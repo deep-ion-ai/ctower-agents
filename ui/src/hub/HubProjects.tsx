@@ -2,37 +2,26 @@ import { useEffect, useState, type DragEvent, type KeyboardEvent } from "react";
 import { useNow } from "../App";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
-import type { HubHealth, HubProject, HubProjectView, HubSession, ProjectAdded } from "../protocol/hub-gen";
+import type { HubHealth, HubProject, HubProjectView, HubSession } from "../protocol/hub-gen";
 import { projectCounts } from "./HubHealth";
 import { hubTab, type ProjectRef } from "./sections";
-import {
-  gitlabOf,
-  hostsOf,
-  hubSupportsJira,
-  jiraOf,
-  kindOf,
-  providerParams,
-  type ProjectKindForm,
-} from "./tracker";
+import { gitlabOf, jiraOf, type ProjectKindForm } from "./tracker";
 import { ProviderIcon } from "../project/ProviderIcon";
 import {
   AssignmentsCard,
   DangerZone,
-  EMPTY_PROJECT_FORM as EMPTY,
-  GeneralForm,
   ProjectSecretsCard,
   RepositoryCard,
   SyncEnvCard,
-  branches,
   keyOf,
   plural,
   projectSecretsOf,
   syncText,
   useSecrets,
   useSettingsRun,
-  type ProjectForm,
   type Tone,
 } from "../project/settings";
+import { NewProjectDialog, type RegisterIntent } from "../project/NewProjectDialog";
 import { AgentRules } from "./AgentRules";
 
 // Fica exportada daqui para quem já importa de HubProjects.
@@ -91,7 +80,8 @@ export function HubProjects({
   const nav = useNav();
   const now = useNow();
   const [filter, setFilter] = useState("");
-  const [add, setAdd] = useState<ProjectForm | null>(null);
+  /** Cadastro aberto; `id` novo a cada pedido, para o formulário recomeçar. */
+  const [add, setAdd] = useState<{ id: number; intent: RegisterIntent } | null>(null);
   const [editing, setEditing] = useState(false);
   const { busy, run, fail, error, done } = useSettingsRun();
   const settings = { busy, run, fail };
@@ -100,11 +90,10 @@ export function HubProjects({
   const secrets = useSecrets(!web);
 
   useEffect(() => {
-    if (addUrl !== null && (addUrl || addKind === "jira")) setAdd({ ...EMPTY, ...hostsOf(addKind ?? "github"), url: addUrl });
+    if (addUrl !== null && (addUrl || addKind === "jira")) setAdd((a) => ({ id: (a?.id ?? 0) + 1, intent: { url: addUrl, kind: addKind } }));
   }, [addUrl, addKind]);
 
   const projects = hub.projects;
-  const jiraOk = hubSupportsJira(hub.info?.protocol ?? null);
 
   const wanted = project ? keyOf(project.owner, project.repo).toLowerCase() : null;
   const sel =
@@ -123,38 +112,6 @@ export function HubProjects({
     setEditing(false);
     // Na própria aba (a seção pode estar na aba "hub", vinda de `go`): troca só o endereço.
     nav.openTab({ ...hubTab("projects", { project: { owner: pr.gh_owner, repo: pr.gh_repo } }), id: nav.current });
-  };
-
-
-  const save = async () => {
-    if (!add) return;
-    let added: ProjectRef | undefined;
-    const ok = await run(async () => {
-      // Jira + GitLab: sem URL do GitHub; o repositório vem da URL do GitLab.
-      let source: Record<string, unknown> = { url: add.url.trim() };
-      if (kindOf(add.code, add.issues) === "jira") {
-        const pv = providerParams(add.jira);
-        if ("error" in pv) throw new Error(pv.error);
-        source = {
-          ...pv,
-          ...(add.jira.branch_pattern.trim() ? { branch_pattern: add.jira.branch_pattern.trim() } : {}),
-          attribution: add.jira.attribution,
-        };
-      }
-      const r = await api.hubCall<ProjectAdded>("hub.projects.add", {
-        ...source,
-        ...(add.name.trim() ? { name: add.name.trim() } : {}),
-        ...(add.base_branch.trim() ? { base_branch: add.base_branch.trim() } : {}),
-        ...(add.protected.trim() ? { protected_branches: branches(add.protected) } : {}),
-      });
-      added = { owner: r.project.gh_owner, repo: r.project.gh_repo };
-      const extra = r.reapplied > 0 ? ` ${r.reapplied} linha(s) da quarentena reaplicada(s).` : "";
-      return `${r.project.gh_owner}/${r.project.gh_repo} cadastrado no hub.${extra}`;
-    });
-    if (ok) {
-      setAdd(null);
-      onAddDone(added);
-    }
   };
 
 
@@ -347,7 +304,7 @@ export function HubProjects({
                 aria-label="Cadastrar projeto"
                 onClick={() => {
                   setEditing(false);
-                  setAdd({ ...EMPTY });
+                  setAdd((a) => ({ id: (a?.id ?? 0) + 1, intent: { url: "" } }));
                 }}
               >
                 + Cadastrar
@@ -428,45 +385,15 @@ export function HubProjects({
 
         <div className="hub-pdetail">
           {add ? (
-            <form
-              className="env-form"
-              aria-label="Novo projeto"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void save();
+            <NewProjectDialog
+              key={add.id}
+              intent={add.intent}
+              settings={settings}
+              onDone={(added) => {
+                setAdd(null);
+                onAddDone(added);
               }}
-            >
-              <h2 className="hub-ptitle hub-wide">Cadastrar projeto</h2>
-              <GeneralForm form={add} onChange={setAdd} prefix="np" withUrl />
-              <div className="form-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    setAdd(null);
-                    onAddDone();
-                  }}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={
-                    busy ||
-                    (() => {
-                      const kind = kindOf(add.code, add.issues);
-                      if (kind === "github") return !add.url.trim();
-                      if (kind === "jira")
-                        return !jiraOk || !add.jira.jira_url.trim() || !add.jira.jira_key.trim() || !add.jira.gitlab_url.trim();
-                      return true;
-                    })()
-                  }
-                >
-                  {busy ? "Validando…" : "Cadastrar"}
-                </button>
-              </div>
-            </form>
+            />
           ) : sel ? (
             detail(sel)
           ) : (
