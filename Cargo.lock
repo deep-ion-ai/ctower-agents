@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "ct-client"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "axum",
  "ct-core",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "ct-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "ct-gh"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ct-core",
  "ct-ledger",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "ct-git"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "tempfile",
  "thiserror 2.0.21",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "ct-gitlab"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ct-core",
  "ct-ledger",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "ct-http"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "axum",
  "ct-ledger",
@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "ct-jira"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ct-core",
  "ct-ledger",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "ct-ledger"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ct-core",
  "rusqlite",
@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "ct-proc"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "libc",
  "thiserror 2.0.21",
@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "ct-pty"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "portable-pty",
  "tempfile",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "ct-secrets"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "age",
  "base64",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "ct-server"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "axum",
  "ct-core",
@@ -680,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "ct-sessions"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ct-core",
  "ct-gh",
@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "ct-update"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ct-core",
  "ct-ledger",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "cthubd"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "assert_cmd",
  "axum",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "ctower"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "ctowerd"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "axum",
  "clap",
