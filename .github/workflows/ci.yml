@@ -50,6 +50,10 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
     steps:
       - uses: actions/checkout@v4
+      # O check-versions.py usa tomllib (Python 3.11+); o ubuntu-22.04 traz 3.10.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - run: python3 scripts/check-versions.py
 
   rust:

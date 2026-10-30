@@ -16,6 +16,13 @@ TAG="${1:-v$VER}"
 REAL_GH="$(command -v gh)" || { echo "falta o gh" >&2; exit 1; }
 REAL_HOME="$HOME"
 
+# Antes da primeira release (ou numa bifurcação sem releases) não há asset para
+# baixar: avisa e sai sem falhar, em vez de quebrar o CI.
+if ! "$REAL_GH" release view "$TAG" ${GH_REPO:+--repo "$GH_REPO"} >/dev/null 2>&1; then
+  echo "AVISO: a release $TAG não existe neste repositório; teste do asset ignorado." >&2
+  exit 0
+fi
+
 ARCH="$(uname -m)"
 [[ $ARCH == arm64 ]] && ARCH=aarch64
 OSN=linux

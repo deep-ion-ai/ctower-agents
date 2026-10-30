@@ -54,6 +54,10 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
+      # O check-versions.py usa tomllib (Python 3.11+); o ubuntu-22.04 traz 3.10.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Sincronizar os lockfiles
         run: |
           (cd ui && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
