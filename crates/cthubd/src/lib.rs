@@ -57,8 +57,9 @@ use tokio::sync::broadcast;
 /// 1.8 (#440): `docs` em `HubProject` e em `hub.projects.add|update`, e
 /// `HubInfo.docs_dir`. 1.9 (#442): backup dos docs — `BackupConfigView.docs`,
 /// `docs_*` no `hub.backup.set`, `what` no `hub.backup.run` e os avisos
-/// `docs_backup_failed|stale|too_large` em `hub.status`.
-pub const PROTOCOL_VERSION: &str = "1.9";
+/// `docs_backup_failed|stale|too_large` em `hub.status`. 1.10 (#434):
+/// `hub.workitem.body` (descrição da issue lida no rastreador, sem gravar).
+pub const PROTOCOL_VERSION: &str = "1.10";
 
 #[derive(Clone)]
 pub struct HubState {

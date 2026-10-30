@@ -729,6 +729,7 @@ dependencies = [
  "ct-core",
  "ct-gh",
  "ct-http",
+ "ct-jira",
  "ct-ledger",
  "ct-secrets",
  "ct-update",

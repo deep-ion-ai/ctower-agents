@@ -11,6 +11,8 @@ license.workspace = true
 ct-core.workspace = true
 ct-gh.workspace = true
 ct-http.workspace = true
+# Descrição da issue do Jira → Markdown no "Ver issue" (#434).
+ct-jira.workspace = true
 ct-ledger.workspace = true
 ct-secrets.workspace = true
 ct-update.workspace = true
