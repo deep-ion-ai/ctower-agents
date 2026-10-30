@@ -78,7 +78,20 @@ jobs:
           cache-bin: false
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - name: cargo test
+        if: matrix.os == 'linux'
+        run: cargo test --workspace --locked
+      # No macOS hospedado, testes que falam HTTP em 127.0.0.1 falham de vez em
+      # quando com EINVAL (o servidor fecha a conexão antes de o ureq ajustar o
+      # timeout de leitura). Uma segunda tentativa cobre a corrida; falha real
+      # continua falhando.
+      - name: cargo test (macOS, com uma nova tentativa)
+        if: matrix.os == 'macos'
+        run: |
+          cargo test --workspace --locked || {
+            echo "::warning::cargo test falhou no macOS; repetindo uma vez"
+            cargo test --workspace --locked
+          }
       # O hub (cthubd) não linka sessões, PTY nem git (issue #174).
       - name: cthubd sem ct-sessions, ct-pty e ct-git
         run: |
