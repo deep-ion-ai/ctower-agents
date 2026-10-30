@@ -48,6 +48,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "session.archive",
   "session.remote_control.enable",
   "hub.sync.now",
+  "tracker.issue_body",
 ]);
 
 /** O método do ambiente existe na web? */

@@ -3,7 +3,7 @@
 //!
 //! Métodos: `hub.info`, `hub.status`, `hub.projects.list|add|update|delete|impact`,
 //! `hub.assignments.list|add|remove`, `hub.quarantine.list|discard`, `hub.tree.get`, `hub.workitem.history`,
-//! `hub.workitem.set_status|set_priority|move`, `hub.projects.move`,
+//! `hub.workitem.set_status|set_priority|move`, `hub.workitem.body`, `hub.projects.move`,
 //! `hub.ranking.get`, `hub.health.get`, `hub.proposals.list|decide`,
 //! `hub.dashboard.get`, `hub.envs.list`,
 //! `hub.rules.get|set|import|history` e `hub.rules.proposals.list|decide`
@@ -316,6 +316,12 @@ async fn env_call(st: &HubState, p: Value) -> RpcResult {
             format!("método indisponível pelo hub: {}", req.method),
         ));
     }
+    call_env(st, env, &req.method, params).await
+}
+
+/// Chamada ao ambiente `env` pelo canal reverso, com o erro de ambiente
+/// desconhecido ou offline.
+async fn call_env(st: &HubState, env: String, method: &str, params: Value) -> RpcResult {
     if !st.channels.is_online(&env) {
         let hub = st.hub.clone();
         let id = env.clone();
@@ -338,7 +344,99 @@ async fn env_call(st: &HubState, p: Value) -> RpcResult {
             ),
         ));
     }
-    st.channels.call(&env, &req.method, params).await
+    st.channels.call(&env, method, params).await
+}
+
+/// Resposta de `hub.workitem.body` (#434): a descrição da issue lida agora
+/// no rastreador, que o hub não grava.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HubWorkItemBody {
+    pub title: String,
+    /// Markdown (GFM); `""` = issue sem descrição.
+    pub body: String,
+    /// Sempre `"markdown"`: a descrição do Jira já vem convertida.
+    pub format: String,
+    /// Link da issue no rastreador.
+    pub url: String,
+}
+
+/// `hub.workitem.body { owner, repo, number }` (#434): passagem de leitura,
+/// sem gravar nada. GitHub pela API, com o token do hub; Jira pelo ambiente
+/// de sync do projeto (o hub não alcança o Jira), com a descrição convertida
+/// para Markdown aqui, em memória.
+async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
+    let (owner, repo) = (
+        str_param(&p, "owner")?.to_string(),
+        str_param(&p, "repo")?.to_string(),
+    );
+    let number = i64_param(&p, "number")?;
+    if number <= 0 {
+        return Err(invalid("number inválido"));
+    }
+    let hub = st.hub.clone();
+    let (o, r) = (owner.clone(), repo.clone());
+    let project = tokio::task::spawn_blocking(move || hub.lock().find_project(&o, &r))
+        .await
+        .map_err(|e| (-32603, e.to_string()))?
+        .map_err(|e| (-32000, e.to_string()))?
+        .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
+    let markdown = |title: &Value, body: String, url: String| {
+        json!(HubWorkItemBody {
+            title: title.as_str().unwrap_or("").to_string(),
+            body,
+            format: "markdown".into(),
+            url,
+        })
+    };
+    match project.tracker.kind() {
+        ct_core::TrackerKind::Github => {
+            let gh = st.github.clone().ok_or_else(|| {
+                (
+                    -32000,
+                    "integração com o GitHub desativada no hub".to_string(),
+                )
+            })?;
+            let path = format!(
+                "/repos/{}/{}/issues/{number}",
+                project.gh_owner, project.gh_repo
+            );
+            let v = tokio::task::spawn_blocking(move || gh.client().get_json(&path))
+                .await
+                .map_err(|e| (-32603, e.to_string()))?
+                .map_err(|e| (-32000, format!("GitHub: {e}")))?
+                .ok_or_else(|| (-32000, format!("issue #{number} não encontrada no GitHub")))?;
+            let url = v
+                .get("html_url")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), number));
+            let body = v
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            Ok(markdown(&v["title"], body, url))
+        }
+        ct_core::TrackerKind::Jira => {
+            let env = project.sync_env_id.clone().ok_or_else(|| {
+                (
+                    -32000,
+                    "projeto Jira sem ambiente de sync: a descrição é lida por ele".to_string(),
+                )
+            })?;
+            let params =
+                json!({ "owner": project.gh_owner, "repo": project.gh_repo, "number": number });
+            let v = call_env(st, env, "tracker.issue_body", params).await?;
+            let body = ct_jira::description_markdown(v.get("description"));
+            let url = v
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), number));
+            Ok(markdown(&v["title"], body, url))
+        }
+    }
 }
 
 /// Resposta de `hub.web.sessions.revoke`.
@@ -483,6 +581,7 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         }
         "github.status" | "github.set_token" | "github.clear_token" => github(st, method, &p).await,
         "hub.env.call" => env_call(st, p).await,
+        "hub.workitem.body" => workitem_body(st, p).await,
         m if m.starts_with("hub.update.") => update_call(st, method, &p).await,
         "hub.projects.add" | "hub.projects.update" => {
             let (st, method) = (st.clone(), method.to_string());
@@ -1636,6 +1735,7 @@ mod export {
         QuarantineDiscarded::export_all_to(&dir).unwrap();
         SecretChanged::export_all_to(&dir).unwrap();
         WebSessionsRevoked::export_all_to(&dir).unwrap();
+        HubWorkItemBody::export_all_to(&dir).unwrap();
         crate::push::PushVapidKey::export_all_to(&dir).unwrap();
         crate::channel::EnvPush::export_all_to(&dir).unwrap();
         crate::channel::EnvOnline::export_all_to(&dir).unwrap();
@@ -3521,17 +3621,26 @@ pub(crate) mod tests {
     /// Hub com dados e a web ligada, e o cookie de uma sessão web válida.
     fn hub_web() -> (HubState, String) {
         let mut st = hub_com_dados();
+        st.web = hub_web_options(&st);
+        let cookie = web_cookie(&st);
+        (st, cookie)
+    }
+
+    fn hub_web_options(st: &HubState) -> crate::web::WebOptions {
         let cfg = crate::config::WebConfig {
             enabled: true,
             ..Default::default()
         };
-        st.web = crate::web::WebOptions::new(&cfg, 7879, st.hub.clone(), UI);
+        crate::web::WebOptions::new(&cfg, 7879, st.hub.clone(), UI)
+    }
+
+    fn web_cookie(st: &HubState) -> String {
         let s = st
             .hub
             .lock()
             .create_web_session(None, Some("teste"), 3_600_000)
             .unwrap();
-        (st, format!("ct_web={}", s.cookie))
+        format!("ct_web={}", s.cookie)
     }
 
     async fn connect_web(url: &str, headers: &[(&str, &str)]) -> Result<Client, String> {
@@ -3674,6 +3783,23 @@ pub(crate) mod tests {
                 }
                 let r = if v["method"] == "session.kill" {
                     json!({ "id": v["id"], "error": { "code": -32000, "message": "sessão não está rodando" } })
+                } else if v["method"] == "tracker.issue_body" {
+                    // "Ver issue" de projeto Jira (#434): 7 com descrição em
+                    // wiki markup, 8 sem descrição, o resto com a senha recusada.
+                    let n = v["params"]["number"].as_i64().unwrap_or(0);
+                    let d = match n {
+                        7 => json!("h2. Contexto\n*a* <script>x</script>"),
+                        8 => Value::Null,
+                        _ => {
+                            let e = format!("Jira, PROJ-{n}: o Jira recusou a senha (401)");
+                            let r =
+                                json!({ "id": v["id"], "error": { "code": -32000, "message": e } });
+                            let _ = tx.send(WsMsg::Text(r.to_string().into())).await;
+                            continue;
+                        }
+                    };
+                    json!({ "id": v["id"], "result": { "title": "Corrigir login", "description": d,
+                            "url": format!("https://jira.x/browse/PROJ-{n}") } })
                 } else {
                     json!({ "id": v["id"], "result": { "method": v["method"], "params": v["params"] } })
                 };
@@ -3809,6 +3935,172 @@ pub(crate) mod tests {
         assert_eq!(
             web.pushes.last().unwrap(),
             &json!({ "event": "env.online", "data": { "env_id": "env-x", "online": false } })
+        );
+    }
+
+    /// "Ver issue" de projeto GitHub (#434): a descrição vem da API agora, a
+    /// cada chamada, pelo /ws e pela web; nada dela fica no hub.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workitem_body_do_github_de_passagem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut st, gh) = hub_com_github(tmp.path());
+        st.web = hub_web_options(&st);
+        let cookie = web_cookie(&st);
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let mut web = web_ui(&url, &cookie).await;
+        let issue = |body: Value| {
+            json!({ "number": 5, "title": "Corrigir login", "body": body,
+                    "html_url": "https://github.com/deep-ion-ai/demo/issues/5" })
+        };
+        gh.set(
+            "/repos/deep-ion-ai/demo/issues/5",
+            issue(json!("## Contexto\n- [ ] critério")),
+        );
+        let p = json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 5 });
+        for c in [&mut ui, &mut web] {
+            let v = c.call("hub.workitem.body", p.clone()).await;
+            assert_eq!(
+                v["result"],
+                json!({ "title": "Corrigir login", "body": "## Contexto\n- [ ] critério",
+                        "format": "markdown",
+                        "url": "https://github.com/deep-ion-ai/demo/issues/5" }),
+                "{v}"
+            );
+        }
+        // Mudou no GitHub: a próxima leitura já vem nova (sem cache).
+        gh.set("/repos/deep-ion-ai/demo/issues/5", issue(Value::Null));
+        let v = ui.call("hub.workitem.body", p.clone()).await;
+        assert_eq!(v["result"]["body"], "", "sem descrição: {v}");
+        // Nada da descrição ficou no hub.
+        let tree = ui
+            .call(
+                "hub.tree.get",
+                json!({ "owner": "deep-ion-ai", "repo": "demo" }),
+            )
+            .await;
+        assert!(!tree.to_string().contains("critério"), "{tree}");
+
+        // Erros: issue inexistente, projeto fora do hub e parâmetros.
+        let v = ui
+            .call(
+                "hub.workitem.body",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 99 }),
+            )
+            .await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("não encontrada"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.workitem.body",
+                json!({ "owner": "x", "repo": "y", "number": 1 }),
+            )
+            .await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("não está no hub"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.workitem.body",
+                json!({ "owner": "deep-ion-ai", "repo": "demo" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workitem_body_sem_github_no_hub() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui
+            .call(
+                "hub.workitem.body",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 5 }),
+            )
+            .await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("GitHub desativada"),
+            "{v}"
+        );
+    }
+
+    /// "Ver issue" de projeto Jira (#434): o hub pede ao ambiente de sync pelo
+    /// canal e converte a descrição para Markdown; sem ambiente de sync,
+    /// offline ou com erro do Jira, a falha volta clara.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workitem_body_do_jira_pelo_ambiente_de_sync() {
+        let (st, cookie) = hub_web();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let mut web = web_ui(&url, &cookie).await;
+        let v = ui
+            .call(
+                "hub.projects.add",
+                json!({
+                    "tracker": { "kind": "jira", "url": "https://jira.x", "project_key": "PROJ",
+                                 "jql": "", "active_sprint_only": true,
+                                 "credential_cmd": "pass show jira" },
+                    "forge": { "kind": "gitlab", "clone_url": "git@git.x:pje/app.git",
+                               "credential_cmd": "pass show gitlab" }
+                }),
+            )
+            .await;
+        assert!(v["result"].is_object(), "{v}");
+        let p = |n: i64| json!({ "owner": "pje", "repo": "app", "number": n });
+
+        let v = ui.call("hub.workitem.body", p(7)).await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("sem ambiente de sync"),
+            "{v}"
+        );
+        st.hub.lock().ingest("env-x", "x", &[]).unwrap();
+        let v = ui
+            .call(
+                "hub.assignments.add",
+                json!({ "owner": "pje", "repo": "app", "env": "env-x" }),
+            )
+            .await;
+        assert_eq!(v["result"]["sync_env"], true, "{v}");
+        let v = ui.call("hub.workitem.body", p(7)).await;
+        assert_eq!(
+            v["error"]["code"],
+            crate::channel::CHANNEL_ENV_OFFLINE,
+            "{v}"
+        );
+
+        let _env = fake_env(&st, &url, "env-x").await;
+        for c in [&mut ui, &mut web] {
+            let v = c.call("hub.workitem.body", p(7)).await;
+            assert_eq!(
+                v["result"],
+                json!({ "title": "Corrigir login",
+                        "body": "## Contexto\n**a** &lt;script>x&lt;/script>",
+                        "format": "markdown", "url": "https://jira.x/browse/PROJ-7" }),
+                "{v}"
+            );
+        }
+        let v = ui.call("hub.workitem.body", p(8)).await;
+        assert_eq!(v["result"]["body"], "", "{v}");
+        let v = ui.call("hub.workitem.body", p(9)).await;
+        assert_eq!(
+            v["error"]["message"], "Jira, PROJ-9: o Jira recusou a senha (401)",
+            "{v}"
         );
     }
 

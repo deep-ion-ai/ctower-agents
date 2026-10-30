@@ -561,6 +561,21 @@ impl Conn {
                 .map_err(from_sessions)?;
                 Ok(json!(v))
             }
+            // "Ver issue" de projeto Jira (#434), pedido pelo hub pelo canal:
+            // a descrição crua do jira-cli, sem gravar nada.
+            "tracker.issue_body" => {
+                let tracker = self
+                    .st
+                    .tracker
+                    .clone()
+                    .ok_or_else(|| (-32000, "leitura do Jira desativada".into()))?;
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let number = i64_param(p, "number")?;
+                tokio::task::spawn_blocking(move || tracker.issue_description(project_id, number))
+                    .await
+                    .map_err(|e| (-32603, e.to_string()))?
+                    .map_err(from_sessions)
+            }
             "github.status" | "github.set_token" | "github.clear_token" => {
                 let gh = self
                     .st
@@ -1928,6 +1943,8 @@ mod tests {
     async fn sync_now_do_projeto_jira_e_prontidao_no_env_info() {
         use ct_jira::fake::{api_issue, FakeJira, FAKE_SERVER};
         let (mut srv, gh) = Srv::with_github(FakeClaude::exit(0));
+        // Ligado a um hub, como quando o `tracker.issue_body` chega pelo canal.
+        srv.link();
         let fake = FakeJira::new(srv.env.tmp.path(), "senha-de-teste");
         let repo_path = srv.env.repo.display().to_string();
         srv.env
@@ -2007,6 +2024,26 @@ mod tests {
         let roots = v["result"]["roots"].as_array().unwrap();
         assert_eq!(roots.len(), 2, "{v}");
         assert_eq!(roots[1]["issue"]["state"], "closed");
+
+        // "Ver issue" (#434): a descrição crua, por owner/repo e número.
+        let mut i = api_issue("PROJ-2", "Tarefa", "done");
+        i["fields"]["description"] = "h2. Oi".into();
+        fake.set_view(&i);
+        let v = ui
+            .call(
+                "tracker.issue_body",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 2 }),
+            )
+            .await;
+        assert_eq!(v["result"]["description"], "h2. Oi", "{v}");
+        assert_eq!(v["result"]["url"], format!("{FAKE_SERVER}/browse/PROJ-2"));
+        let v = ui
+            .call(
+                "tracker.issue_body",
+                json!({ "owner": "deep-ion-ai", "repo": "demo" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -4,7 +4,7 @@ import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { EnvInfo, IssueRow, PrRow, ProjectTree } from "../protocol/gen";
 import type { HubDashboard, HubDecision, HubEvent, HubHistory, HubProject, HubSession, HubTree, HubTreeNode, HubWorkItem } from "../protocol/hub-gen";
-import { HUB_CONFIG_UNLINKED, dashboard, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
+import { HUB_CONFIG_UNLINKED, dashboard, hubInfo, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
 
 const NOW = Date.now();
 const H = 3600_000;
@@ -606,4 +606,110 @@ test("sub-issue aguardando o épico: rótulo, opção no seletor e contagem sepa
   const menu = within(item).getByRole("group", { name: "Mudar status" });
   expect(within(menu).getAllByRole("button")).toHaveLength(8);
   expect(within(menu).getByRole("button", { name: /aguardando o épico/ })).toHaveAttribute("aria-current", "true");
+});
+
+// ---- "Ver issue" (#434) ----
+
+const BODY = [
+  "## Contexto",
+  "",
+  "Depende de #59; ver [a spec](https://docs.example/spec).",
+  "",
+  "- [ ] critério aberto",
+  "- [x] critério feito",
+  "",
+  "<img src=x onerror=\"alert(1)\"><script>alert(2)</script>",
+].join("\n");
+
+function setupBody(body: (p: unknown) => unknown, protocol = "1.10") {
+  const api = build(true).onHub("hub.info", hubInfo({ protocol })).onHub("hub.workitem.body", body);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  return { api, user: userEvent.setup() };
+}
+
+const bodyOf = (body: string) => ({
+  title: "ui: painel de detalhe",
+  body,
+  format: "markdown",
+  url: "https://github.com/deep-ion-ai/ctower-agents/issues/50",
+});
+
+test("Ver issue: busca pelo hub ao abrir, renderiza sanitizado e descarta ao fechar", async () => {
+  const { api, user } = setupBody(() => bodyOf(BODY));
+  const panel = await openPanel(user, "ui: painel de detalhe");
+  await user.click(within(panel).getByRole("button", { name: "Ver issue" }));
+  const dialog = await screen.findByRole("dialog", { name: /#50 ui: painel de detalhe/ });
+  expect(await within(dialog).findByRole("heading", { name: "Contexto" })).toBeInTheDocument();
+  expect(api.hubCallsTo("hub.workitem.body")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    number: 50,
+  });
+  // Checklist só de leitura.
+  const boxes = within(dialog).getAllByRole("checkbox");
+  expect(boxes.map((b) => (b as HTMLInputElement).checked)).toEqual([false, true]);
+  expect(boxes.every((b) => (b as HTMLInputElement).disabled)).toBe(true);
+  // Nada executável do corpo chega ao DOM.
+  expect(dialog.querySelector("script")).toBeNull();
+  expect(dialog.querySelector("[onerror]")).toBeNull();
+  // Link externo vai para o navegador.
+  await user.click(within(dialog).getByRole("link", { name: "a spec" }));
+  expect(api.opened).toEqual(["https://docs.example/spec"]);
+  // Esc fecha; abrir de novo busca de novo.
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await user.click(within(panel).getByRole("button", { name: "Ver issue" }));
+  await screen.findByRole("dialog");
+  await waitFor(() => expect(api.hubCallsTo("hub.workitem.body")).toHaveLength(2));
+  await user.click(screen.getByRole("button", { name: "Fechar" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+test("Ver issue: #n do mesmo repositório abre a aba do item no app", async () => {
+  const { api, user } = setupBody(() => bodyOf(BODY));
+  const panel = await openPanel(user, "ui: painel de detalhe");
+  await user.click(within(panel).getByRole("button", { name: "Ver issue" }));
+  const dialog = await screen.findByRole("dialog");
+  await user.click(await within(dialog).findByRole("link", { name: "#59" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /#59 sync ambiente→hub/ })).toBeInTheDocument();
+  expect(api.opened).toEqual([]);
+});
+
+test("Ver issue: sem descrição e erro do rastreador com a saída para o GitHub", async () => {
+  let fail = false;
+  const { api, user } = setupBody(() => {
+    if (fail) throw new Error("GitHub: 502 Bad Gateway");
+    return bodyOf("  ");
+  });
+  const panel = await openPanel(user, "ui: painel de detalhe");
+  await user.click(within(panel).getByRole("button", { name: "Ver issue" }));
+  expect(await screen.findByText("Sem descrição.")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Fechar" }));
+
+  fail = true;
+  await user.click(within(panel).getByRole("button", { name: "Ver issue" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("GitHub: 502 Bad Gateway");
+  await user.click(within(alert).getByRole("button", { name: "Abrir no GitHub ↗" }));
+  expect(api.opened).toEqual(["https://github.com/deep-ion-ai/ctower-agents/issues/50"]);
+});
+
+test("Ver issue: desabilitado com hub anterior ao método ou fora do ar", async () => {
+  const { api, user } = setupBody(() => bodyOf("x"), "1.9");
+  const panel = await openPanel(user, "ui: painel de detalhe");
+  await waitFor(() => expect(within(panel).getByRole("button", { name: "Ver issue" })).toBeDisabled());
+  expect(within(panel).getByRole("button", { name: "Ver issue" })).toHaveAttribute(
+    "title",
+    expect.stringContaining("Atualize o hub"),
+  );
+  await user.click(within(panel).getByRole("button", { name: "Ver issue" }));
+  expect(api.hubCallsTo("hub.workitem.body")).toHaveLength(0);
+});
+
+test("Ver issue: tela local com o hub fora fica desabilitado", async () => {
+  const { panel } = await localSetup(true);
+  const ver = within(panel).getByRole("button", { name: "Ver issue" });
+  expect(ver).toBeDisabled();
+  expect(ver).toHaveAttribute("title", expect.stringContaining("fora do ar"));
 });

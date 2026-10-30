@@ -24,7 +24,9 @@ import {
   type ProviderProject,
 } from "../util/item";
 import { ago, duration } from "../util/time";
+import { versionNewer } from "../util/version";
 import { AgentRules } from "../hub/AgentRules";
+import { IssueBodyModal } from "./IssueBodyModal";
 import { STATUS } from "./status";
 import { StatusMenu } from "./StatusMenu";
 import { mergedOpen, mergedOpenText } from "./TreeRow";
@@ -41,6 +43,8 @@ export const STATE_TEXT = {
 } as const;
 /** Eventos por página da linha do tempo. */
 export const EVENTS_PAGE = 5;
+/** Protocolo do hub com `hub.workitem.body` ("Ver issue", #434). */
+export const WORKITEM_BODY_PROTOCOL = "1.10";
 
 /** Nó da árvore (hub ou local) que o painel mostra. Prioridade só no hub. */
 export interface PanelNode {
@@ -181,6 +185,7 @@ export function WorkItemPanel({
   const [prioMenu, setPrioMenu] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [viewing, setViewing] = useState(false);
   const seq = useRef(0);
   const sessionIds = useRef<Set<string>>(new Set());
   sessionIds.current = new Set(history?.sessions.map((s) => s.id));
@@ -223,6 +228,14 @@ export function WorkItemPanel({
   }, [api, hubUp, hasWi, owner, repo, n, signature, tick]);
 
   const open = (url: string) => api.openUrl(url).catch((e) => setActionError(String(e)));
+
+  // "Ver issue" (#434) lê pelo hub: fora do ar ou anterior ao método, desabilitado.
+  const hubProtocol = hub.info?.protocol;
+  const viewBlocked = !hubUp
+    ? "A descrição é lida pelo hub, que está fora do ar"
+    : hubProtocol && versionNewer(WORKITEM_BODY_PROTOCOL, hubProtocol)
+      ? `Atualize o hub (protocolo ${hubProtocol}; ver a issue no app pede ${WORKITEM_BODY_PROTOCOL} ou maior)`
+      : null;
 
   const setStatus = async (status: WorkItemStatus, reason: string | undefined) => {
     if (!hubUp) return false;
@@ -475,6 +488,15 @@ export function WorkItemPanel({
           <button type="button" className="btn" onClick={() => void open(node.issue.url)}>
             {warn ? `Fechar a issue no ${tracker} ↗` : `Abrir issue no ${tracker} ↗`}
           </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={viewBlocked !== null}
+            title={viewBlocked ?? `Mostrar a descrição da issue, lida agora no ${tracker}`}
+            onClick={() => setViewing(true)}
+          >
+            Ver issue
+          </button>
           {pr && (
             <button type="button" className="btn" onClick={() => void open(pr.url)}>
               Abrir {change(pr.number)} no {forge} ↗
@@ -689,6 +711,16 @@ export function WorkItemPanel({
 
       {isEpic && hub.expected && (
         <AgentRules owner={owner} repo={repo} epic={n} label={itemFullRef(project, n)} now={now} className="sec iv-card iv-rules" />
+      )}
+      {viewing && (
+        <IssueBodyModal
+          project={project}
+          number={n}
+          title={node.issue.title}
+          url={node.issue.url}
+          onClose={() => setViewing(false)}
+          onOpenItem={onOpenItem}
+        />
       )}
     </section>
   );
