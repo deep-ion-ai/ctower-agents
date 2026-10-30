@@ -228,6 +228,13 @@
   gap: 8px;
 }
 
+/* Atalhos para as regras do projeto e do épico (#11). */
+.sm-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
 .sm-foot {
   display: flex;
   flex-wrap: wrap;

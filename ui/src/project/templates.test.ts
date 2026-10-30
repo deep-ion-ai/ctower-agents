@@ -1,5 +1,5 @@
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
-import { renderTemplate, templateFor } from "./templates";
+import { renderTemplate, templateFor, templateKeyFor } from "./templates";
 
 const vars = {
   kind: "issue" as const,
@@ -76,6 +76,8 @@ test("template escolhido pelo rastreador; GitHub com os de sempre", () => {
   expect(templateFor(t, "issue")).toBe(t.issue);
   expect(templateFor(t, "epic", "github")).toBe(t.epic);
   expect(templateFor(t, "project", "github")).toBe(t.project);
+  expect(templateKeyFor("issue", "jira")).toBe("jira_issue");
+  expect(templateKeyFor("project")).toBe("project");
 });
 
 test("template de issue do Jira: chave, jira-cli e glab com o comando de credencial, MR comentado, sem transição", () => {
