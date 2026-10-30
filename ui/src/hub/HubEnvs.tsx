@@ -1,3 +1,4 @@
+import { envTab } from "../env/sections";
 import { maintenanceTab } from "../maintenance/sections";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -12,7 +13,8 @@ import type { HubAssignment } from "../protocol/hub-gen";
  * plano e a limpeza de cada um ficam em Manutenção › Limpeza (#337), aonde
  * o número leva quando esta UI conhece o ambiente (#339). A
  * conexão da UI com cada ambiente é outra (Configurações → Ambientes): aqui
- * aparece se esta UI o conhece.
+ * aparece se esta UI o conhece. O nome leva ao detalhe do ambiente (#23),
+ * na seção Hub, quando esta UI o conhece.
  */
 export function HubEnvs({ now }: { now: number }) {
   const { hub, envs, status, web } = useTower();
@@ -52,7 +54,18 @@ export function HubEnvs({ now }: { now: number }) {
                 return (
                   <tr key={e.env_id}>
                     <td>
-                      <span className="strong">{e.name}</span>
+                      {uiEnv ? (
+                        <button
+                          type="button"
+                          className="link-btn strong"
+                          title={`Tudo sobre ${uiEnv.name}`}
+                          onClick={() => nav.openTab(envTab(uiEnv.id, uiEnv.name, "hub"))}
+                        >
+                          {e.name}
+                        </button>
+                      ) : (
+                        <span className="strong">{e.name}</span>
+                      )}
                       <br />
                       <span className="mono muted small">{e.env_id}</span>
                     </td>

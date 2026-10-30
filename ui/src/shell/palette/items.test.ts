@@ -22,6 +22,8 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Hub",
     "Manutenção",
     "Configurações",
+    // Índice dos ambientes (#23).
+    "Ambientes",
     // Seções do Hub (#313).
     "Hub › Visão geral",
     "Hub › Propostas do gestor",
@@ -171,6 +173,7 @@ test("web: sem os lugares e comandos exclusivos do desktop (#201)", () => {
     "Recuperação",
     "Hub",
     "Configurações",
+    "Ambientes",
     "Hub › Visão geral",
     "Hub › Propostas do gestor",
     "Hub › Saúde dos projetos",
@@ -194,4 +197,27 @@ test("shell (#423): comando com a aba ativa no work item; sem ela ou na web, nad
   });
   expect(cmd({ shellTarget: null })).toBeUndefined();
   expect(cmd({ shellTarget: target, web: true })).toBeUndefined();
+});
+
+test("ambientes (#23): o detalhe de cada um e, só buscando, cada seção; na web, sem as do desktop", () => {
+  const envs = [{ ...FakeDaemonApi.wslEnv(), name: "WSL" }];
+  const status: PaletteSources["status"] = { wsl: { env: "wsl", connected: true, since: 0, error: null } };
+  const items = paletteItems(src({ envs, status }));
+  const env = items.filter((i) => i.id.startsWith("env:"));
+  expect(env.map((i) => [i.label, i.browse ?? true])).toEqual([
+    ["Ambiente: WSL", true],
+    ["Ambiente: Hub — WSL", false],
+    ["Ambiente: Projetos atribuídos — WSL", false],
+    ["Ambiente: Atualização — WSL", false],
+    ["Ambiente: Configuração do daemon — WSL", false],
+    ["Ambiente: Limpeza — WSL", false],
+  ]);
+  expect(env[0]).toMatchObject({ detail: "conectado", action: { type: "tab", tab: { screen: { name: "env", env: "wsl" } } } });
+  expect(env[3].action).toEqual({
+    type: "tab",
+    tab: { screen: { name: "env", env: "wsl", section: "update" }, title: "WSL · Atualização" },
+  });
+
+  const web = paletteItems(src({ envs, status, web: true })).filter((i) => i.id.startsWith("env:"));
+  expect(web.map((i) => i.label)).toEqual(["Ambiente: WSL", "Ambiente: Hub — WSL", "Ambiente: Projetos atribuídos — WSL"]);
 });

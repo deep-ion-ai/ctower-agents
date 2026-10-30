@@ -55,6 +55,22 @@ button.cr-item-main {
   margin-top: 6px;
 }
 
+/* Ambiente (#23): a linha é um botão (abre o detalhe) e o envio ao hub fica abaixo dele. */
+.cr-env {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.cr-env-sync {
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 6px 16px;
+}
+
+.cr-env-sync .cr-sync {
+  margin-top: 0;
+}
+
 /* Cabeçalho da área de editor: título da visão, agrupar e densidade. */
 .control-head {
   display: flex;

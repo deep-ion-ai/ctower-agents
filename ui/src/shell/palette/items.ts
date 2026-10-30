@@ -17,6 +17,13 @@ import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../
 import { liveGestorLabel } from "../../hub/HubGestor";
 import { PLACES, type Place } from "../places";
 import { maintenanceTab } from "../../maintenance/sections";
+import {
+  DESKTOP_ONLY_ENV_SECTIONS,
+  ENV_SECTIONS,
+  ENV_SECTION_KEYWORDS,
+  ENV_SECTION_LABEL,
+  envTab,
+} from "../../env/sections";
 import type { StartTarget } from "../start";
 import type { SessionAction, SessionActionId } from "../../terminal/actions";
 import { placeOnWeb, webPlaceLabel } from "../../web/mode";
@@ -347,6 +354,40 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
   return out;
 }
 
+/**
+ * Detalhe de cada ambiente (#23): "Ambiente: wsl" na lista inicial e, só
+ * buscando, cada seção dele ("Ambiente: Atualização — wsl"), com o
+ * endereço próprio (`envTab`). Na web, sem as seções do desktop.
+ */
+function envItems(src: PaletteSources): PaletteItem[] {
+  return src.envs.flatMap((e) => {
+    const st = src.status[e.id];
+    const head: PaletteItem = {
+      id: `env:${e.id}`,
+      kind: "place",
+      label: `Ambiente: ${e.name}`,
+      detail: !st ? "conectando…" : st.connected ? "conectado" : "desconectado",
+      keywords: "ambiente daemon ctowerd detalhe conexão hub atualização limpeza",
+      action: { type: "tab", tab: envTab(e.id, e.name) },
+    };
+    const sections = ENV_SECTIONS.filter((s) => s !== "connection" && (!src.web || !DESKTOP_ONLY_ENV_SECTIONS.has(s)));
+    return [
+      head,
+      ...sections.map(
+        (s): PaletteItem => ({
+          id: `env:${e.id}:${s}`,
+          // Como as seções do projeto ("Projeto: Rastreador — x"), comandos.
+          kind: "command",
+          label: `Ambiente: ${ENV_SECTION_LABEL[s]} — ${e.name}`,
+          keywords: `ambiente ${ENV_SECTION_KEYWORDS[s]}`,
+          browse: false,
+          action: { type: "tab", tab: envTab(e.id, e.name, s) },
+        }),
+      ),
+    ];
+  });
+}
+
 export function paletteItems(src: PaletteSources): PaletteItem[] {
   const { projects, issues } = catalog(src);
   const interrupted = src.envs.reduce((n, e) => n + (src.dashboards[e.id]?.interrupted_sessions.length ?? 0), 0);
@@ -404,6 +445,8 @@ export function paletteItems(src: PaletteSources): PaletteItem[] {
     ...places,
     ...commands(src, interrupted, projects),
     ...projectCommands(src, projects),
+    // Depois dos de projeto: "configurar <projeto>" segue achando o projeto primeiro.
+    ...envItems(src),
     ...projectItems,
     ...issueItems,
     ...(src.web ? [] : starts),

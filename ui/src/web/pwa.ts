@@ -8,6 +8,7 @@ import type { HubPushDevice, PushEvent } from "../protocol/hub-gen";
 import { hubTab } from "../hub/sections";
 import { itemTab } from "../project/tabs";
 import { isPage, isSection, projectAt } from "../project/sections";
+import { envTab, isEnvSection } from "../env/sections";
 import { splitProjectKey } from "../util/hub";
 import type { OpenTab } from "../state/nav";
 import { browserLabel } from "../hub/HubWebSessions";
@@ -29,7 +30,9 @@ export const PUSH_EVENTS: { event: PushEvent; label: string; hint: string }[] = 
  * desconhecida = a padrão, para um link de uma versão mais nova não falhar).
  * `go=hub:projects` (o antigo Hub › Projetos e atribuições, #18) segue
  * valendo: com `project=<o>/<r>`, as Configurações dele; sem, o índice de
- * Projetos. `null` = sem `go` ou desconhecido.
+ * Projetos. Desde a #23, o detalhe do ambiente: `go=env&env=<id>` com
+ * `section=connection|hub|projects|update|config|cleanup` (desconhecida =
+ * Conexão). `null` = sem `go` ou desconhecido.
  */
 export function deepLinkTab(search: string): OpenTab | null {
   const q = new URLSearchParams(search);
@@ -62,6 +65,12 @@ export function deepLinkTab(search: string): OpenTab | null {
       const key = q.get("project") ?? "";
       const { owner, repo } = splitProjectKey(key);
       return hubTab("projects", key.includes("/") && owner && repo ? { project: { owner, repo } } : {});
+    }
+    case "env": {
+      const env = q.get("env");
+      if (!env) return null;
+      const section = q.get("section");
+      return envTab(env, undefined, isEnvSection(section) ? section : undefined);
     }
     case "hub:proposals":
       return hubTab("proposals");

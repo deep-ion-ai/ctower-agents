@@ -1,6 +1,7 @@
 // Título e estado das abas da área de editor.
 import { GESTOR_LABEL, gestorLabel, lookup } from "../control-room/attention";
 import { tileState } from "../control-room/TileGrid";
+import { ENV_SECTION_LABEL } from "../env/sections";
 import { hubTitle } from "../hub/sections";
 import { maintenanceTitle } from "../maintenance/sections";
 import { pageSuffix } from "../project/sections";
@@ -22,6 +23,7 @@ export const SCREEN_LABEL: Record<Screen["name"], string> = {
   hub: "Hub",
   maintenance: "Manutenção",
   settings: "Configurações",
+  env: "Ambientes",
 };
 
 function screenTitle(s: Screen, dashboards: Record<string, Dashboard>): string {
@@ -62,6 +64,10 @@ function screenTitle(s: Screen, dashboards: Record<string, Dashboard>): string {
       return hubTitle(s.section);
     case "maintenance":
       return maintenanceTitle(s.section);
+    case "env":
+      // As abas abertas pelos atalhos já levam o nome do ambiente (`envTab`).
+      if (!s.env) return SCREEN_LABEL.env;
+      return s.section ? `${s.env} · ${ENV_SECTION_LABEL[s.section]}` : s.env;
     default:
       return SCREEN_LABEL[s.name];
   }
