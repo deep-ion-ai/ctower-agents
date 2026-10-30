@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { HubTree, HubTreeNode } from "../protocol/hub-gen";
 import { useNav, type ItemIntent } from "../state/nav";
 import { useTower } from "../state/tower";
-import { HubSecrets } from "../hub/HubSecrets";
 import { hubTab } from "../hub/sections";
+import { Icon } from "../shell/icons";
 import { hubClones, liveSessions } from "./clones";
 import { ProjectView } from "./ProjectView";
 import { projectKey } from "./tabs";
@@ -26,8 +26,6 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
   const key = projectKey({ owner, repo });
   const [tree, setTree] = useState<HubTree | null>(() => cachedTree<HubTree>(key));
   const [error, setError] = useState<string | null>(null);
-  // Secrets e variáveis do projeto (#165): seção aberta sob demanda.
-  const [showSecrets, setShowSecrets] = useState(false);
 
   // Só a resposta da última chamada vale: uma antiga (ou de outro projeto) é descartada.
   const seq = useRef(0);
@@ -67,6 +65,8 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
   const mine = tree && same(tree.project.gh_owner, owner) && same(tree.project.gh_repo, repo) ? tree : null;
   const p = mine?.project ?? null;
   const projects = hub.dashboard?.projects.map((x) => x.project) ?? [];
+  // Pela chave do hub (`p`): o `owner` da rota pode diferir na caixa.
+  const ref = { owner: p?.gh_owner ?? owner, repo: p?.gh_repo ?? repo };
 
   return (
     <ProjectView<HubTreeNode>
@@ -104,11 +104,10 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
           <span className="hub-badge" title="Visão consolidada de todos os ambientes">
             visão do hub
           </span>
-          {hub.connected && !web && (
-            <button type="button" className="btn" aria-expanded={showSecrets} onClick={() => setShowSecrets((v) => !v)}>
-              Secrets e variáveis
-            </button>
-          )}
+          {/* Configurações do projeto no Hub (#8), com os secrets e variáveis do projeto. Na web, só leitura. */}
+          <button type="button" className="btn" onClick={() => nav.openTab(hubTab("projects", { project: ref }))}>
+            <Icon name="settings" size={14} /> Configurações do projeto
+          </button>
         </>
       }
       banner={
@@ -124,9 +123,7 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
                 <button
                   type="button"
                   className="btn btn-sm"
-                  onClick={() =>
-                    nav.openTab(hubTab("projects", { project: { owner: p?.gh_owner ?? owner, repo: p?.gh_repo ?? repo }, assign: true }))
-                  }
+                  onClick={() => nav.openTab(hubTab("projects", { project: ref, assign: true }))}
                 >
                   Atribuir a um ambiente
                 </button>
@@ -134,11 +131,6 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
             )}
           </p>
         )
-      }
-      below={
-        showSecrets &&
-        hub.connected &&
-        !web && <HubSecrets project={{ owner: p?.gh_owner ?? owner, repo: p?.gh_repo ?? repo }} />
       }
       picker={
         projects.length > 1 ? (

@@ -94,6 +94,18 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(screen.queryByRole("button", { name: "Atribuir a um ambiente" })).toBeNull();
   });
 
+  it("Configurações do projeto (#8): abre o projeto no Hub, só leitura e sem secrets", async () => {
+    const user = userEvent.setup();
+    const api = webApi();
+    renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
+    await user.click(await screen.findByRole("button", { name: "Configurações do projeto" }));
+    await screen.findByRole("button", { name: "Abrir árvore" });
+    expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: /^Editar/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Gerenciar secrets do projeto" })).toBeNull();
+    expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
+  });
+
   it("pedido de atribuição por endereço (#7): Projetos segue só leitura, sem o formulário", async () => {
     const api = webApi().onHub("hub.envs.list", [
       hubEnv({ last_seen_at: now, online: true }),
