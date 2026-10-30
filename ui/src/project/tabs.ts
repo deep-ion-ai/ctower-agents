@@ -12,7 +12,8 @@ export function projectKey(s: Pick<ProjectScreen, "owner" | "repo" | "env" | "pr
 
 /** Aba do item `n` do projeto `base` (endereço do projeto, sem item). */
 export function itemTab(base: ProjectScreen, n: number, title: string, project?: ProviderProject | null): OpenTab {
-  const { item: _omit, ...addr } = base;
+  // A aba do item é sempre Itens: a aba e a seção do projeto não vão junto (#17).
+  const { item: _omit, view: _view, section: _section, ...addr } = base;
   return {
     id: `project:${projectKey(addr)}#${n}`,
     title: `${itemShort(project, n)} ${title}`,

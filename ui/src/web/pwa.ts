@@ -7,6 +7,8 @@ import type { DaemonApi } from "../api/daemon";
 import type { HubPushDevice, PushEvent } from "../protocol/hub-gen";
 import { hubTab } from "../hub/sections";
 import { itemTab } from "../project/tabs";
+import { isPage, isSection, projectAt } from "../project/sections";
+import { splitProjectKey } from "../util/hub";
 import type { OpenTab } from "../state/nav";
 import { browserLabel } from "../hub/HubWebSessions";
 
@@ -20,7 +22,11 @@ export const PUSH_EVENTS: { event: PushEvent; label: string; hint: string }[] = 
 
 /**
  * Aba do deep link da notificação (spec §7.3): `go=item&project=<o>/<r>&n=<n>`,
- * `go=hub:proposals`, `go=hub:envs`, `go=hub:devices` ou `go=control`.
+ * `go=hub:proposals`, `go=hub:envs`, `go=hub:devices` ou `go=control`. E,
+ * desde a #17, o projeto numa aba: `go=project&project=<o>/<r>` com
+ * `view=overview|items|sessions|settings` e, nas Configurações,
+ * `section=general|tracker|envs|rules|secrets|docs|danger` (aba ou seção
+ * desconhecida = a padrão, para um link de uma versão mais nova não falhar).
  * `null` = sem `go` ou desconhecido.
  */
 export function deepLinkTab(search: string): OpenTab | null {
@@ -33,6 +39,21 @@ export function deepLinkTab(search: string): OpenTab | null {
       if (!owner || !repo || !Number.isInteger(n) || n <= 0) return null;
       const tab = itemTab({ name: "project", owner, repo }, n, "");
       return { ...tab, title: `#${n}` };
+    }
+    case "project": {
+      const key = q.get("project") ?? "";
+      // Na última barra: o `owner` do GitLab tem barras (`grupo/projeto`).
+      const { owner, repo } = splitProjectKey(key);
+      if (!key.includes("/") || !owner || !repo) return null;
+      const view = q.get("view");
+      const section = q.get("section");
+      return {
+        screen: projectAt(
+          { name: "project", owner, repo },
+          isPage(view) ? view : "items",
+          isSection(section) ? section : undefined,
+        ),
+      };
     }
     case "hub:proposals":
       return hubTab("proposals");

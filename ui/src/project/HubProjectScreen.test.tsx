@@ -507,7 +507,7 @@ test("aviso sem ambiente: Atribuir a um ambiente abre o formulário do projeto n
   expect(await screen.findByRole("form", { name: "Atribuir ctower-agents" })).toBeInTheDocument();
 });
 
-test("Configurações do projeto: um clique do cabeçalho ao projeto no Hub, sem o toggle de secrets (#8)", async () => {
+test("Configurações do projeto: um clique do cabeçalho à aba Configurações do próprio projeto, sem o toggle de secrets (#8, #17)", async () => {
   const api = setup(true)
     .on("dashboard.get", dashboard({ projects: [] }))
     .onHub("hub.projects.list", [
@@ -519,11 +519,18 @@ test("Configurações do projeto: um clique do cabeçalho ao projeto no Hub, sem
   await screen.findByText("visão do hub");
   expect(screen.queryByRole("button", { name: "Secrets e variáveis" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Configurações do projeto" }));
-  // O projeto do cabeçalho (não o primeiro da lista), com os secrets dele ao alcance.
-  const detail = await screen.findByRole("group", { name: "Projeto ctower-agents" });
-  expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
-  expect(within(detail).getByRole("heading", { name: /Secrets e variáveis do projeto/ })).toBeInTheDocument();
-  expect(within(detail).getByRole("button", { name: "Gerenciar secrets do projeto" })).toBeInTheDocument();
+  // A aba Configurações do projeto do cabeçalho (não o primeiro da lista), na mesma aba de editor.
+  const abas = screen.getByRole("navigation", { name: "Abas do projeto" });
+  expect(within(abas).getByRole("button", { name: "Configurações" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("tab", { name: /ctower-agents · Configurações/ })).toHaveAttribute("aria-selected", "true");
+  expect(screen.queryByRole("tab", { name: /Projetos e atribuições/ })).not.toBeInTheDocument();
+  expect(await screen.findByRole("group", { name: "Geral" })).toHaveTextContent("Branch base");
+  // Os secrets dele ao alcance, na seção própria.
+  const secoes = screen.getByRole("navigation", { name: "Seções das configurações do projeto" });
+  await user.click(within(secoes).getByRole("button", { name: "Secrets e variáveis" }));
+  const sec = await screen.findByRole("group", { name: "Secrets e variáveis" });
+  expect(within(sec).getByRole("heading", { name: /Secrets e variáveis do projeto/ })).toBeInTheDocument();
+  expect(within(sec).getByRole("button", { name: "Gerenciar secrets do projeto" })).toBeInTheDocument();
 });
 
 test("com o hub no ar, ambiente conhecido do hub e sem atribuição do projeto não entra no início", async () => {
@@ -622,4 +629,130 @@ test("modal de início com o hub: atalhos para as regras do projeto e do épico 
   await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Regras do projeto ›" }));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
+});
+
+// Abas do projeto (#17): Visão geral, Itens, Sessões e Configurações.
+
+const INT62 = session({ id: "62626262-0000-0000-0000-00000000aaaa", work_item_id: 62, state: "interrupted", exit_code: null });
+const FAIL59 = session({ id: "59595959-0000-0000-0000-00000000ffff", work_item_id: 59, state: "exited", exit_code: 2, ended_at: NOW });
+
+function setupTabs(hubUp = true) {
+  return setup(hubUp)
+    .on("dashboard.get", (_: unknown, env: string) =>
+      env === "wsl"
+        ? dashboard({ live_sessions: [LIVE59], interrupted_sessions: [INT62], failed_sessions: [FAIL59] }, [WI59, WI62])
+        : dashboard({ projects: [] }),
+    )
+    .onHub("hub.projects.list", [
+      {
+        project: HUB_PROJECT,
+        assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
+        locations: [],
+        sync: sync({ project_id: 7, last_ok_at: NOW }),
+        tracker_status: null,
+      },
+    ]);
+}
+
+const tabsNav = () => screen.getByRole("navigation", { name: "Abas do projeto" });
+const pageBtn = (name: string) => within(tabsNav()).getByRole("button", { name });
+
+test("abas do projeto (#17): sem `view`, Itens; cada aba troca o endereço na mesma aba de editor", async () => {
+  const api = setupTabs();
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await screen.findByText("visão do hub");
+  // Endereço antigo (sem `view`): Itens, com a árvore e o resumo de sempre.
+  expect(pageBtn("Itens")).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("tab", { name: "ctower-agents" })).toHaveAttribute("aria-selected", "true");
+
+  // Visão geral: estado, atribuições e a sessão viva, que abre o terminal.
+  await user.click(pageBtn("Visão geral"));
+  expect(screen.getByRole("tab", { name: "ctower-agents · Visão geral" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByRole("tab").filter((t) => /ctower-agents/.test(t.textContent ?? ""))).toHaveLength(1);
+  const atribs = await screen.findByRole("list", { name: "Atribuições do projeto" });
+  expect(atribs).toHaveTextContent("wsl");
+  expect(atribs).toHaveTextContent("aplicada");
+  expect(await screen.findByRole("heading", { name: "Sessões vivas · 1" })).toBeInTheDocument();
+  expect(screen.getByText(/1 viva · 1 interrompida · 1 com erro/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Abrir terminal: #59 Item 59" })).toBeInTheDocument();
+
+  // Sessões: por ambiente, vivas, interrompidas (Recuperação) e encerradas com erro.
+  await user.click(screen.getByRole("button", { name: "Ver sessões" }));
+  expect(pageBtn("Sessões")).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("list", { name: "Vivas em WSL" })).toHaveTextContent("#59 Item 59");
+  expect(screen.getByRole("list", { name: "Encerradas com erro (últimas 24 h) em WSL" })).toHaveTextContent(
+    "saiu com código 2",
+  );
+  const ints = screen.getByRole("list", { name: "Interrompidas em WSL" });
+  expect(ints).toHaveTextContent("processo perdido");
+  await user.click(within(ints).getByRole("button", { name: "Abrir na Recuperação: #62 Item 62" }));
+  expect(await screen.findByRole("tab", { name: /Recuperação/, selected: true })).toBeInTheDocument();
+
+  // De volta ao projeto, que lembra a aba; Árvore volta a Itens.
+  await user.click(screen.getByRole("tab", { name: "ctower-agents · Sessões" }));
+  await user.click(within(side()).getByRole("button", { name: "Árvore" }));
+  expect(pageBtn("Itens")).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("tab", { name: "ctower-agents" })).toBeInTheDocument();
+});
+
+test("Configurações do projeto (#17): a seção pelo endereço e cada seção com o cartão dela", async () => {
+  const api = setupTabs()
+    .onHub("hub.projects.update", null)
+    .onHub("hub.secrets.list", { items: [], delivery: [] });
+  render(
+    <App
+      api={api}
+      initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "settings", section: "docs" }}
+    />,
+  );
+  const user = userEvent.setup();
+  const docs = await screen.findByRole("group", { name: "Docs" });
+  expect(screen.getByRole("tab", { name: "ctower-agents · Configurações › Docs" })).toHaveAttribute("aria-selected", "true");
+  expect(docs).toHaveTextContent("desligados");
+  // Editar só os docs: o mesmo `docs` inteiro da edição completa.
+  await user.click(within(docs).getByRole("button", { name: "Editar docs" }));
+  await user.click(within(docs).getByLabelText("Pasta de docs do projeto"));
+  await user.type(within(docs).getByLabelText("Pastas do projeto (em _projeto/)"), "analises");
+  await user.click(within(docs).getByRole("button", { name: "Salvar docs" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.projects.update")[0].params).toMatchObject({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    docs: { enabled: true, project_dirs: ["analises"], epic_dirs: [] },
+  });
+
+  const secoes = screen.getByRole("navigation", { name: "Seções das configurações do projeto" });
+  expect(within(secoes).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    "Geral",
+    "Repositório e rastreador",
+    "Ambientes e atribuições",
+    "Regras do agente",
+    "Secrets e variáveis",
+    "Docs",
+    "Zona de perigo",
+  ]);
+  await user.click(within(secoes).getByRole("button", { name: "Repositório e rastreador" }));
+  expect(await screen.findByRole("group", { name: "Repositório e rastreador" })).toHaveTextContent(/sincronizado/);
+  await user.click(within(secoes).getByRole("button", { name: "Ambientes e atribuições" }));
+  expect(await screen.findByRole("group", { name: "Ambientes e atribuições" })).toHaveTextContent("wsl");
+  await user.click(within(secoes).getByRole("button", { name: "Zona de perigo" }));
+  expect(await screen.findByRole("group", { name: "Zona de perigo" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "ctower-agents · Configurações › Zona de perigo" })).toBeInTheDocument();
+  // Geral: o cartão do repositório, com Editar.
+  await user.click(within(secoes).getByRole("button", { name: "Geral" }));
+  const geral = await screen.findByRole("group", { name: "Geral" });
+  await user.click(within(geral).getByRole("button", { name: /^Editar/ }));
+  expect(within(geral).getByRole("form", { name: "Editar ctower-agents" })).toBeInTheDocument();
+});
+
+test("projeto local (hub fora, #17): Sessões pelo ambiente e Configurações apontam para o hub", async () => {
+  const api = setupTabs(false);
+  render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1, view: "sessions" }} />);
+  const user = userEvent.setup();
+  expect(await screen.findByRole("list", { name: "Vivas em WSL" })).toHaveTextContent("#59 Item 59");
+  await user.click(pageBtn("Configurações"));
+  expect(await screen.findByText(/As configurações do projeto ficam no hub/)).toBeInTheDocument();
+  await user.click(pageBtn("Visão geral"));
+  expect(await screen.findByText(/Dados locais de WSL/)).toBeInTheDocument();
 });

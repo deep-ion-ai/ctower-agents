@@ -10,3 +10,4 @@ export { EMPTY_PROJECT_FORM, branches, keyOf, plural, type ProjectForm, type Ton
 export { useSettingsRun, type SettingsRun } from "./run";
 export { projectSecretsOf, useSecrets, type ProjectSecrets } from "./useSecrets";
 export { syncText } from "./sync";
+export { DocsCard } from "./DocsCard";
