@@ -17,7 +17,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { closeTargets, isPinnable, isShell, useNav, type CloseWhich, type EditorTab, type Nav, type Screen } from "../state/nav";
+import { closeTargets, hasProjectKey, isPinnable, isShell, useNav, type CloseWhich, type EditorTab, type Nav, type Screen } from "../state/nav";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { OpenTabsList } from "./OpenTabs";
 import { useTower } from "../state/tower";
@@ -390,7 +390,9 @@ function ActivityBar({
 
   const open = (name: Screen["name"]) => {
     // Clicar na tela atual recolhe ou mostra o painel lateral (como no VS Code).
-    if (nav.screen.name === name) {
+    // Na aba de um projeto, Projetos não é a "tela atual": vai ao índice (#16).
+    const here = nav.screen.name === name && !(nav.screen.name === "project" && hasProjectKey(nav.screen));
+    if (here) {
       onToggleSide();
       return;
     }

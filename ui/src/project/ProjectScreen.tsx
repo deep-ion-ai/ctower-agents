@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { hubTab } from "../hub/sections";
 import type { ProjectTree, TreeNode } from "../protocol/gen";
 import { settingsTab } from "../settings/sections";
 import { useNav, type ItemIntent } from "../state/nav";
@@ -8,6 +7,7 @@ import { changeLabel, trackerLabel } from "../util/item";
 import { useNow } from "../App";
 import { itemTitle } from "../util/item";
 import { localClone, liveSessions } from "./clones";
+import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
 import { ProjectSyncCard } from "./OverviewCards";
@@ -32,13 +32,13 @@ export function ProjectScreen(props: {
   view?: ProjectPage;
 }) {
   const tower = useTower();
-  const { envs, dashboards, api, hub } = tower;
+  const { dashboards, api, hub } = tower;
   const nav = useNav();
   const now = useNow();
 
-  // Sem seleção: o primeiro projeto do primeiro ambiente com dashboard.
-  const env = props.env ?? envs.find((e) => dashboards[e.id]?.projects.length)?.id;
-  const projectId = props.projectId ?? (env ? dashboards[env]?.projects[0]?.project.id : undefined);
+  // Sem projeto não se chega aqui: o endereço sem chave é o índice (#16), e
+  // o do hub com o hub fora sem projeto local correspondente cai no aviso abaixo.
+  const { env, projectId } = props;
   const key = projectKey({ env, projectId });
   // Hooks antes do retorno antecipado (sem projeto): o endereço vale mesmo sem ele.
   const goPage = useGoPage({ name: "project", env, projectId });
@@ -82,34 +82,20 @@ export function ProjectScreen(props: {
     return (
       <main className="page">
         <h1 className="section-title">Projeto</h1>
-        {/* O cadastro é no Hub: sem ele no ar, o caminho é configurar a conexão. */}
         <p className="empty">
           {hub.connected
-            ? "Nenhum projeto cadastrado. O cadastro fica no Hub, em Projetos e atribuições."
-            : "Nenhum projeto cadastrado. O cadastro fica no Hub, que está fora do ar ou sem conexão configurada."}
+            ? "Este projeto não está em nenhum ambiente conectado."
+            : "Este projeto não está em nenhum ambiente conectado, e o Hub, que tem a visão consolidada, está fora do ar."}
         </p>
         <div className="form-actions">
-          {hub.connected ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => nav.openTab(hubTab("projects", { register: { url: "" } }))}
-            >
-              + Novo projeto
-            </button>
-          ) : (
-            <button type="button" className="btn btn-primary" onClick={() => nav.openTab(settingsTab({ section: "connections" }))}>
-              Configurar o hub
-            </button>
-          )}
+          <button type="button" className="btn btn-primary" onClick={() => nav.go({ name: "project" })}>
+            Ver todos os projetos
+          </button>
         </div>
       </main>
     );
   }
 
-  const projects = envs.flatMap((e) =>
-    (dashboards[e.id]?.projects ?? []).map((p) => ({ env: e.id, project: p.project })),
-  );
   const clone = localClone(tower, env, projectId);
   const clones = clone ? [clone] : [];
   const liveOf = (gh: number) =>
@@ -201,28 +187,8 @@ export function ProjectScreen(props: {
       }}
       onReload={() => void load()}
       docs={clones}
-      picker={
-        projects.length > 1 ? (
-          <label className="pj-pick">
-            <span className="sr-only">Trocar de projeto</span>
-            <select
-              value={`${env}|${projectId}`}
-              onChange={(e) => {
-                const [en, id] = e.target.value.split("|");
-                nav.go({ name: "project", env: en, projectId: Number(id) });
-              }}
-            >
-              {projects.map((x) => (
-                <option key={`${x.env}|${x.project.id}`} value={`${x.env}|${x.project.id}`}>
-                  {x.project.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <p className="pj-name">{p ? `${p.gh_owner}/${p.gh_repo}` : name}</p>
-        )
-      }
+      // Trilha "Projetos › X" (#16): trocar de projeto é pelo índice.
+      picker={<ProjectTrail name={name} title={p ? `${p.gh_owner}/${p.gh_repo}` : undefined} />}
     />
   );
 }

@@ -76,32 +76,7 @@
   color: var(--text-2);
 }
 
-/* Painel lateral: seletor, Árvore | Quadro, filtro e a árvore. */
-.pj-pick {
-  margin: 0 10px 8px;
-}
-
-.pj-pick select {
-  width: 100%;
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.pj-name {
-  margin: 0 16px 8px;
-  font-size: 13px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* Painel lateral: trilha (project-index.css), Árvore | Quadro, filtro e a árvore. */
 .views {
   display: flex;
   margin: 0 10px 8px;
@@ -329,20 +304,6 @@
 .pj-picker > .provider-icon {
   margin: 0 0 8px 14px;
   align-self: center;
-}
-
-.pj-picker > .pj-pick,
-.pj-picker > .pj-name {
-  flex: 1;
-  min-width: 0;
-}
-
-.pj-picker > .provider-icon + .pj-name {
-  margin-left: 8px;
-}
-
-.pj-picker > .provider-icon + .pj-pick {
-  margin-left: 8px;
 }
 
 /* Filtro por sprint (projetos Jira). */

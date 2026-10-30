@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import type { Shell } from "../protocol/gen";
 import { paneProject, type TabProject } from "../terminal/tabmeta";
+import { projectKey } from "../project/tabs";
 import { useTower } from "./tower";
 import type { HubSection, ProjectRef, RegisterIntent } from "../hub/sections";
 import type { MaintenanceSection } from "../maintenance/sections";
@@ -256,12 +257,33 @@ export type NavAction =
 
 type ScreenTab = Extract<EditorTab, { kind: "screen" }>;
 
-function screenTab(t: OpenTab): ScreenTab {
-  return { kind: "screen", id: t.id ?? t.screen.name, screen: t.screen, title: t.title };
+/** O endereço de projeto tem chave (`owner/repo` ou `env` + `projectId`)? Sem ela, é o índice (#16). */
+export const hasProjectKey = (s: Extract<Screen, { name: "project" }>): boolean =>
+  !!(s.owner && s.repo) || (s.env !== undefined && s.projectId !== undefined);
+
+/**
+ * Id da aba de uma tela aberta sem `id`: o nome da tela, menos no projeto
+ * com chave (#16), que tem aba própria (`project:<chave>`, a mesma base das
+ * abas de item em project/tabs.ts). Assim a aba "project" (a da barra de
+ * atividades) fica com o índice, e abrir um projeto (pelo índice, pela
+ * paleta, pela Sala de controle...) não troca o endereço dela: o último
+ * projeto aberto segue na sua aba ao voltar ao índice.
+ */
+export function mainTabId(s: Screen): string {
+  if (s.name === "project" && hasProjectKey(s)) return `project:${projectKey(s)}`;
+  return s.name;
 }
 
-/** Aba principal de uma tela (a da barra de atividades): nunca provisória nem fixável. */
-export const isMainTab = (e: EditorTab): boolean => e.kind === "screen" && e.id === e.screen.name;
+function screenTab(t: OpenTab): ScreenTab {
+  return { kind: "screen", id: t.id ?? mainTabId(t.screen), screen: t.screen, title: t.title };
+}
+
+/**
+ * Aba principal de uma tela (a da barra de atividades, ou a de um projeto):
+ * nunca provisória nem fixável. A do projeto não é provisória porque o item
+ * aberto na árvore dela (aba provisória) a substituiria.
+ */
+export const isMainTab = (e: EditorTab): boolean => e.kind === "screen" && e.id === mainTabId(e.screen);
 
 /** Aba que pode ser fixada: a de um item (seção, item do projeto, template...). */
 export const isPinnable = (e: EditorTab): boolean => e.kind === "screen" && !isMainTab(e);
@@ -495,8 +517,22 @@ export function NavProvider({
     return m[id]?.project?.key ?? paneProject(d[p.env], p)?.key;
   }, []);
 
-  const go = useCallback((s: Screen) => dispatch({ type: "open", tab: { screen: s } }), []);
-  const openTab = useCallback((tab: OpenTab) => dispatch({ type: "open", tab }), []);
+  /**
+   * Endereço local de projeto (`env` + `projectId`) ganha a chave natural
+   * (`owner/repo`) do dashboard: a aba do projeto (`mainTabId`) é a mesma
+   * por qualquer caminho, e a árvore volta a ela pela trilha do item (o
+   * `addr` da visão leva `owner/repo`), sem abrir uma segunda.
+   */
+  const withKey = useCallback((s: Screen): Screen => {
+    if (s.name !== "project" || (s.owner && s.repo) || s.env === undefined || s.projectId === undefined) return s;
+    const p = now.current.dashboards[s.env]?.projects.find((x) => x.project.id === s.projectId)?.project;
+    return p ? { ...s, owner: p.gh_owner, repo: p.gh_repo } : s;
+  }, []);
+  const go = useCallback((s: Screen) => dispatch({ type: "open", tab: { screen: withKey(s) } }), [withKey]);
+  const openTab = useCallback(
+    (tab: OpenTab) => dispatch({ type: "open", tab: tab.id ? tab : { ...tab, screen: withKey(tab.screen) } }),
+    [withKey],
+  );
   const activate = useCallback((id: string) => dispatch({ type: "activate", id }), []);
   const closeEditor = useCallback((id: string, force?: boolean) => dispatch({ type: "close", id, force }), []);
   const cancelClose = useCallback(() => dispatch({ type: "cancelClose" }), []);
