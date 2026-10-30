@@ -142,6 +142,7 @@ export function projectState(p: HubProjectView, now: number): { text: string; to
  */
 export function HubProjects({
   project,
+  assign: assignReq,
   addUrl,
   addKind,
   onAddDone,
@@ -149,6 +150,8 @@ export function HubProjects({
 }: {
   /** Projeto mostrado no detalhe; sem ele (ou se sumiu), o primeiro. */
   project?: ProjectRef;
+  /** Abrir o formulário de atribuição do projeto mostrado (`Screen` do hub, #7). */
+  assign?: true;
   addUrl: string | null;
   /** Tipo do formulário pedido (quarentena de projeto GitLab, #352); ausente = GitHub. */
   addKind?: ProjectKindForm;
@@ -194,6 +197,20 @@ export function HubProjects({
         (p) => p.project.name.toLowerCase().includes(q) || keyOf(p.project.gh_owner, p.project.gh_repo).toLowerCase().includes(q),
       )
     : projects;
+
+  // Pedido de atribuição vindo de fora (aviso da tela Projeto, #7): com o
+  // projeto e os ambientes carregados, abre o formulário e tira o pedido da
+  // aba (como o cadastro), para um novo pedido abrir de novo.
+  const shownWanted = !!sel && (!wanted || keyOf(sel.project.gh_owner, sel.project.gh_repo).toLowerCase() === wanted);
+  const assignFor = assignReq && shownWanted ? sel : null;
+  useEffect(() => {
+    if (!assignFor || hub.envs.length === 0) return;
+    const pr = assignFor.project;
+    const taken = new Set(assignFor.assignments.map((a) => a.env_id));
+    const free = hub.envs.find((e) => !taken.has(e.env_id));
+    if (!web && free) setAssign({ key: keyOf(pr.gh_owner, pr.gh_repo), env: free.env_id, repo_path: "" });
+    nav.openTab({ ...hubTab("projects", { project: { owner: pr.gh_owner, repo: pr.gh_repo } }), id: nav.current });
+  }, [assignFor, hub.envs, web, nav]);
 
   const select = (pr: HubProject) => {
     setAdd(null);
@@ -1070,6 +1087,8 @@ export function HubProjects({
                 <label htmlFor={`as-env-${pr.id}`}>Ambiente</label>
                 <select
                   id={`as-env-${pr.id}`}
+                  // Aberto também por pedido de fora (#7): o foco leva até o formulário.
+                  autoFocus
                   value={assign.env}
                   onChange={(e) => setAssign({ ...assign, env: e.target.value })}
                 >

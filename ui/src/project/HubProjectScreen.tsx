@@ -3,6 +3,7 @@ import type { HubTree, HubTreeNode } from "../protocol/hub-gen";
 import { useNav, type ItemIntent } from "../state/nav";
 import { useTower } from "../state/tower";
 import { HubSecrets } from "../hub/HubSecrets";
+import { hubTab } from "../hub/sections";
 import { hubClones, liveSessions } from "./clones";
 import { ProjectView } from "./ProjectView";
 import { projectKey } from "./tabs";
@@ -114,9 +115,23 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
         clones.length === 0 &&
         mine && (
           <p className="banner" role="status">
-            {web
-              ? "Nenhum ambiente com este projeto está online agora: dá para acompanhar, mas iniciar sessões volta quando um deles reconectar ao hub."
-              : "Nenhum ambiente conectado tem este projeto atribuído: dá para acompanhar, mas não iniciar sessões. Atribua o projeto a um ambiente na tela Hub."}
+            {web ? (
+              "Nenhum ambiente com este projeto está online agora: dá para acompanhar, mas iniciar sessões volta quando um deles reconectar ao hub."
+            ) : (
+              // Só no desktop: na web a atribuição é só leitura.
+              <>
+                Nenhum ambiente conectado tem este projeto atribuído: dá para acompanhar, mas não iniciar sessões.{" "}
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() =>
+                    nav.openTab(hubTab("projects", { project: { owner: p?.gh_owner ?? owner, repo: p?.gh_repo ?? repo }, assign: true }))
+                  }
+                >
+                  Atribuir a um ambiente
+                </button>
+              </>
+            )}
           </p>
         )
       }

@@ -90,6 +90,19 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(await screen.findByText(/Nenhum ambiente com este projeto está online/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Sessão de planejamento/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Secrets e variáveis" })).toBeNull();
+    // A atribuição fica no desktop (#7): o aviso não tem o atalho.
+    expect(screen.queryByRole("button", { name: "Atribuir a um ambiente" })).toBeNull();
+  });
+
+  it("pedido de atribuição por endereço (#7): Projetos segue só leitura, sem o formulário", async () => {
+    const api = webApi().onHub("hub.envs.list", [
+      hubEnv({ last_seen_at: now, online: true }),
+      hubEnv({ env_id: "daemon-mac", name: "mac", last_seen_at: now, online: true }),
+    ]);
+    renderApp(api, { name: "hub", section: "projects", project: { owner: "deep-ion-ai", repo: "ctower-agents" }, assign: true });
+    await screen.findByRole("button", { name: "Abrir árvore" });
+    await waitFor(() => expect(api.hubCallsTo("hub.envs.list").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("form", { name: /^Atribuir/ })).toBeNull();
   });
 
   it("Recuperação com o ambiente offline: só leitura, pelas interrompidas do hub", async () => {
