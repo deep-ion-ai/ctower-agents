@@ -9,8 +9,9 @@ import { kindText, SEVERITY_TEXT, SEVERITY_TONE, where } from "./HubHealth";
 import { itemShort } from "../util/item";
 import { hubProjectOf } from "../util/hub";
 import { WHY_SHORT, valueText, type DecideResult, type ProposalsData } from "./HubProposals";
-import { actionableSignals, hubTab, warningAction, type HubSection } from "./sections";
-import { syncText } from "./HubProjects";
+import { actionableSignals, warningAction, type HubSection } from "./sections";
+import { syncText } from "../project/settings";
+import { projectAt } from "../project/sections";
 import { isJira } from "./tracker";
 import { DocsBackupReadOnly } from "../maintenance/DocsBackup";
 
@@ -206,7 +207,8 @@ function SignalAction({ s, open }: { s: HealthSignal; open(sec: HubSection): voi
         type="button"
         className="btn btn-sm"
         aria-label={`Ambiente de sync de ${s.owner}/${s.repo}`}
-        onClick={() => nav.openTab(hubTab("projects", { project }))}
+        // Configurações › Repositório e rastreador do próprio projeto (#18).
+        onClick={() => nav.go(projectAt({ name: "project", ...project }, "settings", "tracker"))}
       >
         Ambiente de sync
       </button>
@@ -350,7 +352,10 @@ function TrackerSync({ now }: { now: number }) {
               <button
                 type="button"
                 className="btn btn-sm"
-                onClick={() => nav.openTab(hubTab("projects", { project: { owner: pr.gh_owner, repo: pr.gh_repo } }))}
+                // Configurações › Repositório e rastreador do próprio projeto (#18).
+                onClick={() =>
+                  nav.go(projectAt({ name: "project", owner: pr.gh_owner, repo: pr.gh_repo }, "settings", "tracker"))
+                }
               >
                 Abrir <span className="sr-only">{pr.name}</span>
               </button>

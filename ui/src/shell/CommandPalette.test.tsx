@@ -204,8 +204,14 @@ test("comandos de projeto (#9): \"novo projeto\" abre o cadastro; \"configurar c
   await user.type(input(), "novo projeto");
   expect(activeOption()).toHaveTextContent("Projeto: Novo…");
   await user.keyboard("{Enter}");
-  expect(await screen.findByRole("tab", { name: "Hub · Projetos e atribuições" })).toHaveAttribute("aria-selected", "true");
+  // O cadastro abre no índice de Projetos (#18); sem hub, ele leva a configurar a conexão.
+  expect(await screen.findByRole("tab", { name: "Projetos" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("button", { name: "Configurar o hub" })).toBeInTheDocument();
+  // O lugar antigo segue na paleta como sinônimo e leva ao índice.
   await open(user);
+  await user.type(input(), "hub projetos");
+  expect(activeOption()).toHaveTextContent("Hub › Projetos e atribuições");
+  await user.clear(input());
   await user.type(input(), "configurar ctower");
   expect(activeOption()).toHaveTextContent("Projeto: Configurações — ctower-agents");
   await user.clear(input());
@@ -217,6 +223,41 @@ test("comandos de projeto (#9): \"novo projeto\" abre o cadastro; \"configurar c
     expect.arrayContaining([
       expect.stringContaining("Projeto: Secrets — ctower-agents"),
       expect.stringContaining("Projeto: Regras — ctower-agents"),
+    ]),
+  );
+});
+
+test("comandos de projeto (#17): cada aba e seção abre na aba do próprio projeto", async () => {
+  const { user } = setup();
+  await screen.findByRole("button", { name: /ui: paleta de comandos/ });
+  await open(user);
+  await user.type(input(), "configurar ctower");
+  expect(activeOption()).toHaveTextContent("Projeto: Configurações — ctower-agents");
+  await user.keyboard("{Enter}");
+  expect(await screen.findByRole("tab", { name: "ctower-agents · Configurações" })).toHaveAttribute("aria-selected", "true");
+  await open(user);
+  await user.type(input(), ">regras ctower");
+  expect(activeOption()).toHaveTextContent("Projeto: Regras — ctower-agents");
+  await user.keyboard("{Enter}");
+  // A mesma aba do projeto, com o endereço da seção.
+  expect(await screen.findByRole("tab", { name: "ctower-agents · Configurações › Regras do agente" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await open(user);
+  await user.type(input(), ">projeto sessões ctower");
+  expect(activeOption()).toHaveTextContent("Projeto: Sessões — ctower-agents");
+  await user.keyboard("{Enter}");
+  expect(await screen.findByRole("tab", { name: "ctower-agents · Sessões" })).toHaveAttribute("aria-selected", "true");
+  await open(user);
+  await user.clear(input());
+  await user.type(input(), ">projeto ctower");
+  expect(options().map((o) => o.textContent)).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("Projeto: Visão geral — ctower-agents"),
+      expect.stringContaining("Projeto: Itens — ctower-agents"),
+      expect.stringContaining("Projeto: Docs — ctower-agents"),
+      expect.stringContaining("Projeto: Excluir — ctower-agents"),
     ]),
   );
 });
@@ -234,7 +275,7 @@ test("comandos de projeto na web (#9): só os de leitura", async () => {
       expect.stringContaining("Projeto: Regras — ctower-agents"),
     ]),
   );
-  for (const l of ["Projeto: Novo", "Projeto: Atribuir", "Projeto: Secrets"]) {
+  for (const l of ["Projeto: Novo", "Projeto: Atribuir", "Projeto: Secrets", "Projeto: Excluir"]) {
     expect(labels.some((t) => t.includes(l))).toBe(false);
   }
 });

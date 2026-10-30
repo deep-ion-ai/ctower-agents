@@ -14,6 +14,12 @@
   min-width: 0;
 }
 
+/* Gestor deste projeto (#19): dentro do cartão, o launcher alinha à
+   esquerda (no cabeçalho do Hub ele é empurrado para a direita). */
+.pj-overview-cards .gestor-launch {
+  margin-left: 0;
+}
+
 .project-head {
   display: flex;
   flex-wrap: wrap;
@@ -70,32 +76,7 @@
   color: var(--text-2);
 }
 
-/* Painel lateral: seletor, Árvore | Quadro, filtro e a árvore. */
-.pj-pick {
-  margin: 0 10px 8px;
-}
-
-.pj-pick select {
-  width: 100%;
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.pj-name {
-  margin: 0 16px 8px;
-  font-size: 13px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* Painel lateral: trilha (project-index.css), Árvore | Quadro, filtro e a árvore. */
 .views {
   display: flex;
   margin: 0 10px 8px;
@@ -325,20 +306,6 @@
   align-self: center;
 }
 
-.pj-picker > .pj-pick,
-.pj-picker > .pj-name {
-  flex: 1;
-  min-width: 0;
-}
-
-.pj-picker > .provider-icon + .pj-name {
-  margin-left: 8px;
-}
-
-.pj-picker > .provider-icon + .pj-pick {
-  margin-left: 8px;
-}
-
 /* Filtro por sprint (projetos Jira). */
 .tree-sprint select {
   flex: 1;
@@ -372,4 +339,101 @@
 .pj-sprint[data-state="active"] {
   border-color: var(--running);
   color: var(--text-2);
+}
+
+/* Abas do projeto (#17): Visão geral, Itens, Sessões e Configurações. */
+.pj-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pj-tabs button {
+  padding: 6px 12px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pj-tabs button:hover {
+  color: var(--text);
+}
+
+.pj-tabs button[aria-current="page"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.pj-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pj-ses-kind {
+  margin: 0;
+  padding: 8px 14px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* Configurações do projeto: índice das seções e a seção pedida. */
+.pj-settings {
+  display: grid;
+  grid-template-columns: minmax(160px, 200px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.pj-settings-nav ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pj-settings-nav button {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pj-settings-nav button:hover {
+  color: var(--text);
+}
+
+.pj-settings-nav button[aria-current="page"] {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.pj-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.pj-settings-body .hub-page-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+@media (max-width: 720px) {
+  .pj-settings {
+    grid-template-columns: 1fr;
+  }
 }

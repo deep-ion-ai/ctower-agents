@@ -40,22 +40,27 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(screen.getAllByText(/sem envio ao hub há 10 min/).length).toBeGreaterThan(0);
   });
 
-  it("Hub sem o grupo Segurança, com Sessões web; Projetos só leitura", async () => {
+  it("Hub sem o grupo Segurança, com Sessões web; o antigo Hub › Projetos cai no índice, só leitura", async () => {
     const api = webApi();
-    renderApp(api, { name: "hub", section: "projects" });
+    renderApp(api, { name: "hub" });
     const side = await screen.findByRole("region", { name: "Painel lateral" });
     await waitFor(() => expect(within(side).getByText("Sessões web")).toBeInTheDocument());
     expect(within(side).queryByText("Segurança")).toBeNull();
     expect(within(side).queryByText("Secrets e variáveis")).toBeNull();
     expect(within(side).queryByText("Chave de recuperação")).toBeNull();
     expect(within(side).queryByText("Token do GitHub")).toBeNull();
-    await screen.findByRole("button", { name: "Abrir árvore" });
-    expect(screen.queryByRole("button", { name: "Cadastrar projeto" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Editar/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Excluir projeto/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Atribuir a ambiente/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Remover/ })).toBeNull();
-    expect(screen.queryByText(/Secrets e variáveis do projeto/)).toBeNull();
+    // Projetos e atribuições saiu do Hub (#18).
+    expect(within(side).queryByText("Projetos e atribuições")).toBeNull();
+  });
+
+  it("endereço antigo do Hub › Projetos (#18): o índice de Projetos, só leitura", async () => {
+    const api = webApi();
+    renderApp(api, { name: "hub", section: "projects", register: { url: "" } });
+    expect(await screen.findByRole("heading", { level: 1, name: "Projetos" })).toBeInTheDocument();
+    await screen.findByRole("button", { name: "ctower-agents" });
+    // O pedido de cadastro não abre nada na web.
+    expect(screen.queryByRole("button", { name: "+ Novo projeto" })).toBeNull();
+    expect(screen.queryByRole("form", { name: "Novo projeto" })).toBeNull();
     // `hub.secrets.list` está fora do /web/ws.
     expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
   });
@@ -94,25 +99,33 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(screen.queryByRole("button", { name: "Atribuir a um ambiente" })).toBeNull();
   });
 
-  it("Configurações do projeto (#8): abre o projeto no Hub, só leitura e sem secrets", async () => {
+  it("Configurações do projeto (#8, #17): a aba do projeto, só leitura e sem secrets nem exclusão", async () => {
     const user = userEvent.setup();
     const api = webApi();
     renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
     await user.click(await screen.findByRole("button", { name: "Configurações do projeto" }));
-    await screen.findByRole("button", { name: "Abrir árvore" });
-    expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
+    await screen.findByRole("group", { name: "Geral" });
+    expect(screen.getByRole("tab", { name: /ctower-agents · Configurações/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("button", { name: /^Editar/ })).toBeNull();
+    const secoes = screen.getByRole("navigation", { name: "Seções das configurações do projeto" });
+    expect(within(secoes).queryByRole("button", { name: "Secrets e variáveis" })).toBeNull();
+    expect(within(secoes).queryByRole("button", { name: "Zona de perigo" })).toBeNull();
+    // A seção do desktop pedida pelo endereço cai em Geral; Ambientes, sem atribuir nem remover.
+    await user.click(within(secoes).getByRole("button", { name: "Ambientes e atribuições" }));
+    await screen.findByRole("group", { name: "Ambientes e atribuições" });
+    expect(screen.queryByRole("button", { name: /Atribuir/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remover/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Gerenciar secrets do projeto" })).toBeNull();
     expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
   });
 
-  it("pedido de atribuição por endereço (#7): Projetos segue só leitura, sem o formulário", async () => {
+  it("pedido de atribuição por endereço (#7, #18): Configurações › Ambientes, só leitura, sem o formulário", async () => {
     const api = webApi().onHub("hub.envs.list", [
       hubEnv({ last_seen_at: now, online: true }),
       hubEnv({ env_id: "daemon-mac", name: "mac", last_seen_at: now, online: true }),
     ]);
     renderApp(api, { name: "hub", section: "projects", project: { owner: "deep-ion-ai", repo: "ctower-agents" }, assign: true });
-    await screen.findByRole("button", { name: "Abrir árvore" });
+    await screen.findByRole("group", { name: "Ambientes e atribuições" });
     await waitFor(() => expect(api.hubCallsTo("hub.envs.list").length).toBeGreaterThan(0));
     expect(screen.queryByRole("form", { name: /^Atribuir/ })).toBeNull();
   });

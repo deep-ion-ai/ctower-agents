@@ -76,13 +76,26 @@ pub fn spawn(how: Launch, program: &Path, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, Instant};
 
+    /// Grava o script executável por um `sh` filho, e não por este processo:
+    /// um `fork` concorrente de outro teste herdaria o descritor de escrita
+    /// até o seu `exec`, e executar o script nesse intervalo dá ETXTBSY
+    /// ("Text file busy") no Linux.
     fn exe(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
         let p = dir.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let ok = Command::new("sh")
+            .args([
+                "-c",
+                "printf '%s' \"$2\" > \"$1\" && chmod 755 \"$1\"",
+                "sh",
+            ])
+            .arg(&p)
+            .arg(format!("#!/bin/sh\n{body}\n"))
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "gravar {}", p.display());
         p
     }
 

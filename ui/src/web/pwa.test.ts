@@ -33,6 +33,36 @@ test("deep link: item, propostas, ambientes, dispositivos e desconhecido", () =>
   expect(deepLinkTab("?go=terminal")).toBeNull();
 });
 
+test("deep link do projeto numa aba e numa seção (#17)", () => {
+  const base = { name: "project", owner: "deep-ion-ai", repo: "demo" };
+  // Sem `view` (ou desconhecida): Itens, o endereço de sempre.
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo")).toEqual({ screen: base });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=nova")).toEqual({ screen: base });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=sessions")?.screen).toEqual({ ...base, view: "sessions" });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=settings&section=rules")?.screen).toEqual({
+    ...base,
+    view: "settings",
+    section: "rules",
+  });
+  // Seção desconhecida ou fora das Configurações: sai do endereço.
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=settings&section=x")?.screen).toEqual({
+    ...base,
+    view: "settings",
+  });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=overview&section=rules")?.screen).toEqual({
+    ...base,
+    view: "overview",
+  });
+  // GitLab: o `owner` com barras (divide na última).
+  expect(deepLinkTab("?go=project&project=grupo/sub/app&view=items")?.screen).toEqual({
+    name: "project",
+    owner: "grupo/sub",
+    repo: "app",
+  });
+  expect(deepLinkTab("?go=project&project=sem-barra")).toBeNull();
+  expect(deepLinkTab("?go=project")).toBeNull();
+});
+
 test("iOS fora da tela de início pede para instalar; Android pode ativar", () => {
   expect(isIos(IPHONE, 5)).toBe(true);
   // iPad no modo desktop: "Macintosh" com toque.
@@ -63,4 +93,19 @@ test("inscrição com outra chave VAPID é refeita", () => {
   expect(sameKey(new Uint8Array([4, 1, 2]).buffer, key)).toBe(true);
   expect(sameKey(new Uint8Array([4, 1, 3]).buffer, key)).toBe(false);
   expect(sameKey(new Uint8Array([4, 1]).buffer, key)).toBe(false);
+});
+
+test("deep link do antigo Hub › Projetos (#18): as Configurações do projeto ou o índice de Projetos", () => {
+  expect(deepLinkTab("?go=hub:projects")).toEqual({ screen: { name: "project" } });
+  expect(deepLinkTab("?go=hub:projects&project=deep-ion-ai/demo")).toEqual({
+    screen: { name: "project", owner: "deep-ion-ai", repo: "demo", view: "settings" },
+  });
+  // GitLab: o `owner` tem barras; corta na última.
+  expect(deepLinkTab("?go=hub:projects&project=grupo/projeto/app")?.screen).toEqual({
+    name: "project",
+    owner: "grupo/projeto",
+    repo: "app",
+    view: "settings",
+  });
+  expect(deepLinkTab("?go=hub:projects&project=sem-barra")).toEqual({ screen: { name: "project" } });
 });

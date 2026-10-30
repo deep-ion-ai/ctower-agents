@@ -1,19 +1,17 @@
 // Painel lateral da Sala de controle (#316): visões, hub, ambientes e projetos.
 import { useState } from "react";
-import { hubTab } from "../hub/sections";
-import { hubClones, localClone } from "../project/clones";
+import { projectsPlace } from "../project/sections";
+import { projectMenuItems, useProjectRows, type ProjectRow } from "../project/rows";
 import { ContextMenu, type MenuItem } from "../shell/ContextMenu";
 import { Icon } from "../shell/icons";
 import { shortcutLabel } from "../shell/layout";
 import { useShell } from "../shell/Shell";
 import { SideContent, SideGroup, SidePanel, SideRow } from "../shell/SidePanel";
-import { useStartSession, type StartTarget } from "../shell/start";
+import { useStartSession } from "../shell/start";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 import { ago } from "../util/time";
 import { configLine } from "../util/hub";
-import { forgeLabel, jiraProjectUrl, repoUrl, type ProviderProject } from "../util/item";
-import { lookup } from "./attention";
 import type { ControlView } from "./grid";
 import type { EnvInfo, HubSyncResult } from "../protocol/gen";
 
@@ -173,78 +171,6 @@ function EnvRow({ id, name, now }: { id: string; name: string; now: number }) {
   );
 }
 
-interface ProjectRow {
-  key: string;
-  name: string;
-  running: number;
-  waiting: number;
-  /** Rastreador e forja, para "Abrir no GitHub/GitLab/Jira". */
-  project: ProviderProject;
-  /** Alvo da sessão de planejamento; `null` = nenhum ambiente conectado com o projeto. */
-  start: StartTarget | null;
-  open(): void;
-}
-
-/** Projetos com sessões em execução e aguardando; com o hub no ar, a visão consolidada. */
-function useProjectRows(): ProjectRow[] {
-  const tower = useTower();
-  const { envs, dashboards, hub } = tower;
-  const nav = useNav();
-  if (hub.up && hub.dashboard) {
-    const hd = hub.dashboard;
-    return hd.projects.map(({ project, work_items }) => {
-      let running = 0;
-      let waiting = 0;
-      for (const s of hd.live_sessions) {
-        const wi = work_items.find((w) => w.id === s.work_item_id);
-        if (!wi) continue;
-        if (wi.status === "aguardando_voce") waiting++;
-        else running++;
-      }
-      return {
-        key: `hub:${project.id}`,
-        name: project.name,
-        running,
-        waiting,
-        project,
-        start:
-          hubClones(tower, project.gh_owner, project.gh_repo).length > 0
-            ? { owner: project.gh_owner, repo: project.gh_repo }
-            : null,
-        open: () =>
-          nav.go({
-            name: "project",
-            owner: project.gh_owner,
-            repo: project.gh_repo,
-          }),
-      };
-    });
-  }
-  return envs.flatMap((e) => {
-    const d = dashboards[e.id];
-    if (!d) return [];
-    return d.projects.map(({ project }) => {
-      let running = 0;
-      let waiting = 0;
-      for (const s of d.live_sessions) {
-        const { wi } = lookup(d, s);
-        if (wi?.project_id !== project.id) continue;
-        if (wi.status === "aguardando_voce") waiting++;
-        else running++;
-      }
-      return {
-        key: `${e.id}:${project.id}`,
-        name: project.name,
-        running,
-        waiting,
-        project,
-        start: localClone(tower, e.id, project.id) ? { env: e.id, projectId: project.id } : null,
-        open: () => nav.go({ name: "project", env: e.id, projectId: project.id }),
-      };
-    });
-  });
-}
-
 const VIEWS: {
   id: ControlView;
   label: string;
@@ -296,21 +222,15 @@ export function Sidebar({
   // Cadastro e atribuição são no hub e só no desktop (na web, só leitura).
   const editable = hub.connected && !web;
 
-  const menuItems = (p: ProjectRow, origin: HTMLElement): MenuItem[] => {
-    const ref = { owner: p.project.gh_owner, repo: p.project.gh_repo };
-    const openUrl = (url: string) => void api.openUrl(url).catch(() => {});
-    const jira = jiraProjectUrl(p.project);
-    return [
-      { label: "Abrir", run: p.open },
-      ...(hub.connected ? [{ label: "Configurações", run: () => nav.openTab(hubTab("projects", { project: ref })) }] : []),
-      ...(editable
-        ? [{ label: "Atribuir a ambiente", run: () => nav.openTab(hubTab("projects", { project: ref, assign: true })) }]
-        : []),
-      ...(p.start ? [{ label: "Sessão de planejamento", run: () => startSession(p.start!, origin) }] : []),
-      { label: `Abrir no ${forgeLabel(p.project)}`, run: () => openUrl(repoUrl(p.project)) },
-      ...(jira ? [{ label: "Abrir no Jira", run: () => openUrl(jira) }] : []),
-    ];
-  };
+  const menuItems = (p: ProjectRow, origin: HTMLElement): MenuItem[] =>
+    projectMenuItems(p, {
+      nav,
+      hubConnected: hub.connected,
+      editable,
+      startSession,
+      openUrl: (url) => void api.openUrl(url).catch(() => {}),
+      origin,
+    });
 
   return (
     <SideContent>
@@ -357,7 +277,8 @@ export function Sidebar({
                 className="ibtn"
                 aria-label="Novo projeto"
                 title="Novo projeto"
-                onClick={() => nav.openTab(hubTab("projects", { register: { url: "" } }))}
+                // O cadastro abre no índice de Projetos (#18).
+                onClick={() => nav.go(projectsPlace({ register: { url: "" } }))}
               >
                 <Icon name="plus" size={15} />
               </button>
@@ -371,7 +292,7 @@ export function Sidebar({
               tone={p.waiting > 0 ? "attention" : p.running > 0 ? "running" : undefined}
               trailing={p.running + p.waiting}
               description={`${p.running} em execução, ${p.waiting} aguardando`}
-              onClick={p.open}
+              onClick={() => nav.go(p.screen)}
               onMenu={(x, y, origin) => setMenu({ x, y, p, origin })}
             />
           ))}

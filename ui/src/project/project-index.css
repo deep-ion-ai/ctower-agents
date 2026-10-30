@@ -1,0 +1,173 @@
+/* Índice da atividade Projetos (#16). */
+.pidx {
+  max-width: 960px;
+}
+
+.pidx-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.pidx-title {
+  margin: 0 auto 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pidx-title h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.pidx-title .badge {
+  font-size: 11px;
+}
+
+.pidx-filter {
+  flex: 0 1 260px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.pidx-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pidx-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.pidx-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+}
+
+.pidx-row + .pidx-row {
+  border-top: 1px solid var(--border);
+}
+
+/* Arrasto da prioridade: a linha arrastada e onde ela vai cair. */
+.pidx-row[data-dragging="true"] {
+  opacity: 0.5;
+}
+
+.pidx-row[data-drop="before"] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.pidx-row[data-drop="after"] {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.pidx-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pidx-main:hover {
+  background: var(--hover);
+}
+
+.pidx-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pidx-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pidx-top strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.pidx-pos {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.pidx-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.pidx-actions {
+  display: flex;
+  gap: 2px;
+}
+
+/* Trilha "Projetos › X" no topo do painel do projeto (no lugar do seletor). */
+.pj-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 16px 8px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.pj-crumbs li {
+  min-width: 0;
+}
+
+.pj-crumbs li + li::before {
+  content: "›";
+  margin-right: 6px;
+  color: var(--muted);
+}
+
+.pj-crumbs [aria-current] {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.pj-picker > .pj-trail {
+  flex: 1;
+  min-width: 0;
+}
+
+.pj-picker > .provider-icon + .pj-trail .pj-crumbs {
+  margin-left: 8px;
+}

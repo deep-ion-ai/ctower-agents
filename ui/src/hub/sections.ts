@@ -5,12 +5,19 @@ import type { HubHealth, QuarantineGroup, Warning } from "../protocol/hub-gen";
 import type { OpenTab, Screen } from "../state/nav";
 import { plural } from "../shell/summary";
 import { isBackupWarning, maintenanceTab } from "../maintenance/sections";
+import { projectsPlace } from "../project/sections";
 
 export type HubSection =
   | "overview"
   | "proposals"
   | "health"
   | "quarantine"
+  /**
+   * Antigo "Projetos e atribuições" (#314). Desde a #18 não é mais seção:
+   * fica no tipo só como o nome de `hubTab("projects", ...)`, que abre o
+   * projeto (Configurações) ou o índice de Projetos, e dos endereços
+   * antigos, que o `screenTab` (state/nav.tsx) leva ao mesmo lugar.
+   */
   | "projects"
   | "envs"
   | "secrets"
@@ -41,7 +48,7 @@ const KEYWORDS: Record<HubSection, string> = {
   proposals: "gestor aprovar rejeitar prioridade status",
   health: "sinais riscos parado bloqueado",
   quarantine: "push não cadastrado descartar",
-  projects: "cadastro atribuições repositórios",
+  projects: "cadastro atribuições repositórios projetos índice",
   envs: "ambientes envio pendências limpezas",
   secrets: "variáveis env tokens chaves",
   recovery: "chave recuperação secrets verificar",
@@ -58,7 +65,9 @@ export interface HubGroup {
 /** Grupos do painel lateral, na ordem. */
 export const HUB_GROUPS: HubGroup[] = [
   { label: "Operação", sections: ["overview", "proposals", "health", "quarantine"] },
-  { label: "Cadastro", sections: ["projects", "envs"] },
+  // Projetos e atribuições saiu daqui na #18: cada projeto se configura na
+  // aba Configurações dele, e o cadastro e a ordem ficam no índice de Projetos.
+  { label: "Cadastro", sections: ["envs"] },
   { label: "Segurança", sections: ["secrets", "recovery", "github"] },
   // Revogar só reduz acesso: fica no desktop e na web (spec §3.1).
   { label: "Acesso", sections: ["web-sessions", "devices"] },
@@ -67,13 +76,14 @@ export const HUB_GROUPS: HubGroup[] = [
 export const HUB_SECTIONS: HubSection[] = HUB_GROUPS.flatMap((g) => g.sections);
 
 export function hubGroupOf(s: HubSection): string {
-  return HUB_GROUPS.find((g) => g.sections.includes(s))!.label;
+  // "projects" (#18) não tem grupo: era do Cadastro.
+  return HUB_GROUPS.find((g) => g.sections.includes(s))?.label ?? "Cadastro";
 }
 
 // O pedido de cadastro mora com o formulário (#14); as abas do Hub o carregam.
 export type { RegisterIntent } from "../project/NewProjectDialog";
 
-/** Projeto pela chave natural: o detalhe da seção Projetos (`hubTab("projects", { project })`, #314). */
+/** Projeto pela chave natural (`hubTab("projects", { project })`: as Configurações dele, #18). */
 export interface ProjectRef {
   owner: string;
   repo: string;
@@ -87,8 +97,16 @@ export type HubScreen = Extract<Screen, { name: "hub" }>;
  */
 export const hubTabId = (s: HubSection): string => (s === "overview" ? "hub" : `hub:${s}`);
 
-/** Aba da seção, para `useNav().openTab` (ex.: link "Hub › Secrets" das Configurações). */
+/**
+ * Aba da seção, para `useNav().openTab` (ex.: link "Hub › Secrets" das
+ * Configurações). "projects" (#18) não é mais do Hub: o projeto, nas
+ * Configurações (com `assign`, na seção Ambientes e atribuições com o
+ * formulário aberto), ou, sem projeto, o índice de Projetos (com
+ * `register`, o cadastro aberto). Sem `id`: o da aba do projeto ou do
+ * índice (`mainTabId`).
+ */
 export function hubTab(s: HubSection, extra: Omit<HubScreen, "name" | "section"> = {}): OpenTab {
+  if (s === "projects") return { screen: projectsPlace(extra) };
   return {
     id: hubTabId(s),
     screen: s === "overview" ? { name: "hub", ...extra } : { name: "hub", section: s, ...extra },
@@ -102,7 +120,11 @@ export const hubTitle = (s: HubSection | undefined): string => `Hub · ${HUB_SEC
  * Lugares da paleta (#312): "Hub › Secrets e variáveis". Backup e
  * snapshots do hub ficam em Manutenção (#338).
  */
-export const HUB_PLACES = HUB_SECTIONS.map((s) => ({
+export const HUB_PLACES = HUB_SECTIONS.flatMap((s): HubSection[] => (s === "envs" ? ["projects", s] : [s])).map((s) => ({
+  // "projects" (#18) segue na paleta, no lugar de antes (no Cadastro, antes
+  // de Ambientes), como sinônimo do lugar antigo: quem procura "Hub
+  // Projetos" ou "atribuições" (e os recentes gravados com o id
+  // `hub:projects`) cai no índice de Projetos.
   id: `hub:${s}`,
   label: `Hub › ${HUB_SECTION_LABEL[s]}`,
   keywords: `hub ${KEYWORDS[s]}`,
@@ -148,7 +170,6 @@ export interface HubCountsInput {
   /** Propostas pendentes. */
   pending: number;
   health: HubHealth | null;
-  projects: number;
   envs: number;
 }
 
@@ -161,7 +182,7 @@ export const actionableSignals = (h: HubHealth | null) => (h?.signals ?? []).fil
 /**
  * Contadores do painel lateral: Visão geral = avisos de `hub.status`,
  * Propostas = pendentes, Saúde = sinais de aviso e críticos, Quarentena =
- * projetos com linhas; Projetos e Ambientes = quantos há. As seções de
+ * projetos com linhas; Ambientes = quantos há. As seções de
  * Segurança mostram "!" quando algum aviso é delas (os de backup contam só
  * na Visão geral: a seção fica em Manutenção).
  */
@@ -181,7 +202,6 @@ export function hubCounts(i: HubCountsInput): Partial<Record<HubSection, Section
   }
   const q = quarantineProjects(i.quarantine);
   if (q > 0) out.quarantine = { n: q, text: plural(q, "projeto", "projetos"), tone: "attention" };
-  if (i.projects > 0) out.projects = { n: i.projects, text: plural(i.projects, "projeto", "projetos") };
   if (i.envs > 0) out.envs = { n: i.envs, text: plural(i.envs, "ambiente", "ambientes") };
   for (const w of i.warnings) {
     const a = warningAction(w.kind);

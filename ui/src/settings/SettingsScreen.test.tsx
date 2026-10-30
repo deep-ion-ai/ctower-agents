@@ -489,13 +489,14 @@ test("notificações por ambiente: silenciar guarda o id em notify.muted_envs", 
   await waitFor(() => expect(api.uiConfig.notify.muted_envs).toEqual([]));
 });
 
-test("o que é do hub fica no Hub: link abre Hub › Projetos e não há cadastro, secrets nem backup aqui", async () => {
+test("o que é do hub fica fora: link abre o índice de Projetos e não há cadastro, secrets nem backup aqui", async () => {
   const { user } = setup();
   for (const name of [/Cadastrar projeto/, /Secrets/, /Backup/]) {
     expect(screen.queryByRole("region", { name })).not.toBeInTheDocument();
   }
-  await user.click(screen.getByRole("button", { name: "Projetos e secrets ficam no Hub ›" }));
-  expect(screen.getByRole("tab", { name: "Hub · Projetos e atribuições" })).toHaveAttribute("aria-selected", "true");
+  // Desde a #18, cada projeto (secrets inclusos) se configura na aba dele, a partir do índice.
+  await user.click(screen.getByRole("button", { name: "Projetos e os secrets deles ficam em Projetos ›" }));
+  expect(screen.getByRole("tab", { name: "Projetos" })).toHaveAttribute("aria-selected", "true");
 });
 
 test("seção pelo endereço (paleta): abre no escopo dela", async () => {

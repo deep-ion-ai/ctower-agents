@@ -1,0 +1,96 @@
+name: gate
+
+# Decide, num lugar só, quais jobs do ci.yml e do ui.yml rodam (issue #45; a
+# matriz está em docs/ci.md). Os dois chamam este workflow no job `changes`, e
+# cada job confere uma única saída. Chamado pelo ui.yml dentro do release.yml,
+# o evento é o push na main e o escopo é `none`: os jobs do ui rodam pela tag.
+on:
+  workflow_call:
+    outputs:
+      scope:
+        description: 'promotion (PR develop → main), release (PR do release-please ou main → develop), full (push na develop, disparo manual), paths (demais PRs) ou none'
+        value: ${{ jobs.gate.outputs.scope }}
+      rust:
+        description: 'roda o rust (Linux e macOS) do ci.yml'
+        value: ${{ jobs.gate.outputs.rust }}
+      web:
+        description: 'roda o web do ui.yml'
+        value: ${{ jobs.gate.outputs.web }}
+      tauri:
+        description: 'roda o macos (app Tauri) do ui.yml sem tag'
+        value: ${{ jobs.gate.outputs.tauri }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+      rust: ${{ steps.out.outputs.rust }}
+      web: ${{ steps.out.outputs.web }}
+      tauri: ${{ steps.out.outputs.tauri }}
+    steps:
+      # Pelo par de branches do PR, não pelos arquivos: o commit de release só
+      # mexe em versão e CHANGELOG, que casariam com os filtros abaixo.
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+          REF: ${{ github.ref }}
+        run: |
+          case "$EVENT:$BASE:$HEAD" in
+            pull_request:main:develop) scope=promotion ;;
+            pull_request:*:release-please--branches--main | pull_request:develop:main) scope=release ;;
+            pull_request:*) scope=paths ;;
+            workflow_dispatch:*) scope=full ;;
+            push:*) [ "$REF" = refs/heads/develop ] && scope=full || scope=none ;;
+            *) scope=none ;;
+          esac
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "Escopo: $scope ($EVENT, ref $REF, $HEAD → $BASE)"
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        if: steps.scope.outputs.scope == 'paths'
+        with:
+          predicate-quantifier: some-with-excludes
+          # ui/src/protocol/gen: o passo dos tipos TS confere se o gerado bate com o Rust.
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'scripts/provision/**'
+              - 'scripts/migrate-to-cthubd.sh'
+              - 'scripts/test-migrate-to-cthubd.sh'
+              - 'packaging/**'
+              - 'ui/src/protocol/gen/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/gate.yml'
+            web:
+              - 'ui/**'
+              - '!ui/src-tauri/**'
+              - '.github/workflows/ui.yml'
+              - '.github/workflows/gate.yml'
+      - id: out
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
+          EVENT: ${{ github.event_name }}
+          RUST: ${{ steps.filter.outputs.rust }}
+          WEB: ${{ steps.filter.outputs.web }}
+        run: |
+          case "$SCOPE" in
+            full | promotion) rust=true web=true ;;
+            paths) rust="${RUST:-false}" web="${WEB:-false}" ;;
+            *) rust=false web=false ;;
+          esac
+          # O app Tauri (macOS) só roda antes da release e no disparo manual.
+          tauri=false
+          [ "$SCOPE" = promotion ] || [ "$EVENT" = workflow_dispatch ] && tauri=true
+          printf 'rust=%s\nweb=%s\ntauri=%s\n' "$rust" "$web" "$tauri" | tee -a "$GITHUB_OUTPUT"

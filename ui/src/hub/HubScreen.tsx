@@ -1,6 +1,6 @@
 import "../settings/settings.css";
 import "./hub.css";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { useNow } from "../App";
 import { useNav, type Screen } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -12,7 +12,6 @@ import { SideContent, SideGroup, SidePanel, SideRow } from "../shell/SidePanel";
 import { useShell } from "../shell/Shell";
 import { Icon } from "../shell/icons";
 import { shortcutLabel } from "../shell/layout";
-import { HubProjects } from "./HubProjects";
 import { HubEnvs } from "./HubEnvs";
 import { HealthPanel, useHubHealth } from "./HubHealth";
 import { ProposalsPanel, useHubProposals } from "./HubProposals";
@@ -32,8 +31,6 @@ import {
   hubGroupOf,
   hubTab,
   type HubSection,
-  type ProjectRef,
-  type RegisterIntent,
   type SectionCount,
 } from "./sections";
 
@@ -44,8 +41,10 @@ import {
  * revisão da configuração e último snapshot. Cada seção abre como aba de
  * editor (`hubTab`): a Visão geral reúne o que pede ação; as outras são os
  * painéis de sempre (propostas e saúde do gestor, quarentena de push,
- * projetos e atribuições, ambientes ligados, secrets e variáveis, chave de
- * recuperação e token do GitHub do hub). Backup e snapshots do hub ficam em
+ * ambientes ligados, secrets e variáveis, chave de recuperação e token do
+ * GitHub do hub). Projetos e atribuições saiu na #18: cada projeto se
+ * configura na aba Configurações dele, e o cadastro e a ordem ficam no
+ * índice de Projetos. Backup e snapshots do hub ficam em
  * Manutenção (#338). Terminal, sessões e recuperação continuam em cada
  * ambiente.
  */
@@ -60,19 +59,12 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
   const proposals = useHubProposals();
   const open = useCallback((s: HubSection) => nav.openTab(hubTab(s)), [nav]);
 
-  // "Cadastrar projeto" a partir da quarentena: a seção Projetos abre o formulário com a URL.
-  const [addReq, setAddReq] = useState<RegisterIntent | null>(null);
-  useEffect(() => {
-    setAddReq(section === "projects" ? (screen.register ?? null) : null);
-  }, [section, screen.register]);
-
   const counts = hub.connected
     ? hubCounts({
         warnings: hub.health?.warnings ?? [],
         quarantine: hub.health?.quarantine ?? [],
         pending: proposals.pending.length,
         health,
-        projects: hub.projects.length,
         envs: hub.envs.length,
       })
     : {};
@@ -123,19 +115,9 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
         proposals={proposals}
         health={health}
         healthError={healthError}
-        addUrl={addReq?.url ?? null}
-        addKind={addReq?.kind}
-        project={screen.project}
-        assign={screen.assign}
-        onAddDone={(added) => {
-          setAddReq(null);
-          // O pedido de cadastro foi atendido: a aba fica sem ele e mostra o projeto cadastrado.
-          if (added) nav.openTab({ ...hubTab("projects", { project: added }), id: nav.current });
-          else if (screen.register) nav.openTab(hubTab("projects", screen.project ? { project: screen.project } : {}));
-        }}
         onRegister={(key) =>
-          // Chave com mais de uma barra é caminho do GitLab (`grupo/projeto/app`, #352): o formulário abre em
-          // Jira + GitLab, sem URL (o host não vem na quarentena).
+          // O cadastro abre no índice de Projetos (#18). Chave com mais de uma barra é caminho do GitLab
+          // (`grupo/projeto/app`, #352): o formulário abre em Jira + GitLab, sem URL (o host não vem na quarentena).
           nav.openTab(
             hubTab("projects", {
               register: key.split("/").length > 2 ? { url: "", kind: "jira" } : { url: `https://github.com/${key}` },
@@ -157,16 +139,7 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
         <ol>
           <li>Hub</li>
           <li>{hubGroupOf(section)}</li>
-          {section === "projects" && screen.project ? (
-            <>
-              <li>{HUB_SECTION_LABEL[section]}</li>
-              <li aria-current="page" className="mono">
-                {screen.project.owner}/{screen.project.repo}
-              </li>
-            </>
-          ) : (
-            <li aria-current="page">{HUB_SECTION_LABEL[section]}</li>
-          )}
+          <li aria-current="page">{HUB_SECTION_LABEL[section]}</li>
         </ol>
       </nav>
       {/* A Visão geral mostra o título; nas outras seções o painel já tem o seu. */}
@@ -175,7 +148,7 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
           Hub · {HUB_SECTION_LABEL[section]}
         </h1>
       )}
-      <div className={`settings hub-content${section === "projects" && hub.connected ? " hub-flush" : ""}`}>
+      <div className="settings hub-content">
         <div className="settings-main">{body}</div>
       </div>
     </main>
@@ -189,11 +162,6 @@ function Section({
   proposals,
   health,
   healthError,
-  addUrl,
-  addKind,
-  project,
-  assign,
-  onAddDone,
   onRegister,
   call,
   onTokenSaved,
@@ -204,11 +172,6 @@ function Section({
   proposals: ReturnType<typeof useHubProposals>;
   health: ReturnType<typeof useHubHealth>["health"];
   healthError: string | null;
-  addUrl: string | null;
-  addKind?: RegisterIntent["kind"];
-  project?: ProjectRef;
-  assign?: true;
-  onAddDone(added?: ProjectRef): void;
   onRegister(key: string): void;
   call: TokenCall;
   onTokenSaved(): void;
@@ -223,16 +186,8 @@ function Section({
     case "quarantine":
       return <Quarantine now={now} onRegister={onRegister} />;
     case "projects":
-      return (
-        <HubProjects
-          project={project}
-          assign={assign}
-          addUrl={addUrl}
-          addKind={addKind}
-          onAddDone={onAddDone}
-          health={health}
-        />
-      );
+      // Nunca chega aqui: `screenTab` (state/nav.tsx) leva o endereço ao projeto ou ao índice (#18).
+      return null;
     case "envs":
       return <HubEnvs now={now} />;
     case "web-sessions":
