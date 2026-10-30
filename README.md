@@ -94,7 +94,7 @@ Antes de instalar, o atualizador guarda os binários atuais em `update/prev/` e 
 
 Quando uma issue termina (work item `concluido`, PR mesclado ou fechado, ou issue fechada no espelho do GitHub), o ambiente pode limpar o que ela deixou, por etapas e nesta ordem: sessões → worktree → `target/` → branch local → branch remota (épico #284). Uma etapa só roda se a anterior terminou, e nada com mudança não commitada ou não enviada sai. O que fica aparece com o motivo.
 
-O `ctowerd` monta o plano das limpezas pendentes no boot e a cada `check_interval_hours`, **sem apagar nada**; com `auto = true`, executa em seguida só as etapas pendentes, nunca as bloqueadas. O resumo (contagem e espaço) vai ao hub, que o mostra na tela Hub. O acionamento manual vale sempre, mesmo com o job desligado: na UI (**Manutenção → Limpeza**, por ambiente: "N limpezas pendentes · X GB", "Verificar agora" e "Limpar", tudo ou um item, e o que ficou fora do hub; as regras de `[cleanup]` ficam em **Configurações → Ambiente → Limpeza**) ou no terminal:
+O `ctowerd` monta o plano das limpezas pendentes no boot e a cada `check_interval_hours`, **sem apagar nada**; com `auto = true`, executa em seguida só as etapas pendentes, nunca as bloqueadas. O resumo (contagem e espaço) vai ao hub, que o mostra na tela Hub. O acionamento manual vale sempre, mesmo com o job desligado: na UI (**Manutenção → Limpeza**, por ambiente: "N limpezas pendentes · X GB", "Verificar agora" e "Limpar", tudo ou um item, e o que ficou fora do hub, com as regras de `[cleanup]` e um filtro por projeto, que o cartão **Limpeza** das Configurações do projeto abre já aplicado) ou no terminal:
 
 ```sh
 ctower clean --dry-run          # o plano: pendentes, bloqueadas com o motivo e o espaço
