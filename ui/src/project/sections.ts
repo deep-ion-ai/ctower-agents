@@ -4,6 +4,7 @@
 // os deep links da PWA e os botões das telas montam por `projectAt`.
 // Funções puras, testadas em sections.test.ts.
 import type { Screen } from "../state/nav";
+import type { RegisterIntent } from "./NewProjectDialog";
 
 export type ProjectAddr = Extract<Screen, { name: "project" }>;
 
@@ -72,7 +73,16 @@ export function sectionOf(s: ProjectAddr, web = false): ProjectSettingsSection {
  * igual ao de antes da #17 (abas, recentes e testes comparam o objeto).
  */
 export function projectAt(base: ProjectAddr, page: ProjectPage = "items", section?: ProjectSettingsSection): ProjectAddr {
-  const { item: _item, view: _view, section: _section, ...addr } = base;
+  // Os pedidos (`assign`, `register`) também saem: valem uma vez, no endereço que os fez.
+  const {
+    item: _item,
+    view: _view,
+    section: _section,
+    assign: _assign,
+    register: _register,
+    notice: _notice,
+    ...addr
+  } = base;
   return {
     ...addr,
     ...(page !== "items" ? { view: page } : {}),
@@ -86,4 +96,25 @@ export function pageSuffix(s: ProjectAddr): string {
   if (page === "items") return "";
   if (page === "settings" && s.section) return ` · ${PROJECT_PAGE_LABEL.settings} › ${PROJECT_SECTION_LABEL[s.section]}`;
   return ` · ${PROJECT_PAGE_LABEL[page]}`;
+}
+
+/**
+ * O lugar novo do antigo Hub › Projetos e atribuições (#18): com projeto,
+ * as Configurações dele (com `assign`, a seção Ambientes e atribuições com
+ * o formulário de atribuição aberto); sem projeto, o índice de Projetos
+ * (com `register`, o cadastro aberto). Uma tela só para configurar cada
+ * projeto: `hubTab("projects", ...)` e os endereços antigos passam por aqui.
+ */
+export function projectsPlace({
+  project,
+  assign,
+  register,
+}: {
+  project?: { owner: string; repo: string };
+  assign?: true;
+  register?: RegisterIntent;
+}): ProjectAddr {
+  if (!project) return { name: "project", ...(register ? { register } : {}) };
+  const base: ProjectAddr = { name: "project", owner: project.owner, repo: project.repo };
+  return assign ? { ...projectAt(base, "settings", "envs"), assign } : projectAt(base, "settings");
 }

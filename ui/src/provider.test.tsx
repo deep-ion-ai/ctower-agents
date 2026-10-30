@@ -560,19 +560,20 @@ describe("hub com projeto Jira + GitLab", () => {
     expect(within(form).queryByLabelText("URL do GitHub")).not.toBeInTheDocument();
   });
 
-  test("Projetos: ícone do provedor no detalhe e atribuição pela última barra", async () => {
+  test("Configurações do projeto: atribuição pela última barra, pelo pedido do endereço antigo (#18)", async () => {
     const api = hubApi({ projects: [hubProjectView(JP, [])] }).onHub("hub.assignments.add", {
       assignment: hubAssignment({ project_id: 7, gh_owner: "grupo/projeto", gh_repo: "app" }),
       changed: true,
       sync_env: false,
     });
-    render(<App api={api} initial={{ name: "hub", section: "projects" }} />);
+    // O endereço antigo (Hub › Projetos com `assign`) cai nas Configurações › Ambientes, com o formulário aberto.
+    render(
+      <App api={api} initial={{ name: "hub", section: "projects", project: { owner: "grupo/projeto", repo: "app" }, assign: true }} />,
+    );
     const user = userEvent.setup();
-    const detail = await screen.findByRole("group", { name: "Projeto app" });
-    expect(within(detail).getByRole("img", { name: "Jira + GitLab" })).toBeInTheDocument();
-    await user.click(within(detail).getByRole("button", { name: /^Atribuir/ }));
-    const env = within(detail).queryByLabelText("Ambiente");
-    if (env) await user.selectOptions(env, "daemon-wsl");
+    const detail = await screen.findByRole("group", { name: "Ambientes e atribuições" });
+    const env = await within(detail).findByLabelText("Ambiente");
+    await user.selectOptions(env, "daemon-wsl");
     await user.click(within(detail).getByRole("button", { name: /^Atribuir$/ }));
     await waitFor(() => expect(api.hubCallsTo("hub.assignments.add")[0].params).toMatchObject({ owner: "grupo/projeto", repo: "app" }));
   });

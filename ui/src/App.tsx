@@ -206,7 +206,7 @@ function Current({ screen }: { screen: Screen }) {
 function ProjectRoute({ screen }: { screen: Extract<Screen, { name: "project" }> }) {
   const { hub, envs, dashboards } = useTower();
   // Sem chave, o índice de projetos (#16): não abre mais o primeiro projeto.
-  if (!hasProjectKey(screen)) return <ProjectIndex />;
+  if (!hasProjectKey(screen)) return <ProjectIndex register={screen.register} notice={screen.notice} />;
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
   let key: { owner: string; repo: string } | undefined =
     screen.owner && screen.repo ? { owner: screen.owner, repo: screen.repo } : undefined;
@@ -217,7 +217,14 @@ function ProjectRoute({ screen }: { screen: Extract<Screen, { name: "project" }>
   if (hub.up && hub.dashboard) {
     if (key)
       return (
-        <HubProjectScreen owner={key.owner} repo={key.repo} item={screen.item} view={screen.view} section={screen.section} />
+        <HubProjectScreen
+          owner={key.owner}
+          repo={key.repo}
+          item={screen.item}
+          view={screen.view}
+          section={screen.section}
+          assign={screen.assign}
+        />
       );
   }
   let { env, projectId } = screen;

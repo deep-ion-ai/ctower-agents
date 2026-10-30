@@ -30,7 +30,7 @@ import {
  * Aba Configurações do projeto pela visão do hub (#17): o índice das seções
  * à esquerda e a seção pedida (`section` do endereço) à direita, uma por
  * vez, cada uma composta pelos cartões de `project/settings` (épico #12),
- * os mesmos do Hub › Projetos. Uma por vez para a seção ser o endereço
+ * os que o Hub › Projetos usava antes da #18. Uma por vez para a seção ser o endereço
  * (paleta, deep link) sem depender de rolagem. Na web (só leitura), sem
  * Secrets e Zona de perigo e sem as ações de mudar (`readOnly`).
  */
@@ -39,12 +39,21 @@ export function ProjectSettings({
   repo,
   section,
   onSection,
+  assign = false,
+  onAssignHandled,
 }: {
   owner: string;
   repo: string;
   /** Já resolvida por `sectionOf` (na web, nunca uma do desktop). */
   section: ProjectSettingsSection;
   onSection: (s: ProjectSettingsSection) => void;
+  /**
+   * Pedido de atribuição do endereço (#18, "Atribuir a ambiente" do menu ⋯,
+   * da paleta e do aviso da tela): na seção Ambientes, o cartão abre o
+   * formulário e chama `onAssignHandled` para tirar o pedido do endereço.
+   */
+  assign?: boolean;
+  onAssignHandled?: () => void;
 }) {
   const { hub, web } = useTower();
   const nav = useNav();
@@ -88,10 +97,9 @@ export function ProjectSettings({
           onEditingChange={setEditing}
           settings={settings}
           now={now}
-          // A ordem entre projetos se muda na lista dos projetos (Hub › Projetos
-          // e, com a #16, o índice da atividade Projetos); aqui, só a posição.
-          readOnly
-          order={{ pos, total: hub.projects.length, canUp: false, canDown: false, onStep: () => {} }}
+          // A ordem entre projetos se muda no índice da atividade Projetos (#16);
+          // aqui, só a posição.
+          order={{ pos, total: hub.projects.length }}
         />
       );
       break;
@@ -127,7 +135,16 @@ export function ProjectSettings({
       break;
     }
     case "envs":
-      body = <AssignmentsCard project={p} settings={settings} live={live} readOnly={web} />;
+      body = (
+        <AssignmentsCard
+          project={p}
+          settings={settings}
+          live={live}
+          readOnly={web}
+          requested={assign}
+          onRequestHandled={onAssignHandled}
+        />
+      );
       break;
     case "rules":
       body = <AgentRules owner={pr.gh_owner} repo={pr.gh_repo} epic={0} label={pr.name} now={now} className="hub-card" />;
@@ -145,8 +162,9 @@ export function ProjectSettings({
           settings={settings}
           live={live}
           secretCount={projectSecretsOf(secrets, pr.gh_owner, pr.gh_repo).own.length}
-          // O projeto não existe mais: volta à atividade Projetos (sem chave).
-          onDeleted={() => nav.go({ name: "project" })}
+          // O projeto não existe mais: volta à atividade Projetos (sem chave),
+          // que mostra a mensagem com o snapshot anterior (esta tela desmonta).
+          onDeleted={(notice) => nav.go({ name: "project", notice })}
         />
       );
       break;

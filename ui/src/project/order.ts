@@ -1,7 +1,7 @@
 // Prioridade entre projetos (`rank` do hub, desempata o ranking do
-// portfólio): arrastar, Alt+↑/↓ e os botões "subir/descer". Saiu da lista do
-// Hub › Projetos (#314) para o índice da atividade Projetos (#16); as duas
-// listas usam o mesmo gancho enquanto a seção do Hub existir.
+// portfólio): arrastar e Alt+↑/↓. Saiu da lista do Hub › Projetos (#314)
+// para o índice da atividade Projetos (#16), o único lugar desde que a
+// seção do Hub saiu (#18), com os botões "subir/descer" do detalhe dela.
 import { useState, type DragEvent, type HTMLAttributes, type KeyboardEvent } from "react";
 import type { HubProject } from "../protocol/hub-gen";
 import { useTower } from "../state/tower";
@@ -14,10 +14,6 @@ export interface Drop {
 }
 
 export interface ProjectOrder {
-  /** Vizinhos de `pr` na ordem do hub (os botões do detalhe desligam sem eles). */
-  neighbors(pr: HubProject): { prev?: HubProject; next?: HubProject };
-  /** Sobe ou desce um lugar. */
-  step(pr: HubProject, up: boolean): void;
   /** Alt+↑/↓ no elemento focável da linha. */
   onKey(e: KeyboardEvent, pr: HubProject): void;
   /** Atributos de arrasto do `<li>` da linha (`data-drop` e `data-dragging` para o CSS). */
@@ -116,5 +112,5 @@ export function useProjectOrder(projects: HubProject[], settings: SettingsRun, e
     };
   };
 
-  return { neighbors, step, onKey, itemProps };
+  return { onKey, itemProps };
 }
