@@ -1,6 +1,6 @@
 // Modo web (épico #205, #201): testes de componente com a FakeDaemonApi no
 // modo web (`asWeb`), o login e o painel da sessão no lugar do terminal.
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi, FakeWebAuth } from "../api/fake";
@@ -115,6 +115,17 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     await screen.findByRole("button", { name: "Abrir árvore" });
     await waitFor(() => expect(api.hubCallsTo("hub.envs.list").length).toBeGreaterThan(0));
     expect(screen.queryByRole("form", { name: /^Atribuir/ })).toBeNull();
+  });
+
+  it("Projetos na Sala de controle (#10): sem '+' e sem Atribuir a ambiente no menu", async () => {
+    renderApp(webApi());
+    const side = await screen.findByRole("complementary", { name: "Ambientes e projetos" });
+    const linha = await within(side).findByRole("button", { name: "ctower-agents" });
+    expect(within(side).queryByRole("button", { name: "Novo projeto" })).toBeNull();
+    fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
+    const menu = screen.getByRole("menu", { name: "Ações do projeto ctower-agents" });
+    expect(within(menu).getByRole("menuitem", { name: "Configurações" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Atribuir a ambiente" })).toBeNull();
   });
 
   it("Recuperação com o ambiente offline: só leitura, pelas interrompidas do hub", async () => {
