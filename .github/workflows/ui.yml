@@ -1,8 +1,10 @@
 name: ui
 
 on:
+  # Sem push na main: o PR develop → main já testou o mesmo código, e o commit
+  # de release só mexe em versão (docs/ci.md, issue #45).
   push:
-    branches: [develop, main]
+    branches: [develop]
   pull_request:
   # Com tag, recompila e reenvia o app de uma release que já existe
   # (recuperação de uma publicação que falhou). Sem tag, só roda os checks.
@@ -29,42 +31,28 @@ on:
 permissions:
   contents: read
 
-# Chamado pelo release.yml, o github.ref é o da main: a tag no grupo evita que
-# o push na main cancele a publicação.
+# Chamado pelo release.yml, o github.ref é o da main: a tag no grupo separa a
+# publicação de qualquer outro run na mesma ref.
 concurrency:
   group: ui-${{ inputs.tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Decide quais jobs rodam num PR. No push em develop/main o filtro não roda e
-  # os jobs de Linux rodam. Um job fora do filtro aparece como skipped, não como pendente.
-  # O macOS só roda no PR develop → main, no disparo manual e na publicação de
-  # release (input tag). Os runners são os hospedados do GitHub (ubuntu-22.04 e macos-14);
+  # Quais jobs rodam (gate.yml, matriz em docs/ci.md). Um job fora do escopo
+  # aparece como skipped, não como pendente. Com tag (release), web e macos rodam
+  # sempre. Os runners são os hospedados do GitHub (ubuntu-22.04 e macos-15);
   # CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON) trocam por runners próprios.
   changes:
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
     permissions:
+      contents: read
       pull-requests: read
-    outputs:
-      web: ${{ steps.filter.outputs.web }}
-      platforms: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'develop') }}
-    steps:
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: filter
-        if: github.event_name == 'pull_request'
-        with:
-          predicate-quantifier: some-with-excludes
-          filters: |
-            web:
-              - 'ui/**'
-              - '!ui/src-tauri/**'
-              - '.github/workflows/ui.yml'
+    uses: ./.github/workflows/gate.yml
 
   # Frontend: tipos, testes de componentes e build do Vite (app desktop e o
   # modo web que o cthubd embute, #199).
   web:
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.platforms == 'true' || needs.changes.outputs.web == 'true'
+    if: inputs.tag != '' || needs.changes.outputs.web == 'true'
     runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
     defaults:
       run:
@@ -95,8 +83,8 @@ jobs:
   # gerado na publicação de release (input tag) e no app de teste (preview).
   macos:
     needs: changes
-    if: inputs.tag != '' || needs.changes.outputs.platforms == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_MACOS || '"macos-14"') }}
+    if: inputs.tag != '' || needs.changes.outputs.tauri == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_MACOS || '"macos-15"') }}
     defaults:
       run:
         working-directory: ui

@@ -1,8 +1,10 @@
 name: ci
 
 on:
+  # Sem push na main: o PR develop → main já testou o mesmo código, e o commit
+  # de release só mexe em versão (docs/ci.md, issue #45).
   push:
-    branches: [develop, main]
+    branches: [develop]
   pull_request:
   workflow_dispatch:
 
@@ -14,38 +16,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Decide quais jobs rodam num PR. No push em develop/main o filtro não roda e
-  # todos os jobs rodam. Um job fora do filtro aparece como skipped, não como pendente.
-  # Os jobs rodam em runners hospedados do GitHub (ubuntu-22.04 e macos-14, ARM). Para
-  # usar runners próprios, defina CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON, docs/ci.md).
+  # Quais jobs rodam (gate.yml, matriz em docs/ci.md). Um job fora do escopo
+  # aparece como skipped, não como pendente. Os jobs rodam em runners hospedados
+  # do GitHub (ubuntu-22.04 e macos-15, ARM). Para usar runners próprios, defina
+  # CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON, docs/ci.md).
   changes:
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
     permissions:
+      contents: read
       pull-requests: read
-    outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      platforms: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'develop') }}
-    steps:
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: filter
-        if: github.event_name == 'pull_request'
-        with:
-          # ui/src/protocol/gen: o passo dos tipos TS confere se o gerado bate com o Rust.
-          filters: |
-            rust:
-              - 'crates/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
-              - 'scripts/provision/**'
-              - 'scripts/migrate-to-cthubd.sh'
-              - 'scripts/test-migrate-to-cthubd.sh'
-              - 'packaging/**'
-              - 'ui/src/protocol/gen/**'
-              - '.github/workflows/ci.yml'
+    uses: ./.github/workflows/gate.yml
 
   # Mesma versão nos quatro arquivos de versão e nos três lockfiles. Roda sempre:
-  # é barato e pega um bump parcial em qualquer PR.
+  # é barato e pega um bump parcial em qualquer PR. Nos PRs do release-please e
+  # main → develop, é o único job: o risco de um commit de release é a versão.
   versions:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
     steps:
@@ -58,13 +41,13 @@ jobs:
 
   rust:
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.platforms == 'true' || needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       # Uma plataforma que falha não cancela a outra.
       fail-fast: false
       matrix:
         os: [linux, macos]
-    runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || '"macos-14"') || (vars.CI_RUNNER_LINUX || '"ubuntu-22.04"')) }}
+    runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || '"macos-15"') || (vars.CI_RUNNER_LINUX || '"ubuntu-22.04"')) }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

@@ -120,7 +120,7 @@ jobs:
   # `provision.sh --env` e `ctower update` instalarem sem toolchain de Rust.
   # Mesmo formato do cthubd: tar.gz com os binários e a unidade de serviço,
   # mais o .sha256. Os runners são os hospedados do GitHub (ubuntu-22.04, para
-  # a glibc 2.35 servir a Ubuntu 22.04 em diante, e macos-14); CI_RUNNER_MACOS e
+  # a glibc 2.35 servir a Ubuntu 22.04 em diante, e macos-15); CI_RUNNER_MACOS e
   # CI_RUNNER_LINUX trocam por runners próprios (docs/ci.md).
   envbins:
     needs: release-please
@@ -135,7 +135,7 @@ jobs:
             unit: packaging/systemd/ctowerd.service
           - os: macos
             runner_var: CI_RUNNER_MACOS
-            default_runner: '"macos-14"'
+            default_runner: '"macos-15"'
             unit: packaging/launchd/ai.deep-ion.ctowerd.plist
     runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || matrix.default_runner) || (vars.CI_RUNNER_LINUX || matrix.default_runner)) }}
     permissions:
