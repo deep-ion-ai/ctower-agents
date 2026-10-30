@@ -87,10 +87,15 @@ export function goToAction(nav: Nav, a: AttentionAction, openUrl?: (url: string)
   }
 }
 
-const TABS: { id: PanelTab; label: string }[] = [
+const TABS: { id: PanelTab; label: string; hint?: string }[] = [
   { id: "events", label: "Eventos" },
   { id: "warnings", label: "Avisos" },
-  { id: "sync", label: "Sincronização" },
+  {
+    id: "sync",
+    label: "Sincronização",
+    // Os dois sentidos, com os nomes dos botões: "Buscar issues agora" e "Enviar ao hub".
+    hint: "Busca de issues no rastreador, por projeto, e envio ao hub, por ambiente",
+  },
 ];
 
 const time = (ms: number) =>
@@ -126,6 +131,7 @@ export function BottomPanel({
               id={`bpanel-tab-${t.id}`}
               aria-selected={tab === t.id}
               aria-controls="bpanel-body"
+              title={t.hint}
               onClick={() => onTab(t.id)}
             >
               {t.label}
@@ -215,7 +221,7 @@ function SyncList({ now }: { now: number }) {
         : s.last_ok_at
           ? `sincronizado ${ago(s.last_ok_at, now)}`
           : "ainda não sincronizado";
-      return { key: `${e.id}:${s.project_id}`, env: e.name, what: `${trackerLabel(project)} · ${name}`, text, warn: !!s.last_error };
+      return { key: `${e.id}:${s.project_id}`, env: e.name, what: `busca de issues · ${trackerLabel(project)} · ${name}`, text, warn: !!s.last_error };
     });
     const h = infos[e.id]?.hub_sync;
     if (h) {

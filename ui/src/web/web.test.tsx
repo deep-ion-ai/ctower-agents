@@ -24,7 +24,7 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label"));
     expect(names).toEqual(["Sala de controle", "Projetos", "Revisão", "Recuperação", "Hub", "Configurações"]);
-    expect(screen.queryByRole("button", { name: /Sincronizar agora/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Buscar issues agora/ })).toBeNull();
     const status = screen.getByRole("contentinfo", { name: "Barra de status" });
     expect(within(status).queryByText(/^v/)).toBeNull();
     // Sem conexão com os ambientes: nada de `session.peek`, `dashboard.get` nem `env.info`.

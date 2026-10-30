@@ -119,7 +119,7 @@ test("Ctrl+B recolhe o painel lateral e Ctrl+J abre o painel inferior", async ()
   const painel = screen.getByRole("region", { name: "Painel inferior" });
   expect(within(painel).getByRole("tab", { name: "Eventos" })).toHaveAttribute("aria-selected", "true");
   await user.click(within(painel).getByRole("tab", { name: "Sincronização" }));
-  expect(within(painel).getByText("GitHub · ctower-agents")).toBeInTheDocument();
+  expect(within(painel).getByText("busca de issues · GitHub · ctower-agents")).toBeInTheDocument();
   expect(within(painel).getByText("sincronizado há 2 min")).toBeInTheDocument();
   await user.keyboard("{Control>}j{/Control}");
   expect(screen.queryByRole("region", { name: "Painel inferior" })).not.toBeInTheDocument();

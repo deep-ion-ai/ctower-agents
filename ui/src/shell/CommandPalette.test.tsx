@@ -146,11 +146,11 @@ test("teclado: ↑↓ movem a opção ativa (aria-activedescendant), Esc fecha e
   expect(trigger()).toHaveFocus();
 });
 
-test("Enter num comando: Sincronizar agora chama sync.now; clique fora fecha", async () => {
+test("Enter num comando: Buscar issues agora chama sync.now; clique fora fecha", async () => {
   const { user, api } = setup();
   await waitFor(() => expect(api.calls.some((c) => c.method === "dashboard.get")).toBe(true));
   await open(user);
-  await user.type(input(), "sincronizar");
+  await user.type(input(), "buscar issues");
   await user.keyboard("{Enter}");
   await waitFor(() => expect(api.calls.some((c) => c.method === "sync.now")).toBe(true));
   await open(user);
@@ -190,7 +190,7 @@ test("sem hub e sem ambiente: telas e comandos continuam", async () => {
   await user.clear(input());
   await user.type(input(), ">");
   expect(options().map((o) => o.textContent)).toEqual(
-    expect.arrayContaining([expect.stringContaining("Sincronizar agora"), expect.stringContaining("Abrir gestor")]),
+    expect.arrayContaining([expect.stringContaining("Buscar issues agora"), expect.stringContaining("Abrir gestor")]),
   );
   await user.clear(input());
   await user.type(input(), "#1");

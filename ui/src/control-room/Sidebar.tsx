@@ -62,9 +62,10 @@ function HubSyncButton({ env, name }: { env: string; name: string }) {
         onClick={run}
         disabled={busy}
         aria-busy={busy}
-        aria-label={`Sincronizar ${name} com o hub`}
+        aria-label={`Enviar ao hub o estado de ${name}`}
+        title={`Enviar agora ao hub as mudanças pendentes de ${name} (sessões, work items e eventos)`}
       >
-        {busy ? "Sincronizando…" : "Sincronizar com o hub"}
+        {busy ? "Enviando…" : "Enviar ao hub"}
       </button>
       <span className="cr-sub" role="status" data-warn={msg?.warn ? "true" : undefined}>
         {msg?.text}

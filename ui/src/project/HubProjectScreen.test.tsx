@@ -770,7 +770,7 @@ test("projeto local (hub fora, #17): Sessões pelo ambiente e Configurações ap
   expect(await screen.findByText(/Dados locais de WSL/)).toBeInTheDocument();
 });
 
-// Visão geral do projeto (#19): saúde, "Sincronizar agora" e gestor do projeto.
+// Visão geral do projeto (#19): saúde, "Buscar issues agora" e gestor do projeto.
 
 const BLOQUEADO = healthSignal({
   kind: "bloqueado",
@@ -824,15 +824,15 @@ test("Visão geral (#19): item bloqueado há mais de 2 dias aparece na saúde do
   expect(screen.queryByRole("list", { name: "Sinais de saúde do projeto" })).not.toBeInTheDocument();
 });
 
-test("Visão geral (#19): Sincronizar agora roda sync.now só deste projeto no ambiente e mostra o resultado", async () => {
+test("Visão geral (#19): Buscar issues agora roda sync.now só deste projeto no ambiente e mostra o resultado", async () => {
   const api = setupOverview();
   render(<App api={api} initial={overviewAt} />);
   const user = userEvent.setup();
   // Espera a visão do hub (antes dele conectar, a tela é a local).
   await screen.findByRole("list", { name: "Sinais de saúde do projeto" });
-  const sync = await card("Sincronizar");
+  const sync = await card("Buscar issues");
   expect(sync).toHaveTextContent("Só este projeto, pelo ambiente WSL.");
-  await user.click(within(sync).getByRole("button", { name: "Sincronizar agora este projeto" }));
+  await user.click(within(sync).getByRole("button", { name: "Buscar issues agora este projeto" }));
   await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
   expect(api.callsTo("sync.now")[0]).toMatchObject({ env: "wsl", params: { project_id: 1 } });
   expect(await within(sync).findByRole("status")).toHaveTextContent(
@@ -841,7 +841,7 @@ test("Visão geral (#19): Sincronizar agora roda sync.now só deste projeto no a
 
   // Falha do ambiente: o erro, como alerta.
   api.on("sync.now", () => Promise.reject(new Error("sincronização com o GitHub desativada")));
-  await user.click(within(sync).getByRole("button", { name: "Sincronizar agora este projeto" }));
+  await user.click(within(sync).getByRole("button", { name: "Buscar issues agora este projeto" }));
   expect(await within(sync).findByRole("alert")).toHaveTextContent("Falhou em WSL: sincronização com o GitHub desativada");
 });
 
@@ -865,11 +865,11 @@ test("Visão geral (#19): Gestor deste projeto abre já com o escopo Um projeto 
   });
 });
 
-test("Visão geral local (hub fora, #19): só o Sincronizar agora, no ambiente do projeto", async () => {
+test("Visão geral local (hub fora, #19): só o Buscar issues agora, no ambiente do projeto", async () => {
   const api = setupOverview(false);
   render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1, view: "overview" }} />);
   const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "Sincronizar agora este projeto" }));
+  await user.click(await screen.findByRole("button", { name: "Buscar issues agora este projeto" }));
   await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
   expect(api.callsTo("sync.now")[0]).toMatchObject({ env: "wsl", params: { project_id: 1 } });
   expect(screen.queryByRole("heading", { name: /^Saúde/ })).not.toBeInTheDocument();

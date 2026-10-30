@@ -56,7 +56,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Configurações › Ambiente › Notificações",
   ]);
   expect(byKind(items, "command").map((i) => i.label)).toEqual([
-    "Sincronizar agora",
+    "Buscar issues agora",
     "Abrir gestor",
     "Atualizar app",
     "Retomar interrompidas",

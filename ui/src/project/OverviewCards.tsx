@@ -1,5 +1,5 @@
 // Cartões de ação da Visão geral do projeto (#19), que entram pela prop
-// `extra` de `ProjectOverview`: saúde do projeto, "Sincronizar agora" e o
+// `extra` de `ProjectOverview`: saúde do projeto, "Buscar issues agora" e o
 // gestor com o escopo do projeto. As regras ficam em overview.ts.
 import { useState } from "react";
 import type { ProjectSync } from "../protocol/gen";
@@ -74,7 +74,7 @@ export function ProjectHealthCard({ owner, repo, project }: { owner: string; rep
 }
 
 /**
- * "Sincronizar agora" só deste projeto: `sync.now` com o `project_id` em
+ * "Buscar issues agora" só deste projeto: `sync.now` com o `project_id` em
  * cada ambiente do plano (`syncPlan`), com o resultado ou o erro de cada
  * um. Fica fora da web: o canal reverso recusa `sync.now` (spec do épico
  * #205 §5.2), como o botão da barra de título.
@@ -109,15 +109,16 @@ export function ProjectSyncCard({ plan, change }: { plan: SyncPlan; change: stri
   return (
     <section className="hub-card" aria-labelledby="pj-ov-sync">
       <div className="hub-card-head">
-        <h2 id="pj-ov-sync">Sincronizar</h2>
+        <h2 id="pj-ov-sync">Buscar issues</h2>
         <button
           type="button"
           className="btn btn-sm btn-primary"
           disabled={busy || plan.targets.length === 0}
+          title="Buscar agora no rastreador as issues só deste projeto"
           onClick={() => void run()}
         >
-          {/* O nome acessível difere do "Sincronizar agora" da barra de título (todos os ambientes). */}
-          {busy ? "Sincronizando…" : "Sincronizar agora"}
+          {/* O nome acessível difere do "Buscar issues agora" da barra de título (todos os ambientes). */}
+          {busy ? "Buscando issues…" : "Buscar issues agora"}
           <span className="sr-only"> este projeto</span>
         </button>
       </div>

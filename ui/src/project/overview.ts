@@ -1,5 +1,5 @@
 // Regras das ações da Visão geral do projeto (#19): quais sinais de saúde
-// são do projeto, em que ambiente o "Sincronizar agora" roda e como o
+// são do projeto, em que ambiente o "Buscar issues agora" roda e como o
 // resultado vira uma linha. Funções puras, testadas em overview.test.ts;
 // os cartões ficam em OverviewCards.tsx.
 import type { ProjectSync } from "../protocol/gen";
@@ -32,14 +32,14 @@ export interface SyncTarget {
   projectId: number;
 }
 
-/** Ambientes do "Sincronizar agora"; sem nenhum, `reason` diz por quê. */
+/** Ambientes do "Buscar issues agora"; sem nenhum, `reason` diz por quê. */
 export interface SyncPlan {
   targets: SyncTarget[];
   reason: string | null;
 }
 
 /**
- * Em que ambientes o "Sincronizar agora" do projeto roda (#19).
+ * Em que ambientes o "Buscar issues agora" do projeto roda (#19).
  *
  * `sync.now` do ambiente aceita `project_id` (o id local do projeto, não o
  * do hub) e sincroniza só ele, pelo jira-cli se o projeto é Jira, senão pelo
@@ -72,7 +72,7 @@ export function syncPlan(clones: Clone[], jira: { env: string | null; name: stri
 export type SyncOutcome = { name: string; result: ProjectSync[] } | { name: string; error: string };
 
 /**
- * Feedback do "Sincronizar agora" em uma linha: o total buscado nos
+ * Feedback do "Buscar issues agora" em uma linha: o total buscado nos
  * ambientes que deram certo e o erro de cada um que falhou (na chamada ou
  * no `ProjectSync.error`, quando o rastreador recusou). `change` é "PR"
  * ou "MR", pela forja do projeto.

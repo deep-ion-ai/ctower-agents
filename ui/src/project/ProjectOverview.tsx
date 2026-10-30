@@ -31,7 +31,7 @@ export interface ProjectOverviewProps {
   /** Vai para outra aba (ou seção das Configurações) do mesmo projeto. */
   onPage: (page: ProjectPage, section?: ProjectSettingsSection) => void;
   /**
-   * Ponto de extensão (#19): saúde do projeto, "Sincronizar agora", gestor e
+   * Ponto de extensão (#19): saúde do projeto, "Buscar issues agora", gestor e
    * outras ações rápidas entram aqui como cartões `hub-card`, depois dos
    * básicos, sem mexer neles.
    */
