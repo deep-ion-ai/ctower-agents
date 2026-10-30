@@ -4,6 +4,8 @@
 // implementação da DaemonApi (`api.web`, `useTower().web`): o bundle web usa
 // a `WebDaemonApi` (`main.web.tsx`), e os testes, a `FakeDaemonApi.asWeb()`.
 import type { HubSection } from "../hub/sections";
+import { MOBILE_QUERY, useMediaQuery } from "../shell/layout";
+import { useTower } from "../state/tower";
 import type { SettingsSection } from "../settings/sections";
 import type { Place } from "../shell/places";
 import type { Screen } from "../state/nav";
@@ -42,3 +44,14 @@ export function placeOnWeb(p: Place): boolean {
 
 /** Rótulo do lugar na web: sem o escopo "Este app", que não existe lá. */
 export const webPlaceLabel = (label: string) => label.replace("Configurações › Este app › ", "Configurações › ");
+
+/**
+ * Celular (spec do épico #205 §10.3): modo web abaixo de 768 px, o mesmo
+ * corte do shell. As telas o usam para trazer ao corpo o que no desktop fica
+ * no painel lateral (#25).
+ */
+export function useMobile(): boolean {
+  const narrow = useMediaQuery(MOBILE_QUERY);
+  const { web } = useTower();
+  return narrow && web;
+}
