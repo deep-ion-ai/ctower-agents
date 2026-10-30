@@ -40,7 +40,7 @@ concurrency:
 jobs:
   # Quais jobs rodam (gate.yml, matriz em docs/ci.md). Um job fora do escopo
   # aparece como skipped, não como pendente. Com tag (release), web e macos rodam
-  # sempre. Os runners são os hospedados do GitHub (ubuntu-22.04 e macos-14);
+  # sempre. Os runners são os hospedados do GitHub (ubuntu-22.04 e macos-15);
   # CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON) trocam por runners próprios.
   changes:
     permissions:
@@ -84,7 +84,7 @@ jobs:
   macos:
     needs: changes
     if: inputs.tag != '' || needs.changes.outputs.tauri == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_MACOS || '"macos-14"') }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_MACOS || '"macos-15"') }}
     defaults:
       run:
         working-directory: ui

@@ -18,7 +18,7 @@ concurrency:
 jobs:
   # Quais jobs rodam (gate.yml, matriz em docs/ci.md). Um job fora do escopo
   # aparece como skipped, não como pendente. Os jobs rodam em runners hospedados
-  # do GitHub (ubuntu-22.04 e macos-14, ARM). Para usar runners próprios, defina
+  # do GitHub (ubuntu-22.04 e macos-15, ARM). Para usar runners próprios, defina
   # CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON, docs/ci.md).
   changes:
     permissions:
@@ -47,7 +47,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [linux, macos]
-    runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || '"macos-14"') || (vars.CI_RUNNER_LINUX || '"ubuntu-22.04"')) }}
+    runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || '"macos-15"') || (vars.CI_RUNNER_LINUX || '"ubuntu-22.04"')) }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
