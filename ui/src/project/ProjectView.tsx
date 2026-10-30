@@ -19,6 +19,7 @@ import { ago } from "../util/time";
 import { Board, type BoardNode } from "./Board";
 import { STATUS } from "./status";
 import { itemTab } from "./tabs";
+import { PROJECT_PAGES, PROJECT_PAGE_LABEL, projectAt, type ProjectPage, type ProjectSettingsSection } from "./sections";
 import { TreeControls } from "./TreeControls";
 import { ProviderIcon } from "./ProviderIcon";
 import { decisionsTitle, mergedOpen, mergedOpenText, rowLabel } from "./TreeRow";
@@ -44,10 +45,31 @@ export type ProjectNode = BoardNode & PanelNode & { children: ProjectNode[] };
 
 type ProjectAddr = Extract<Screen, { name: "project" }>;
 
+/** As abas do projeto além de Itens, que cada visão (local ou do hub) monta. */
+export type ProjectPages = Record<Exclude<ProjectPage, "items">, () => ReactNode>;
+
+/**
+ * Vai para outra aba (ou seção das Configurações) do projeto `addr` (#17).
+ * Na própria aba de editor quando ela mostra o projeto sem item (troca só o
+ * endereço, como as seções do Hub); de uma aba de item, na aba do projeto.
+ */
+export function useGoPage(addr: ProjectAddr): (page: ProjectPage, section?: ProjectSettingsSection) => void {
+  const nav = useNav();
+  return (page, section) => {
+    const screen = projectAt(addr, page, section);
+    if (nav.screen.name === "project" && !nav.screen.item) nav.openTab({ id: nav.current, screen });
+    else nav.go(screen);
+  };
+}
+
 /** Dados que cada tela (local ou do hub) entrega à visão comum. */
 export interface ProjectViewProps<T extends ProjectNode> {
-  /** Endereço do projeto (sem item): base das abas dos itens. */
+  /** Endereço do projeto (sem item nem aba): base das abas dos itens e das do projeto. */
   addr: ProjectAddr;
+  /** Aba do projeto mostrada sem item (#17); sem ela, Itens. */
+  page?: ProjectPage;
+  /** Conteúdo das outras abas (Itens é a árvore e o quadro desta visão). */
+  pages: ProjectPages;
   /** Chave do estado da árvore (`projectKey`). */
   uiKey: string;
   name: string;
@@ -93,6 +115,8 @@ const isClosed = (n: ProjectNode) => n.issue.state === "closed" || n.work_item?.
  */
 export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   const nav = useNav();
+  const goPage = useGoPage(p.addr);
+  const page = p.page ?? "items";
   const { api, envs, infos, web } = useTower();
   const now = useNow();
   const startSession = useStartSession();
@@ -310,7 +334,11 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
           <button
             type="button"
             aria-pressed={viewMode === "tree"}
-            onClick={() => setViewMode("tree")}
+            onClick={() => {
+              setViewMode("tree");
+              // Árvore e Quadro são da aba Itens (#17).
+              if (focus === null && page !== "items") goPage("items");
+            }}
           >
             Árvore
           </button>
@@ -319,8 +347,9 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
             aria-pressed={viewMode === "board"}
             onClick={() => {
               setViewMode("board");
-              // O Quadro fica na aba do projeto.
+              // O Quadro fica na aba do projeto, em Itens (#17).
               if (focus !== null) nav.go(p.addr);
+              else if (page !== "items") goPage("items");
             }}
           >
             Quadro
@@ -500,13 +529,30 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
             </button>
           )}
         </div>
+        {/* Abas do projeto (#17): cada uma com endereço próprio (`projectAt`).
+            Navegação, e não `tablist`: trocar de aba troca o endereço da aba
+            de editor, e "tab" já é o papel das abas do editor. */}
+        <nav className="pj-tabs" aria-label="Abas do projeto">
+          {PROJECT_PAGES.map((pg) => (
+            <button
+              key={pg}
+              type="button"
+              aria-current={pg === page ? "page" : undefined}
+              onClick={() => goPage(pg)}
+            >
+              {PROJECT_PAGE_LABEL[pg]}
+            </button>
+          ))}
+        </nav>
         {p.banner}
         {p.error && (
           <p role="alert" className="banner">
             {p.error}
           </p>
         )}
-        {viewMode === "board" ? (
+        {page !== "items" ? (
+          p.pages[page]()
+        ) : viewMode === "board" ? (
           <Board
             view={view}
             filters={filters}

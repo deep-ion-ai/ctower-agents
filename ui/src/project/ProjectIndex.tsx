@@ -3,7 +3,6 @@ import { useState, type MouseEvent } from "react";
 import { useNow } from "../App";
 import { projectCounts, useHubHealth } from "../hub/HubHealth";
 import { projectState } from "../hub/HubProjects";
-import { hubTab } from "../hub/sections";
 import type { HubHealth } from "../protocol/hub-gen";
 import { settingsTab } from "../settings/sections";
 import { ContextMenu } from "../shell/ContextMenu";
@@ -15,13 +14,14 @@ import { NewProjectDialog, type RegisterIntent } from "./NewProjectDialog";
 import { useProjectOrder, type ProjectOrder } from "./order";
 import { ProviderIcon } from "./ProviderIcon";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "./rows";
+import { projectAt } from "./sections";
 import { keyOf, plural, syncText, useSettingsRun, type Tone } from "./settings";
 
 /**
  * Índice da atividade Projetos (#16): `{ name: "project" }` sem chave. Lista
  * os projetos (pelo hub, na ordem de prioridade; sem hub, os locais de cada
  * ambiente) com estado, sessões, atribuições e saúde, e as ações de cada um:
- * Abrir (a linha), ⚙ (configurações) e ⋯ (o mesmo menu da Sala de
+ * Abrir (a linha, na aba Itens), ⚙ (a aba Configurações do projeto, #17) e ⋯ (o mesmo menu da Sala de
  * controle). Aqui ficam também o cadastro (+ Novo projeto), o filtro e a
  * reordenação da prioridade (arrastar ou Alt+↑/↓). Abrir um projeto abre a
  * aba dele (`project:<chave>`), e esta aba segue sendo o índice: o projeto
@@ -55,8 +55,8 @@ export function ProjectIndex() {
     : rows;
 
   const openMenu = (row: ProjectRow, x: number, y: number, origin: HTMLElement) => setMenu({ x, y, row, origin });
-  const settingsOf = (r: ProjectRow) =>
-    nav.openTab(hubTab("projects", { project: { owner: r.project.gh_owner, repo: r.project.gh_repo } }));
+  // ⚙: a aba Configurações do projeto (#17), na mesma aba do projeto.
+  const settingsOf = (r: ProjectRow) => nav.go(projectAt(r.screen, "settings"));
 
   const list = (items: ProjectRow[]) => (
     <ul className="pidx-list">
@@ -68,7 +68,7 @@ export function ProjectIndex() {
           health={viaHub ? health : null}
           pos={r.view ? ranked.findIndex((p) => p.id === r.view!.project.id) + 1 : null}
           order={r.view && viaHub ? order : null}
-          onOpen={() => nav.go(r.screen)}
+          onOpen={() => nav.go(projectAt(r.screen))}
           onSettings={hub.connected ? () => settingsOf(r) : null}
           onMenu={(x, y, origin) => openMenu(r, x, y, origin)}
         />

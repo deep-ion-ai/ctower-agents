@@ -94,14 +94,22 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(screen.queryByRole("button", { name: "Atribuir a um ambiente" })).toBeNull();
   });
 
-  it("Configurações do projeto (#8): abre o projeto no Hub, só leitura e sem secrets", async () => {
+  it("Configurações do projeto (#8, #17): a aba do projeto, só leitura e sem secrets nem exclusão", async () => {
     const user = userEvent.setup();
     const api = webApi();
     renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
     await user.click(await screen.findByRole("button", { name: "Configurações do projeto" }));
-    await screen.findByRole("button", { name: "Abrir árvore" });
-    expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
+    await screen.findByRole("group", { name: "Geral" });
+    expect(screen.getByRole("tab", { name: /ctower-agents · Configurações/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("button", { name: /^Editar/ })).toBeNull();
+    const secoes = screen.getByRole("navigation", { name: "Seções das configurações do projeto" });
+    expect(within(secoes).queryByRole("button", { name: "Secrets e variáveis" })).toBeNull();
+    expect(within(secoes).queryByRole("button", { name: "Zona de perigo" })).toBeNull();
+    // A seção do desktop pedida pelo endereço cai em Geral; Ambientes, sem atribuir nem remover.
+    await user.click(within(secoes).getByRole("button", { name: "Ambientes e atribuições" }));
+    await screen.findByRole("group", { name: "Ambientes e atribuições" });
+    expect(screen.queryByRole("button", { name: /Atribuir/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remover/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Gerenciar secrets do projeto" })).toBeNull();
     expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
   });

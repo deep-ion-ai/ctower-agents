@@ -33,6 +33,36 @@ test("deep link: item, propostas, ambientes, dispositivos e desconhecido", () =>
   expect(deepLinkTab("?go=terminal")).toBeNull();
 });
 
+test("deep link do projeto numa aba e numa seção (#17)", () => {
+  const base = { name: "project", owner: "deep-ion-ai", repo: "demo" };
+  // Sem `view` (ou desconhecida): Itens, o endereço de sempre.
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo")).toEqual({ screen: base });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=nova")).toEqual({ screen: base });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=sessions")?.screen).toEqual({ ...base, view: "sessions" });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=settings&section=rules")?.screen).toEqual({
+    ...base,
+    view: "settings",
+    section: "rules",
+  });
+  // Seção desconhecida ou fora das Configurações: sai do endereço.
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=settings&section=x")?.screen).toEqual({
+    ...base,
+    view: "settings",
+  });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=overview&section=rules")?.screen).toEqual({
+    ...base,
+    view: "overview",
+  });
+  // GitLab: o `owner` com barras (divide na última).
+  expect(deepLinkTab("?go=project&project=grupo/sub/app&view=items")?.screen).toEqual({
+    name: "project",
+    owner: "grupo/sub",
+    repo: "app",
+  });
+  expect(deepLinkTab("?go=project&project=sem-barra")).toBeNull();
+  expect(deepLinkTab("?go=project")).toBeNull();
+});
+
 test("iOS fora da tela de início pede para instalar; Android pode ativar", () => {
   expect(isIos(IPHONE, 5)).toBe(true);
   // iPad no modo desktop: "Macintosh" com toque.

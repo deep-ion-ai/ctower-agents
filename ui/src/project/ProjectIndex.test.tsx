@@ -151,7 +151,8 @@ test("filtro, ⚙ (configurações no Hub), ⋯ (menu) e + Novo projeto", async 
   expect(screen.queryByRole("form", { name: "Novo projeto" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Configurações de demo" }));
-  expect(await screen.findByRole("tab", { name: /Hub › Projetos|Projetos e atribuições/, selected: true })).toBeInTheDocument();
+  // A aba Configurações do projeto (#17), na aba do projeto.
+  expect(await screen.findByRole("tab", { name: /demo · Configurações/, selected: true })).toBeInTheDocument();
 });
 
 test("sem hub: lista local por ambiente, que abre o projeto local", async () => {

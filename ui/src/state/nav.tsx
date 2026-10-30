@@ -6,6 +6,7 @@ import { useTower } from "./tower";
 import type { HubSection, ProjectRef, RegisterIntent } from "../hub/sections";
 import type { MaintenanceSection } from "../maintenance/sections";
 import type { SettingsScope, SettingsSection, TemplateKey } from "../settings/sections";
+import type { ProjectPage, ProjectSettingsSection } from "../project/sections";
 
 /**
  * Item do projeto mostrado na aba (detalhe no editor, linha selecionada na
@@ -27,6 +28,16 @@ export type Screen =
       repo?: string;
       /** Item aberto nesta aba (aba própria por item: `itemTab` em project/tabs.ts). */
       item?: ItemIntent;
+      /**
+       * Aba do projeto (#17): Visão geral, Itens, Sessões ou Configurações.
+       * Sem ela, Itens: é o que o endereço sem `view` mostrava antes (árvore
+       * e quadro), e os links de fora (Sala de controle, Hub, paleta, PWA)
+       * seguem caindo no mesmo lugar. Com `item`, vale Itens. Monte com
+       * `projectAt` (project/sections.ts), que tira `view` em Itens.
+       */
+      view?: ProjectPage;
+      /** Seção das Configurações do projeto (só com `view: "settings"`); sem ela, Geral. */
+      section?: ProjectSettingsSection;
     }
   /** Recuperação (#318): a sessão interrompida mostrada (sem ela, a primeira). */
   | { name: "recovery"; env?: string; session?: string }

@@ -334,3 +334,100 @@
   border-color: var(--running);
   color: var(--text-2);
 }
+
+/* Abas do projeto (#17): Visão geral, Itens, Sessões e Configurações. */
+.pj-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pj-tabs button {
+  padding: 6px 12px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pj-tabs button:hover {
+  color: var(--text);
+}
+
+.pj-tabs button[aria-current="page"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.pj-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pj-ses-kind {
+  margin: 0;
+  padding: 8px 14px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* Configurações do projeto: índice das seções e a seção pedida. */
+.pj-settings {
+  display: grid;
+  grid-template-columns: minmax(160px, 200px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.pj-settings-nav ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pj-settings-nav button {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pj-settings-nav button:hover {
+  color: var(--text);
+}
+
+.pj-settings-nav button[aria-current="page"] {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.pj-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.pj-settings-body .hub-page-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+@media (max-width: 720px) {
+  .pj-settings {
+    grid-template-columns: 1fr;
+  }
+}

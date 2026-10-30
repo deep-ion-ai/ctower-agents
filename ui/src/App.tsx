@@ -215,7 +215,10 @@ function ProjectRoute({ screen }: { screen: Extract<Screen, { name: "project" }>
     if (p) key = { owner: p.gh_owner, repo: p.gh_repo };
   }
   if (hub.up && hub.dashboard) {
-    if (key) return <HubProjectScreen owner={key.owner} repo={key.repo} item={screen.item} />;
+    if (key)
+      return (
+        <HubProjectScreen owner={key.owner} repo={key.repo} item={screen.item} view={screen.view} section={screen.section} />
+      );
   }
   let { env, projectId } = screen;
   if (key && (env === undefined || projectId === undefined)) {
@@ -231,5 +234,5 @@ function ProjectRoute({ screen }: { screen: Extract<Screen, { name: "project" }>
       }
     }
   }
-  return <ProjectScreen env={env} projectId={projectId} item={screen.item} />;
+  return <ProjectScreen env={env} projectId={projectId} item={screen.item} view={screen.view} />;
 }

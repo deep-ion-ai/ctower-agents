@@ -13,6 +13,7 @@ import type { Nav, Screen } from "../state/nav";
 import { useTower } from "../state/tower";
 import { forgeLabel, jiraProjectUrl, repoUrl, type ProviderProject } from "../util/item";
 import { hubClones, localClone } from "./clones";
+import { projectAt } from "./sections";
 
 export interface ProjectRow {
   key: string;
@@ -111,8 +112,8 @@ export function useProjectRows(): ProjectRow[] {
 
 /**
  * Ações do menu ⋯ (e do botão direito) de um projeto: as mesmas na Sala de
- * controle e no índice. Configurações e atribuição são no Hub (a atribuição,
- * só no desktop: `editable`).
+ * controle e no índice. Configurações abre a aba Configurações do projeto
+ * (#17); a atribuição é no Hub, só no desktop (`editable`).
  */
 export function projectMenuItems(
   p: ProjectRow,
@@ -129,8 +130,9 @@ export function projectMenuItems(
   const ref = { owner: p.project.gh_owner, repo: p.project.gh_repo };
   const jira = jiraProjectUrl(p.project);
   return [
-    { label: "Abrir", run: () => nav.go(p.screen) },
-    ...(ctx.hubConnected ? [{ label: "Configurações", run: () => nav.openTab(hubTab("projects", { project: ref })) }] : []),
+    { label: "Abrir", run: () => nav.go(projectAt(p.screen)) },
+    // A aba Configurações do próprio projeto (#17), que vem do hub.
+    ...(ctx.hubConnected ? [{ label: "Configurações", run: () => nav.go(projectAt(p.screen, "settings")) }] : []),
     ...(ctx.editable
       ? [{ label: "Atribuir a ambiente", run: () => nav.openTab(hubTab("projects", { project: ref, assign: true })) }]
       : []),
