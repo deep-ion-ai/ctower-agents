@@ -176,7 +176,7 @@ export function HubProjects({
   const secrets = useSecrets(!web);
 
   useEffect(() => {
-    if (addUrl !== null && (addUrl || addKind === "jira")) setAdd({ ...EMPTY, ...hostsOf(addKind ?? "github"), url: addUrl });
+    if (addUrl !== null) setAdd({ ...EMPTY, ...hostsOf(addKind ?? "github"), url: addUrl });
   }, [addUrl, addKind]);
 
   const projects = hub.projects;
