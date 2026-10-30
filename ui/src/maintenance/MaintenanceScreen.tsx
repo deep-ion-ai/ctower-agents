@@ -15,11 +15,13 @@ import {
   isEnvSection,
   maintenancePath,
   maintenanceTab,
+  projectFilterKey,
   type MaintenanceScreen as MaintenanceAddress,
   type MaintenanceSection,
 } from "./sections";
 import { Backup } from "./Backup";
 import { Cleanup } from "./Cleanup";
+import { CleanupRules } from "./CleanupRules";
 import { Leftovers } from "./Leftovers";
 import { MaintenanceOverview } from "./Overview";
 import { AppUpdate, EnvUpdates, HubUpdate } from "./Updates";
@@ -32,19 +34,32 @@ import { AppUpdate, EnvUpdates, HubUpdate } from "./Updates";
  * mostram o ambiente do endereço (sem ele, o mesmo critério das
  * Configurações) e o seletor quando há mais de um; Atualizações › Ambientes
  * mostra todos numa tabela (#336) e a Limpeza, o plano e os restos fora do
- * hub do ambiente escolhido (#337). Backup e snapshots são os do hub (#338),
+ * hub do ambiente escolhido (#337), com as regras (`[cleanup]`, antes
+ * nas Configurações) e o filtro por projeto (#22). Backup e snapshots são os do hub (#338),
  * com as mesmas chamadas `hub.*`. A Visão geral (#339) junta o estado de
- * todos, com cada célula levando à seção. Os ajustes continuam nas
- * Configurações.
+ * todos, com cada célula levando à seção. Os demais ajustes continuam
+ * nas Configurações.
  */
 export function MaintenanceScreen({ screen }: { screen: MaintenanceAddress }) {
   const nav = useNav();
-  const { envs } = useTower();
+  const { envs, dashboards } = useTower();
   const section = screen.section ?? "overview";
   const perEnv = isEnvSection(section);
   const env = useEnvChoice(screen.env);
   const envName = envs.find((e) => e.id === env)?.name;
   const path = maintenancePath(section);
+  // Filtro por projeto (#22): só na Limpeza. As opções são os projetos do
+  // ambiente, mais o do endereço se ele não estiver lá (outro ambiente).
+  const project = section === "cleanup" ? screen.project : undefined;
+  const filterKey = project ? projectFilterKey(project) : "";
+  const options = (env ? (dashboards[env]?.projects ?? []) : []).map((p) => ({
+    key: projectFilterKey({ owner: p.project.gh_owner, repo: p.project.gh_repo }),
+    label: p.project.name,
+    ref: { owner: p.project.gh_owner, repo: p.project.gh_repo },
+  }));
+  if (project && !options.some((o) => o.key === filterKey))
+    options.unshift({ key: filterKey, label: `${project.owner}/${project.repo}`, ref: project });
+  const filterLabel = project && options.find((o) => o.key === filterKey)?.label;
 
   return (
     <main className="maint-screen" aria-labelledby="maint-h1">
@@ -59,7 +74,8 @@ export function MaintenanceScreen({ screen }: { screen: MaintenanceAddress }) {
               {p}
             </li>
           ))}
-          {perEnv && envName && <li aria-current="page">{envName}</li>}
+          {perEnv && envName && <li aria-current={project ? undefined : "page"}>{envName}</li>}
+          {project && <li aria-current="page">{filterLabel}</li>}
         </ol>
       </nav>
       <div className="settings hub-content">
@@ -71,11 +87,31 @@ export function MaintenanceScreen({ screen }: { screen: MaintenanceAddress }) {
                 aria-label="Ambiente da manutenção"
                 className="set-env-select"
                 value={env}
-                onChange={(e) => nav.openTab({ ...maintenanceTab(section, e.target.value), id: nav.current })}
+                onChange={(e) => nav.openTab({ ...maintenanceTab(section, e.target.value, project), id: nav.current })}
               >
                 {envs.map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {section === "cleanup" && env && (
+              <select
+                aria-label="Projeto da limpeza"
+                className="set-env-select"
+                value={filterKey}
+                onChange={(e) =>
+                  nav.openTab({
+                    ...maintenanceTab(section, env, options.find((o) => o.key === e.target.value)?.ref),
+                    id: nav.current,
+                  })
+                }
+              >
+                <option value="">Todos os projetos</option>
+                {options.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
                   </option>
                 ))}
               </select>
@@ -96,8 +132,9 @@ export function MaintenanceScreen({ screen }: { screen: MaintenanceAddress }) {
             <HubUpdate onHubSettings={() => nav.openTab(settingsTab({ section: "connections" }))} />
           ) : section === "cleanup" && env ? (
             <>
-              <Cleanup key={env} env={env} onSettings={() => nav.openTab(settingsTab({ section: "cleanup", env }))} />
-              <Leftovers env={env} />
+              <Cleanup key={env} env={env} project={project} />
+              <CleanupRules env={env} />
+              <Leftovers env={env} project={project} />
             </>
           ) : section === "backup" ? (
             <BackupSection />

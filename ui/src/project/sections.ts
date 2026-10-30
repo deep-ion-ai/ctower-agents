@@ -16,9 +16,10 @@ export type ProjectPage = "overview" | "items" | "sessions" | "settings";
  * `project/settings` (épico #12): Geral = `RepositoryCard`; Rastreador e
  * sync = `SyncEnvCard` (Jira) ou o sync do hub (GitHub); Ambientes =
  * `AssignmentsCard`; Regras = `AgentRules`; Secrets = `ProjectSecretsCard`;
- * Docs = `DocsForm`; Zona de perigo = `DangerZone`.
+ * Docs = `DocsForm`; Limpeza = `CleanupCard` (o atalho para Manutenção ›
+ * Limpeza filtrada pelo projeto, #22); Zona de perigo = `DangerZone`.
  */
-export type ProjectSettingsSection = "general" | "tracker" | "envs" | "rules" | "secrets" | "docs" | "danger";
+export type ProjectSettingsSection = "general" | "tracker" | "envs" | "rules" | "secrets" | "docs" | "cleanup" | "danger";
 
 /** Na ordem da faixa de abas. */
 export const PROJECT_PAGES: ProjectPage[] = ["overview", "items", "sessions", "settings"];
@@ -31,7 +32,16 @@ export const PROJECT_PAGE_LABEL: Record<ProjectPage, string> = {
 };
 
 /** Na ordem do índice das Configurações. */
-export const PROJECT_SECTIONS: ProjectSettingsSection[] = ["general", "tracker", "envs", "rules", "secrets", "docs", "danger"];
+export const PROJECT_SECTIONS: ProjectSettingsSection[] = [
+  "general",
+  "tracker",
+  "envs",
+  "rules",
+  "secrets",
+  "docs",
+  "cleanup",
+  "danger",
+];
 
 export const PROJECT_SECTION_LABEL: Record<ProjectSettingsSection, string> = {
   general: "Geral",
@@ -40,15 +50,17 @@ export const PROJECT_SECTION_LABEL: Record<ProjectSettingsSection, string> = {
   rules: "Regras do agente",
   secrets: "Secrets e variáveis",
   docs: "Docs",
+  cleanup: "Limpeza",
   danger: "Zona de perigo",
 };
 
 /**
  * Seções que a web (só leitura, épico #205) não mostra: os secrets ficam
  * fora do /web/ws (`hub.secrets.list` devolve valores de variáveis) e
- * excluir é do desktop. O mesmo corte que o Hub › Projetos faz.
+ * excluir é do desktop. O mesmo corte que o Hub › Projetos faz. A Limpeza
+ * leva à Manutenção, que a web não tem.
  */
-export const DESKTOP_ONLY_SECTIONS: ReadonlySet<ProjectSettingsSection> = new Set(["secrets", "danger"]);
+export const DESKTOP_ONLY_SECTIONS: ReadonlySet<ProjectSettingsSection> = new Set(["secrets", "cleanup", "danger"]);
 
 export const isPage = (v: unknown): v is ProjectPage => typeof v === "string" && (PROJECT_PAGES as string[]).includes(v);
 export const isSection = (v: unknown): v is ProjectSettingsSection =>

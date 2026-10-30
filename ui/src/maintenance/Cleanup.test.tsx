@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { CleanupItem, CleanupPlan, CleanupRun, CleanupStatus, StepPlan } from "../protocol/gen";
+import type { Screen } from "../state/nav";
 import { HUB_CONFIG_UNLINKED, dashboard, project } from "../test/fixtures";
-import { itemReason, pendingText } from "./Cleanup";
+import { itemReason, mergeRuns, pendingText } from "./Cleanup";
 
 const GB = 1024 ** 3;
 
@@ -91,7 +92,7 @@ const RUN: CleanupRun = {
   ],
 };
 
-function setup(st: CleanupStatus | null) {
+function setup(st: CleanupStatus | null, initial: Screen = { name: "maintenance", section: "cleanup" }) {
   let current = st;
   const api = new FakeDaemonApi()
     .on("dashboard.get", dashboard())
@@ -115,7 +116,7 @@ function setup(st: CleanupStatus | null) {
     .on("cleanup.plan", () => current?.plan)
     .on("cleanup.run", () => RUN)
     .on("session.kill", {});
-  render(<App api={api} initial={{ name: "maintenance", section: "cleanup" }} />);
+  render(<App api={api} initial={initial} />);
   return {
     api,
     user: userEvent.setup(),
@@ -231,13 +232,74 @@ test("sessão aberta de issue concluída: aviso e encerramento explícito com co
   await waitFor(() => expect(within(r).queryByRole("list", { name: /Sessões abertas/ })).not.toBeInTheDocument());
 });
 
-test("Ajustes de limpeza leva às regras nas Configurações do ambiente", async () => {
-  const { user } = setup(status(PLANO));
+test("as regras ficam na própria Limpeza (#22, antes nas Configurações), só leitura", async () => {
+  setup(status(PLANO));
   await waitFor(() => row());
-  await user.click(screen.getByRole("button", { name: "Ajustes de limpeza ›" }));
-  expect(screen.getByRole("tab", { name: "Configurações" })).toHaveAttribute("aria-selected", "true");
-  expect(await screen.findByRole("region", { name: "Limpeza: Regras" })).toBeInTheDocument();
+  const regras = await screen.findByRole("table", { name: "Regras de limpeza" });
+  const linha = (k: string) => within(regras).getByText(k).closest("tr")!;
+  expect(await within(linha("check_interval_hours")).findByText("6 h")).toBeInTheDocument();
+  expect(within(linha("auto")).getByText("desligado")).toBeInTheDocument();
+  expect(within(linha("end_idle_sessions_hours")).getByText("desligado")).toBeInTheDocument();
+  expect(within(linha("target_idle_days")).getByText("14 dia(s)")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Ajustes de limpeza ›" })).not.toBeInTheDocument();
+});
+
+/** Plano com itens de dois projetos: o ctower-agents (PLANO) e o outro-repo. */
+const MISTO = plan([
+  ...PLANO.items,
+  item(5, [step("worktree", "pendente", { bytes: 2 * GB })], { work_item_id: 905, project_id: 2, repo: "outro-repo" }),
+  item(6, [step("target", "pendente", { bytes: GB })], { work_item_id: 906, project_id: 2, repo: "outro-repo" }),
+]);
+const OUTRO: Screen = {
+  name: "maintenance",
+  section: "cleanup",
+  project: { owner: "deep-ion-ai", repo: "outro-repo" },
+};
+
+test("filtro por projeto (#22): só os itens dele, com a contagem e o espaço deles", async () => {
+  const { user } = setup(status(MISTO));
+  const r = await waitFor(() => row());
+  expect(await within(r).findByText("4 limpezas pendentes · 10,0 GB")).toBeInTheDocument();
+  const filtro = screen.getByLabelText("Projeto da limpeza");
+  expect(filtro).toHaveValue("");
+
+  await user.selectOptions(filtro, "deep-ion-ai/ctower-agents");
+  expect(screen.getAllByRole("tab", { name: "Manutenção · Limpeza" })).toHaveLength(1);
+  expect(screen.getByRole("navigation", { name: "Trilha" })).toHaveTextContent("ManutençãoLimpezactower-agents (WSL)ctower-agents");
+  const r2 = await waitFor(() => row());
+  expect(await within(r2).findByText("2 limpezas pendentes · 7,0 GB")).toBeInTheDocument();
+  const pend = within(r2).getByRole("list", { name: "Limpezas pendentes em ctower-agents (WSL)" });
+  expect(within(pend).queryByText(/outro-repo/)).not.toBeInTheDocument();
+  // As regras valem para o ambiente inteiro: seguem lá com o filtro.
   expect(screen.getByRole("table", { name: "Regras de limpeza" })).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("Projeto da limpeza"), "");
+  expect(await within(row()).findByText("4 limpezas pendentes · 10,0 GB")).toBeInTheDocument();
+});
+
+test("filtro pelo endereço: projeto fora do ambiente entra no seletor; Limpar tudo limpa item a item", async () => {
+  const { api, user } = setup(status(MISTO), OUTRO);
+  const r = await waitFor(() => row());
+  expect(await within(r).findByText("2 limpezas pendentes · 3,0 GB")).toBeInTheDocument();
+  expect(screen.getByLabelText("Projeto da limpeza")).toHaveValue("deep-ion-ai/outro-repo");
+  expect(within(r).queryByRole("list", { name: /Sessões abertas/ })).not.toBeInTheDocument();
+  await user.click(within(r).getByRole("button", { name: /^Limpar tudo de deep-ion-ai\/outro-repo/ }));
+  const box = within(r).getByRole("group", { name: "Confirmar limpeza" });
+  expect(box).toHaveTextContent("Limpar 2 work item(s) de deep-ion-ai/outro-repo em ctower-agents (WSL)? Saem as etapas pendentes (3,0 GB).");
+  await user.click(within(box).getByRole("button", { name: "Limpar" }));
+  // O daemon só limpa o plano inteiro ou um item: um `cleanup.run` por item do projeto.
+  await waitFor(() =>
+    expect(api.callsTo("cleanup.run").map((c) => c.params)).toEqual([{ work_item_id: 905 }, { work_item_id: 906 }]),
+  );
+  expect(await within(r).findByText(/2 etapa\(s\) feita\(s\), 2 bloqueada\(s\), 0 com falha · liberado: 12,0 GB/)).toBeInTheDocument();
+});
+
+test("mergeRuns soma as execuções por item", () => {
+  expect(mergeRuns([])).toBeNull();
+  const m = mergeRuns([RUN, { ...RUN, finished_at: 9, freed_bytes: GB }])!;
+  expect(m.items).toHaveLength(2);
+  expect(m.freed_bytes).toBe(7 * GB);
+  expect(m.finished_at).toBe(9);
 });
 
 test("o que ficou fora do hub aparece na Limpeza, para limpar à mão", async () => {

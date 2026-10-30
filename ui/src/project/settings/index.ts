@@ -1,4 +1,5 @@
 export { AssignmentsCard } from "./AssignmentsCard";
+export { CleanupCard } from "./CleanupCard";
 export { DangerZone } from "./DangerZone";
 export { DocsForm } from "./DocsForm";
 export { GeneralForm } from "./GeneralForm";

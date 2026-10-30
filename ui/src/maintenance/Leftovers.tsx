@@ -1,21 +1,29 @@
 import { useEffect, useState } from "react";
 import { useNow } from "../App";
 import type { Project } from "../protocol/gen";
+import type { ProjectRef } from "../hub/sections";
 import { useTower } from "../state/tower";
 import { ago } from "../util/time";
+import { projectFilterKey } from "./sections";
 
 /**
  * Manutenção › Limpeza › Fora do hub (#337, antes em Configurações ›
  * Projetos locais): projetos desatribuídos no hub e os locais anteriores a
  * ele, cujo clone e worktrees ficaram no disco do ambiente `env`. O
- * ambiente não os apaga: a lista é o que resta limpar à mão.
+ * ambiente não os apaga: a lista é o que resta limpar à mão. Com `project`
+ * (o filtro da Limpeza, #22), só a linha desse projeto, se houver.
  */
-export function Leftovers({ env }: { env: string }) {
+export function Leftovers({ env, project }: { env: string; project?: ProjectRef }) {
   const { status, infos, api } = useTower();
   const now = useNow();
   const current = status[env]?.connected ? env : undefined;
   // `null` = ainda não lido.
-  const [outside, setOutside] = useState<Project[] | null>(null);
+  const [all, setOutside] = useState<Project[] | null>(null);
+  const filterKey = project ? projectFilterKey(project) : null;
+  const outside =
+    all && filterKey !== null
+      ? all.filter((p) => projectFilterKey({ owner: p.gh_owner, repo: p.gh_repo }) === filterKey)
+      : all;
   const rev = current ? infos[current]?.hub_config?.config_rev : undefined;
 
   // Relê quando a configuração do ambiente muda.
@@ -40,7 +48,9 @@ export function Leftovers({ env }: { env: string }) {
       ) : outside === null ? (
         <p className="muted">Carregando…</p>
       ) : outside.length === 0 ? (
-        <p className="muted">Nada fora do hub neste ambiente.</p>
+        <p className="muted">
+          {project ? `${project.owner}/${project.repo} não está fora do hub neste ambiente.` : "Nada fora do hub neste ambiente."}
+        </p>
       ) : (
         <div className="table-wrap">
           <table aria-label="Projetos fora do hub">

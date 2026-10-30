@@ -83,7 +83,16 @@ export type Screen =
    * tem aba própria (`maintenanceTab`); `env` = o ambiente das seções por
    * ambiente (sem ele, o mesmo critério das Configurações).
    */
-  | { name: "maintenance"; section?: MaintenanceSection; env?: string }
+  | {
+      name: "maintenance";
+      section?: MaintenanceSection;
+      env?: string;
+      /**
+       * Filtro por projeto da Limpeza (#22): o plano, as sessões abertas e
+       * o que ficou fora do hub só desse projeto. Monte com `maintenanceTab`.
+       */
+      project?: ProjectRef;
+    }
   | { name: "review"; env?: string; workItemId?: number }
   /**
    * Configurações (#315): escopo (Este app ou o ambiente `env`), a seção a
