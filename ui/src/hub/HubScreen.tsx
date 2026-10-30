@@ -126,6 +126,7 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
         addUrl={addReq?.url ?? null}
         addKind={addReq?.kind}
         project={screen.project}
+        assign={screen.assign}
         onAddDone={(added) => {
           setAddReq(null);
           // O pedido de cadastro foi atendido: a aba fica sem ele e mostra o projeto cadastrado.
@@ -191,6 +192,7 @@ function Section({
   addUrl,
   addKind,
   project,
+  assign,
   onAddDone,
   onRegister,
   call,
@@ -205,6 +207,7 @@ function Section({
   addUrl: string | null;
   addKind?: RegisterIntent["kind"];
   project?: ProjectRef;
+  assign?: true;
   onAddDone(added?: ProjectRef): void;
   onRegister(key: string): void;
   call: TokenCall;
@@ -220,7 +223,16 @@ function Section({
     case "quarantine":
       return <Quarantine now={now} onRegister={onRegister} />;
     case "projects":
-      return <HubProjects project={project} addUrl={addUrl} addKind={addKind} onAddDone={onAddDone} health={health} />;
+      return (
+        <HubProjects
+          project={project}
+          assign={assign}
+          addUrl={addUrl}
+          addKind={addKind}
+          onAddDone={onAddDone}
+          health={health}
+        />
+      );
     case "envs":
       return <HubEnvs now={now} />;
     case "web-sessions":

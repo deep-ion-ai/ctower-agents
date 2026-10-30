@@ -4,6 +4,7 @@ import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { IssueRow, ProjectTree, TreeNode } from "../protocol/gen";
 import { dashboard, project, session, sync, workItem } from "../test/fixtures";
+import { webApi } from "../test/web";
 
 const NOW = Date.now();
 
@@ -194,4 +195,46 @@ test("sem hub e sem ambiente: telas e comandos continuam", async () => {
   await user.clear(input());
   await user.type(input(), "#1");
   expect(screen.getByRole("status")).toHaveTextContent("Nada encontrado.");
+});
+
+test("comandos de projeto (#9): \"novo projeto\" abre o cadastro; \"configurar ctower\", a configuração", async () => {
+  const { user } = setup();
+  await screen.findByRole("button", { name: /ui: paleta de comandos/ });
+  await open(user);
+  await user.type(input(), "novo projeto");
+  expect(activeOption()).toHaveTextContent("Projeto: Novo…");
+  await user.keyboard("{Enter}");
+  expect(await screen.findByRole("tab", { name: "Hub · Projetos e atribuições" })).toHaveAttribute("aria-selected", "true");
+  await open(user);
+  await user.type(input(), "configurar ctower");
+  expect(activeOption()).toHaveTextContent("Projeto: Configurações — ctower-agents");
+  await user.clear(input());
+  await user.type(input(), ">atribuir ctower");
+  expect(activeOption()).toHaveTextContent("Projeto: Atribuir ctower-agents a ambiente");
+  await user.clear(input());
+  await user.type(input(), ">projeto ctower");
+  expect(options().map((o) => o.textContent)).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("Projeto: Secrets — ctower-agents"),
+      expect.stringContaining("Projeto: Regras — ctower-agents"),
+    ]),
+  );
+});
+
+test("comandos de projeto na web (#9): só os de leitura", async () => {
+  const user = userEvent.setup();
+  render(<App api={webApi()} />);
+  await screen.findByRole("button", { name: /WebDaemonApi/ });
+  await open(user);
+  await user.type(input(), ">projeto");
+  const labels = options().map((o) => o.textContent ?? "");
+  expect(labels).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("Projeto: Configurações — ctower-agents"),
+      expect.stringContaining("Projeto: Regras — ctower-agents"),
+    ]),
+  );
+  for (const l of ["Projeto: Novo", "Projeto: Atribuir", "Projeto: Secrets"]) {
+    expect(labels.some((t) => t.includes(l))).toBe(false);
+  }
 });

@@ -2,6 +2,7 @@
 // do projeto (spec do Jira e GitLab §9, #351).
 import type { ForgeConfig, GitlabConfig, JiraConfig, TrackerConfig, WorkItemKind } from "../protocol/gen";
 import type { Templates } from "../api/types";
+import type { TemplateKey } from "../settings/sections";
 
 export interface TemplateVars {
   kind: WorkItemKind;
@@ -83,8 +84,13 @@ export function renderTemplate(template: string, v: TemplateVars): string {
  * GitLab §9.1): os `jira_*` nos projetos Jira; os de hoje no GitHub.
  */
 export function templateFor(t: Templates, kind: WorkItemKind | "project", tracker: TrackerConfig["kind"] = "github"): string {
-  if (tracker === "jira") return kind === "epic" ? t.jira_epic : kind === "project" ? t.jira_project : t.jira_issue;
-  return kind === "epic" ? t.epic : kind === "project" ? t.project : t.issue;
+  return t[templateKeyFor(kind, tracker)];
+}
+
+/** Chave do template de `templateFor` (o "Editar template" da modal de início abre a aba dela). */
+export function templateKeyFor(kind: WorkItemKind | "project", tracker: TrackerConfig["kind"] = "github"): TemplateKey {
+  if (tracker === "jira") return kind === "epic" ? "jira_epic" : kind === "project" ? "jira_project" : "jira_issue";
+  return kind === "epic" ? "epic" : kind === "project" ? "project" : "issue";
 }
 
 /** Nota acrescentada quando a sessão interrompida recomeça do zero (sem o transcript, ou por escolha). */

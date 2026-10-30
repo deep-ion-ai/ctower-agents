@@ -3,7 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { IssueRow, ProjectTree, TreeNode, WorkItem } from "../protocol/gen";
-import { dashboard, project, session, sync, workItem } from "../test/fixtures";
+import {
+  HUB_DASHBOARD,
+  NO_HEALTH,
+  NO_PROPOSALS,
+  dashboard,
+  hubInfo,
+  hubStatus,
+  project,
+  session,
+  sync,
+  workItem,
+} from "../test/fixtures";
 import { rememberTermSize } from "../terminal/size";
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
 import { renderTemplate } from "./templates";
@@ -578,4 +589,54 @@ test("a sessão nasce com o último tamanho medido do terminal", async () => {
   await waitFor(() =>
     expect(api.callsTo("session.start_project")[0]?.params).toMatchObject({ cols: 132, rows: 41 }),
   );
+});
+
+describe("sem projetos (#6)", () => {
+  // Nenhum projeto no ambiente; o hub, quando há, também está vazio.
+  function setupVazio(hub: "no ar" | "fora" | "sem") {
+    const api = new FakeDaemonApi()
+      .on("dashboard.get", dashboard({ projects: [] }))
+      .on("env.info", { protocol: "2.0", version: "0.1.0", hostname: "ct", worktrees_root: "/w" });
+    if (hub !== "sem")
+      api
+        .withHub("ws://mac-mini:7879/ws", hub === "no ar")
+        .onHub("hub.info", hubInfo())
+        .onHub("hub.status", hubStatus())
+        .onHub("hub.projects.list", [])
+        .onHub("hub.envs.list", [])
+        .onHub("hub.dashboard.get", HUB_DASHBOARD)
+        .onHub("hub.proposals.list", NO_PROPOSALS)
+        .onHub("hub.health.get", NO_HEALTH);
+    render(<App api={api} initial={{ name: "project" }} />);
+    return userEvent.setup();
+  }
+
+  test("hub no ar: o texto aponta para o Hub e '+ Novo projeto' abre o formulário de cadastro", async () => {
+    const user = setupVazio("no ar");
+    const novo = await screen.findByRole("button", { name: "+ Novo projeto" });
+    expect(screen.getByText(/O cadastro fica no Hub, em Projetos e atribuições/)).toBeInTheDocument();
+    expect(screen.queryByText(/Cadastre um em Configurações/)).not.toBeInTheDocument();
+    await user.click(novo);
+    expect(await screen.findByRole("form", { name: "Novo projeto" })).toBeInTheDocument();
+  });
+
+  test.each(["fora", "sem"] as const)("hub %s: 'Configurar o hub' leva a Configurações › Conexões", async (hub) => {
+    const user = setupVazio(hub);
+    const configurar = await screen.findByRole("button", { name: "Configurar o hub" });
+    expect(screen.queryByRole("button", { name: "+ Novo projeto" })).not.toBeInTheDocument();
+    await user.click(configurar);
+    expect(await screen.findByRole("tab", { name: /Configurações/, selected: true })).toBeInTheDocument();
+  });
+});
+
+test("Editar template na modal abre a aba do template usado e fecha a modal; no épico, as regras dele (#11)", async () => {
+  const { user } = setup();
+  await screen.findByText("Plano 4 — UI Tauri");
+  await user.click(play(27));
+  expect(within(dialog()).getByRole("button", { name: "Regras do projeto ›" })).toBeInTheDocument();
+  expect(within(dialog()).getByRole("button", { name: "Regras do épico #27 ›" })).toBeInTheDocument();
+  await user.click(within(dialog()).getByRole("button", { name: "Editar template ›" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Template · Épico" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("heading", { name: "Template: Épico" })).toBeInTheDocument();
 });

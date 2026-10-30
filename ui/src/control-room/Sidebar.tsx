@@ -1,13 +1,18 @@
 // Painel lateral da Sala de controle (#316): visões, hub, ambientes e projetos.
 import { useState } from "react";
+import { hubTab } from "../hub/sections";
+import { hubClones, localClone } from "../project/clones";
+import { ContextMenu, type MenuItem } from "../shell/ContextMenu";
 import { Icon } from "../shell/icons";
 import { shortcutLabel } from "../shell/layout";
 import { useShell } from "../shell/Shell";
 import { SideContent, SideGroup, SidePanel, SideRow } from "../shell/SidePanel";
+import { useStartSession, type StartTarget } from "../shell/start";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 import { ago } from "../util/time";
 import { configLine } from "../util/hub";
+import { forgeLabel, jiraProjectUrl, repoUrl, type ProviderProject } from "../util/item";
 import { lookup } from "./attention";
 import type { ControlView } from "./grid";
 import type { EnvInfo, HubSyncResult } from "../protocol/gen";
@@ -173,12 +178,17 @@ interface ProjectRow {
   name: string;
   running: number;
   waiting: number;
+  /** Rastreador e forja, para "Abrir no GitHub/GitLab/Jira". */
+  project: ProviderProject;
+  /** Alvo da sessão de planejamento; `null` = nenhum ambiente conectado com o projeto. */
+  start: StartTarget | null;
   open(): void;
 }
 
 /** Projetos com sessões em execução e aguardando; com o hub no ar, a visão consolidada. */
 function useProjectRows(): ProjectRow[] {
-  const { envs, dashboards, hub } = useTower();
+  const tower = useTower();
+  const { envs, dashboards, hub } = tower;
   const nav = useNav();
   if (hub.up && hub.dashboard) {
     const hd = hub.dashboard;
@@ -196,6 +206,11 @@ function useProjectRows(): ProjectRow[] {
         name: project.name,
         running,
         waiting,
+        project,
+        start:
+          hubClones(tower, project.gh_owner, project.gh_repo).length > 0
+            ? { owner: project.gh_owner, repo: project.gh_repo }
+            : null,
         open: () =>
           nav.go({
             name: "project",
@@ -222,6 +237,8 @@ function useProjectRows(): ProjectRow[] {
         name: project.name,
         running,
         waiting,
+        project,
+        start: localClone(tower, e.id, project.id) ? { env: e.id, projectId: project.id } : null,
         open: () => nav.go({ name: "project", env: e.id, projectId: project.id }),
       };
     });
@@ -270,9 +287,30 @@ export function Sidebar({
   onView(v: ControlView | null): void;
   counts: Record<ControlView, number>;
 }) {
-  const { envs } = useTower();
+  const { envs, hub, web, api } = useTower();
   const shell = useShell();
+  const nav = useNav();
+  const startSession = useStartSession();
   const projects = useProjectRows();
+  const [menu, setMenu] = useState<{ x: number; y: number; p: ProjectRow; origin: HTMLElement } | null>(null);
+  // Cadastro e atribuição são no hub e só no desktop (na web, só leitura).
+  const editable = hub.connected && !web;
+
+  const menuItems = (p: ProjectRow, origin: HTMLElement): MenuItem[] => {
+    const ref = { owner: p.project.gh_owner, repo: p.project.gh_repo };
+    const openUrl = (url: string) => void api.openUrl(url).catch(() => {});
+    const jira = jiraProjectUrl(p.project);
+    return [
+      { label: "Abrir", run: p.open },
+      ...(hub.connected ? [{ label: "Configurações", run: () => nav.openTab(hubTab("projects", { project: ref })) }] : []),
+      ...(editable
+        ? [{ label: "Atribuir a ambiente", run: () => nav.openTab(hubTab("projects", { project: ref, assign: true })) }]
+        : []),
+      ...(p.start ? [{ label: "Sessão de planejamento", run: () => startSession(p.start!, origin) }] : []),
+      { label: `Abrir no ${forgeLabel(p.project)}`, run: () => openUrl(repoUrl(p.project)) },
+      ...(jira ? [{ label: "Abrir no Jira", run: () => openUrl(jira) }] : []),
+    ];
+  };
 
   return (
     <SideContent>
@@ -309,7 +347,23 @@ export function Sidebar({
             <EnvRow key={e.id} id={e.id} name={e.name} now={now} />
           ))}
         </SideGroup>
-        <SideGroup title="Projetos" count={projects.length}>
+        <SideGroup
+          title="Projetos"
+          count={projects.length}
+          actions={
+            editable && (
+              <button
+                type="button"
+                className="ibtn"
+                aria-label="Novo projeto"
+                title="Novo projeto"
+                onClick={() => nav.openTab(hubTab("projects", { register: { url: "" } }))}
+              >
+                <Icon name="plus" size={15} />
+              </button>
+            )
+          }
+        >
           {projects.map((p) => (
             <SideRow
               key={p.key}
@@ -318,10 +372,24 @@ export function Sidebar({
               trailing={p.running + p.waiting}
               description={`${p.running} em execução, ${p.waiting} aguardando`}
               onClick={p.open}
+              onMenu={(x, y, origin) => setMenu({ x, y, p, origin })}
             />
           ))}
         </SideGroup>
       </SidePanel>
+      {menu && (
+        <ContextMenu
+          label={`Ações do projeto ${menu.p.name}`}
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menu.p, menu.origin)}
+          onClose={(restore) => {
+            const o = menu.origin;
+            setMenu(null);
+            if (restore) o.focus();
+          }}
+        />
+      )}
     </SideContent>
   );
 }

@@ -227,3 +227,16 @@ Pré-requisito: hub 1.9 ou maior com `docs_dir` configurado (o `cthubd` cria o m
 8. Clique **Fazer backup agora** no bloco dos docs. **Esperado:** "Backup dos docs feito." e o último pacote atualizado; o **Fazer backup agora** do topo roda só o hub.db. Troque **Pacotes dos docs mantidos** para 10 e salve. **Esperado:** "Configuração do backup dos docs salva." e a retenção mostra 10. Limite 5000 MB não deixa salvar.
 9. Com `docs_backup_max_mb` abaixo do tamanho dos docs, rode o backup dos docs. **Esperado:** "Backup dos docs não rodou…", a linha **Última rodada** com o tamanho, e o aviso "Docs acima do limite do backup" no bloco e na faixa **Precisa de você** (com **Configurar backup** levando ao bloco).
 10. Na PWA (celular), abra **Hub → Visão geral**. **Esperado:** o cartão **Backup dos docs** com o mesmo estado, só leitura, sem botões; **Abrir pasta de docs** não aparece na tela Projeto.
+
+## 14. Ver issue (#434)
+
+Pré-requisito: hub 1.10 ou maior; para projeto Jira, o ambiente de sync 2.9 ou maior e online.
+
+1. Na tela **Projeto**, abra uma issue do GitHub com descrição (títulos, checklist, código, tabela, imagem). Clique **Ver issue**, ao lado de **Abrir issue no GitHub ↗**. **Esperado:** a modal com o número, o título e a descrição renderizada; checklist só de leitura; segue o tema claro/escuro.
+2. Na descrição, clique numa referência `#n` do mesmo repositório. **Esperado:** a modal fecha e a aba daquela issue abre no app. Clique num link externo: abre no navegador.
+3. Feche com **Esc**, de novo com **✕** e com clique fora. Edite a descrição no GitHub e abra de novo. **Esperado:** a versão nova (nada fica guardado entre aberturas).
+4. Numa issue sem descrição. **Esperado:** "Sem descrição.".
+5. Num projeto Jira + GitLab, **Ver issue** numa issue com wiki markup (títulos `h2.`, `*negrito*`, `{code}`, tabela `||`). **Esperado:** convertido para Markdown; chaves `PROJ-n` do projeto abrem a aba do item. Pare o `ctowerd` do ambiente de sync e tente de novo: **Esperado:** "ambiente offline…" e o botão **Abrir no Jira ↗**.
+6. Com um hub 1.9, passe o mouse em **Ver issue**. **Esperado:** desabilitado com "Atualize o hub…". Com o hub fora do ar (tela local), desabilitado com "…fora do ar".
+7. Na PWA, repita o passo 1. **Esperado:** o mesmo comportamento.
+

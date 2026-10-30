@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { hubTab } from "../hub/sections";
 import type { ProjectTree, TreeNode } from "../protocol/gen";
+import { settingsTab } from "../settings/sections";
 import { useNav, type ItemIntent } from "../state/nav";
 import { useTower } from "../state/tower";
 import { trackerLabel } from "../util/item";
@@ -15,7 +17,7 @@ import { cacheTree, cachedTree } from "./ui-store";
  */
 export function ProjectScreen(props: { env?: string; projectId?: number; item?: ItemIntent }) {
   const tower = useTower();
-  const { envs, dashboards, api } = tower;
+  const { envs, dashboards, api, hub } = tower;
   const nav = useNav();
 
   // Sem seleção: o primeiro projeto do primeiro ambiente com dashboard.
@@ -62,7 +64,27 @@ export function ProjectScreen(props: { env?: string; projectId?: number; item?: 
     return (
       <main className="page">
         <h1 className="section-title">Projeto</h1>
-        <p className="empty">Nenhum projeto cadastrado. Cadastre um em Configurações.</p>
+        {/* O cadastro é no Hub: sem ele no ar, o caminho é configurar a conexão. */}
+        <p className="empty">
+          {hub.connected
+            ? "Nenhum projeto cadastrado. O cadastro fica no Hub, em Projetos e atribuições."
+            : "Nenhum projeto cadastrado. O cadastro fica no Hub, que está fora do ar ou sem conexão configurada."}
+        </p>
+        <div className="form-actions">
+          {hub.connected ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => nav.openTab(hubTab("projects", { register: { url: "" } }))}
+            >
+              + Novo projeto
+            </button>
+          ) : (
+            <button type="button" className="btn btn-primary" onClick={() => nav.openTab(settingsTab({ section: "connections" }))}>
+              Configurar o hub
+            </button>
+          )}
+        </div>
       </main>
     );
   }

@@ -104,6 +104,9 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "session.archive",
     "session.remote_control.enable",
     "hub.sync.now",
+    // "Ver issue" de projeto Jira (#434): o hub não alcança o Jira e lê a
+    // descrição pelo ambiente de sync, sem gravar.
+    "tracker.issue_body",
 ];
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:

@@ -40,6 +40,8 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.quarantine.list",
     "hub.tree.get",
     "hub.workitem.history",
+    // "Ver issue" (#434): só leitura, de passagem, sem gravar.
+    "hub.workitem.body",
     "hub.workitem.set_status",
     "hub.workitem.set_priority",
     "hub.ranking.get",

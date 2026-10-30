@@ -1,10 +1,22 @@
 import { afterEach, expect, test } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { EnvInfo, HubSyncResult, HubSyncStatus } from "../protocol/gen";
-import { HUB_CONFIG_UNLINKED, HUB_DASHBOARD, dashboard, hubInfo, hubStatus, RC_AVAILABLE } from "../test/fixtures";
+import {
+  HUB_CONFIG_UNLINKED,
+  HUB_DASHBOARD,
+  NO_HEALTH,
+  NO_PROPOSALS,
+  dashboard,
+  hubEnv,
+  hubInfo,
+  hubProjectView,
+  hubStatus,
+  jiraHubProject,
+  RC_AVAILABLE,
+} from "../test/fixtures";
 import { syncResultText } from "./Sidebar";
 
 afterEach(cleanup);
@@ -208,5 +220,88 @@ describe("hub na lateral", () => {
     render(<App api={api} />);
     await waitFor(() => expect(api.callsTo("env.info").length).toBeGreaterThan(0));
     expect(screen.queryByRole("button", { name: /^Hub:/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Projetos na lateral (#10)", () => {
+  const side = () => screen.getByRole("complementary", { name: "Ambientes e projetos" });
+  const items = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((b) => b.textContent);
+
+  test("sem hub: menu com Abrir, planejamento e GitHub; sem '+'", async () => {
+    const api = new FakeDaemonApi([{ ...FakeDaemonApi.wslEnv(), name: "wsl" }])
+      .on("dashboard.get", dashboard())
+      .on("env.info", info());
+    render(<App api={api} />);
+    const user = userEvent.setup();
+    const linha = await within(side()).findByRole("button", { name: "ctower-agents" });
+    expect(within(side()).queryByRole("button", { name: "Novo projeto" })).not.toBeInTheDocument();
+
+    // Botão direito: o foco vai para a primeira ação; Esc devolve à linha.
+    fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
+    let menu = screen.getByRole("menu", { name: "Ações do projeto ctower-agents" });
+    expect(items(menu)).toEqual(["Abrir", "Sessão de planejamento", "Abrir no GitHub"]);
+    expect(within(menu).getByRole("menuitem", { name: "Abrir" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(linha).toHaveFocus();
+
+    // Shift+F10 na linha focada.
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    menu = screen.getByRole("menu", { name: "Ações do projeto ctower-agents" });
+    await user.click(within(menu).getByRole("menuitem", { name: "Abrir no GitHub" }));
+    expect(api.opened).toEqual(["https://github.com/deep-ion-ai/ctower-agents"]);
+
+    fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
+    await user.click(screen.getByRole("menuitem", { name: "Sessão de planejamento" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  function setupHub() {
+    const jira = jiraHubProject();
+    const api = new FakeDaemonApi([{ ...FakeDaemonApi.wslEnv(), name: "wsl" }])
+      .on("dashboard.get", dashboard({ projects: [] }))
+      .on("env.info", info())
+      .withHub()
+      .onHub("hub.info", hubInfo())
+      .onHub("hub.status", hubStatus())
+      .onHub("hub.projects.list", [hubProjectView(jira)])
+      .onHub("hub.envs.list", [hubEnv()])
+      .onHub("hub.dashboard.get", { ...HUB_DASHBOARD, projects: [{ project: jira, work_items: [] }] })
+      .onHub("hub.proposals.list", NO_PROPOSALS)
+      .onHub("hub.health.get", NO_HEALTH);
+    render(<App api={api} />);
+    return { api, user: userEvent.setup() };
+  }
+
+  test("hub no ar: '+' abre o cadastro em branco", async () => {
+    const { user } = setupHub();
+    await user.click(await within(side()).findByRole("button", { name: "Novo projeto" }));
+    expect(await screen.findByRole("form", { name: "Novo projeto" })).toBeInTheDocument();
+  });
+
+  test("hub no ar: menu completo, links do GitLab e do Jira e Configurações", async () => {
+    const { api, user } = setupHub();
+    const linha = await within(side()).findByRole("button", { name: "app" });
+    fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
+    const menu = screen.getByRole("menu", { name: "Ações do projeto app" });
+    // Sem ambiente conectado com o projeto: sem sessão de planejamento.
+    expect(items(menu)).toEqual(["Abrir", "Configurações", "Atribuir a ambiente", "Abrir no GitLab", "Abrir no Jira"]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Abrir no GitLab" }));
+    fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
+    await user.click(screen.getByRole("menuitem", { name: "Abrir no Jira" }));
+    expect(api.opened).toEqual(["https://gitlab.example.com/grupo/projeto/app", "https://jira.example.com/browse/PROJ"]);
+
+    fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
+    await user.click(screen.getByRole("menuitem", { name: "Configurações" }));
+    expect(await screen.findByRole("tab", { name: /Projetos e atribuições/, selected: true })).toBeInTheDocument();
+  });
+
+  test("hub no ar: Atribuir a ambiente abre o formulário do projeto", async () => {
+    const { user } = setupHub();
+    const linha = await within(side()).findByRole("button", { name: "app" });
+    linha.focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(screen.getByRole("menuitem", { name: "Atribuir a ambiente" }));
+    expect(await screen.findByRole("form", { name: "Atribuir app" })).toBeInTheDocument();
   });
 });

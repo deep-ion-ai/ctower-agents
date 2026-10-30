@@ -47,7 +47,7 @@
 
 use crate::github::ProjectSync;
 use crate::gitlab::{project_path, GitlabRemote};
-use crate::{Result, Sessions};
+use crate::{Result, Sessions, SessionsError};
 use ct_core::{
     now_ms, GitlabConfig, GitlabReadiness, JiraConfig, JiraReadiness, PrState, TrackerKind,
     TrackerProgress, TrackerReadiness, WorkItemStatus,
@@ -424,6 +424,29 @@ impl JiraGitlabSync {
             .unwrap_or_else(|e| e.into_inner())
             .retain(|id, _| ids.contains(id));
         ids.into_iter().map(|id| self.sync_one(id)).collect()
+    }
+
+    /// Descrição crua da issue `number` (`issue view --raw`), para o "Ver
+    /// issue" (#434): `{ title, description, url }`, com a `description` como
+    /// o Jira a manda (wiki markup ou ADF; o hub converte). Nada é gravado.
+    /// Síncrono: chame fora do runtime.
+    pub fn issue_description(&self, project_id: i64, number: i64) -> Result<serde_json::Value> {
+        let project = self.sessions.ledger().get_project(project_id)?;
+        let Some(jira) = project.tracker.jira().cloned() else {
+            return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
+        };
+        let key = ct_core::item_key(&project.tracker_ref(), number);
+        let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
+            .with_deadline(self.cfg.view_deadline);
+        let fail = |e: String| SessionsError::Invalid(format!("Jira, {key}: {e}"));
+        let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
+            .map_err(|e| fail(e.to_string()))?;
+        let v = cli.view(&token, &key).map_err(|e| fail(e.to_string()))?;
+        Ok(json!({
+            "title": v.pointer("/fields/summary").cloned().unwrap_or_default(),
+            "description": v.pointer("/fields/description").cloned().unwrap_or_default(),
+            "url": ct_core::item_url(&project.tracker_ref(), number),
+        }))
     }
 
     pub fn sync_project(&self, project_id: i64) -> Result<ProjectSync> {
@@ -1250,6 +1273,42 @@ mod tests {
         assert!(story.issue.has_sub_issues, "Story com sub-task vira épico");
         assert_eq!(story.children[0].issue.gh_number, 3);
         assert!(tree.sync.unwrap().last_ok_at.is_some());
+    }
+
+    /// "Ver issue" (#434): a descrição vem crua do `issue view`, sem passar
+    /// pelo espelho nem pelo outbox; issue sem descrição e senha recusada.
+    #[test]
+    fn descricao_da_issue_vem_do_view_sem_gravar() {
+        let j = setup(true);
+        let mut i = api_issue("PROJ-7", "Tarefa", "new");
+        i["fields"]["summary"] = "Corrigir login".into();
+        i["fields"]["description"] = "h2. Contexto\n*a*".into();
+        j.fake.set_view(&i);
+        let before = outbox_kinds(&j.env);
+        let v = j.sync.issue_description(j.env.project_id, 7).unwrap();
+        assert_eq!(v["title"], "Corrigir login");
+        assert_eq!(v["description"], "h2. Contexto\n*a*");
+        assert_eq!(v["url"], format!("{FAKE_SERVER}/browse/PROJ-7"));
+        assert_eq!(j.fake.viewed(), vec!["PROJ-7"]);
+        assert_eq!(outbox_kinds(&j.env), before, "nada vai ao outbox");
+        let tree = j
+            .env
+            .sessions
+            .ledger()
+            .project_tree(j.env.project_id)
+            .unwrap();
+        assert!(tree.roots.is_empty(), "nada vai ao espelho");
+
+        let mut sem = api_issue("PROJ-8", "Tarefa", "new");
+        sem["fields"]["description"] = Value::Null;
+        j.fake.set_view(&sem);
+        let v = j.sync.issue_description(j.env.project_id, 8).unwrap();
+        assert_eq!(v["description"], Value::Null);
+
+        j.fake.fail_view_401("PROJ-7", true);
+        let e = j.sync.issue_description(j.env.project_id, 7).unwrap_err();
+        assert!(e.to_string().contains("PROJ-7"), "{e}");
+        assert!(!e.to_string().contains(SENHA), "{e}");
     }
 
     #[test]
