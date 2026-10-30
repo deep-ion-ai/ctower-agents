@@ -15,7 +15,8 @@ import {
   hubStatus,
   jiraHubProject,
 } from "../test/fixtures";
-import type { HubSection } from "./sections";
+import type { Screen } from "../state/nav";
+import type { ProjectSettingsSection } from "./sections";
 
 const NOW = Date.now();
 const JIRA = jiraHubProject();
@@ -47,7 +48,20 @@ function status(p: { credential_ok?: boolean } = {}): HubTrackerStatus {
   };
 }
 
-function setup(opts: { projects?: HubProjectView[]; section?: HubSection; protocol?: string } = {}) {
+/** Configurações do projeto Jira (#17; antes da #18, o detalhe do Hub › Projetos), na seção pedida. */
+const settingsAt = (section: ProjectSettingsSection): Screen => ({
+  name: "project",
+  owner: "grupo/projeto",
+  repo: "app",
+  view: "settings",
+  section,
+});
+
+/**
+ * Sem `at`: com projetos, as Configurações › Geral do projeto Jira; sem
+ * projetos, o índice de Projetos (onde fica o cadastro desde a #18).
+ */
+function setup(opts: { projects?: HubProjectView[]; at?: Screen; protocol?: string } = {}) {
   let projects = opts.projects ?? [{ ...hubProjectView(JIRA, ASSIGNMENTS), tracker_status: null }];
   const api = new FakeDaemonApi([{ ...FakeDaemonApi.wslEnv(), name: "WSL" }])
     .on("dashboard.get", dashboard({ projects: [] }))
@@ -61,7 +75,8 @@ function setup(opts: { projects?: HubProjectView[]; section?: HubSection; protoc
     .onHub("hub.health.get", NO_HEALTH)
     .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 0, recovery_configured: true }, items: [], delivery: [] });
-  render(<App api={api} initial={{ name: "hub", section: opts.section ?? "projects" }} />);
+  const at = opts.at ?? (projects.length === 0 ? { name: "project" } : settingsAt("general"));
+  render(<App api={api} initial={at} />);
   return { api, user: userEvent.setup(), setProjects: (p: HubProjectView[]) => (projects = p) };
 }
 
@@ -71,7 +86,7 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
     setProjects([hubProjectView(JIRA)]);
     return { project: JIRA, rev: 3, reapplied: 0, restored: false };
   });
-  await user.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
+  await user.click(await screen.findByRole("button", { name: "+ Novo projeto" }));
   const form = screen.getByRole("form", { name: "Novo projeto" });
   await user.selectOptions(within(form).getByLabelText("Repositório do código-fonte"), "gitlab");
   await user.selectOptions(within(form).getByLabelText("Repositório de demandas (issues)"), "jira");
@@ -142,7 +157,7 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
 }, 15_000);
 
 async function jiraForm(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
+  await user.click(await screen.findByRole("button", { name: "+ Novo projeto" }));
   const form = screen.getByRole("form", { name: "Novo projeto" });
   await user.selectOptions(within(form).getByLabelText("Repositório do código-fonte"), "gitlab");
   await user.selectOptions(within(form).getByLabelText("Repositório de demandas (issues)"), "jira");
@@ -197,7 +212,7 @@ test("editar projeto Jira mostra o modo, o JQL e o limite atuais", async () => {
     Object.assign(sprintProject.tracker, { active_sprint_only: false, jql: "labels = web", max_issues: 300 });
   }
   const { user } = setup({ projects: [{ ...hubProjectView(sprintProject, ASSIGNMENTS), tracker_status: null }] });
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+  const g = await screen.findByRole("group", { name: "Geral" });
   expect(g).toHaveTextContent(/JQL: labels = web · até 300 issues/);
   await user.click(within(g).getByRole("button", { name: /^Editar/ }));
   const form = within(g).getByRole("form", { name: "Editar app" });
@@ -211,7 +226,7 @@ test("editar projeto Jira mostra o modo, o JQL e o limite atuais", async () => {
 
 test("cadastro: combinação não suportada avisa e não deixa cadastrar", async () => {
   const { user } = setup({ projects: [] });
-  await user.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
+  await user.click(await screen.findByRole("button", { name: "+ Novo projeto" }));
   const form = screen.getByRole("form", { name: "Novo projeto" });
   expect(within(form).queryByRole("note")).not.toBeInTheDocument();
   await user.selectOptions(within(form).getByLabelText("Repositório de demandas (issues)"), "jira");
@@ -235,7 +250,7 @@ test("cadastro: combinação não suportada avisa e não deixa cadastrar", async
 
 test("cadastro num hub anterior ao protocolo 1.3: GitLab e Jira desabilitados, com aviso", async () => {
   const { user } = setup({ projects: [], protocol: "1.4" });
-  await user.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
+  await user.click(await screen.findByRole("button", { name: "+ Novo projeto" }));
   const form = screen.getByRole("form", { name: "Novo projeto" });
   await waitFor(() =>
     expect(within(form).getByRole("note")).toHaveTextContent(
@@ -251,7 +266,7 @@ test("cadastro num hub anterior ao protocolo 1.3: GitLab e Jira desabilitados, c
 
 test("editar projeto Jira: os dois repositórios mostram o atual, sem trocar", async () => {
   const { user } = setup();
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+  const g = await screen.findByRole("group", { name: "Geral" });
   await user.click(within(g).getByRole("button", { name: /^Editar/ }));
   const form = within(g).getByRole("form", { name: "Editar app" });
   const code = within(form).getByLabelText("Repositório do código-fonte");
@@ -268,7 +283,7 @@ test("editar projeto Jira: os dois repositórios mostram o atual, sem trocar", a
 
 test("padrão de branch inválido e mapa de tipos inválido não vão ao hub", async () => {
   const { api, user } = setup({ projects: [] });
-  await user.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
+  await user.click(await screen.findByRole("button", { name: "+ Novo projeto" }));
   const form = screen.getByRole("form", { name: "Novo projeto" });
   await user.selectOptions(within(form).getByLabelText("Repositório do código-fonte"), "gitlab");
   await user.selectOptions(within(form).getByLabelText("Repositório de demandas (issues)"), "jira");
@@ -285,30 +300,34 @@ test("padrão de branch inválido e mapa de tipos inválido não vão ao hub", a
   expect(api.hubCallsTo("hub.projects.add")).toHaveLength(0);
 });
 
-test("detalhe do projeto Jira: Jira e GitLab, sem GitHub, e aguardando o ambiente de sync", async () => {
-  setup();
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+test("Configurações do projeto Jira: Jira e GitLab, sem GitHub, e aguardando o ambiente de sync", async () => {
+  const { user } = setup();
+  const nav = await screen.findByRole("navigation", { name: "Seções das configurações do projeto" });
+  // Geral: o repositório com o Jira, o GitLab e as credenciais, sem GitHub.
+  const g = await screen.findByRole("group", { name: "Geral" });
   expect(g).not.toHaveTextContent(/GitHub/);
   expect(within(g).queryByRole("link", { name: /github\.com/ })).not.toBeInTheDocument();
-  expect(within(g).getByRole("link", { name: "Jira PROJ" })).toHaveAttribute(
-    "href",
-    "https://jira.example.com/projects/PROJ",
-  );
-  expect(within(g).getByRole("link", { name: "gitlab.example.com/grupo/projeto/app" })).toBeInTheDocument();
+  expect(g).toHaveTextContent("https://jira.example.com · projeto PROJ");
+  expect(g).toHaveTextContent("https://gitlab.example.com/grupo/projeto/app.git");
   expect(g).toHaveTextContent("pass show jira | head -1");
   expect(g).toHaveTextContent("sem linhas de atribuição");
-  const card = within(g).getByRole("heading", { name: "Ambiente de sync" }).closest("section")!;
+  // Repositório e rastreador: o ambiente de sync, aguardando o relato.
+  await user.click(within(nav).getByRole("button", { name: "Repositório e rastreador" }));
+  const t = await screen.findByRole("group", { name: "Repositório e rastreador" });
+  const card = within(t).getByRole("heading", { name: "Ambiente de sync" }).closest("section")!;
   expect(card).toHaveTextContent(/wsl-pc busca o Jira e o GitLab/);
   expect(within(card).getByRole("status")).toHaveTextContent(/Aguardando o ambiente de sync/);
-  // A atribuição do ambiente de sync tem a marca.
-  const table = within(g).getByRole("table", { name: "Atribuições de app" });
+  // Ambientes: a atribuição do ambiente de sync tem a marca.
+  await user.click(within(nav).getByRole("button", { name: "Ambientes e atribuições" }));
+  const envs = await screen.findByRole("group", { name: "Ambientes e atribuições" });
+  const table = within(envs).getByRole("table", { name: "Atribuições de app" });
   expect(within(table).getByText("sync")).toBeInTheDocument();
 });
 
 test("trocar o ambiente de sync entre os atribuídos", async () => {
-  const { api, user } = setup();
+  const { api, user } = setup({ at: settingsAt("tracker") });
   api.onHub("hub.projects.update", { ...JIRA, sync_env_id: "daemon-mac" });
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+  const g = await screen.findByRole("group", { name: "Repositório e rastreador" });
   await user.click(within(g).getByRole("button", { name: "Trocar ambiente de sync" }));
   const form = within(g).getByRole("form", { name: "Ambiente de sync de app" });
   const sel = within(form).getByLabelText("Ambiente (entre os atribuídos)");
@@ -326,6 +345,7 @@ test("trocar o ambiente de sync entre os atribuídos", async () => {
 
 test("prontidão do ambiente de sync: o que falta, com a instrução", async () => {
   setup({
+    at: settingsAt("tracker"),
     projects: [
       {
         ...hubProjectView(JIRA, ASSIGNMENTS),
@@ -334,7 +354,7 @@ test("prontidão do ambiente de sync: o que falta, com a instrução", async () 
       },
     ],
   });
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+  const g = await screen.findByRole("group", { name: "Repositório e rastreador" });
   const r = within(g).getByLabelText("Prontidão de wsl-pc");
   expect(r).toHaveTextContent(/2 item\(ns\) a configurar/);
   expect(within(r).getByRole("list", { name: "Jira" })).toHaveTextContent(
@@ -342,16 +362,19 @@ test("prontidão do ambiente de sync: o que falta, com a instrução", async () 
   );
   expect(within(r).getByRole("list", { name: "Jira" })).toHaveTextContent("1.7.0");
   expect(within(r).getByRole("list", { name: "GitLab" })).not.toHaveTextContent(/falta/);
-  // O erro do último sync aparece na Sincronização.
-  expect(g).toHaveTextContent(/sincronização com erro/);
-  expect(g).toHaveTextContent(/pelo ambiente de sync wsl-pc/);
+  // O erro do último sync aparece na Sincronização, no cartão do repositório (Geral).
+  const nav = screen.getByRole("navigation", { name: "Seções das configurações do projeto" });
+  await userEvent.setup().click(within(nav).getByRole("button", { name: "Geral" }));
+  const geral = await screen.findByRole("group", { name: "Geral" });
+  expect(geral).toHaveTextContent(/sincronização com erro/);
+  expect(geral).toHaveTextContent(/pelo ambiente de sync wsl-pc/);
 });
 
 test("prontidão mostra o progresso do sync em andamento", async () => {
   const st = status();
   st.readiness.progress = { done: 400, total: 3800, started_at: NOW - 120_000 };
-  setup({ projects: [{ ...hubProjectView(JIRA, ASSIGNMENTS), tracker_status: st }] });
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+  setup({ at: settingsAt("tracker"), projects: [{ ...hubProjectView(JIRA, ASSIGNMENTS), tracker_status: st }] });
+  const g = await screen.findByRole("group", { name: "Repositório e rastreador" });
   const r = within(g).getByLabelText("Prontidão de wsl-pc");
   expect(r).toHaveTextContent(/Sincronizando… 400 de 3800 issues lidas/);
 });
@@ -359,23 +382,26 @@ test("prontidão mostra o progresso do sync em andamento", async () => {
 test("prontidão mostra a listagem do sync antes da leitura", async () => {
   const st = status();
   st.readiness.progress = { done: 1500, total: 0, started_at: NOW - 60_000 };
-  setup({ projects: [{ ...hubProjectView(JIRA, ASSIGNMENTS), tracker_status: st }] });
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+  setup({ at: settingsAt("tracker"), projects: [{ ...hubProjectView(JIRA, ASSIGNMENTS), tracker_status: st }] });
+  const g = await screen.findByRole("group", { name: "Repositório e rastreador" });
   const r = within(g).getByLabelText("Prontidão de wsl-pc");
   expect(r).toHaveTextContent(/Sincronizando… listando as issues, 1500 até agora/);
   expect(r).not.toHaveTextContent(/de 0 issues/);
 });
 
 test("projeto Jira sem ambiente de sync orienta a escolher", async () => {
-  setup({ projects: [{ ...hubProjectView(jiraHubProject({ sync_env_id: null }), ASSIGNMENTS), tracker_status: null }] });
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+  setup({
+    at: settingsAt("tracker"),
+    projects: [{ ...hubProjectView(jiraHubProject({ sync_env_id: null }), ASSIGNMENTS), tracker_status: null }],
+  });
+  const g = await screen.findByRole("group", { name: "Repositório e rastreador" });
   expect(g).toHaveTextContent(/Sem ambiente de sync: o hub não recebe o espelho do Jira/);
   expect(within(g).getByRole("button", { name: "Escolher ambiente de sync" })).toBeInTheDocument();
 });
 
 test("Visão geral mostra o último sync ou o erro de cada projeto Jira", async () => {
   setup({
-    section: "overview",
+    at: { name: "hub" },
     projects: [
       {
         ...hubProjectView(JIRA, ASSIGNMENTS),
@@ -389,8 +415,8 @@ test("Visão geral mostra o último sync ou o erro de cada projeto Jira", async 
   expect(item).toHaveTextContent(/pelo ambiente de sync wsl-pc: o Jira recusou a senha \(401\)/);
 });
 
-test("detalhe do projeto Jira: regras do agente do projeto no hub, com a versão", async () => {
-  const { api } = setup();
+test("Configurações › Regras do projeto Jira: regras do agente do projeto no hub, com a versão", async () => {
+  const { api } = setup({ at: settingsAt("rules") });
   api
     .onHub("hub.rules.get", (p: { owner: string; repo: string; epic_number: number }) => ({
       ...p,
@@ -412,7 +438,7 @@ test("detalhe do projeto Jira: regras do agente do projeto no hub, com a versão
       warn_bytes: 12288,
     }))
     .onHub("hub.rules.proposals.list", { proposals: [], truncated: false });
-  const g = await screen.findByRole("group", { name: "Projeto app" });
+  const g = await screen.findByRole("group", { name: "Regras do agente" });
   const card = await within(g).findByRole("region", { name: /Regras do agente do projeto · versão 4/ });
   expect(card).toHaveTextContent("importação de CLAUDE.md");
   expect(within(card).getByLabelText("Texto de regras do projeto")).toHaveTextContent("[PROJ-NNNN] título");

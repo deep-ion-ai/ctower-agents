@@ -2,14 +2,25 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { HubTree, HubTreeNode } from "../protocol/hub-gen";
 import { useNav, type ItemIntent } from "../state/nav";
 import { useTower } from "../state/tower";
-import { hubTab } from "../hub/sections";
 import { Icon } from "../shell/icons";
+import { useNow } from "../App";
 import { hubClones, liveSessions } from "./clones";
-import { ProjectView } from "./ProjectView";
+import { ProjectTrail } from "./ProjectIndex";
+import { ProjectView, useGoPage } from "./ProjectView";
+import { ProjectOverview } from "./ProjectOverview";
+import { ProjectGestorCard, ProjectHealthCard, ProjectSyncCard } from "./OverviewCards";
+import { syncPlan } from "./overview";
+import { isJira } from "../hub/tracker";
+import { ProjectSessions } from "./ProjectSessions";
+import { ProjectSettings } from "./ProjectSettings";
+import { projectsPlace, sectionOf, type ProjectPage, type ProjectSettingsSection } from "./sections";
+import { projectSessions, sessionCounts } from "./sessions";
 import { projectKey } from "./tabs";
 import { cacheTree, cachedTree } from "./ui-store";
-import { trackerLabel } from "../util/item";
-import { splitProjectKey } from "../util/hub";
+import { changeLabel, itemTitle, trackerLabel } from "../util/item";
+import { assignmentText } from "../util/hub";
+import { projectState, syncText, type Tone } from "./settings";
+import type { AssignmentState } from "../protocol/hub-gen";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -19,10 +30,30 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
  * vivas continuam em cada daemon; a modal de início escolhe o ambiente (o
  * da atribuição) e manda `owner/repo` e o número.
  */
-export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: string; item?: ItemIntent }) {
+export function HubProjectScreen({
+  owner,
+  repo,
+  item,
+  view,
+  section,
+  assign,
+}: {
+  owner: string;
+  repo: string;
+  item?: ItemIntent;
+  /** Aba do projeto (#17); sem ela, Itens. */
+  view?: ProjectPage;
+  /** Seção das Configurações. */
+  section?: ProjectSettingsSection;
+  /** Pedido de atribuição (#18): nas Configurações › Ambientes, abre o formulário. */
+  assign?: true;
+}) {
   const tower = useTower();
-  const { api, hub, web } = tower;
+  const { api, hub, web, dashboards } = tower;
   const nav = useNav();
+  const now = useNow();
+  const addr = { name: "project" as const, owner, repo };
+  const goPage = useGoPage(addr);
   const key = projectKey({ owner, repo });
   const [tree, setTree] = useState<HubTree | null>(() => cachedTree<HubTree>(key));
   const [error, setError] = useState<string | null>(null);
@@ -64,13 +95,91 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
   // A árvore de outro projeto (troca em andamento) não serve.
   const mine = tree && same(tree.project.gh_owner, owner) && same(tree.project.gh_repo, repo) ? tree : null;
   const p = mine?.project ?? null;
-  const projects = hub.dashboard?.projects.map((x) => x.project) ?? [];
   // Pela chave do hub (`p`): o `owner` da rota pode diferir na caixa.
   const ref = { owner: p?.gh_owner ?? owner, repo: p?.gh_repo ?? repo };
+  const hubProject = hub.projects.find((x) => same(x.project.gh_owner, owner) && same(x.project.gh_repo, repo)) ?? null;
+
+  // Sessões do projeto (#17): as dos ambientes conectados e as que o hub relata.
+  const sessions = () =>
+    projectSessions(
+      clones,
+      dashboards,
+      hub.dashboard && hubProject
+        ? { dashboard: hub.dashboard, envs: hub.envs, envByDaemon: hub.envByDaemon, projectId: hubProject.project.id }
+        : null,
+    );
+  const TONE: Record<AssignmentState, Tone> = { applied: "ok", pending: "attention", error: "error" };
 
   return (
     <ProjectView<HubTreeNode>
-      addr={{ name: "project", owner, repo }}
+      addr={addr}
+      page={item ? "items" : view}
+      pages={{
+        overview: () => {
+          const groups = sessions();
+          const sync = syncText(hubProject?.sync ?? mine?.sync ?? null, now);
+          // Projeto Jira: o sync é do ambiente de sync (id do hub → ambiente da UI).
+          const hp = hubProject?.project;
+          const jira =
+            hp && isJira(hp)
+              ? {
+                  env: hp.sync_env_id ? (hub.envByDaemon[hp.sync_env_id] ?? null) : null,
+                  name: hp.sync_env_id
+                    ? (hubProject.assignments.find((a) => a.env_id === hp.sync_env_id)?.env_name ?? hp.sync_env_id)
+                    : null,
+                }
+              : null;
+          return (
+            <ProjectOverview
+              state={hubProject ? projectState(hubProject, now) : null}
+              sync={{ ...sync, error: hubProject?.sync?.last_error ?? null }}
+              assignments={
+                hubProject?.assignments.map((a) => ({ env: a.env_name, text: assignmentText(a), tone: TONE[a.state] })) ?? []
+              }
+              live={groups.flatMap((g) =>
+                g.live.map((s) => {
+                  const env = g.env;
+                  return {
+                    id: s.id,
+                    label: itemTitle({ gh_number: s.gh, title: s.title }, p),
+                    envName: g.name,
+                    open: env ? () => nav.openTerminal({ env, session: s.id }) : undefined,
+                  };
+                }),
+              )}
+              counts={sessionCounts(groups)}
+              onPage={goPage}
+              extra={
+                <>
+                  <ProjectHealthCard owner={ref.owner} repo={ref.repo} project={hp ?? p} />
+                  <ProjectSyncCard plan={syncPlan(clones, jira)} change={changeLabel(hp ?? p)} />
+                  <ProjectGestorCard owner={ref.owner} repo={ref.repo} />
+                </>
+              }
+            />
+          );
+        },
+        sessions: () => (
+          <ProjectSessions
+            groups={sessions()}
+            project={p}
+            now={now}
+            emptyText="Nenhum ambiente com este projeto relatou sessões ao hub, e nenhum ambiente conectado o tem."
+          />
+        ),
+        settings: () => (
+          <ProjectSettings
+            owner={ref.owner}
+            repo={ref.repo}
+            section={sectionOf({ name: "project", section }, web)}
+            onSection={(s) => goPage("settings", s)}
+            // A web é só leitura: o pedido de atribuição não abre nada lá.
+            assign={!web && assign}
+            // Atendido, o pedido sai do endereço (a aba fica em Ambientes): voltar a ela não reabre o formulário.
+            onAssignHandled={() => goPage("settings", "envs")}
+          />
+        ),
+      }}
       uiKey={key}
       name={p?.name ?? `${owner}/${repo}`}
       project={p}
@@ -104,8 +213,9 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
           <span className="hub-badge" title="Visão consolidada de todos os ambientes">
             visão do hub
           </span>
-          {/* Configurações do projeto no Hub (#8), com os secrets e variáveis do projeto. Na web, só leitura. */}
-          <button type="button" className="btn" onClick={() => nav.openTab(hubTab("projects", { project: ref }))}>
+          {/* Configurações do projeto (#8): desde a #17, a aba Configurações do
+              próprio projeto, com os secrets e variáveis dele. Na web, só leitura. */}
+          <button type="button" className="btn" onClick={() => goPage("settings")}>
             <Icon name="settings" size={14} /> Configurações do projeto
           </button>
         </>
@@ -123,7 +233,8 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
                 <button
                   type="button"
                   className="btn btn-sm"
-                  onClick={() => nav.openTab(hubTab("projects", { project: ref, assign: true }))}
+                  // Desde a #18, na seção Ambientes das Configurações do próprio projeto.
+                  onClick={() => nav.go(projectsPlace({ project: ref, assign: true }))}
                 >
                   Atribuir a um ambiente
                 </button>
@@ -132,30 +243,9 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
           </p>
         )
       }
-      picker={
-        projects.length > 1 ? (
-          <label className="pj-pick">
-            <span className="sr-only">Trocar de projeto</span>
-            <select
-              value={`${p?.gh_owner ?? owner}/${p?.gh_repo ?? repo}`}
-              onChange={(e) => {
-                // Na última barra: o `owner` do GitLab tem barras (`grupo/projeto`).
-                nav.go({ name: "project", ...splitProjectKey(e.target.value) });
-              }}
-            >
-              {projects.map((x) => (
-                <option key={x.id} value={`${x.gh_owner}/${x.gh_repo}`}>
-                  {x.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <p className="pj-name">
-            {owner}/{repo}
-          </p>
-        )
-      }
+      // Trilha "Projetos › X" (#16): trocar de projeto é pelo índice, e cada
+      // projeto aberto fica na sua aba.
+      picker={<ProjectTrail name={p?.name ?? `${owner}/${repo}`} title={`${ref.owner}/${ref.repo}`} />}
     />
   );
 }

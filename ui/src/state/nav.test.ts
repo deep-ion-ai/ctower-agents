@@ -111,3 +111,33 @@ test("ordem por projeto: a aba nova entra depois da última do mesmo projeto", (
   s = navReducer(s, { type: "terminal", tab: A, groups });
   expect(ids(s)[1]).toBe(terminalTabId(A));
 });
+
+// Antigo Hub › Projetos e atribuições (#18): o endereço vira o lugar novo ao abrir.
+
+test("endereço antigo do Hub › Projetos abre o projeto (Configurações) ou o índice, na aba deles", () => {
+  const project = { owner: "deep-ion-ai", repo: "ctower-agents" };
+  // Com projeto e `assign`: a aba do projeto, em Configurações › Ambientes, com o pedido.
+  let s = navReducer(initialNav({ name: "control" }), {
+    type: "open",
+    // O `id` velho (a aba da seção, ou o `nav.current` de quem trocava só o endereço) não vale.
+    tab: { id: "hub:projects", screen: { name: "hub", section: "projects", project, assign: true } },
+  });
+  expect(ids(s)).toEqual(["control", "project:deep-ion-ai/ctower-agents"]);
+  expect(s.editors[1]).toMatchObject({
+    screen: { name: "project", ...project, view: "settings", section: "envs", assign: true },
+  });
+  // Sem projeto, com `register`: o índice de Projetos com o pedido de cadastro.
+  s = navReducer(s, { type: "open", tab: { screen: { name: "hub", section: "projects", register: { url: "u" } } } });
+  expect(s.current).toBe("project");
+  expect(s.editors.find((e) => e.id === "project")).toMatchObject({ screen: { name: "project", register: { url: "u" } } });
+  // A aba inicial também (endereço de uma versão anterior).
+  const init = initialNav({ name: "hub", section: "projects", project });
+  expect(init.editors).toEqual([
+    { kind: "screen", id: "project:deep-ion-ai/ctower-agents", screen: { name: "project", ...project, view: "settings" } },
+  ]);
+  // As outras seções do Hub seguem iguais.
+  expect(initialNav({ name: "hub", section: "envs" }).editors[0]).toMatchObject({
+    id: "hub",
+    screen: { name: "hub", section: "envs" },
+  });
+});

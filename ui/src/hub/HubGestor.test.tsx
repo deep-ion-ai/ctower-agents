@@ -280,7 +280,7 @@ test("proposta obsoleta na decisão: avisa o motivo", async () => {
   expect(await within(sec).findByRole("alert")).toHaveTextContent("ficou obsoleta: valor atual mudou: prioridade P2");
 });
 
-test("saúde: sinais por gravidade, link para o projeto e contagem nos projetos", async () => {
+test("saúde: sinais por gravidade e link para o projeto", async () => {
   const health: HubHealth = {
     generated_at: NOW,
     signals: [
@@ -309,32 +309,10 @@ test("saúde: sinais por gravidade, link para o projeto e contagem nos projetos"
   await user.click(within(sec).getByLabelText("mostrar informativos"));
   expect(within(sec).getByText("issues não triadas")).toBeInTheDocument();
   // Contador da seção no painel lateral: só aviso e crítico.
+  // (A contagem por projeto fica no índice de Projetos desde a #18: ProjectIndex.test.tsx.)
   expect(screen.getByRole("button", { name: "Saúde dos projetos" })).toHaveAccessibleDescription("2 sinais");
-  await user.click(screen.getByRole("button", { name: "Projetos e atribuições" }));
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
-  expect(within(ct).getByLabelText("1 crítico(s), 0 aviso(s)")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Saúde dos projetos" }));
-  const again = await screen.findByRole("region", { name: /Saúde e riscos/ });
-  await user.click(within(again).getByRole("button", { name: "deep-ion-ai/ctower-agents#176" }));
+  await user.click(within(sec).getByRole("button", { name: "deep-ion-ai/ctower-agents#176" }));
   expect(await screen.findByRole("heading", { level: 1, name: /ctower-agents/ })).toBeInTheDocument();
-});
-
-test("ordem entre projetos: subir e descer", async () => {
-  const { api, user } = setup({ section: "projects" });
-  await user.click(await screen.findByRole("button", { name: "demo" }));
-  const demo = await screen.findByRole("group", { name: "Projeto demo" });
-  expect(within(demo).getByRole("button", { name: "Descer demo na ordem dos projetos" })).toBeDisabled();
-  api.onHub("hub.projects.move", { ...DEMO, rank: 1 });
-  await user.click(within(demo).getByRole("button", { name: "Subir demo na ordem dos projetos" }));
-  await waitFor(() => expect(api.hubCallsTo("hub.projects.move")).toHaveLength(1));
-  expect(api.hubCallsTo("hub.projects.move")[0].params).toEqual({
-    owner: "deep-ion-ai",
-    repo: "demo",
-    before: { owner: "deep-ion-ai", repo: "ctower-agents" },
-  });
-  await user.click(screen.getByRole("button", { name: "ctower-agents" }));
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
-  expect(within(ct).getByRole("button", { name: "Subir ctower-agents na ordem dos projetos" })).toBeDisabled();
 });
 
 test("propostas de prioridade: tabela na ordem resultante, com sobe/desce e lote", async () => {

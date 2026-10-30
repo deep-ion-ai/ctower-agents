@@ -17,7 +17,9 @@ interface Deleting {
 /**
  * Exclusão do projeto, que mostra o impacto (`DeleteImpact`, do hub ou
  * estimado pela UI com `live` e `secretCount`) e pede a confirmação que o
- * hub pedir. `onDeleted` roda depois de excluir.
+ * hub pedir. `onDeleted` roda depois de excluir, com a mensagem (o
+ * snapshot anterior): quem sai da tela (as Configurações do projeto, que
+ * deixa de existir) a leva adiante.
  */
 export function DangerZone({
   project: p,
@@ -31,7 +33,7 @@ export function DangerZone({
   live: HubSession[];
   /** Secrets e variáveis do próprio projeto. */
   secretCount: number;
-  onDeleted?: () => void;
+  onDeleted?: (message: string) => void;
 }) {
   const { api } = useTower();
   const pr = p.project;
@@ -54,8 +56,9 @@ export function DangerZone({
           ...(confirm ? { confirm: true } : {}),
         });
         setDeleting(null);
-        onDeleted?.();
-        return `${key} excluído do hub. Snapshot anterior: ${r.snapshot}`;
+        const message = `${key} excluído do hub. Snapshot anterior: ${r.snapshot}`;
+        onDeleted?.(message);
+        return message;
       },
       (m) => {
         if (confirm || !needsConfirm(m)) return false;

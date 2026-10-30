@@ -162,7 +162,7 @@ const treeRow = async (name: RegExp) =>
 describe("projeto Jira + GitLab", () => {
   test("árvore do Projeto: chave do Jira, MR, ícone do provedor e links do Jira", async () => {
     const api = envApi();
-    render(<App api={api} initial={{ name: "project" }} />);
+    render(<App api={api} initial={{ name: "project", env: "wsl", projectId: P.id }} />);
     const user = userEvent.setup();
     await treeRow(/^PROJ-5450 Portar o plugin/);
     // Ícone do provedor na árvore e no cabeçalho do projeto.
@@ -218,7 +218,7 @@ describe("projeto Jira + GitLab", () => {
 
   test("busca na árvore pela chave do Jira", async () => {
     const api = envApi();
-    render(<App api={api} initial={{ name: "project" }} />);
+    render(<App api={api} initial={{ name: "project", env: "wsl", projectId: P.id }} />);
     const user = userEvent.setup();
     await treeRow(/^PROJ-5450 Portar o plugin/);
     await user.type(within(side()).getByRole("searchbox"), "PROJ-5450");
@@ -227,7 +227,7 @@ describe("projeto Jira + GitLab", () => {
 
   test("modal de início: chave no título, MR no escopo do épico e a branch pelo padrão do projeto", async () => {
     const api = envApi({ pr: null });
-    render(<App api={api} initial={{ name: "project" }} />);
+    render(<App api={api} initial={{ name: "project", env: "wsl", projectId: P.id }} />);
     const user = userEvent.setup();
     await treeRow(/^PROJ-5450 Portar o plugin/);
     await user.click(within(side()).getByRole("button", { name: "Iniciar sessão para PROJ-5400" }));
@@ -260,7 +260,7 @@ describe("projeto Jira + GitLab", () => {
   test("modal de início avisa o que falta no jira-cli e no glab do ambiente, sem bloquear", async () => {
     const api = envApi({ pr: null, trackers: [readiness({ jira: { credential_ok: false, me_ok: false, error: "pass: gpg-agent sem a chave" }, gitlab: { cli: null } })] });
     api.on("session.start", session({ id: "54605460-0000-0000-0000-000000005460", work_item_id: 99 }));
-    render(<App api={api} initial={{ name: "project" }} />);
+    render(<App api={api} initial={{ name: "project", env: "wsl", projectId: P.id }} />);
     const user = userEvent.setup();
     await treeRow(/^PROJ-5450 Portar o plugin/);
     await user.click(within(side()).getByRole("button", { name: "Iniciar sessão para PROJ-5450" }));
@@ -280,7 +280,7 @@ describe("projeto Jira + GitLab", () => {
 
   test("modal de início avisa quando o ambiente ainda não conferiu o jira-cli", async () => {
     const api = envApi({ pr: null, trackers: null });
-    render(<App api={api} initial={{ name: "project" }} />);
+    render(<App api={api} initial={{ name: "project", env: "wsl", projectId: P.id }} />);
     const user = userEvent.setup();
     await treeRow(/^PROJ-5450 Portar o plugin/);
     await user.click(within(side()).getByRole("button", { name: "Iniciar sessão para PROJ-5450" }));
@@ -560,19 +560,20 @@ describe("hub com projeto Jira + GitLab", () => {
     expect(within(form).queryByLabelText("URL do GitHub")).not.toBeInTheDocument();
   });
 
-  test("Projetos: ícone do provedor no detalhe e atribuição pela última barra", async () => {
+  test("Configurações do projeto: atribuição pela última barra, pelo pedido do endereço antigo (#18)", async () => {
     const api = hubApi({ projects: [hubProjectView(JP, [])] }).onHub("hub.assignments.add", {
       assignment: hubAssignment({ project_id: 7, gh_owner: "grupo/projeto", gh_repo: "app" }),
       changed: true,
       sync_env: false,
     });
-    render(<App api={api} initial={{ name: "hub", section: "projects" }} />);
+    // O endereço antigo (Hub › Projetos com `assign`) cai nas Configurações › Ambientes, com o formulário aberto.
+    render(
+      <App api={api} initial={{ name: "hub", section: "projects", project: { owner: "grupo/projeto", repo: "app" }, assign: true }} />,
+    );
     const user = userEvent.setup();
-    const detail = await screen.findByRole("group", { name: "Projeto app" });
-    expect(within(detail).getByRole("img", { name: "Jira + GitLab" })).toBeInTheDocument();
-    await user.click(within(detail).getByRole("button", { name: /^Atribuir/ }));
-    const env = within(detail).queryByLabelText("Ambiente");
-    if (env) await user.selectOptions(env, "daemon-wsl");
+    const detail = await screen.findByRole("group", { name: "Ambientes e atribuições" });
+    const env = await within(detail).findByLabelText("Ambiente");
+    await user.selectOptions(env, "daemon-wsl");
     await user.click(within(detail).getByRole("button", { name: /^Atribuir$/ }));
     await waitFor(() => expect(api.hubCallsTo("hub.assignments.add")[0].params).toMatchObject({ owner: "grupo/projeto", repo: "app" }));
   });
@@ -665,7 +666,7 @@ describe("projeto GitHub continua igual", () => {
       .on("session.peek", { data: "" })
       .on("tree.get", GTREE)
       .on("env.info", ENV_INFO);
-    render(<App api={api} initial={{ name: "project" }} />);
+    render(<App api={api} initial={{ name: "project", env: "wsl", projectId: GH.id }} />);
     const user = userEvent.setup();
     await treeRow(/^#28 ct-server: lacunas/);
     expect(within(side()).getByRole("img", { name: "GitHub" })).toBeInTheDocument();

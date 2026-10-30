@@ -1,10 +1,12 @@
 import { createContext, useCallback, useContext, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import type { Shell } from "../protocol/gen";
 import { paneProject, type TabProject } from "../terminal/tabmeta";
+import { projectKey } from "../project/tabs";
 import { useTower } from "./tower";
 import type { HubSection, ProjectRef, RegisterIntent } from "../hub/sections";
 import type { MaintenanceSection } from "../maintenance/sections";
 import type { SettingsScope, SettingsSection, TemplateKey } from "../settings/sections";
+import { projectsPlace, type ProjectPage, type ProjectSettingsSection } from "../project/sections";
 
 /**
  * Item do projeto mostrado na aba (detalhe no editor, linha selecionada na
@@ -26,6 +28,35 @@ export type Screen =
       repo?: string;
       /** Item aberto nesta aba (aba própria por item: `itemTab` em project/tabs.ts). */
       item?: ItemIntent;
+      /**
+       * Aba do projeto (#17): Visão geral, Itens, Sessões ou Configurações.
+       * Sem ela, Itens: é o que o endereço sem `view` mostrava antes (árvore
+       * e quadro), e os links de fora (Sala de controle, Hub, paleta, PWA)
+       * seguem caindo no mesmo lugar. Com `item`, vale Itens. Monte com
+       * `projectAt` (project/sections.ts), que tira `view` em Itens.
+       */
+      view?: ProjectPage;
+      /** Seção das Configurações do projeto (só com `view: "settings"`); sem ela, Geral. */
+      section?: ProjectSettingsSection;
+      /**
+       * Pedido de atribuição (#18, o `assign` do antigo Hub › Projetos):
+       * com `view: "settings"` e `section: "envs"`, abre o formulário de
+       * atribuição do projeto. Atendido, sai do endereço; a web (só
+       * leitura) ignora. Monte com `projectsPlace` (project/sections.ts).
+       */
+      assign?: true;
+      /**
+       * Pedido de cadastro (#18), só no índice (sem chave): abre o
+       * `NewProjectDialog` com a URL (ex.: a partir da Quarentena) ou vazio
+       * (o "+" da Sala de controle, a paleta). Atendido, sai do endereço.
+       */
+      register?: RegisterIntent;
+      /**
+       * Aviso de uma ação que terminou no índice (sem chave): a exclusão do
+       * projeto, com o snapshot anterior (#18). Mostrado uma vez; sai do
+       * endereço como o `register`.
+       */
+      notice?: string;
     }
   /** Recuperação (#318): a sessão interrompida mostrada (sem ela, a primeira). */
   | { name: "recovery"; env?: string; session?: string }
@@ -36,14 +67,15 @@ export type Screen =
   | {
       name: "hub";
       section?: HubSection;
-      /** Seção Projetos: abrir o cadastro com a URL (ex.: a partir da quarentena). */
-      register?: RegisterIntent;
-      /** Seção Projetos: o projeto mostrado no detalhe (sem ele, o primeiro). */
-      project?: ProjectRef;
       /**
-       * Seção Projetos: abrir o formulário de atribuição do `project` (#7).
-       * Atendido, sai do endereço; a web (só leitura) ignora.
+       * `register`, `project` e `assign` são do antigo Hub › Projetos e
+       * atribuições (#314, #7). Desde a #18 a seção não existe mais: um
+       * endereço com `section: "projects"` (deep link, aba de uma versão
+       * antiga, código que o monte à mão) vira o lugar novo em
+       * `screenTab`, por `projectsPlace` — ninguém renderiza estes campos.
        */
+      register?: RegisterIntent;
+      project?: ProjectRef;
       assign?: true;
     }
   /**
@@ -245,12 +277,45 @@ export type NavAction =
 
 type ScreenTab = Extract<EditorTab, { kind: "screen" }>;
 
-function screenTab(t: OpenTab): ScreenTab {
-  return { kind: "screen", id: t.id ?? t.screen.name, screen: t.screen, title: t.title };
+/** O endereço de projeto tem chave (`owner/repo` ou `env` + `projectId`)? Sem ela, é o índice (#16). */
+export const hasProjectKey = (s: Extract<Screen, { name: "project" }>): boolean =>
+  !!(s.owner && s.repo) || (s.env !== undefined && s.projectId !== undefined);
+
+/**
+ * Id da aba de uma tela aberta sem `id`: o nome da tela, menos no projeto
+ * com chave (#16), que tem aba própria (`project:<chave>`, a mesma base das
+ * abas de item em project/tabs.ts). Assim a aba "project" (a da barra de
+ * atividades) fica com o índice, e abrir um projeto (pelo índice, pela
+ * paleta, pela Sala de controle...) não troca o endereço dela: o último
+ * projeto aberto segue na sua aba ao voltar ao índice.
+ */
+export function mainTabId(s: Screen): string {
+  if (s.name === "project" && hasProjectKey(s)) return `project:${projectKey(s)}`;
+  return s.name;
 }
 
-/** Aba principal de uma tela (a da barra de atividades): nunca provisória nem fixável. */
-export const isMainTab = (e: EditorTab): boolean => e.kind === "screen" && e.id === e.screen.name;
+function screenTab(t: OpenTab): ScreenTab {
+  // Antigo Hub › Projetos e atribuições (#18): vira o projeto (Configurações)
+  // ou o índice de Projetos, já com o `id` do lugar novo. Aqui, e não num
+  // redirecionamento na tela do Hub, porque todo caminho passa por aqui
+  // (abrir, `go`, a aba inicial) e a aba nasce certa: sem uma aba
+  // "hub:projects" que pisca e fica para trás, e sem `id` velho (o
+  // `nav.current` de quem trocava só o endereço) prendendo o projeto na aba
+  // de outra tela.
+  if (t.screen.name === "hub" && t.screen.section === "projects") {
+    const { project, assign, register } = t.screen;
+    const screen = projectsPlace({ project, assign, register });
+    return { kind: "screen", id: mainTabId(screen), screen };
+  }
+  return { kind: "screen", id: t.id ?? mainTabId(t.screen), screen: t.screen, title: t.title };
+}
+
+/**
+ * Aba principal de uma tela (a da barra de atividades, ou a de um projeto):
+ * nunca provisória nem fixável. A do projeto não é provisória porque o item
+ * aberto na árvore dela (aba provisória) a substituiria.
+ */
+export const isMainTab = (e: EditorTab): boolean => e.kind === "screen" && e.id === mainTabId(e.screen);
 
 /** Aba que pode ser fixada: a de um item (seção, item do projeto, template...). */
 export const isPinnable = (e: EditorTab): boolean => e.kind === "screen" && !isMainTab(e);
@@ -484,8 +549,22 @@ export function NavProvider({
     return m[id]?.project?.key ?? paneProject(d[p.env], p)?.key;
   }, []);
 
-  const go = useCallback((s: Screen) => dispatch({ type: "open", tab: { screen: s } }), []);
-  const openTab = useCallback((tab: OpenTab) => dispatch({ type: "open", tab }), []);
+  /**
+   * Endereço local de projeto (`env` + `projectId`) ganha a chave natural
+   * (`owner/repo`) do dashboard: a aba do projeto (`mainTabId`) é a mesma
+   * por qualquer caminho, e a árvore volta a ela pela trilha do item (o
+   * `addr` da visão leva `owner/repo`), sem abrir uma segunda.
+   */
+  const withKey = useCallback((s: Screen): Screen => {
+    if (s.name !== "project" || (s.owner && s.repo) || s.env === undefined || s.projectId === undefined) return s;
+    const p = now.current.dashboards[s.env]?.projects.find((x) => x.project.id === s.projectId)?.project;
+    return p ? { ...s, owner: p.gh_owner, repo: p.gh_repo } : s;
+  }, []);
+  const go = useCallback((s: Screen) => dispatch({ type: "open", tab: { screen: withKey(s) } }), [withKey]);
+  const openTab = useCallback(
+    (tab: OpenTab) => dispatch({ type: "open", tab: tab.id ? tab : { ...tab, screen: withKey(tab.screen) } }),
+    [withKey],
+  );
   const activate = useCallback((id: string) => dispatch({ type: "activate", id }), []);
   const closeEditor = useCallback((id: string, force?: boolean) => dispatch({ type: "close", id, force }), []);
   const cancelClose = useCallback(() => dispatch({ type: "cancelClose" }), []);

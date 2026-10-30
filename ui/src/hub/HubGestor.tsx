@@ -48,17 +48,28 @@ export function liveGestorLabel(l: LiveGestor): string {
 
 type ScopeKind = GestorScopeChoice["kind"];
 
+const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/** O gestor vivo é deste projeto: escopo "Um projeto" com o mesmo `owner/repo`. */
+const scopedTo = (l: LiveGestor, p: { owner: string; repo: string }) =>
+  l.scope?.kind === "project" && same(l.scope.owner, p.owner) && same(l.scope.repo, p.repo);
+
 /**
  * Botão "Abrir sessão do gestor" da Visão geral do Hub (spec do gestor §11): abre o
  * diálogo de início (ambiente, escopo, modelo, modo e prompt do template
  * `gestor`) e chama `session.start_gestor` no ambiente escolhido. Sempre
  * inicia uma sessão nova; as vivas ficam ao lado, uma ação "Abrir gestor"
  * por sessão.
+ *
+ * Com `project` (Visão geral do projeto, #19), o diálogo já abre no escopo
+ * "Um projeto" com ele escolhido (o usuário está nele; antes tinha de
+ * escolher de novo), o botão vira "Gestor deste projeto" e só as sessões
+ * vivas do gestor com o foco nele aparecem. O escopo segue trocável.
  */
-export function GestorLauncher() {
+export function GestorLauncher({ project }: { project?: { owner: string; repo: string } } = {}) {
   const { envs, status, infos, hub, api, config, web } = useTower();
   const nav = useNav();
-  const live = useLiveGestor();
+  const live = useLiveGestor().filter((l) => !project || scopedTo(l, project));
   const [open, setOpen] = useState(false);
   // Só servem ambientes conectados, ligados a um hub e com token de agente.
   const eligible = envs.filter(
@@ -66,8 +77,8 @@ export function GestorLauncher() {
   );
   const projects = hub.projects.map((p) => p.project);
   const [env, setEnv] = useState("");
-  const [scopeKind, setScopeKind] = useState<ScopeKind>("portfolio");
-  const [projectKey, setProjectKey] = useState("");
+  const [scopeKind, setScopeKind] = useState<ScopeKind>(project ? "project" : "portfolio");
+  const [projectKey, setProjectKey] = useState(project ? `${project.owner}/${project.repo}` : "");
   const [model, setModel] = useState(config.session.model ?? DEFAULT_MODEL_VALUE);
   const [mode, setMode] = useState<SessionMode>(config.session.mode);
   const [prompt, setPrompt] = useState("");
@@ -76,12 +87,18 @@ export function GestorLauncher() {
   const [error, setError] = useState<string | null>(null);
 
   const target = eligible.find((e) => e.id === env) ?? eligible[0];
-  const pick = projects.find((p) => `${p.gh_owner}/${p.gh_repo}` === projectKey) ?? projects[0];
+  // Sem caixa: o `owner/repo` pré-preenchido vem do endereço do projeto.
+  const found = projects.find((p) => same(`${p.gh_owner}/${p.gh_repo}`, projectKey));
+  // Pré-preenchido e ainda fora da lista do hub (carregando): fica o pedido,
+  // nunca o primeiro da lista no lugar dele.
+  const pick = found ?? (project ? undefined : projects[0]);
   const scope: GestorScopeChoice | null =
     scopeKind === "project"
       ? pick
         ? { kind: "project", owner: pick.gh_owner, repo: pick.gh_repo }
-        : null
+        : project
+          ? { kind: "project", owner: project.owner, repo: project.repo }
+          : null
       : { kind: scopeKind };
   const rendered = target && scope ? renderGestorTemplate(config.templates.gestor, target.name, scope) : "";
 
@@ -131,7 +148,7 @@ export function GestorLauncher() {
       {/* Web: iniciar o gestor fica no app desktop (a escolha do ambiente depende do token de agente do `env.info`). */}
       {!web && (
         <button type="button" className="btn btn-primary" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-          Abrir sessão do gestor
+          {project ? "Gestor deste projeto" : "Abrir sessão do gestor"}
         </button>
       )}
       {open && !web && (
@@ -184,7 +201,7 @@ export function GestorLauncher() {
                     <span className="sr-only">Projeto</span>
                     <select
                       aria-label="Projeto do escopo"
-                      value={pick ? `${pick.gh_owner}/${pick.gh_repo}` : ""}
+                      value={pick ? `${pick.gh_owner}/${pick.gh_repo}` : projectKey}
                       onChange={(e) => setProjectKey(e.target.value)}
                     >
                       {projects.map((p) => (

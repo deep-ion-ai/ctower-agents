@@ -131,7 +131,7 @@ const side = () => screen.getByRole("complementary", { name: "Árvore do projeto
 describe("tela Projeto", () => {
   test("projeto Jira: filtro por sprint, chip da sprint atual e escolha guardada", async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<App api={envApi(jiraProject(), roots())} initial={{ name: "project" }} />);
+    const { unmount } = render(<App api={envApi(jiraProject(), roots())} initial={{ name: "project", env: "wsl", projectId: jiraProject().id }} />);
     await screen.findByText("Épico do plugin");
     await user.click(screen.getByRole("button", { name: "Expandir épico PROJ-5400" }));
     const select = screen.getByRole("combobox", { name: "Filtrar por sprint" });
@@ -163,7 +163,7 @@ describe("tela Projeto", () => {
 
   test("a escolha volta ao reabrir o app", async () => {
     localStorage.setItem("ct.project.sprint", JSON.stringify({ "grupo/projeto/app": "2273" }));
-    render(<App api={envApi(jiraProject(), roots())} initial={{ name: "project" }} />);
+    render(<App api={envApi(jiraProject(), roots())} initial={{ name: "project", env: "wsl", projectId: jiraProject().id }} />);
     await screen.findByText("Portar o plugin");
     const select = screen.getByRole("combobox", { name: "Filtrar por sprint" });
     expect(select).toHaveValue("2273");
@@ -174,7 +174,7 @@ describe("tela Projeto", () => {
   test("projeto Jira sem nenhuma sprint no espelho: aviso no filtro e na sprint ativa vazia", async () => {
     const user = userEvent.setup();
     const semSprint = [node(issue(5510, "Sem sprint nenhuma")), node(issue(5511, "Outra sem sprint"))];
-    render(<App api={envApi(jiraProject(), semSprint)} initial={{ name: "project" }} />);
+    render(<App api={envApi(jiraProject(), semSprint)} initial={{ name: "project", env: "wsl", projectId: jiraProject().id }} />);
     await screen.findByText("Sem sprint nenhuma");
     expect(screen.getByRole("note")).toHaveTextContent("sprints ainda não lidas (aguarde o próximo sync)");
     await user.selectOptions(screen.getByRole("combobox", { name: "Filtrar por sprint" }), "Sprint ativa");
@@ -185,7 +185,7 @@ describe("tela Projeto", () => {
   test("sprint ativa sem itens, com sprints lidas: a mensagem diz isso, sem o aviso", async () => {
     const user = userEvent.setup();
     const fechada = [node(issue(5460, "Ajustar o build", { sprints: [S47] }))];
-    render(<App api={envApi(jiraProject(), fechada)} initial={{ name: "project" }} />);
+    render(<App api={envApi(jiraProject(), fechada)} initial={{ name: "project", env: "wsl", projectId: jiraProject().id }} />);
     await screen.findByText("Ajustar o build");
     expect(screen.queryByText(/sprints ainda não lidas/)).not.toBeInTheDocument();
     await user.selectOptions(screen.getByRole("combobox", { name: "Filtrar por sprint" }), "Sprint ativa");
@@ -193,7 +193,7 @@ describe("tela Projeto", () => {
   });
 
   test("projeto GitHub: sem filtro nem chip de sprint", async () => {
-    render(<App api={envApi(project(), [node({ ...issue(7, "Issue do GitHub"), url: "https://github.com/o/r/issues/7" })])} initial={{ name: "project" }} />);
+    render(<App api={envApi(project(), [node({ ...issue(7, "Issue do GitHub"), url: "https://github.com/o/r/issues/7" })])} initial={{ name: "project", env: "wsl", projectId: project().id }} />);
     expect(await screen.findByText("Issue do GitHub")).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Filtrar por sprint" })).not.toBeInTheDocument();
   });

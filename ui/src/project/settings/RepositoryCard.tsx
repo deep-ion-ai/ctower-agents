@@ -35,15 +35,6 @@ export function projectEditForm(p: HubProjectView): ProjectForm {
   };
 }
 
-/** Posição do projeto na ordem entre projetos e como mudá-la. */
-export interface ProjectOrder {
-  pos: number;
-  total: number;
-  canUp: boolean;
-  canDown: boolean;
-  onStep: (up: boolean) => void;
-}
-
 /**
  * Repositório do projeto: os dados de hoje e, com `editing`, o formulário de
  * edição (aberto pelo "Editar" de quem hospeda a seção).
@@ -55,16 +46,18 @@ export function RepositoryCard({
   settings,
   order,
   now,
-  readOnly = false,
 }: {
   project: HubProjectView;
   editing: boolean;
   onEditingChange: (editing: boolean) => void;
   settings: SettingsRun;
-  order: ProjectOrder;
+  /**
+   * Posição na ordem entre projetos, só para ler: desde a #18 a ordem muda
+   * só no índice de Projetos (arrastar, Alt+↑/↓, `useProjectOrder`), e os
+   * ↑/↓ que ficavam aqui (no antigo Hub › Projetos) saíram.
+   */
+  order: { pos: number; total: number };
   now: number;
-  /** Web (épico #205): sem reordenar. */
-  readOnly?: boolean;
 }) {
   const { hub } = useTower();
   const pr = p.project;
@@ -161,28 +154,6 @@ export function RepositoryCard({
               <span className="mono">
                 #{order.pos} de {order.total}
               </span>
-              {!readOnly && (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={settings.busy || !order.canUp}
-                    aria-label={`Subir ${pr.name} na ordem dos projetos`}
-                    onClick={() => order.onStep(true)}
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={settings.busy || !order.canDown}
-                    aria-label={`Descer ${pr.name} na ordem dos projetos`}
-                    onClick={() => order.onStep(false)}
-                  >
-                    ↓
-                  </button>
-                </>
-              )}
             </dd>
           </div>
         </dl>

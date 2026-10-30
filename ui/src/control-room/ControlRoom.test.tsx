@@ -88,7 +88,7 @@ test("rodapé leva à revisão e a lateral ao projeto", async () => {
   expect(screen.getByRole("button", { name: "Revisão" })).toHaveAttribute("aria-current", "page");
   await user.click(screen.getByRole("button", { name: "Sala de controle" }));
   await user.click(await screen.findByRole("button", { name: "ctower-agents" }));
-  expect(screen.getByRole("button", { name: "Projetos" })).toHaveAttribute("aria-current", "page");
+  expect(within(screen.getByRole("navigation", { name: "Telas" })).getByRole("button", { name: "Projetos" })).toHaveAttribute("aria-current", "page");
 });
 
 test("ambiente desconectado aparece na faixa e na lateral", async () => {
