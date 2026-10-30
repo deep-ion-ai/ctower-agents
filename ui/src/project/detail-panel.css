@@ -35,6 +35,10 @@
 .status-pop button.opt:hover, .status-pop button.opt[aria-current] { background: var(--idle-bg); }
 .status-pop input { height: 32px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; padding: 0 8px; }
 .status-pop label { font-size: 12px; color: var(--muted); }
+/* Ações só do desktop na web (#26): em coluna, como as outras opções. */
+.status-pop .desktop-only { flex-direction: column; align-items: stretch; gap: 6px; }
+.status-pop button.opt:disabled { opacity: 0.55; cursor: not-allowed; background: none; }
+.status-pop .desktop-only-note { padding: 0 8px; }
 .sec { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
 .sec:last-child { border-bottom: none; }
 .sec h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }

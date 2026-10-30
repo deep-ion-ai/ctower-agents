@@ -241,9 +241,11 @@ describe.each([360, 414])("celular, %i px", (width) => {
 
     await user.click(within(panel).getByRole("button", { name: /^Prioridade: P2/ }));
     const prio = within(panel).getByRole("group", { name: "Mudar prioridade" });
-    // `hub.workitem.move` fica fora do /web/ws.
-    expect(within(prio).queryByRole("button", { name: /Subir na ordem/ })).toBeNull();
-    expect(within(prio).queryByRole("button", { name: /Descer na ordem/ })).toBeNull();
+    // `hub.workitem.move` fica fora do /web/ws: desabilitados com o motivo (#26).
+    expect(within(prio).getByRole("button", { name: /Subir na ordem/ })).toBeDisabled();
+    expect(within(prio).getByRole("button", { name: /Descer na ordem/ })).toHaveAccessibleDescription(
+      "Reordenar fica no app desktop",
+    );
     await user.click(within(prio).getByRole("button", { name: "P0" }));
     await waitFor(() => expect(api.hubCallsTo("hub.workitem.set_priority")).toHaveLength(1));
     expect(api.hubCallsTo("hub.workitem.set_priority")[0].params).toEqual({
@@ -301,7 +303,7 @@ describe.each([360, 414])("celular, %i px", (width) => {
     expect(api.opened).toEqual([]);
   });
 
-  it("telas da web pela barra inferior: Revisão, Recuperação e Hub sem Segurança", async () => {
+  it("telas da web pela barra inferior: Revisão, Recuperação e Hub com Segurança só no desktop", async () => {
     const api = mobileApi({ interrupted_sessions: [hubSession({ id: "s-int", state: "interrupted" })] });
     const user = renderApp(api);
     const bar = await screen.findByRole("navigation", { name: "Telas" });
@@ -315,7 +317,9 @@ describe.each([360, 414])("celular, %i px", (width) => {
     // Tocar na tela atual abre a gaveta, com as seções do Hub.
     await user.click(within(bar).getByRole("button", { name: "Hub" }));
     const drawer = await screen.findByRole("region", { name: "Painel lateral" });
-    expect(within(drawer).queryByText("Segurança")).toBeNull();
+    // Segurança fica no índice, avisando que é do desktop (#26).
+    expect(within(drawer).getByText("Segurança")).toBeInTheDocument();
+    expect(within(drawer).getAllByText("Só no app desktop")).toHaveLength(3);
     expect(within(drawer).getByText("Propostas do gestor")).toBeInTheDocument();
   });
 });

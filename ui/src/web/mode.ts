@@ -27,6 +27,12 @@ export const WEB_HIDDEN_HUB: ReadonlySet<HubSection> = new Set(["secrets", "reco
  */
 export const WEB_SETTINGS: ReadonlySet<SettingsSection> = new Set(["appearance", "web-access"]);
 
+/**
+ * Explicação padrão das ações só do desktop (#26): na web elas aparecem
+ * desabilitadas com este aviso (`DesktopOnly`), em vez de sumir.
+ */
+export const DESKTOP_ONLY_NOTE = "Cadastro e edição no app desktop";
+
 export const hubSectionOnWeb = (s: HubSection) => !WEB_HIDDEN_HUB.has(s);
 
 /** Lugar da paleta que existe na web. */

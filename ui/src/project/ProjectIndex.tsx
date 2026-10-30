@@ -16,6 +16,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "./rows";
 import { projectAt } from "./sections";
 import { keyOf, plural, projectState, syncText, useSettingsRun, type Tone } from "./settings";
+import { DesktopOnly } from "../web/DesktopOnly";
 
 /**
  * Índice da atividade Projetos (#16): `{ name: "project" }` sem chave. Lista
@@ -138,6 +139,8 @@ export function ProjectIndex({ register, notice: noticeReq }: { register?: Regis
             + Novo projeto
           </button>
         )}
+        {/* Web: o cadastro não some, fica desabilitado com o motivo (#26). */}
+        {web && hub.connected && <DesktopOnly labels="+ Novo projeto" className="btn btn-primary" />}
       </div>
 
       {!viaHub && rows.length > 0 && (

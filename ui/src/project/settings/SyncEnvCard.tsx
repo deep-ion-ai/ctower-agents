@@ -3,6 +3,7 @@ import { useTower } from "../../state/tower";
 import type { HubProjectView } from "../../protocol/hub-gen";
 import { TrackerReadiness } from "../../hub/TrackerReadiness";
 import type { SettingsRun } from "./run";
+import { DesktopOnly } from "../../web/DesktopOnly";
 
 /** Ambiente de sync do projeto Jira (spec §5.1), escolhido entre os atribuídos. */
 export function SyncEnvCard({
@@ -42,6 +43,13 @@ export function SyncEnvCard({
           >
             {pr.sync_env_id ? "Trocar ambiente de sync" : "Escolher ambiente de sync"}
           </button>
+        )}
+        {/* Só leitura (web): a ação fica, desabilitada com o motivo (#26). */}
+        {readOnly && p.assignments.length > 0 && (
+          <DesktopOnly
+            className="btn btn-sm"
+            labels={pr.sync_env_id ? "Trocar ambiente de sync" : "Escolher ambiente de sync"}
+          />
         )}
       </div>
       {env !== null ? (

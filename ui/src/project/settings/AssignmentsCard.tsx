@@ -6,6 +6,7 @@ import { needsConfirm } from "../../hub/calls";
 import { isJira } from "../../hub/tracker";
 import { keyOf, plural } from "./form";
 import type { SettingsRun } from "./run";
+import { DesktopOnly } from "../../web/DesktopOnly";
 
 /**
  * Atribuições do projeto a ambientes: estado, clone, sessões vivas (`live`),
@@ -97,6 +98,17 @@ export function AssignmentsCard({
           <button type="button" className="btn btn-sm" onClick={() => setAssign({ env: free[0].env_id, repo_path: "" })}>
             Atribuir a ambiente <span className="sr-only">({pr.name})</span>
           </button>
+        )}
+        {/* Só leitura (web): atribuir e remover ficam no desktop, com o motivo (#26). */}
+        {readOnly && (
+          <DesktopOnly
+            className="btn btn-sm"
+            labels={
+              <>
+                Atribuir a ambiente <span className="sr-only">({pr.name})</span>
+              </>
+            }
+          />
         )}
       </div>
       {assign && (
