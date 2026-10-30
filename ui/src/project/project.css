@@ -14,6 +14,12 @@
   min-width: 0;
 }
 
+/* Gestor deste projeto (#19): dentro do cartão, o launcher alinha à
+   esquerda (no cabeçalho do Hub ele é empurrado para a direita). */
+.pj-overview-cards .gestor-launch {
+  margin-left: 0;
+}
+
 .project-head {
   display: flex;
   flex-wrap: wrap;

@@ -4,12 +4,14 @@ import type { ProjectTree, TreeNode } from "../protocol/gen";
 import { settingsTab } from "../settings/sections";
 import { useNav, type ItemIntent } from "../state/nav";
 import { useTower } from "../state/tower";
-import { trackerLabel } from "../util/item";
+import { changeLabel, trackerLabel } from "../util/item";
 import { useNow } from "../App";
 import { itemTitle } from "../util/item";
 import { localClone, liveSessions } from "./clones";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
+import { ProjectSyncCard } from "./OverviewCards";
+import { syncPlan } from "./overview";
 import { ProjectSessions } from "./ProjectSessions";
 import type { ProjectPage } from "./sections";
 import { projectSessions, sessionCounts } from "./sessions";
@@ -142,6 +144,9 @@ export function ProjectScreen(props: {
               )}
               counts={sessionCounts(groups)}
               onPage={goPage}
+              // Hub fora (#19): só o sync, no próprio ambiente. Saúde e gestor
+              // dependem do hub (os sinais são calculados lá; o gestor lê o hub).
+              extra={<ProjectSyncCard plan={syncPlan(clones, null)} change={changeLabel(p)} />}
             />
           );
         },

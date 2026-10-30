@@ -4,7 +4,7 @@ import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { EnvInfo, IssueRow } from "../protocol/gen";
 import type { HubDashboard, HubInfo, HubProject, HubTree, HubTreeNode, HubWorkItem } from "../protocol/hub-gen";
-import { HUB_CONFIG_UNLINKED, dashboard, hubAssignment, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
+import { HUB_CONFIG_UNLINKED, dashboard, healthSignal, hubAssignment, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
 
 const NOW = Date.now();
 
@@ -755,4 +755,110 @@ test("projeto local (hub fora, #17): Sessões pelo ambiente e Configurações ap
   expect(await screen.findByText(/As configurações do projeto ficam no hub/)).toBeInTheDocument();
   await user.click(pageBtn("Visão geral"));
   expect(await screen.findByText(/Dados locais de WSL/)).toBeInTheDocument();
+});
+
+// Visão geral do projeto (#19): saúde, "Sincronizar agora" e gestor do projeto.
+
+const BLOQUEADO = healthSignal({
+  kind: "bloqueado",
+  severity: "aviso",
+  number: 81,
+  ref: "deep-ion-ai/ctower-agents#81",
+  title: "filha parada",
+  value: "3 dias",
+  threshold: "2 dias",
+  detail: "bloqueado: aguardando o cliente",
+});
+
+function setupOverview(hubUp = true) {
+  return setupTabs(hubUp)
+    .on("env.info", (_: unknown, env: string) =>
+      env === "wsl"
+        ? info("daemon-wsl", { hub_sync: SENDING, hub_config: { ...LINKED, agent_token: true } })
+        : info("daemon-mac", { hub_config: LINKED }),
+    )
+    .on("sync.now", [{ project_id: 1, ok: true, error: null, issues: 12, prs: 3, status_changes: 1 }])
+    .on("session.start_gestor", session({ id: "9e570000-0000-0000-0000-000000000001", work_item_id: 900 }))
+    .onHub("hub.health.get", {
+      generated_at: NOW,
+      // De outro projeto e informativo: ficam fora da Visão geral deste.
+      signals: [
+        BLOQUEADO,
+        healthSignal({ repo: "outro", number: 5, title: "de outro projeto" }),
+        healthSignal({ kind: "pausado_longo", severity: "info", number: 82, title: "pausado" }),
+      ],
+      counts: { critico: 1, aviso: 1, info: 1 },
+    });
+}
+
+const overviewAt = { name: "project" as const, owner: "deep-ion-ai", repo: "ctower-agents", view: "overview" as const };
+const card = async (heading: string) => (await screen.findByRole("heading", { name: heading })).closest("section")!;
+
+test("Visão geral (#19): item bloqueado há mais de 2 dias aparece na saúde do projeto, só os sinais dele", async () => {
+  const api = setupOverview();
+  render(<App api={api} initial={overviewAt} />);
+  const user = userEvent.setup();
+  const sinais = await screen.findByRole("list", { name: "Sinais de saúde do projeto" });
+  expect(screen.getByRole("heading", { name: "Saúde · 1 sinal" })).toBeInTheDocument();
+  expect(sinais).toHaveTextContent("bloqueado");
+  expect(sinais).toHaveTextContent("filha parada");
+  expect(sinais).toHaveTextContent("3 dias · limiar 2 dias");
+  expect(sinais).not.toHaveTextContent("de outro projeto");
+  expect(sinais).not.toHaveTextContent("pausado");
+  // O número abre o item do mesmo projeto.
+  await user.click(within(sinais).getByRole("button", { name: "#81" }));
+  expect(await screen.findByRole("button", { name: "Ver issue" })).toBeInTheDocument();
+  expect(screen.queryByRole("list", { name: "Sinais de saúde do projeto" })).not.toBeInTheDocument();
+});
+
+test("Visão geral (#19): Sincronizar agora roda sync.now só deste projeto no ambiente e mostra o resultado", async () => {
+  const api = setupOverview();
+  render(<App api={api} initial={overviewAt} />);
+  const user = userEvent.setup();
+  // Espera a visão do hub (antes dele conectar, a tela é a local).
+  await screen.findByRole("list", { name: "Sinais de saúde do projeto" });
+  const sync = await card("Sincronizar");
+  expect(sync).toHaveTextContent("Só este projeto, pelo ambiente WSL.");
+  await user.click(within(sync).getByRole("button", { name: "Sincronizar agora este projeto" }));
+  await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
+  expect(api.callsTo("sync.now")[0]).toMatchObject({ env: "wsl", params: { project_id: 1 } });
+  expect(await within(sync).findByRole("status")).toHaveTextContent(
+    "Sincronizado por WSL: 12 issues, 3 PRs, 1 mudança de status.",
+  );
+
+  // Falha do ambiente: o erro, como alerta.
+  api.on("sync.now", () => Promise.reject(new Error("sincronização com o GitHub desativada")));
+  await user.click(within(sync).getByRole("button", { name: "Sincronizar agora este projeto" }));
+  expect(await within(sync).findByRole("alert")).toHaveTextContent("Falhou em WSL: sincronização com o GitHub desativada");
+});
+
+test("Visão geral (#19): Gestor deste projeto abre já com o escopo Um projeto neste projeto", async () => {
+  const api = setupOverview();
+  render(<App api={api} initial={overviewAt} />);
+  const user = userEvent.setup();
+  await screen.findByRole("list", { name: "Sinais de saúde do projeto" });
+  const gestor = await card("Gestor deste projeto");
+  await user.click(await within(gestor).findByRole("button", { name: "Gestor deste projeto" }));
+  const dialog = within(gestor).getByRole("region", { name: "Iniciar o gestor de projetos" });
+  expect(within(dialog).getByRole("radio", { name: "Um projeto" })).toBeChecked();
+  expect(within(dialog).getByLabelText("Projeto do escopo")).toHaveValue("deep-ion-ai/ctower-agents");
+  expect((within(dialog).getByLabelText("Prompt inicial (template do gestor)") as HTMLTextAreaElement).value).toContain(
+    "Foco: deep-ion-ai/ctower-agents.",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "▶ Iniciar gestor" }));
+  await waitFor(() => expect(api.callsTo("session.start_gestor")).toHaveLength(1));
+  expect(api.callsTo("session.start_gestor")[0].params).toMatchObject({
+    scope: { kind: "project", owner: "deep-ion-ai", repo: "ctower-agents" },
+  });
+});
+
+test("Visão geral local (hub fora, #19): só o Sincronizar agora, no ambiente do projeto", async () => {
+  const api = setupOverview(false);
+  render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1, view: "overview" }} />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Sincronizar agora este projeto" }));
+  await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
+  expect(api.callsTo("sync.now")[0]).toMatchObject({ env: "wsl", params: { project_id: 1 } });
+  expect(screen.queryByRole("heading", { name: /^Saúde/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Gestor deste projeto" })).not.toBeInTheDocument();
 });
