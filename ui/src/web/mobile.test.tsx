@@ -106,15 +106,23 @@ describe.each([360, 414])("celular, %i px", (width) => {
 
   it("painel lateral em gaveta: fechado de início, abre pelo menu e fecha ao escolher", async () => {
     const api = mobileApi();
-    const user = renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
+    // Com o item aberto, a árvore do projeto segue na gaveta (sem item, ela vem ao corpo, #25).
+    const user = renderApp(api, {
+      name: "project",
+      owner: "deep-ion-ai",
+      repo: "ctower-agents",
+      item: { ghNumber: 201 },
+    });
+    await screen.findByRole("region", { name: "Detalhe do item" });
     const menu = await screen.findByRole("button", { name: "Abrir painel lateral" });
     expect(side()).toBeNull();
     await user.click(menu);
     const drawer = await screen.findByRole("region", { name: "Painel lateral" });
     expect(screen.getByRole("button", { name: "Fechar painel lateral" })).toHaveAttribute("aria-expanded", "true");
-    await user.click(await within(drawer).findByRole("button", { name: /^#201 WebDaemonApi/ }));
-    // A escolha abre o item e a gaveta some.
-    expect(await screen.findByRole("region", { name: "Detalhe do item" })).toBeInTheDocument();
+    expect(within(drawer).getByRole("complementary", { name: "Árvore do projeto" })).toBeInTheDocument();
+    // Escolher outro lugar (a trilha da gaveta) fecha a gaveta.
+    await user.click(within(drawer).getByRole("button", { name: "Projetos" }));
+    expect(await screen.findByRole("heading", { name: "Projetos" })).toBeInTheDocument();
     await waitFor(() => expect(side()).toBeNull());
     // Escape também fecha.
     await user.click(screen.getByRole("button", { name: "Abrir painel lateral" }));
@@ -126,7 +134,6 @@ describe.each([360, 414])("celular, %i px", (width) => {
   it("uma aba por vez: as abertas numa lista no cabeçalho", async () => {
     const api = mobileApi();
     const user = renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
-    await user.click(await screen.findByRole("button", { name: "Abrir painel lateral" }));
     await user.click(await screen.findByRole("button", { name: /^#201 WebDaemonApi/ }));
     await screen.findByRole("region", { name: "Detalhe do item" });
     const trigger = screen.getByRole("button", { name: /^Abas abertas \(2\): .*#201/ });
@@ -147,6 +154,60 @@ describe.each([360, 414])("celular, %i px", (width) => {
     expect(screen.getByRole("button", { name: /^Abas abertas \(1\)/ })).toBeInTheDocument();
   });
 
+  it("Projetos na barra inferior: o índice no corpo, sem a gaveta (#25)", async () => {
+    const api = mobileApi();
+    const user = renderApp(api);
+    const bar = await screen.findByRole("navigation", { name: "Telas" });
+    await user.click(within(bar).getByRole("button", { name: "Projetos" }));
+    const main = await screen.findByRole("main");
+    expect(within(main).getByRole("heading", { name: "Projetos" })).toBeInTheDocument();
+    expect(await within(main).findByRole("button", { name: "ctower-agents" })).toBeInTheDocument();
+    expect(side()).toBeNull();
+  });
+
+  it("abrir um projeto: os itens no corpo, sem abrir a gaveta, e as abas segmentadas (#25)", async () => {
+    const api = mobileApi();
+    const user = renderApp(api, { name: "project" });
+    await user.click(await screen.findByRole("button", { name: "ctower-agents" }));
+    const items = await screen.findByRole("region", { name: "Itens do projeto" });
+    expect(side()).toBeNull();
+    // A árvore não fica também na gaveta (fechada): só no corpo.
+    expect(screen.queryByRole("complementary", { name: "Árvore do projeto", hidden: true })).toBeNull();
+    expect(within(items).getByRole("group", { name: "Visão" })).toBeInTheDocument();
+    expect(within(items).getByRole("searchbox", { name: "Buscar por número ou título" })).toBeInTheDocument();
+    // Abas do projeto como controle segmentado, com a trilha de volta ao índice.
+    const tabs = screen.getByRole("navigation", { name: "Abas do projeto" });
+    expect(tabs).toHaveAttribute("data-segmented", "true");
+    expect(within(tabs).getByRole("button", { name: "Itens" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("navigation", { name: "Trilha do projeto" })).toBeInTheDocument();
+    // Filtros pelo botão da barra dos itens.
+    await user.click(within(items).getByRole("button", { name: "Filtros" }));
+    expect(within(items).getByRole("group", { name: "Filtrar por status" })).toBeInTheDocument();
+    // Quadro no corpo também.
+    await user.click(within(items).getByRole("button", { name: "Quadro" }));
+    expect(within(items).getByRole("button", { name: "Quadro" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(items).getByRole("button", { name: "Árvore" }));
+    // Outra aba e de volta: os itens só na aba Itens.
+    await user.click(within(tabs).getByRole("button", { name: "Sessões" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Itens do projeto" })).toBeNull());
+    await user.click(within(screen.getByRole("navigation", { name: "Abas do projeto" })).getByRole("button", { name: "Itens" }));
+    // Tocar na linha abre o item.
+    const again = await screen.findByRole("region", { name: "Itens do projeto" });
+    await user.click(within(again).getByRole("button", { name: /^#201 WebDaemonApi/ }));
+    expect(await screen.findByRole("region", { name: "Detalhe do item" })).toBeInTheDocument();
+    expect(side()).toBeNull();
+    expect(envCalls(api)).toEqual([]);
+  });
+
+  it("nenhum texto manda usar atalho de teclado no projeto (#25)", async () => {
+    const api = mobileApi();
+    renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
+    const items = await screen.findByRole("region", { name: "Itens do projeto" });
+    await within(items).findByRole("button", { name: /^#201 WebDaemonApi/ });
+    const body = document.querySelector(".shell-main")!.textContent ?? "";
+    expect(body).not.toMatch(/Ctrl|⌘|paleta|atalho|painel lateral/i);
+  });
+
   it("avisos no sino do cabeçalho, numa folha", async () => {
     const api = mobileApi().onHub("hub.envs.list", [hubEnv({ last_seen_at: now - 10 * 60_000 })]);
     const user = renderApp(api, { name: "hub" });
@@ -165,7 +226,6 @@ describe.each([360, 414])("celular, %i px", (width) => {
   it("mudar status e prioridade do item pelo hub (sem reordenar)", async () => {
     const api = mobileApi();
     const user = renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
-    await user.click(await screen.findByRole("button", { name: "Abrir painel lateral" }));
     await user.click(await screen.findByRole("button", { name: /^#201 WebDaemonApi/ }));
     const panel = await screen.findByRole("region", { name: "Detalhe do item" });
 
