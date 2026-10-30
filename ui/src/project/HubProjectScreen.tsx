@@ -5,11 +5,11 @@ import { useTower } from "../state/tower";
 import { hubTab } from "../hub/sections";
 import { Icon } from "../shell/icons";
 import { hubClones, liveSessions } from "./clones";
+import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView } from "./ProjectView";
 import { projectKey } from "./tabs";
 import { cacheTree, cachedTree } from "./ui-store";
 import { trackerLabel } from "../util/item";
-import { splitProjectKey } from "../util/hub";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -64,7 +64,6 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
   // A árvore de outro projeto (troca em andamento) não serve.
   const mine = tree && same(tree.project.gh_owner, owner) && same(tree.project.gh_repo, repo) ? tree : null;
   const p = mine?.project ?? null;
-  const projects = hub.dashboard?.projects.map((x) => x.project) ?? [];
   // Pela chave do hub (`p`): o `owner` da rota pode diferir na caixa.
   const ref = { owner: p?.gh_owner ?? owner, repo: p?.gh_repo ?? repo };
 
@@ -132,30 +131,9 @@ export function HubProjectScreen({ owner, repo, item }: { owner: string; repo: s
           </p>
         )
       }
-      picker={
-        projects.length > 1 ? (
-          <label className="pj-pick">
-            <span className="sr-only">Trocar de projeto</span>
-            <select
-              value={`${p?.gh_owner ?? owner}/${p?.gh_repo ?? repo}`}
-              onChange={(e) => {
-                // Na última barra: o `owner` do GitLab tem barras (`grupo/projeto`).
-                nav.go({ name: "project", ...splitProjectKey(e.target.value) });
-              }}
-            >
-              {projects.map((x) => (
-                <option key={x.id} value={`${x.gh_owner}/${x.gh_repo}`}>
-                  {x.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <p className="pj-name">
-            {owner}/{repo}
-          </p>
-        )
-      }
+      // Trilha "Projetos › X" (#16): trocar de projeto é pelo índice, e cada
+      // projeto aberto fica na sua aba.
+      picker={<ProjectTrail name={p?.name ?? `${owner}/${repo}`} title={`${ref.owner}/${ref.repo}`} />}
     />
   );
 }

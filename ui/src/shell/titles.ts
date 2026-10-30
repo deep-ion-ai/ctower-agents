@@ -5,7 +5,7 @@ import { hubTitle } from "../hub/sections";
 import { maintenanceTitle } from "../maintenance/sections";
 import type { Dashboard, Project } from "../protocol/gen";
 import { shellItem, shellTitle } from "../terminal/shells";
-import type { EditorTab, Screen, TabMeta } from "../state/nav";
+import { hasProjectKey, type EditorTab, type Screen, type TabMeta } from "../state/nav";
 import { paneProject, projectSessionTitle } from "../terminal/tabmeta";
 import { dashboardSessions } from "../terminal/SessionTree";
 import { itemShort, itemTitle, PROJECT_ITEM } from "../util/item";
@@ -26,6 +26,8 @@ export const SCREEN_LABEL: Record<Screen["name"], string> = {
 function screenTitle(s: Screen, dashboards: Record<string, Dashboard>): string {
   switch (s.name) {
     case "project": {
+      // Sem chave, o índice (#16).
+      if (!hasProjectKey(s)) return SCREEN_LABEL.project;
       if (s.repo) return s.repo;
       const p =
         s.env !== undefined && s.projectId !== undefined

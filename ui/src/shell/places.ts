@@ -28,7 +28,7 @@ const screen = (name: Screen["name"], keywords?: string): Place => ({
 export const PLACES: Place[] = [
   screen("control", "início sessões aguardando atenção"),
   screen("terminal", "console sessões"),
-  screen("project", "árvore issues épicos kanban"),
+  screen("project", "índice lista árvore issues épicos kanban prioridade"),
   screen("review", "decisões pr"),
   screen("recovery", "interrompidas retomar"),
   screen("hub", "cthubd projetos atribuições ambientes secrets quarentena propostas gestor"),
@@ -44,6 +44,9 @@ export const PLACES: Place[] = [
  * nova. Mesma regra da barra de atividades.
  */
 export function openScreen(nav: Pick<Nav, "editors" | "activate" | "go">, name: Screen["name"]): void {
+  // Projetos (#16) é sempre o índice: as abas de projeto (`project:<chave>`)
+  // e de item continuam abertas, mas a atividade não cai nelas.
+  if (name === "project") return nav.go({ name: "project" });
   const tab =
     nav.editors.find((e) => e.kind === "screen" && e.id === name) ??
     [...nav.editors].reverse().find((e) => e.kind === "screen" && e.screen.name === name);

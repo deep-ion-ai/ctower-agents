@@ -419,8 +419,12 @@ test("resposta antiga de hub.tree.get de outro projeto não sobrescreve a árvor
     );
   render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
   const user = userEvent.setup();
-  const pick = await screen.findByRole("combobox", { name: "Trocar de projeto" });
-  await user.selectOptions(pick, "deep-ion-ai/outro");
+  // Troca pela trilha "Projetos › X" (#16): o índice e, nele, o outro projeto.
+  // Já na visão do hub (antes, a local): a trilha não é remontada no meio do clique.
+  await screen.findByText("visão do hub");
+  const trilha = screen.getByRole("navigation", { name: "Trilha do projeto" });
+  await user.click(within(trilha).getByRole("button", { name: "Projetos" }));
+  await user.click(await screen.findByRole("button", { name: "outro" }));
   expect(await screen.findByText("issue do outro")).toBeInTheDocument();
   // A resposta do projeto anterior chega depois e deve ser descartada.
   await act(async () => soltar(TREE));
