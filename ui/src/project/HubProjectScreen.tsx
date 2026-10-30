@@ -9,13 +9,16 @@ import { hubClones, liveSessions } from "./clones";
 import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
+import { ProjectGestorCard, ProjectHealthCard, ProjectSyncCard } from "./OverviewCards";
+import { syncPlan } from "./overview";
+import { isJira } from "../hub/tracker";
 import { ProjectSessions } from "./ProjectSessions";
 import { ProjectSettings } from "./ProjectSettings";
 import { sectionOf, type ProjectPage, type ProjectSettingsSection } from "./sections";
 import { projectSessions, sessionCounts } from "./sessions";
 import { projectKey } from "./tabs";
 import { cacheTree, cachedTree } from "./ui-store";
-import { itemTitle, trackerLabel } from "../util/item";
+import { changeLabel, itemTitle, trackerLabel } from "../util/item";
 import { assignmentText } from "../util/hub";
 import { projectState } from "../hub/HubProjects";
 import { syncText, type Tone } from "./settings";
@@ -114,6 +117,17 @@ export function HubProjectScreen({
         overview: () => {
           const groups = sessions();
           const sync = syncText(hubProject?.sync ?? mine?.sync ?? null, now);
+          // Projeto Jira: o sync é do ambiente de sync (id do hub → ambiente da UI).
+          const hp = hubProject?.project;
+          const jira =
+            hp && isJira(hp)
+              ? {
+                  env: hp.sync_env_id ? (hub.envByDaemon[hp.sync_env_id] ?? null) : null,
+                  name: hp.sync_env_id
+                    ? (hubProject.assignments.find((a) => a.env_id === hp.sync_env_id)?.env_name ?? hp.sync_env_id)
+                    : null,
+                }
+              : null;
           return (
             <ProjectOverview
               state={hubProject ? projectState(hubProject, now) : null}
@@ -134,6 +148,13 @@ export function HubProjectScreen({
               )}
               counts={sessionCounts(groups)}
               onPage={goPage}
+              extra={
+                <>
+                  <ProjectHealthCard owner={ref.owner} repo={ref.repo} project={hp ?? p} />
+                  <ProjectSyncCard plan={syncPlan(clones, jira)} change={changeLabel(hp ?? p)} />
+                  <ProjectGestorCard owner={ref.owner} repo={ref.repo} />
+                </>
+              }
             />
           );
         },

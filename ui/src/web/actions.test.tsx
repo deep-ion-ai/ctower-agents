@@ -323,3 +323,14 @@ describe("no celular", () => {
     expect(within(actions).getByRole("button", { name: "Ligar Remote Control" })).toBeInTheDocument();
   });
 });
+
+it("Visão geral do projeto na web (#19): saúde e gestor só leitura, sem Sincronizar agora", async () => {
+  renderApp(webApi(), { name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "overview" });
+  expect(await screen.findByRole("heading", { name: "Saúde · 0 sinais" })).toBeInTheDocument();
+  const gestor = (await screen.findByRole("heading", { name: "Gestor deste projeto" })).closest("section")!;
+  expect(gestor).toHaveTextContent("Iniciar o gestor fica no app desktop");
+  expect(within(gestor).queryByRole("button", { name: "Gestor deste projeto" })).not.toBeInTheDocument();
+  // `sync.now` fica fora do canal reverso: o cartão nem aparece.
+  expect(screen.queryByRole("heading", { name: "Sincronizar" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Sincronizar agora este projeto" })).not.toBeInTheDocument();
+});
