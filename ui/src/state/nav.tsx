@@ -40,6 +40,11 @@ export type Screen =
       register?: RegisterIntent;
       /** Seção Projetos: o projeto mostrado no detalhe (sem ele, o primeiro). */
       project?: ProjectRef;
+      /**
+       * Seção Projetos: abrir o formulário de atribuição do `project` (#7).
+       * Atendido, sai do endereço; a web (só leitura) ignora.
+       */
+      assign?: true;
     }
   /**
    * Manutenção (#335), por seção: sem `section`, a Visão geral. Cada seção

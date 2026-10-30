@@ -476,6 +476,37 @@ test("sem ambiente conectado com o projeto atribuído: acompanha, mas não inici
   expect(screen.queryByRole("button", { name: /^Iniciar sessão/ })).not.toBeInTheDocument();
 });
 
+test("aviso sem ambiente: Atribuir a um ambiente abre o formulário do projeto no Hub, a cada pedido (#7)", async () => {
+  const api = setup(true)
+    .on("dashboard.get", dashboard({ projects: [] }))
+    .onHub("hub.envs.list", [
+      { env_id: "daemon-wsl", name: "wsl", created_at: 0, last_seen_at: NOW, last_seq: 1, pending: 0, cleanup: null },
+    ])
+    .onHub("hub.projects.list", [
+      { project: { ...HUB_PROJECT, id: 1, gh_repo: "outro", name: "outro" }, assignments: [], locations: [], sync: null },
+      { project: HUB_PROJECT, assignments: [], locations: [], sync: null },
+    ]);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Atribuir a um ambiente" }));
+  // O projeto do aviso (não o primeiro da lista), com o formulário aberto e o foco nele.
+  const form = await screen.findByRole("form", { name: "Atribuir ctower-agents" });
+  const env = within(form).getByRole("combobox", { name: "Ambiente" });
+  expect(env).toHaveValue("daemon-wsl");
+  expect(env).toHaveFocus();
+  expect(screen.queryByRole("form", { name: "Atribuir outro" })).not.toBeInTheDocument();
+
+  // O pedido sai do endereço da aba: voltar à aba não reabre o formulário, e um novo clique abre.
+  await user.click(within(form).getByRole("button", { name: "Cancelar" }));
+  await user.click(screen.getByRole("tab", { name: /ctower-agents/ }));
+  await user.click(screen.getByRole("tab", { name: /Projetos e atribuições/ }));
+  expect(await screen.findByRole("heading", { name: /Atribuições/ })).toBeInTheDocument();
+  expect(screen.queryByRole("form", { name: "Atribuir ctower-agents" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: /ctower-agents/ }));
+  await user.click(await screen.findByRole("button", { name: "Atribuir a um ambiente" }));
+  expect(await screen.findByRole("form", { name: "Atribuir ctower-agents" })).toBeInTheDocument();
+});
+
 test("com o hub no ar, ambiente conhecido do hub e sem atribuição do projeto não entra no início", async () => {
   const api = setup(true)
     .on("dashboard.get", dashboard({ projects: [{ project: project(), work_items: [WI62] }] }))
