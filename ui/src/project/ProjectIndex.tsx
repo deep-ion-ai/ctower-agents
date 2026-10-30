@@ -9,6 +9,7 @@ import { Icon } from "../shell/icons";
 import { useStartSession } from "../shell/start";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
+import { isMac } from "../terminal/links";
 import { NewProjectDialog, type RegisterIntent } from "./NewProjectDialog";
 import { useProjectOrder, type ProjectOrder } from "./order";
 import { ProviderIcon } from "./ProviderIcon";
@@ -284,7 +285,9 @@ function IndexRow({
         className="pidx-main"
         aria-label={r.name}
         aria-describedby={`${id}-d`}
-        title="Abrir"
+        // Dica do gesto escondido (#27): arrastar ou Alt+↑/↓ muda a prioridade.
+        title={order?.enabled ? `Abrir · arraste ou ${isMac() ? "⌥" : "Alt"}+↑/↓ para mudar a prioridade` : "Abrir"}
+        aria-keyshortcuts={order?.enabled ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
         onClick={onOpen}
         onKeyDown={(e) => {
           if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {

@@ -14,6 +14,8 @@ export interface Drop {
 }
 
 export interface ProjectOrder {
+  /** Pode reordenar agora: a linha mostra a dica do gesto (#27). */
+  enabled: boolean;
   /** Alt+↑/↓ no elemento focável da linha. */
   onKey(e: KeyboardEvent, pr: HubProject): void;
   /** Atributos de arrasto do `<li>` da linha (`data-drop` e `data-dragging` para o CSS). */
@@ -112,5 +114,5 @@ export function useProjectOrder(projects: HubProject[], settings: SettingsRun, e
     };
   };
 
-  return { onKey, itemProps };
+  return { enabled, onKey, itemProps };
 }
