@@ -34,6 +34,8 @@ export const PLACES: Place[] = [
   screen("hub", "cthubd projetos atribuições ambientes secrets quarentena propostas gestor"),
   screen("maintenance", "atualizações limpeza backup snapshots versão daemon worktrees"),
   screen("settings", "configurações preferências ambientes atualizações templates"),
+  // Índice dos ambientes (#23); cada um, com as seções, vem da paleta (items.ts).
+  screen("env", "ambientes daemons ctowerd conexão hub detalhe"),
   ...HUB_PLACES,
   ...MAINTENANCE_PLACES,
   ...SETTINGS_PLACES,
@@ -47,6 +49,8 @@ export function openScreen(nav: Pick<Nav, "editors" | "activate" | "go">, name: 
   // Projetos (#16) é sempre o índice: as abas de projeto (`project:<chave>`)
   // e de item continuam abertas, mas a atividade não cai nelas.
   if (name === "project") return nav.go({ name: "project" });
+  // Idem para Ambientes (#23): o índice, não a aba de um ambiente.
+  if (name === "env") return nav.go({ name: "env" });
   const tab =
     nav.editors.find((e) => e.kind === "screen" && e.id === name) ??
     [...nav.editors].reverse().find((e) => e.kind === "screen" && e.screen.name === name);

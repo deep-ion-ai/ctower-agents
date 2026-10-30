@@ -1,6 +1,7 @@
 import "../settings/settings.css";
 import "../hub/hub.css";
 import "./maintenance.css";
+import { envTab } from "../env/sections";
 import { settingsTab } from "../settings/sections";
 import { useEnvChoice } from "../state/env-choice";
 import { useNav } from "../state/nav";
@@ -127,6 +128,8 @@ export function MaintenanceScreen({ screen }: { screen: MaintenanceAddress }) {
             <EnvUpdates
               onSettings={() => nav.openTab(settingsTab({ section: "daemon-update" }))}
               onHub={() => nav.openTab(maintenanceTab("hub-updates"))}
+              // O nome leva ao detalhe do ambiente (#23), na seção Atualização.
+              onEnv={(e) => nav.openTab(envTab(e.id, e.name, "update"))}
             />
           ) : section === "hub-updates" ? (
             <HubUpdate onHubSettings={() => nav.openTab(settingsTab({ section: "connections" }))} />

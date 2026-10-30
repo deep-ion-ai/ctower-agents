@@ -1,5 +1,6 @@
 // Painel lateral da Sala de controle (#316): visões, hub, ambientes e projetos.
 import { useState } from "react";
+import { envTab } from "../env/sections";
 import { projectsPlace } from "../project/sections";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "../project/rows";
 import { ContextMenu, type MenuItem } from "../shell/ContextMenu";
@@ -33,8 +34,8 @@ export function syncResultText(r: HubSyncResult): string {
   return `${r.sent} ${r.sent === 1 ? "mudança enviada" : "mudanças enviadas"} ao hub`;
 }
 
-/** Envio ao hub sob demanda (`hub.sync.now`), com progresso e resultado. */
-function HubSyncButton({ env, name }: { env: string; name: string }) {
+/** Envio ao hub sob demanda (`hub.sync.now`), com progresso e resultado (também no detalhe do ambiente, #23). */
+export function HubSyncButton({ env, name }: { env: string; name: string }) {
   const { api, refresh } = useTower();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; warn: boolean } | null>(null);
@@ -114,9 +115,13 @@ function HubEntry({ now }: { now: number }) {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** Estado de um ambiente: conexão, configuração do hub, envio ao hub e o botão de envio. */
+/**
+ * Estado de um ambiente: conexão, configuração do hub, envio ao hub e o
+ * botão de envio. A linha abre o detalhe do ambiente (#23).
+ */
 function EnvRow({ id, name, now }: { id: string; name: string; now: number }) {
   const { status, dashboards, infos, web } = useTower();
+  const nav = useNav();
   const st = status[id];
   const live = dashboards[id]?.live_sessions.length ?? 0;
   // Web (fase 1): o estado é o do último envio ao hub, não uma conexão.
@@ -135,8 +140,13 @@ function EnvRow({ id, name, now }: { id: string; name: string; now: number }) {
   const docs = infos[id]?.docs;
   const docsDown = st?.connected && docs?.warning === "docs_unreachable";
   return (
-    <li className="sp-row cr-item">
-      <span className="cr-item-main">
+    <li className="sp-row cr-item cr-env">
+      <button
+        type="button"
+        className="cr-item-main"
+        title={`Tudo sobre ${name}: conexão, hub, projetos, atualização e limpeza`}
+        onClick={() => nav.openTab(envTab(id, name))}
+      >
         <span className="sp-dot" data-tone={!st ? "neutral" : st.connected ? "done" : "error"} aria-hidden="true" />
         <span className="cr-item-text">
           <span className="cr-item-name">
@@ -165,9 +175,14 @@ function EnvRow({ id, name, now }: { id: string; name: string; now: number }) {
               {sending}
             </span>
           )}
-          {infos[id]?.hub_sync && st?.connected && <HubSyncButton env={id} name={name} />}
         </span>
-      </span>
+      </button>
+      {/* Fora do botão da linha (botão não vai dentro de botão). */}
+      {infos[id]?.hub_sync && st?.connected && (
+        <span className="cr-env-sync">
+          <HubSyncButton env={id} name={name} />
+        </span>
+      )}
     </li>
   );
 }

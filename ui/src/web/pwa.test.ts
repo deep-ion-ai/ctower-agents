@@ -27,6 +27,10 @@ test("deep link: item, propostas, ambientes, dispositivos e desconhecido", () =>
   expect(deepLinkTab("?go=hub:envs")?.screen).toEqual({ name: "hub", section: "envs" });
   expect(deepLinkTab("?go=hub:devices")?.screen).toEqual({ name: "hub", section: "devices" });
   expect(deepLinkTab("?go=control")?.screen).toEqual({ name: "control" });
+  // Detalhe do ambiente (#23); seção desconhecida = Conexão.
+  expect(deepLinkTab("?go=env&env=daemon-wsl&section=hub")?.screen).toEqual({ name: "env", env: "daemon-wsl", section: "hub" });
+  expect(deepLinkTab("?go=env&env=daemon-wsl&section=nova")?.screen).toEqual({ name: "env", env: "daemon-wsl" });
+  expect(deepLinkTab("?go=env")).toBeNull();
   expect(deepLinkTab("")).toBeNull();
   expect(deepLinkTab("?go=item&project=sem-barra&n=5")).toBeNull();
   expect(deepLinkTab("?go=item&project=o/r&n=abc")).toBeNull();

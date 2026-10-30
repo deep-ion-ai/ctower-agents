@@ -114,8 +114,24 @@ function rowState(
  * sozinha, e a linha confirma o commit novo. Canal e intervalo ficam nas
  * Configurações (`onSettings`).
  */
-export function EnvUpdates({ onSettings, onHub }: { onSettings: () => void; onHub?: () => void }) {
-  const { envs, status, infos, dashboards, api, refresh, hub } = useTower();
+export function EnvUpdates({
+  onSettings,
+  onHub,
+  onEnv,
+  only,
+}: {
+  onSettings?: () => void;
+  onHub?: () => void;
+  /** Atalho do nome de cada ambiente para o detalhe dele (#23). */
+  onEnv?: (env: EnvView) => void;
+  /**
+   * Só este ambiente (#23: a seção Atualização do detalhe do ambiente). Sem
+   * "Atualizar todos", e canal e Reverter ficam na própria seção.
+   */
+  only?: string;
+}) {
+  const { envs: all, status, infos, dashboards, api, refresh, hub } = useTower();
+  const envs = only === undefined ? all : all.filter((e) => e.id === only);
   const now = useNow();
   const [track, setTrack] = useState<Record<string, Track>>({});
   const [checking, setChecking] = useState(false);
@@ -176,7 +192,7 @@ export function EnvUpdates({ onSettings, onHub }: { onSettings: () => void; onHu
   return (
     <section className="panel settings-section set-stack" aria-labelledby="maint-env-updates">
       <div className="settings-head">
-        <h2 id="maint-env-updates">Daemons · {envs.length}</h2>
+        <h2 id="maint-env-updates">{only === undefined ? `Daemons · ${envs.length}` : "Daemon"}</h2>
         <div className="env-actions">
           <button type="button" className="btn" disabled={checking || connected.length === 0} onClick={check}>
             {checking ? "Verificando…" : "Verificar agora"}
@@ -219,7 +235,20 @@ export function EnvUpdates({ onSettings, onHub }: { onSettings: () => void; onHu
             return (
               <tbody key={e.id} aria-label={`Atualização de ${e.name}`}>
                 <tr>
-                  <td className="strong">{e.name}</td>
+                  <td className="strong">
+                    {onEnv ? (
+                      <button
+                        type="button"
+                        className="link-btn strong"
+                        title={`Tudo sobre ${e.name}`}
+                        onClick={() => onEnv(e)}
+                      >
+                        {e.name}
+                      </button>
+                    ) : (
+                      e.name
+                    )}
+                  </td>
                   <td className="mono">{info ? build({ version: info.version, commit: info.commit ?? "" }) : "—"}</td>
                   <td>
                     {!on ? (
@@ -314,15 +343,20 @@ export function EnvUpdates({ onSettings, onHub }: { onSettings: () => void; onHu
           </div>
         </div>
       )}
-      <p className="muted hint">
-        Cada ambiente verifica sozinho no intervalo dos ajustes (padrão 6 h). Canal e Reverter (volta à versão
-        anterior) ficam nos ajustes; no terminal do ambiente também há <span className="mono">ctower update --rollback</span>.
-      </p>
-      <div>
-        <button type="button" className="link-btn" onClick={onSettings}>
-          Ajustes de atualização ›
-        </button>
-      </div>
+      {only === undefined && (
+        <p className="muted hint">
+          Cada ambiente verifica sozinho no intervalo dos ajustes (padrão 6 h). Canal e Reverter (volta à versão
+          anterior) ficam nos ajustes; no terminal do ambiente também há{" "}
+          <span className="mono">ctower update --rollback</span>.
+        </p>
+      )}
+      {onSettings && (
+        <div>
+          <button type="button" className="link-btn" onClick={onSettings}>
+            Ajustes de atualização ›
+          </button>
+        </div>
+      )}
     </section>
   );
 }

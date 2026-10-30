@@ -1,6 +1,7 @@
 import "./settings.css";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { NotifyPrefs, ThemePref, UiConfig } from "../api/types";
+import { envTab } from "../env/sections";
 import { hubTab } from "../hub/sections";
 import { maintenanceTab } from "../maintenance/sections";
 import type { SessionMode } from "../protocol/gen";
@@ -287,9 +288,34 @@ function SettingItem({ item }: { item: Item }) {
   );
 }
 
+/**
+ * Itens do escopo Ambiente das Configurações de `env` nas `sections`, menos
+ * os `skip` (ids): a configuração do daemon no detalhe do ambiente (#23)
+ * compõe os mesmos itens, sem repetir os controles.
+ */
+export function EnvSettingsItems({
+  env,
+  sections,
+  skip = [],
+}: {
+  env: string;
+  sections: SettingsSection[];
+  skip?: string[];
+}) {
+  const items = useEnvItems(env).filter((i) => sections.includes(i.section) && !skip.includes(i.id));
+  return (
+    <div className="env-set-items">
+      {items.map((i) => (
+        <SettingItem key={i.id} item={i} />
+      ))}
+    </div>
+  );
+}
+
 /** Daemon do ambiente: versão, protocolo e máquina; e de onde vêm estas configurações. */
 function EnvIntro({ env }: { env: string }) {
   const { envs, infos, status } = useTower();
+  const nav = useNav();
   const name = envs.find((e) => e.id === env)?.name ?? env;
   const i = infos[env];
   return (
@@ -305,6 +331,10 @@ function EnvIntro({ env }: { env: string }) {
       ) : (
         <p className="state-off hint">sem conexão</p>
       )}
+      {/* Atalho (#23): conexão, hub, projetos, atualização e limpeza do ambiente numa tela só. */}
+      <button type="button" className="link-btn" onClick={() => nav.openTab(envTab(env, name))}>
+        Tudo sobre {name} ›
+      </button>
     </div>
   );
 }
