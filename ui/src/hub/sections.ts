@@ -70,12 +70,8 @@ export function hubGroupOf(s: HubSection): string {
   return HUB_GROUPS.find((g) => g.sections.includes(s))!.label;
 }
 
-/** Cadastrar projeto com a URL preenchida (vinda da quarentena). Cada pedido (objeto novo) abre o formulário. */
-export interface RegisterIntent {
-  url: string;
-  /** Tipo do projeto no formulário; ausente = GitHub. Jira + GitLab vem sem URL (#352). */
-  kind?: "github" | "jira";
-}
+// O pedido de cadastro mora com o formulário (#14); as abas do Hub o carregam.
+export type { RegisterIntent } from "../project/NewProjectDialog";
 
 /** Projeto pela chave natural: o detalhe da seção Projetos (`hubTab("projects", { project })`, #314). */
 export interface ProjectRef {
