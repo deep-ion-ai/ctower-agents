@@ -207,10 +207,12 @@ test("erro do hub ao gravar aparece no formulário", async () => {
 
 test("escopo do projeto: herda os globais, marca a sobrescrita, cria, edita e remove", async () => {
   const { api, store, user } = setupProject();
-  // Pelas Configurações do projeto no Hub (#8): o cabeçalho do Projeto não tem mais o toggle.
+  // Pelas Configurações do projeto (#8; desde a #17, a aba do próprio projeto): o cabeçalho não tem mais o toggle.
   expect(await screen.findByText("visão do hub")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Secrets e variáveis" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Configurações do projeto" }));
+  const secoes = await screen.findByRole("navigation", { name: "Seções das configurações do projeto" });
+  await user.click(within(secoes).getByRole("button", { name: "Secrets e variáveis" }));
   const toggle = await screen.findByRole("button", { name: "Gerenciar secrets do projeto" });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
   await user.click(toggle);

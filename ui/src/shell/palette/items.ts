@@ -12,6 +12,7 @@ import type { Dashboard, Session, WorkItemKind, WorkItemStatus } from "../../pro
 import type { HubView } from "../../state/tower";
 import type { OpenTab, Screen } from "../../state/nav";
 import { itemTab } from "../../project/tabs";
+import { projectAt, type ProjectPage, type ProjectSettingsSection } from "../../project/sections";
 import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../../util/item";
 import { liveGestorLabel } from "../../hub/HubGestor";
 import { PLACES, type Place } from "../places";
@@ -287,9 +288,11 @@ function commands(src: PaletteSources, interrupted: number, projects: ProjectRef
 }
 
 /**
- * Comandos de projeto (#9), que abrem o Hub › Projetos: cadastrar e, por
- * projeto, configurações, atribuição, secrets e regras (só buscando). Na web,
- * só os de leitura: cadastro, atribuição e secrets são do desktop.
+ * Comandos de projeto (#9): cadastrar e, por projeto (só buscando), cada aba
+ * e cada seção das Configurações do próprio projeto (#17), cada uma com o
+ * endereço dela (`projectAt`). Atribuir segue no Hub › Projetos, que abre o
+ * formulário pelo endereço (`assign`). Na web, só os de leitura: cadastro,
+ * atribuição, secrets e exclusão são do desktop.
  */
 function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteItem[] {
   const out: PaletteItem[] = [];
@@ -306,24 +309,38 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
   for (const p of projects) {
     const k = key(p.owner, p.repo);
     const project = { owner: p.owner, repo: p.repo };
-    const cmd = (id: string, label: string, keywords: string, tab = hubTab("projects", { project })): PaletteItem => ({
+    const item = (id: string, label: string, keywords: string, action: PaletteAction): PaletteItem => ({
       id: `cmd:project-${id}:${k}`,
       kind: "command",
       label,
       detail: `${p.owner}/${p.repo}`,
       keywords,
       browse: false,
-      action: { type: "tab", tab },
+      action,
     });
-    out.push(cmd("config", `Projeto: Configurações — ${p.name}`, "configurar editar"));
+    // Aba (e seção) do próprio projeto: a aba dele, com o endereço trocado.
+    const at = (id: string, label: string, keywords: string, page: ProjectPage, section?: ProjectSettingsSection) =>
+      item(id, `Projeto: ${label} — ${p.name}`, keywords, { type: "screen", screen: projectAt(projectScreen(p), page, section) });
+    out.push(
+      at("overview", "Visão geral", "resumo estado atribuições sessões vivas sync", "overview"),
+      at("items", "Itens", "árvore quadro kanban issues épicos", "items"),
+      at("sessions", "Sessões", "vivas interrompidas encerradas ambientes", "sessions"),
+      at("config", "Configurações", "configurar editar geral nome branches", "settings"),
+      at("tracker", "Rastreador", "repositório rastreador jira gitlab github sync ambiente de sync", "settings", "tracker"),
+      at("envs", "Ambientes", "ambientes atribuições clone", "settings", "envs"),
+      at("rules", "Regras", "regras agentes instruções", "settings", "rules"),
+      at("docs", "Docs", "docs pasta documentação", "settings", "docs"),
+    );
     if (!src.web) {
       out.push(
-        cmd("assign", `Projeto: Atribuir ${p.name} a ambiente`, "atribuir atribuição", hubTab("projects", { project, assign: true })),
-        // Os secrets do projeto ficam na configuração dele (card "Secrets e variáveis do projeto").
-        cmd("secrets", `Projeto: Secrets — ${p.name}`, "secrets variáveis env tokens chaves"),
+        item("assign", `Projeto: Atribuir ${p.name} a ambiente`, "atribuir atribuição", {
+          type: "tab",
+          tab: hubTab("projects", { project, assign: true }),
+        }),
+        at("secrets", "Secrets", "secrets variáveis env tokens chaves", "settings", "secrets"),
+        at("danger", "Excluir", "excluir apagar remover zona de perigo", "settings", "danger"),
       );
     }
-    out.push(cmd("rules", `Projeto: Regras — ${p.name}`, "regras agentes instruções"));
   }
   return out;
 }
