@@ -18,7 +18,8 @@ test("navega entre as telas pela barra de atividades", async () => {
   for (const [tela, titulo] of [
     ["Configurações", "Configurações"],
     ["Revisão", "Revisão"],
-    ["Projetos", "ctower-agents"],
+    // Projetos abre o índice (#16), não o primeiro projeto.
+    ["Projetos", "Projetos"],
   ]) {
     await user.click(within(nav).getByRole("button", { name: tela }));
     expect(screen.getByRole("heading", { name: titulo })).toBeInTheDocument();
@@ -84,7 +85,7 @@ test("exceção ao renderizar uma tela mostra o erro, não a janela em branco", 
     .on("dashboard.get", dashboard({}, []))
     .on("env.info", { protocol: "2.0", version: "0.1.0", hostname: "ct", worktrees_root: "/w" })
     .on("tree.get", { project: project(), sync: null, roots: [{ issue: null }], untracked: [] });
-  render(<App api={api} initial={{ name: "project" }} />);
+  render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1 }} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("Esta tela falhou ao abrir");
   // O menu continua funcionando.
   expect(screen.getByRole("button", { name: "Sala de controle" })).toBeInTheDocument();

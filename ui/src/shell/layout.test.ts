@@ -1,4 +1,4 @@
-import { initialNav, navReducer, shellTabId, terminalTabId, type NavState } from "../state/nav";
+import { initialNav, isPinnable, navReducer, shellTabId, terminalTabId, type NavState } from "../state/nav";
 import { clampWidth, contextShortcut, loadLayout, DEFAULT_LAYOUT, newShellShortcut, shellShortcut } from "./layout";
 
 const key = (k: string, mods: Partial<KeyboardEvent> = {}) => ({
@@ -104,9 +104,30 @@ test("abas provisórias: o item novo substitui a provisória no lugar dela; a ab
   s = navReducer(s, { type: "open", tab: { screen: { name: "review" } } });
   s = navReducer(s, { type: "open", tab: item(2) });
   // No lugar da #1 (antes da Revisão), ativa.
-  expect(ids(s)).toEqual(["control", "project", item(2).id, "review"]);
+  // A aba do projeto é `project:<chave>` (#16) e, como a da tela, não é provisória.
+  expect(ids(s)).toEqual(["control", "project:o/r", item(2).id, "review"]);
   expect(s.current).toBe(item(2).id);
   expect(previews(s)).toEqual([item(2).id]);
+});
+
+test("índice e projeto (#16): abrir um projeto não troca o índice; voltar ao índice mantém a aba do projeto", () => {
+  let s: NavState = initialNav({ name: "control" });
+  s = navReducer(s, { type: "open", tab: { screen: { name: "project" } } });
+  s = navReducer(s, { type: "open", tab: { screen: { name: "project", owner: "o", repo: "r" } } });
+  expect(ids(s)).toEqual(["control", "project", "project:o/r"]);
+  expect(s.current).toBe("project:o/r");
+  // O mesmo projeto por outro caminho (com o item, como a paleta) reusa a aba.
+  s = navReducer(s, { type: "open", tab: { screen: { name: "project", owner: "O", repo: "R", item: { ghNumber: 3 } } } });
+  expect(ids(s)).toEqual(["control", "project", "project:o/r"]);
+  // "Projetos" (a trilha, a atividade): o índice, com o projeto ainda aberto.
+  s = navReducer(s, { type: "open", tab: { screen: { name: "project" } } });
+  expect(s.current).toBe("project");
+  expect(ids(s)).toEqual(["control", "project", "project:o/r"]);
+  // Outro projeto, outra aba; nenhuma das duas é provisória nem fixável.
+  s = navReducer(s, { type: "open", tab: { screen: { name: "project", env: "wsl", projectId: 2 } } });
+  expect(ids(s)).toEqual(["control", "project", "project:o/r", "project:wsl:2"]);
+  expect(previews(s)).toEqual([]);
+  expect(s.editors.filter(isPinnable).map((e) => e.id)).toEqual([]);
 });
 
 test("fixar: a aba fica; reabrir item já aberto só ativa; trocar o endereço da atual mantém o estado", () => {

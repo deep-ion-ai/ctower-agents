@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DaemonApi } from "./api/daemon";
 import { TowerProvider, useTower } from "./state/tower";
-import { NavProvider, useNav, type Screen } from "./state/nav";
+import { NavProvider, hasProjectKey, useNav, type Screen } from "./state/nav";
 import { Shell } from "./shell/Shell";
 import { interruptedCount } from "./shell/summary";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -9,6 +9,7 @@ import { ControlRoom } from "./control-room/ControlRoom";
 import { TerminalScreen } from "./terminal/TerminalScreen";
 import { ProjectScreen } from "./project/ProjectScreen";
 import { HubProjectScreen } from "./project/HubProjectScreen";
+import { ProjectIndex } from "./project/ProjectIndex";
 import { RecoveryScreen } from "./recovery/RecoveryScreen";
 import { ReviewScreen } from "./review/ReviewScreen";
 import { SettingsScreen } from "./settings/SettingsScreen";
@@ -204,6 +205,8 @@ function Current({ screen }: { screen: Screen }) {
  */
 function ProjectRoute({ screen }: { screen: Extract<Screen, { name: "project" }> }) {
   const { hub, envs, dashboards } = useTower();
+  // Sem chave, o índice de projetos (#16): não abre mais o primeiro projeto.
+  if (!hasProjectKey(screen)) return <ProjectIndex />;
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
   let key: { owner: string; repo: string } | undefined =
     screen.owner && screen.repo ? { owner: screen.owner, repo: screen.repo } : undefined;
@@ -212,11 +215,9 @@ function ProjectRoute({ screen }: { screen: Extract<Screen, { name: "project" }>
     if (p) key = { owner: p.gh_owner, repo: p.gh_repo };
   }
   if (hub.up && hub.dashboard) {
-    const first = hub.dashboard.projects[0]?.project;
-    const k = key ?? (first ? { owner: first.gh_owner, repo: first.gh_repo } : undefined);
-    if (k)
+    if (key)
       return (
-        <HubProjectScreen owner={k.owner} repo={k.repo} item={screen.item} view={screen.view} section={screen.section} />
+        <HubProjectScreen owner={key.owner} repo={key.repo} item={screen.item} view={screen.view} section={screen.section} />
       );
   }
   let { env, projectId } = screen;

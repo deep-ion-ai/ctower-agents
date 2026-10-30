@@ -293,7 +293,8 @@ describe("Projetos na lateral (#10)", () => {
 
     fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
     await user.click(screen.getByRole("menuitem", { name: "Configurações" }));
-    expect(await screen.findByRole("tab", { name: /Projetos e atribuições/, selected: true })).toBeInTheDocument();
+    // A aba Configurações do próprio projeto (#17), não o Hub.
+    expect(await screen.findByRole("tab", { name: /app · Configurações/, selected: true })).toBeInTheDocument();
   });
 
   test("hub no ar: Atribuir a ambiente abre o formulário do projeto", async () => {

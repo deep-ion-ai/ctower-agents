@@ -1,4 +1,4 @@
-import { useEffect, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useState } from "react";
 import { useNow } from "../App";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -22,16 +22,11 @@ import {
   type Tone,
 } from "../project/settings";
 import { NewProjectDialog, type RegisterIntent } from "../project/NewProjectDialog";
+import { useProjectOrder } from "../project/order";
 import { AgentRules } from "./AgentRules";
 
 // Fica exportada daqui para quem já importa de HubProjects.
 export { syncText };
-
-/** Onde soltar o projeto arrastado: antes ou depois do alvo. */
-interface Drop {
-  key: string;
-  where: "before" | "after";
-}
 
 /**
  * Estado do projeto na lista: atribuição com erro ou pendente pede atenção
@@ -79,7 +74,7 @@ export function HubProjects({
 }) {
   // Web (épico #205): só leitura; cadastro, ordem, atribuições, secrets e
   // exclusão ficam no desktop (spec §4.1 e §10.2).
-  const { hub, api, web } = useTower();
+  const { hub, web } = useTower();
   const nav = useNav();
   const now = useNow();
   const [filter, setFilter] = useState("");
@@ -88,8 +83,6 @@ export function HubProjects({
   const [editing, setEditing] = useState(false);
   const { busy, run, fail, error, done } = useSettingsRun();
   const settings = { busy, run, fail };
-  const [dragging, setDragging] = useState<string | null>(null);
-  const [drop, setDrop] = useState<Drop | null>(null);
   const secrets = useSecrets(!web);
 
   useEffect(() => {
@@ -123,53 +116,10 @@ export function HubProjects({
   };
 
 
-  // Ordem entre projetos (desempata o ranking do portfólio): `pr` vai para
-  // antes ou depois de `other`.
-  const move = (pr: HubProject, to: "before" | "after", other: HubProject) =>
-    void run(async () => {
-      await api.hubCall("hub.projects.move", {
-        owner: pr.gh_owner,
-        repo: pr.gh_repo,
-        [to]: { owner: other.gh_owner, repo: other.gh_repo },
-      });
-      const i = projects.findIndex((p) => p.project.id === pr.id);
-      const j = projects.findIndex((p) => p.project.id === other.id);
-      return `${pr.name} ${j < i ? "subiu" : "desceu"} na ordem dos projetos.`;
-    });
-
-  const neighbors = (pr: HubProject) => {
-    const i = projects.findIndex((p) => p.project.id === pr.id);
-    return { prev: projects[i - 1]?.project, next: projects[i + 1]?.project };
-  };
-
-  /** Sobe ou desce um lugar (botões do detalhe e Alt+↑/↓ na lista). */
-  const step = (pr: HubProject, up: boolean) => {
-    const { prev, next } = neighbors(pr);
-    if (up && prev) move(pr, "before", prev);
-    if (!up && next) move(pr, "after", next);
-  };
-
-  const onKey = (e: KeyboardEvent, pr: HubProject) => {
-    if (web || !e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown") || busy) return;
-    e.preventDefault();
-    step(pr, e.key === "ArrowUp");
-  };
-
-  // Arrasto (HTML5): metade de cima do alvo = antes; de baixo = depois.
-  const dropWhere = (e: DragEvent<HTMLElement>): Drop["where"] => {
-    const r = e.currentTarget.getBoundingClientRect();
-    return e.clientY < r.top + r.height / 2 ? "before" : "after";
-  };
-  const onDrop = (target: HubProject, where: Drop["where"]) => {
-    const from = projects.find((p) => keyOf(p.project.gh_owner, p.project.gh_repo) === dragging)?.project;
-    setDragging(null);
-    setDrop(null);
-    if (!from || from.id === target.id || busy) return;
-    const { prev, next } = neighbors(target);
-    // Soltar ao lado de onde já está não muda a ordem.
-    if ((where === "before" && prev?.id === from.id) || (where === "after" && next?.id === from.id)) return;
-    move(from, where, target);
-  };
+  // Ordem entre projetos (arrasto, Alt+↑/↓ e os botões do detalhe): o mesmo
+  // gancho do índice de Projetos (#16).
+  const order = useProjectOrder(projects.map((p) => p.project), settings, !web);
+  const { neighbors, step, onKey } = order;
 
   /** Sessões vivas relatadas no hub para o projeto (pelos work items dele). */
   const liveOf = (pr: HubProject): HubSession[] => {
@@ -339,36 +289,7 @@ export function HubProjects({
               const pos = projects.indexOf(p) + 1;
               const current = !add && sel?.project.id === pr.id;
               return (
-                <li
-                  key={pr.id}
-                  draggable={!busy && !web}
-                  data-drop={drop?.key === key ? drop.where : undefined}
-                  data-dragging={dragging === key ? "true" : undefined}
-                  onDragStart={(e) => {
-                    setDragging(key);
-                    try {
-                      e.dataTransfer.effectAllowed = "move";
-                      e.dataTransfer.setData("text/plain", key);
-                    } catch {
-                      // Sem dataTransfer (testes): o estado basta.
-                    }
-                  }}
-                  onDragOver={(e) => {
-                    if (!dragging || dragging === key) return;
-                    e.preventDefault();
-                    const where = dropWhere(e);
-                    if (drop?.key !== key || drop.where !== where) setDrop({ key, where });
-                  }}
-                  onDragLeave={() => drop?.key === key && setDrop(null)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    onDrop(pr, dropWhere(e));
-                  }}
-                  onDragEnd={() => {
-                    setDragging(null);
-                    setDrop(null);
-                  }}
-                >
+                <li key={pr.id} {...order.itemProps(pr)}>
                   <button
                     type="button"
                     className="hub-pitem"

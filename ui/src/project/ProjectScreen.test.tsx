@@ -20,6 +20,9 @@ import { DEFAULT_UI_CONFIG } from "../settings/defaults";
 import { renderTemplate } from "./templates";
 
 const NOW = Date.now();
+// O projeto local do fixture (`project()`, id 1) no ambiente padrão do fake:
+// sem chave, a atividade Projetos mostra o índice (#16), não o primeiro projeto.
+const LOCAL = { name: "project", env: "wsl", projectId: 1 } as const;
 
 function issue(n: number, title: string, p: Partial<IssueRow> = {}): IssueRow {
   return {
@@ -73,7 +76,7 @@ function setup(tree: unknown = TREE) {
     .on("tree.get", tree)
     .on("env.info", { protocol: "2.0", version: "0.1.0", hostname: "ct", worktrees_root: "/home/user/worktrees" })
     .on("session.start", session({ id: "dddddddd-0000-0000-0000-000000000033", work_item_id: 33 }));
-  render(<App api={api} initial={{ name: "project" }} />);
+  render(<App api={api} initial={LOCAL} />);
   return { api, user: userEvent.setup() };
 }
 
@@ -175,7 +178,7 @@ test("modelo e modo: padrão das Configurações pré-selecionado e escolha envi
     .on("env.info", { protocol: "2.0", version: "0.1.0", hostname: "ct", worktrees_root: "/home/user/worktrees" })
     .on("session.start", session({ id: "dddddddd-0000-0000-0000-000000000033", work_item_id: 33 }));
   api.uiConfig = { ...api.uiConfig, session: { model: "sonnet", mode: "subagents", remote_control: false } };
-  render(<App api={api} initial={{ name: "project" }} />);
+  render(<App api={api} initial={LOCAL} />);
   const user = userEvent.setup();
 
   await screen.findByText("ui: Projeto, Recuperação e Revisão");
@@ -201,7 +204,7 @@ function setupRc(rc: { available: boolean; reason: string | null }, remote = fal
     .on("env.info", { protocol: "2.3", version: "0.1.0", hostname: "ct", worktrees_root: "/w", remote_control: rc })
     .on("session.start", session({ id: "dddddddd-0000-0000-0000-000000000033", work_item_id: 33 }));
   api.uiConfig = { ...api.uiConfig, session: { ...api.uiConfig.session, remote_control: remote } };
-  render(<App api={api} initial={{ name: "project" }} />);
+  render(<App api={api} initial={LOCAL} />);
   return { api, user: userEvent.setup() };
 }
 
@@ -374,7 +377,7 @@ test("com sessão do projeto viva, a modal avisa e 'Abrir a existente' abre o te
     .on("session.peek", { data: "" })
     .on("tree.get", TREE)
     .on("env.info", { protocol: "2.0", version: "0.1.0", hostname: "ct", worktrees_root: "/w" });
-  render(<App api={api} initial={{ name: "project" }} />);
+  render(<App api={api} initial={LOCAL} />);
   const user = userEvent.setup();
   await screen.findByText("Plano 4 — UI Tauri");
   await user.click(screen.getByRole("button", { name: /Sessão de planejamento/ }));
@@ -552,7 +555,7 @@ describe("modal de início", () => {
     await user.click(within(dialog()).getByRole("button", { name: /^Iniciar sessão/ }));
     await waitFor(() => expect(api.callsTo("session.start")).toHaveLength(1));
     expect(await screen.findByText("Sessão de #33 iniciada em ctower-agents (WSL)")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Projetos" })).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByRole("navigation", { name: "Telas" })).getByRole("button", { name: "Projetos" })).toHaveAttribute("aria-current", "page");
     await user.click(screen.getByRole("button", { name: "Ver terminal" }));
     expect(screen.getByRole("button", { name: "Terminal", description: "1 sessão" })).toHaveAttribute("aria-current", "page");
   });
@@ -568,7 +571,7 @@ test("resposta antiga de tree.get não sobrescreve a mais nova", async () => {
     .on("session.peek", { data: "" })
     .on("env.info", { protocol: "2.0", version: "0.1.0", hostname: "ct", worktrees_root: "/w" })
     .on("tree.get", () => (++chamadas === 1 ? new Promise<ProjectTree>((r) => (soltar = r)) : TREE));
-  render(<App api={api} initial={{ name: "project" }} />);
+  render(<App api={api} initial={LOCAL} />);
   await waitFor(() => expect(chamadas).toBeGreaterThan(0));
   // Um segundo carregamento (push do dashboard) resolve antes do primeiro.
   await act(async () => api.push("wsl", "session_state", {}));
@@ -611,10 +614,11 @@ describe("sem projetos (#6)", () => {
     return userEvent.setup();
   }
 
-  test("hub no ar: o texto aponta para o Hub e '+ Novo projeto' abre o formulário de cadastro", async () => {
+  // O estado vazio agora é o do índice (#16): o cadastro abre ali mesmo.
+  test("hub no ar: o índice vazio oferece '+ Novo projeto', que abre o formulário de cadastro", async () => {
     const user = setupVazio("no ar");
     const novo = await screen.findByRole("button", { name: "+ Novo projeto" });
-    expect(screen.getByText(/O cadastro fica no Hub, em Projetos e atribuições/)).toBeInTheDocument();
+    expect(screen.getByText(/Nenhum projeto cadastrado. Use \+ Novo projeto/)).toBeInTheDocument();
     expect(screen.queryByText(/Cadastre um em Configurações/)).not.toBeInTheDocument();
     await user.click(novo);
     expect(await screen.findByRole("form", { name: "Novo projeto" })).toBeInTheDocument();
