@@ -16,7 +16,7 @@ concurrency:
 jobs:
   # Decide quais jobs rodam num PR. No push em develop/main o filtro não roda e
   # todos os jobs rodam. Um job fora do filtro aparece como skipped, não como pendente.
-  # Os jobs rodam em runners hospedados do GitHub (ubuntu-22.04 e macos-14, ARM). Para
+  # Os jobs rodam em runners hospedados do GitHub (ubuntu-22.04 e macos-15, ARM). Para
   # usar runners próprios, defina CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON, docs/ci.md).
   changes:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
@@ -64,7 +64,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [linux, macos]
-    runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || '"macos-14"') || (vars.CI_RUNNER_LINUX || '"ubuntu-22.04"')) }}
+    runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || '"macos-15"') || (vars.CI_RUNNER_LINUX || '"ubuntu-22.04"')) }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

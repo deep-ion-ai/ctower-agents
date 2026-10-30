@@ -39,7 +39,7 @@ jobs:
   # Decide quais jobs rodam num PR. No push em develop/main o filtro não roda e
   # os jobs de Linux rodam. Um job fora do filtro aparece como skipped, não como pendente.
   # O macOS só roda no PR develop → main, no disparo manual e na publicação de
-  # release (input tag). Os runners são os hospedados do GitHub (ubuntu-22.04 e macos-14);
+  # release (input tag). Os runners são os hospedados do GitHub (ubuntu-22.04 e macos-15);
   # CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON) trocam por runners próprios.
   changes:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
@@ -96,7 +96,7 @@ jobs:
   macos:
     needs: changes
     if: inputs.tag != '' || needs.changes.outputs.platforms == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_MACOS || '"macos-14"') }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_MACOS || '"macos-15"') }}
     defaults:
       run:
         working-directory: ui

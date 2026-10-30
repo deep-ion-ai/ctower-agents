@@ -1,6 +1,6 @@
 # CI: quando cada job roda e quais runners usa
 
-O CI roda nos **runners hospedados do GitHub**, grátis em repositório público: `ubuntu-22.04` (Linux x86_64) e `macos-14` (Apple Silicon). Não há Windows. Runners próprios continuam possíveis por variável do repositório (veja "Escolher o runner"), mas só em repositório privado.
+O CI roda nos **runners hospedados do GitHub**, grátis em repositório público: `ubuntu-22.04` (Linux x86_64) e `macos-15` (Apple Silicon). Não há Windows. Runners próprios continuam possíveis por variável do repositório (veja "Escolher o runner"), mas só em repositório privado.
 
 | Evento | Linux (`rust`, tipos TS, `web`) | macOS (`rust`) | macOS (`macos`, Tauri) |
 |---|---|---|---|
@@ -13,7 +13,7 @@ O CI roda nos **runners hospedados do GitHub**, grátis em repositório público
 
 O job `rust` também roda o `scripts/provision/test-provision.sh`, que executa o `provision.sh --hub --env` com HOME temporário e `sudo`, `systemctl` e `cargo` falsos (usa os binários de `target/debug`). O teste confere que o ambiente sai ligado ao hub local (o token gravado vale no `/sync/config` de um `cthubd` de verdade) e que rodar de novo não muda nada. Ele também roda à mão, sem tocar no sistema: `cargo build -p cthubd -p ctowerd -p ctower && scripts/provision/test-provision.sh`. Mudanças em `scripts/provision/**` e `packaging/**` disparam o job.
 
-O job `cthubd` do `release` (`release.yml`) compila o hub na tag e anexa `cthubd-vX.Y.Z-<arch>-linux.tar.gz` e o `.sha256` à release em rascunho, antes do `publish`. O `publish` (o workflow `ui`, que tira a release do rascunho) depende dele. Se o job `cthubd` falhar, a release fica em rascunho, sem o app. Corrija a causa (falha de build, runner indisponível) e rode **Re-run failed jobs** no run do `release`: o job reenvia o binário com `--clobber`, e em seguida o `publish` roda. Não crie tag nem release à mão. Ele roda no `ubuntu-22.04`, então o binário exige glibc 2.35 ou mais nova (Ubuntu 22.04 em diante). O job `envbins` anexa `ctower-env-vX.Y.Z-<arch>-<os>.tar.gz` (+ `.sha256`) com `ctowerd`, `ctower` e a unidade de serviço, para macOS aarch64 (`macos-14`) e Linux x86_64; `provision.sh --env` e `ctower update` os usam, com `cargo install` de fallback (`--from-source` força). Não há binário do hub para macOS; num Mac, o hub é compilado localmente (`docs/hub.md`).
+O job `cthubd` do `release` (`release.yml`) compila o hub na tag e anexa `cthubd-vX.Y.Z-<arch>-linux.tar.gz` e o `.sha256` à release em rascunho, antes do `publish`. O `publish` (o workflow `ui`, que tira a release do rascunho) depende dele. Se o job `cthubd` falhar, a release fica em rascunho, sem o app. Corrija a causa (falha de build, runner indisponível) e rode **Re-run failed jobs** no run do `release`: o job reenvia o binário com `--clobber`, e em seguida o `publish` roda. Não crie tag nem release à mão. Ele roda no `ubuntu-22.04`, então o binário exige glibc 2.35 ou mais nova (Ubuntu 22.04 em diante). O job `envbins` anexa `ctower-env-vX.Y.Z-<arch>-<os>.tar.gz` (+ `.sha256`) com `ctowerd`, `ctower` e a unidade de serviço, para macOS aarch64 (`macos-15`) e Linux x86_64; `provision.sh --env` e `ctower update` os usam, com `cargo install` de fallback (`--from-source` força). Não há binário do hub para macOS; num Mac, o hub é compilado localmente (`docs/hub.md`).
 
 Um job que não roda aparece como *skipped*, não como pendente. Quando um PR mexer em código de plataforma (PTY, área de transferência, abrir URL), dispare as plataformas à mão antes de mesclar:
 
@@ -46,7 +46,7 @@ Cada plataforma lê uma variável. Sem ela, o job usa o runner hospedado do GitH
 | Variável | Jobs | Sem a variável |
 |---|---|---|
 | `CI_RUNNER_LINUX` | `changes`, `rust` (Linux), `web`, `release` (inclusive o `cthubd`) | `"ubuntu-22.04"` |
-| `CI_RUNNER_MACOS` | `rust` (macOS), `macos` (Tauri), `envbins` (macOS) | `"macos-14"` |
+| `CI_RUNNER_MACOS` | `rust` (macOS), `macos` (Tauri), `envbins` (macOS) | `"macos-15"` |
 
 O valor é **JSON**: um label entre aspas ou uma lista de labels que o runner precisa ter. Um valor que não seja JSON válido (ex.: `macos` sem aspas) quebra o workflow.
 
