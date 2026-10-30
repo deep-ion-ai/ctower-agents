@@ -135,6 +135,7 @@ export function SideRow({
   selected,
   depth = 0,
   onClick,
+  onMenu,
   actions,
 }: {
   label: ReactNode;
@@ -150,6 +151,11 @@ export function SideRow({
   selected?: boolean;
   depth?: number;
   onClick?: () => void;
+  /**
+   * Menu de contexto da linha: botão direito na linha ou Shift+F10 / tecla de
+   * menu no botão. Recebe a posição e o botão (para devolver o foco).
+   */
+  onMenu?: (x: number, y: number, origin: HTMLElement) => void;
   actions?: ReactNode;
 }) {
   const id = useId();
@@ -158,6 +164,14 @@ export function SideRow({
       className={sub !== undefined ? "sp-row sp-row-2" : "sp-row"}
       data-selected={selected ? "true" : undefined}
       style={{ paddingLeft: 18 + depth * 16 }}
+      onContextMenu={
+        onMenu &&
+        ((e) => {
+          e.preventDefault();
+          const el = e.currentTarget.querySelector<HTMLElement>(".sp-row-main") ?? e.currentTarget;
+          onMenu(e.clientX, e.clientY, el);
+        })
+      }
     >
       <button
         type="button"
@@ -166,6 +180,15 @@ export function SideRow({
         aria-current={selected ? "true" : undefined}
         aria-describedby={description ? `${id}-d` : undefined}
         onClick={onClick}
+        onKeyDown={
+          onMenu &&
+          ((e) => {
+            if (e.key !== "ContextMenu" && !(e.key === "F10" && e.shiftKey)) return;
+            e.preventDefault();
+            const r = e.currentTarget.getBoundingClientRect();
+            onMenu(r.left + 16, r.bottom, e.currentTarget);
+          })
+        }
       >
         {tone && <span className="sp-dot" data-tone={tone} aria-hidden="true" />}
         {icon}
