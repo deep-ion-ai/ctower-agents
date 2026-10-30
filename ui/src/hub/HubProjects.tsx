@@ -19,7 +19,7 @@ import type {
   SyncState,
 } from "../protocol/hub-gen";
 import { projectCounts } from "./HubHealth";
-import { DELIVERY_TEXT } from "./HubSecrets";
+import { DELIVERY_TEXT, HubSecrets } from "./HubSecrets";
 import { errText, needsConfirm } from "./calls";
 import { hubTab, type ProjectRef } from "./sections";
 import { TrackerReadiness } from "./TrackerReadiness";
@@ -136,12 +136,13 @@ export function projectState(p: HubProjectView, now: number): { text: string; to
  * Alt+↑/↓ ou pelos botões do detalhe), com filtro e "Cadastrar". À direita,
  * o projeto escolhido (`project`, senão o primeiro): repositório e edição,
  * atribuições por ambiente (estado, clone, sessões vivas, remover,
- * atribuir), secrets e variáveis do projeto com a entrega por ambiente, e a
- * exclusão, que mostra o impacto (`DeleteImpact`) e pede a confirmação que
- * o hub pedir.
+ * atribuir), secrets e variáveis do projeto com a entrega por ambiente e o
+ * editor do escopo do projeto (#8), e a exclusão, que mostra o impacto
+ * (`DeleteImpact`) e pede a confirmação que o hub pedir.
  */
 export function HubProjects({
   project,
+  assign: assignReq,
   addUrl,
   addKind,
   onAddDone,
@@ -149,6 +150,8 @@ export function HubProjects({
 }: {
   /** Projeto mostrado no detalhe; sem ele (ou se sumiu), o primeiro. */
   project?: ProjectRef;
+  /** Abrir o formulário de atribuição do projeto mostrado (`Screen` do hub, #7). */
+  assign?: true;
   addUrl: string | null;
   /** Tipo do formulário pedido (quarentena de projeto GitLab, #352); ausente = GitHub. */
   addKind?: ProjectKindForm;
@@ -173,10 +176,13 @@ export function HubProjects({
   const [done, setDone] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
-  const secrets = useSecrets(!web);
+  // Projeto (chave) com o editor dos secrets aberto no detalhe (#8: antes, um toggle no cabeçalho do Projeto).
+  const [editSecrets, setEditSecrets] = useState<string | null>(null);
+  // Fechar o editor relê o resumo.
+  const secrets = useSecrets(!web, editSecrets);
 
   useEffect(() => {
-    if (addUrl !== null && (addUrl || addKind === "jira")) setAdd({ ...EMPTY, ...hostsOf(addKind ?? "github"), url: addUrl });
+    if (addUrl !== null) setAdd({ ...EMPTY, ...hostsOf(addKind ?? "github"), url: addUrl });
   }, [addUrl, addKind]);
 
   const projects = hub.projects;
@@ -194,6 +200,20 @@ export function HubProjects({
         (p) => p.project.name.toLowerCase().includes(q) || keyOf(p.project.gh_owner, p.project.gh_repo).toLowerCase().includes(q),
       )
     : projects;
+
+  // Pedido de atribuição vindo de fora (aviso da tela Projeto, #7): com o
+  // projeto e os ambientes carregados, abre o formulário e tira o pedido da
+  // aba (como o cadastro), para um novo pedido abrir de novo.
+  const shownWanted = !!sel && (!wanted || keyOf(sel.project.gh_owner, sel.project.gh_repo).toLowerCase() === wanted);
+  const assignFor = assignReq && shownWanted ? sel : null;
+  useEffect(() => {
+    if (!assignFor || hub.envs.length === 0) return;
+    const pr = assignFor.project;
+    const taken = new Set(assignFor.assignments.map((a) => a.env_id));
+    const free = hub.envs.find((e) => !taken.has(e.env_id));
+    if (!web && free) setAssign({ key: keyOf(pr.gh_owner, pr.gh_repo), env: free.env_id, repo_path: "" });
+    nav.openTab({ ...hubTab("projects", { project: { owner: pr.gh_owner, repo: pr.gh_repo } }), id: nav.current });
+  }, [assignFor, hub.envs, web, nav]);
 
   const select = (pr: HubProject) => {
     setAdd(null);
@@ -1070,6 +1090,8 @@ export function HubProjects({
                 <label htmlFor={`as-env-${pr.id}`}>Ambiente</label>
                 <select
                   id={`as-env-${pr.id}`}
+                  // Aberto também por pedido de fora (#7): o foco leva até o formulário.
+                  autoFocus
                   value={assign.env}
                   onChange={(e) => setAssign({ ...assign, env: e.target.value })}
                 >
@@ -1195,11 +1217,21 @@ export function HubProjects({
             <section className="hub-card" aria-labelledby={`pc-sec-${pr.id}`}>
               <div className="hub-card-head">
                 <h3 id={`pc-sec-${pr.id}`}>Secrets e variáveis do projeto · {own.length}</h3>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  aria-expanded={editSecrets === key}
+                  onClick={() => setEditSecrets(editSecrets === key ? null : key)}
+                >
+                  Gerenciar secrets do projeto
+                </button>
                 <button type="button" className="btn btn-sm" onClick={() => nav.openTab(hubTab("secrets"))}>
                   Abrir Secrets e variáveis
                 </button>
               </div>
-              {secrets.error ? (
+              {editSecrets === key ? (
+                <HubSecrets project={{ owner: pr.gh_owner, repo: pr.gh_repo }} />
+              ) : secrets.error ? (
                 <p className="muted hub-card-msg">Secrets indisponíveis: {secrets.error}</p>
               ) : !secrets.list ? (
                 <p className="muted hub-card-msg">Carregando…</p>
@@ -1519,7 +1551,7 @@ function DeleteImpactText({ impact, secrets, local }: { impact: DeleteImpact; se
 }
 
 /** `hub.secrets.list`, relido junto com a visão do hub (a entrega muda com os pulls). */
-function useSecrets(enabled = true): { list: SecretsList | null; error: string | null } {
+function useSecrets(enabled = true, reload?: unknown): { list: SecretsList | null; error: string | null } {
   const { api, hub } = useTower();
   const [list, setList] = useState<SecretsList | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1539,6 +1571,6 @@ function useSecrets(enabled = true): { list: SecretsList | null; error: string |
   }, [api, enabled]);
   useEffect(() => {
     void load();
-  }, [load, hub.envs]);
+  }, [load, hub.envs, reload]);
   return { list, error };
 }

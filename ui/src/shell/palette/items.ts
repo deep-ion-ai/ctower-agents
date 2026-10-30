@@ -16,6 +16,7 @@ import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../
 import { liveGestorLabel } from "../../hub/HubGestor";
 import { PLACES, type Place } from "../places";
 import { maintenanceTab } from "../../maintenance/sections";
+import { hubTab } from "../../hub/sections";
 import type { StartTarget } from "../start";
 import type { SessionAction, SessionActionId } from "../../terminal/actions";
 import { placeOnWeb, webPlaceLabel } from "../../web/mode";
@@ -285,6 +286,48 @@ function commands(src: PaletteSources, interrupted: number, projects: ProjectRef
   return out;
 }
 
+/**
+ * Comandos de projeto (#9), que abrem o Hub › Projetos: cadastrar e, por
+ * projeto, configurações, atribuição, secrets e regras (só buscando). Na web,
+ * só os de leitura: cadastro, atribuição e secrets são do desktop.
+ */
+function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteItem[] {
+  const out: PaletteItem[] = [];
+  if (!src.web) {
+    out.push({
+      id: "cmd:project-new",
+      kind: "command",
+      label: "Projeto: Novo…",
+      detail: "Cadastrar no Hub › Projetos e atribuições",
+      keywords: "novo cadastrar criar adicionar repositório",
+      action: { type: "tab", tab: hubTab("projects", { register: { url: "" } }) },
+    });
+  }
+  for (const p of projects) {
+    const k = key(p.owner, p.repo);
+    const project = { owner: p.owner, repo: p.repo };
+    const cmd = (id: string, label: string, keywords: string, tab = hubTab("projects", { project })): PaletteItem => ({
+      id: `cmd:project-${id}:${k}`,
+      kind: "command",
+      label,
+      detail: `${p.owner}/${p.repo}`,
+      keywords,
+      browse: false,
+      action: { type: "tab", tab },
+    });
+    out.push(cmd("config", `Projeto: Configurações — ${p.name}`, "configurar editar"));
+    if (!src.web) {
+      out.push(
+        cmd("assign", `Projeto: Atribuir ${p.name} a ambiente`, "atribuir atribuição", hubTab("projects", { project, assign: true })),
+        // Os secrets do projeto ficam na configuração dele (card "Secrets e variáveis do projeto").
+        cmd("secrets", `Projeto: Secrets — ${p.name}`, "secrets variáveis env tokens chaves"),
+      );
+    }
+    out.push(cmd("rules", `Projeto: Regras — ${p.name}`, "regras agentes instruções"));
+  }
+  return out;
+}
+
 export function paletteItems(src: PaletteSources): PaletteItem[] {
   const { projects, issues } = catalog(src);
   const interrupted = src.envs.reduce((n, e) => n + (src.dashboards[e.id]?.interrupted_sessions.length ?? 0), 0);
@@ -341,6 +384,7 @@ export function paletteItems(src: PaletteSources): PaletteItem[] {
     ...sessions(src),
     ...places,
     ...commands(src, interrupted, projects),
+    ...projectCommands(src, projects),
     ...projectItems,
     ...issueItems,
     ...(src.web ? [] : starts),

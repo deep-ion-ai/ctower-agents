@@ -139,6 +139,12 @@ export function repoUrl(p: ProviderProject): string {
   return g ? `https://${g.host}/${gitlabPath(p, g)}` : `https://github.com/${p.gh_owner}/${p.gh_repo}`;
 }
 
+/** Página do projeto no Jira (`<jira>/browse/PROJ`); `null` fora do Jira. */
+export function jiraProjectUrl(p: MaybeProject): string | null {
+  const j = jiraOf(p);
+  return j ? `${j.url.replace(/\/+$/, "")}/browse/${j.project_key}` : null;
+}
+
 /** "#31", "PROJ-31" ou "sessão do projeto". */
 export function itemRef(n: number, p?: MaybeProject): string {
   return n === PROJECT_ITEM ? "sessão do projeto" : itemShort(p, n);

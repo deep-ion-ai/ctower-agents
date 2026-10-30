@@ -1,6 +1,6 @@
 // Modo web (épico #205, #201): testes de componente com a FakeDaemonApi no
 // modo web (`asWeb`), o login e o painel da sessão no lugar do terminal.
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi, FakeWebAuth } from "../api/fake";
@@ -90,6 +90,42 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(await screen.findByText(/Nenhum ambiente com este projeto está online/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Sessão de planejamento/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Secrets e variáveis" })).toBeNull();
+    // A atribuição fica no desktop (#7): o aviso não tem o atalho.
+    expect(screen.queryByRole("button", { name: "Atribuir a um ambiente" })).toBeNull();
+  });
+
+  it("Configurações do projeto (#8): abre o projeto no Hub, só leitura e sem secrets", async () => {
+    const user = userEvent.setup();
+    const api = webApi();
+    renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
+    await user.click(await screen.findByRole("button", { name: "Configurações do projeto" }));
+    await screen.findByRole("button", { name: "Abrir árvore" });
+    expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: /^Editar/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Gerenciar secrets do projeto" })).toBeNull();
+    expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
+  });
+
+  it("pedido de atribuição por endereço (#7): Projetos segue só leitura, sem o formulário", async () => {
+    const api = webApi().onHub("hub.envs.list", [
+      hubEnv({ last_seen_at: now, online: true }),
+      hubEnv({ env_id: "daemon-mac", name: "mac", last_seen_at: now, online: true }),
+    ]);
+    renderApp(api, { name: "hub", section: "projects", project: { owner: "deep-ion-ai", repo: "ctower-agents" }, assign: true });
+    await screen.findByRole("button", { name: "Abrir árvore" });
+    await waitFor(() => expect(api.hubCallsTo("hub.envs.list").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("form", { name: /^Atribuir/ })).toBeNull();
+  });
+
+  it("Projetos na Sala de controle (#10): sem '+' e sem Atribuir a ambiente no menu", async () => {
+    renderApp(webApi());
+    const side = await screen.findByRole("complementary", { name: "Ambientes e projetos" });
+    const linha = await within(side).findByRole("button", { name: "ctower-agents" });
+    expect(within(side).queryByRole("button", { name: "Novo projeto" })).toBeNull();
+    fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
+    const menu = screen.getByRole("menu", { name: "Ações do projeto ctower-agents" });
+    expect(within(menu).getByRole("menuitem", { name: "Configurações" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Atribuir a ambiente" })).toBeNull();
   });
 
   it("Recuperação com o ambiente offline: só leitura, pelas interrompidas do hub", async () => {

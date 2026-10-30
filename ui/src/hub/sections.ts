@@ -70,7 +70,10 @@ export function hubGroupOf(s: HubSection): string {
   return HUB_GROUPS.find((g) => g.sections.includes(s))!.label;
 }
 
-/** Cadastrar projeto com a URL preenchida (vinda da quarentena). Cada pedido (objeto novo) abre o formulário. */
+/**
+ * Cadastrar projeto com a URL preenchida (vinda da quarentena) ou vazia (estado vazio de Projetos, #6).
+ * Cada pedido (objeto novo) abre o formulário.
+ */
 export interface RegisterIntent {
   url: string;
   /** Tipo do projeto no formulário; ausente = GitHub. Jira + GitLab vem sem URL (#352). */
