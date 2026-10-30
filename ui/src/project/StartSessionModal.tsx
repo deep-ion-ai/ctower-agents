@@ -20,17 +20,19 @@ import type {
 } from "../protocol/gen";
 import type { HubTree } from "../protocol/hub-gen";
 import { CLAUDE_MODELS, DEFAULT_MODEL_VALUE, SESSION_MODES } from "../settings/session-options";
+import { hubTab } from "../hub/sections";
+import { templateTab } from "../settings/sections";
 import { shortcutLabel } from "../shell/layout";
 import { sessionReadiness } from "../hub/tracker";
 import { StartCtx, type StartSession, type StartTarget } from "../shell/start";
-import { useNav, type Tab } from "../state/nav";
+import { useNav, type OpenTab, type Tab } from "../state/nav";
 import { useTower, type Tower } from "../state/tower";
 import { lastTermSize } from "../terminal/size";
 import { changeLabel, itemKey, itemShort, PROJECT_ITEM } from "../util/item";
 import { branchFor, branchFromPattern, patternOf, worktreeDirName } from "./branch";
 import { STATE_SUFFIX, hubClones, liveSessions, localClone, type Clone } from "./clones";
-import { projectKey } from "./tabs";
-import { renderGestorTemplate, renderTemplate, scopeText, templateFor } from "./templates";
+import { itemTab, projectKey } from "./tabs";
+import { renderGestorTemplate, renderTemplate, scopeText, templateKeyFor } from "./templates";
 import { cachedTree } from "./ui-store";
 import { rcRequested } from "../web/envActions";
 
@@ -166,6 +168,8 @@ export function StartSessionModal(props: {
   onClose: () => void;
   onStarted: StartedFn;
   onOpenExisting: (t: Tab) => void;
+  /** Atalho para outra aba (template, regras): fecha a modal e abre a aba. */
+  onOpenTab: (t: OpenTab) => void;
 }) {
   return props.target.gestor ? (
     <GestorStartModal target={props.target} scope={props.target.gestor} onClose={props.onClose} onStarted={props.onStarted} />
@@ -182,17 +186,20 @@ export function StartSessionModal(props: {
  * prévia de branch e worktree e o prompt do template, editável. As chamadas
  * são as de antes: `session.start` com o número (na visão do hub, `owner/repo`
  * mais título e labels) ou `session.start_project` no planejamento.
+ * Atalhos (#11) para o template usado e as regras do projeto e do épico.
  */
 function ItemStartModal({
   target,
   onClose,
   onStarted,
   onOpenExisting,
+  onOpenTab,
 }: {
   target: StartTarget;
   onClose: () => void;
   onStarted: StartedFn;
   onOpenExisting: (t: Tab) => void;
+  onOpenTab: (t: OpenTab) => void;
 }) {
   const tower = useTower();
   const { api, config, web } = tower;
@@ -297,9 +304,10 @@ function ItemStartModal({
   const editKey = String(gh ?? PROJECT_ITEM);
   // Template pelo rastreador do projeto (#351): os `jira_*` no Jira.
   const tracker = project?.tracker?.kind ?? "github";
+  const tplKey = templateKeyFor(issue ? kind : "project", tracker);
   const base =
     project && (planning || issue)
-      ? renderTemplate(templateFor(config.templates, issue ? kind : "project", tracker), {
+      ? renderTemplate(config.templates[tplKey], {
           kind,
           number: issue?.gh_number ?? 0,
           owner: project.gh_owner,
@@ -314,6 +322,21 @@ function ItemStartModal({
       : "";
   const prompt = edits[editKey] ?? base;
   const edited = edits[editKey] !== undefined && edits[editKey] !== base;
+
+  // Regras (#11): as do projeto ficam em Hub › Projetos; as do épico (o
+  // próprio item ou o pai da sub-issue), no detalhe do épico na tela Projeto.
+  const epicN = issue ? (kind === "epic" ? issue.gh_number : issue.parent_number) : null;
+  const epicTab =
+    where && epicN !== null
+      ? itemTab(
+          where.view === "hub"
+            ? { name: "project", owner: where.owner, repo: where.repo }
+            : { name: "project", env: where.env, projectId: where.projectId },
+          epicN,
+          all.find((x) => x.issue.gh_number === epicN)?.issue.title ?? "",
+          project,
+        )
+      : null;
 
   // jira-cli e glab no ambiente escolhido (spec do Jira e GitLab §9.3): só avisa.
   const readiness = project && clone ? sessionReadiness(project, infos[clone.env]?.trackers) : null;
@@ -616,6 +639,10 @@ function ItemStartModal({
                   {planning ? "da sessão do projeto" : kind === "epic" ? "de épico" : "de issue"}
                   {tracker === "jira" ? " do Jira" : ""}
                 </label>
+                <span className="sm-spacer" />
+                <button type="button" className="linklike" onClick={() => onOpenTab(templateTab(tplKey))}>
+                  Editar template ›
+                </button>
                 {edited && (
                   <button
                     type="button"
@@ -637,6 +664,24 @@ function ItemStartModal({
                 value={prompt}
                 onChange={(e) => setEdits((all) => ({ ...all, [editKey]: e.target.value }))}
               />
+              {tower.hub.expected && (
+                <span className="sm-rules">
+                  <button
+                    type="button"
+                    className="linklike"
+                    onClick={() =>
+                      onOpenTab(hubTab("projects", { project: { owner: project.gh_owner, repo: project.gh_repo } }))
+                    }
+                  >
+                    Regras do projeto ›
+                  </button>
+                  {epicTab && epicN !== null && (
+                    <button type="button" className="linklike" onClick={() => onOpenTab(epicTab)}>
+                      Regras do épico {ref(epicN)} ›
+                    </button>
+                  )}
+                </span>
+              )}
             </div>
           )}
 
@@ -870,6 +915,10 @@ export function StartSessionHost({ children }: { children: ReactNode }) {
           onOpenExisting={(t) => {
             close(false);
             nav.openTerminal(t);
+          }}
+          onOpenTab={(t) => {
+            close(false);
+            nav.openTab(t);
           }}
           onStarted={(s, env, envName, label, openTerminal) => {
             const tab = { env, session: s.id };

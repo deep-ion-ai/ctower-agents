@@ -586,3 +586,21 @@ test("Abrir pasta de docs: no projeto e no épico pelo ambiente WSL; inacessíve
   fireEvent.contextMenu((await screen.findByText("ui: hub")).closest("li")!, { clientX: 10, clientY: 10 });
   expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: /pasta de docs/ })).not.toBeInTheDocument();
 });
+
+test("modal de início com o hub: atalhos para as regras do projeto e do épico pai (#11)", async () => {
+  const api = setup(true);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  await screen.findByText("ui: hub");
+  const user = userEvent.setup();
+
+  // Sub-issue: as regras do épico são as do pai (#64), no detalhe dele.
+  await user.click(play(62));
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Regras do épico #64 ›" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /^#64 Épico: ledger centralizado/ })).toHaveAttribute("aria-selected", "true");
+
+  await user.click(play(62));
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Regras do projeto ›" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
+});

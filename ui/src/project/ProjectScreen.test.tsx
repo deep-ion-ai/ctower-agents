@@ -628,3 +628,15 @@ describe("sem projetos (#6)", () => {
     expect(await screen.findByRole("tab", { name: /Configurações/, selected: true })).toBeInTheDocument();
   });
 });
+
+test("Editar template na modal abre a aba do template usado e fecha a modal; no épico, as regras dele (#11)", async () => {
+  const { user } = setup();
+  await screen.findByText("Plano 4 — UI Tauri");
+  await user.click(play(27));
+  expect(within(dialog()).getByRole("button", { name: "Regras do projeto ›" })).toBeInTheDocument();
+  expect(within(dialog()).getByRole("button", { name: "Regras do épico #27 ›" })).toBeInTheDocument();
+  await user.click(within(dialog()).getByRole("button", { name: "Editar template ›" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Template · Épico" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("heading", { name: "Template: Épico" })).toBeInTheDocument();
+});
