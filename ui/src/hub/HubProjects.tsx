@@ -59,6 +59,7 @@ export function projectState(p: HubProjectView, now: number): { text: string; to
  */
 export function HubProjects({
   project,
+  assign: assignReq,
   addUrl,
   addKind,
   onAddDone,
@@ -66,6 +67,8 @@ export function HubProjects({
 }: {
   /** Projeto mostrado no detalhe; sem ele (ou se sumiu), o primeiro. */
   project?: ProjectRef;
+  /** Abrir o formulário de atribuição do projeto mostrado (`Screen` do hub, #7). */
+  assign?: true;
   addUrl: string | null;
   /** Tipo do formulário pedido (quarentena de projeto GitLab, #352); ausente = GitHub. */
   addKind?: ProjectKindForm;
@@ -90,7 +93,7 @@ export function HubProjects({
   const secrets = useSecrets(!web);
 
   useEffect(() => {
-    if (addUrl !== null && (addUrl || addKind === "jira")) setAdd((a) => ({ id: (a?.id ?? 0) + 1, intent: { url: addUrl, kind: addKind } }));
+    if (addUrl !== null) setAdd((a) => ({ id: (a?.id ?? 0) + 1, intent: { url: addUrl, kind: addKind } }));
   }, [addUrl, addKind]);
 
   const projects = hub.projects;
@@ -106,6 +109,11 @@ export function HubProjects({
         (p) => p.project.name.toLowerCase().includes(q) || keyOf(p.project.gh_owner, p.project.gh_repo).toLowerCase().includes(q),
       )
     : projects;
+
+  // Pedido de atribuição vindo de fora: vale para o projeto mostrado, e sai da aba
+  // quando o cartão o atende (como o cadastro).
+  const shownWanted = !!sel && (!wanted || keyOf(sel.project.gh_owner, sel.project.gh_repo).toLowerCase() === wanted);
+  const assignFor = assignReq && shownWanted ? sel : null;
 
   const select = (pr: HubProject) => {
     setAdd(null);
@@ -265,7 +273,16 @@ export function HubProjects({
 
         {jira && <SyncEnvCard project={p} settings={settings} now={now} readOnly={web} />}
 
-        <AssignmentsCard project={p} settings={settings} live={sessions} readOnly={web} />
+        <AssignmentsCard
+          project={p}
+          settings={settings}
+          live={sessions}
+          readOnly={web}
+          requested={assignFor?.project.id === pr.id}
+          onRequestHandled={() =>
+            nav.openTab({ ...hubTab("projects", { project: { owner: pr.gh_owner, repo: pr.gh_repo } }), id: nav.current })
+          }
+        />
 
         <AgentRules owner={pr.gh_owner} repo={pr.gh_repo} epic={0} label={pr.name} now={now} className="hub-card" />
 

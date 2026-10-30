@@ -1,25 +1,41 @@
+import { useState } from "react";
 import { useNav } from "../../state/nav";
 import type { HubProject } from "../../protocol/hub-gen";
-import { DELIVERY_TEXT } from "../../hub/HubSecrets";
+import { DELIVERY_TEXT, HubSecrets } from "../../hub/HubSecrets";
 import { hubTab } from "../../hub/sections";
 import { projectSecretsOf, type ProjectSecrets } from "./useSecrets";
 
 /**
- * Secrets e variáveis do projeto e a entrega por ambiente. O gerenciamento
- * (criar, trocar, apagar) fica em `HubSecrets project=`, que o botão abre.
+ * Secrets e variáveis do projeto e a entrega por ambiente. "Gerenciar" abre
+ * no cartão o editor do escopo do projeto (`HubSecrets project=`, #8); ao
+ * abrir e ao fechar, o resumo é relido.
  */
 export function ProjectSecretsCard({ project: pr, secrets }: { project: HubProject; secrets: ProjectSecrets }) {
   const nav = useNav();
+  const [editing, setEditing] = useState(false);
   const { own, delivery } = projectSecretsOf(secrets, pr.gh_owner, pr.gh_repo);
   return (
     <section className="hub-card" aria-labelledby={`pc-sec-${pr.id}`}>
       <div className="hub-card-head">
         <h3 id={`pc-sec-${pr.id}`}>Secrets e variáveis do projeto · {own.length}</h3>
+        <button
+          type="button"
+          className="btn btn-sm"
+          aria-expanded={editing}
+          onClick={() => {
+            setEditing(!editing);
+            void secrets.reload();
+          }}
+        >
+          Gerenciar secrets do projeto
+        </button>
         <button type="button" className="btn btn-sm" onClick={() => nav.openTab(hubTab("secrets"))}>
           Abrir Secrets e variáveis
         </button>
       </div>
-      {secrets.error ? (
+      {editing ? (
+        <HubSecrets project={{ owner: pr.gh_owner, repo: pr.gh_repo }} />
+      ) : secrets.error ? (
         <p className="muted hub-card-msg">Secrets indisponíveis: {secrets.error}</p>
       ) : !secrets.list ? (
         <p className="muted hub-card-msg">Carregando…</p>

@@ -5,7 +5,10 @@ import { hostsOf, hubSupportsJira, kindOf, providerParams } from "../hub/tracker
 import type { ProjectRef } from "../hub/sections";
 import { EMPTY_PROJECT_FORM, GeneralForm, branches, type ProjectForm, type SettingsRun } from "./settings";
 
-/** Cadastrar projeto com a URL preenchida (vinda da quarentena). Cada pedido (objeto novo) abre o formulário. */
+/**
+ * Cadastrar projeto com a URL preenchida (vinda da quarentena) ou vazia (estado vazio de Projetos, #6).
+ * Cada pedido (objeto novo) abre o formulário.
+ */
 export interface RegisterIntent {
   url: string;
   /** Tipo do projeto no formulário; ausente = GitHub. Jira + GitLab vem sem URL (#352). */

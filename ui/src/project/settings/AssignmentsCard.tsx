@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTower } from "../../state/tower";
 import { assignmentText, repoPathText } from "../../util/hub";
 import type { AssignmentAdded, AssignmentRemoved, HubAssignment, HubProjectView, HubSession } from "../../protocol/hub-gen";
@@ -16,12 +16,21 @@ export function AssignmentsCard({
   settings,
   live,
   readOnly = false,
+  requested = false,
+  onRequestHandled,
 }: {
   project: HubProjectView;
   settings: SettingsRun;
   live: HubSession[];
   /** Web (épico #205): sem atribuir nem remover. */
   readOnly?: boolean;
+  /**
+   * Pedido de atribuição vindo de fora (aviso da tela Projeto, #7): com os
+   * ambientes carregados, abre o formulário e chama `onRequestHandled` para
+   * quem hospeda tirar o pedido (um novo pedido abre de novo).
+   */
+  requested?: boolean;
+  onRequestHandled?: () => void;
 }) {
   const { hub, api } = useTower();
   const pr = p.project;
@@ -31,6 +40,13 @@ export function AssignmentsCard({
   const [assign, setAssign] = useState<{ env: string; repo_path: string } | null>(null);
   /** Remoção que o hub pediu para confirmar (`hub` = a mensagem dele). */
   const [pending, setPending] = useState<{ a: HubAssignment; hub: string } | null>(null);
+
+  useEffect(() => {
+    if (!requested || hub.envs.length === 0) return;
+    if (!readOnly && free[0]) setAssign({ env: free[0].env_id, repo_path: "" });
+    onRequestHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- só o pedido e os ambientes disparam
+  }, [requested, hub.envs]);
 
   const addAssignment = async () => {
     if (!assign) return;
@@ -94,7 +110,11 @@ export function AssignmentsCard({
         >
           <div className="field">
             <label htmlFor={`as-env-${pr.id}`}>Ambiente</label>
-            <select id={`as-env-${pr.id}`} value={assign.env} onChange={(e) => setAssign({ ...assign, env: e.target.value })}>
+            <select
+              id={`as-env-${pr.id}`}
+              // Aberto também por pedido de fora (#7): o foco leva até o formulário.
+              autoFocus
+              value={assign.env} onChange={(e) => setAssign({ ...assign, env: e.target.value })}>
               {free.map((e) => (
                 <option key={e.env_id} value={e.env_id}>
                   {e.name}

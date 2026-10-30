@@ -476,6 +476,56 @@ test("sem ambiente conectado com o projeto atribuído: acompanha, mas não inici
   expect(screen.queryByRole("button", { name: /^Iniciar sessão/ })).not.toBeInTheDocument();
 });
 
+test("aviso sem ambiente: Atribuir a um ambiente abre o formulário do projeto no Hub, a cada pedido (#7)", async () => {
+  const api = setup(true)
+    .on("dashboard.get", dashboard({ projects: [] }))
+    .onHub("hub.envs.list", [
+      { env_id: "daemon-wsl", name: "wsl", created_at: 0, last_seen_at: NOW, last_seq: 1, pending: 0, cleanup: null },
+    ])
+    .onHub("hub.projects.list", [
+      { project: { ...HUB_PROJECT, id: 1, gh_repo: "outro", name: "outro" }, assignments: [], locations: [], sync: null },
+      { project: HUB_PROJECT, assignments: [], locations: [], sync: null },
+    ]);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Atribuir a um ambiente" }));
+  // O projeto do aviso (não o primeiro da lista), com o formulário aberto e o foco nele.
+  const form = await screen.findByRole("form", { name: "Atribuir ctower-agents" });
+  const env = within(form).getByRole("combobox", { name: "Ambiente" });
+  expect(env).toHaveValue("daemon-wsl");
+  expect(env).toHaveFocus();
+  expect(screen.queryByRole("form", { name: "Atribuir outro" })).not.toBeInTheDocument();
+
+  // O pedido sai do endereço da aba: voltar à aba não reabre o formulário, e um novo clique abre.
+  await user.click(within(form).getByRole("button", { name: "Cancelar" }));
+  await user.click(screen.getByRole("tab", { name: /ctower-agents/ }));
+  await user.click(screen.getByRole("tab", { name: /Projetos e atribuições/ }));
+  expect(await screen.findByRole("heading", { name: /Atribuições/ })).toBeInTheDocument();
+  expect(screen.queryByRole("form", { name: "Atribuir ctower-agents" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: /ctower-agents/ }));
+  await user.click(await screen.findByRole("button", { name: "Atribuir a um ambiente" }));
+  expect(await screen.findByRole("form", { name: "Atribuir ctower-agents" })).toBeInTheDocument();
+});
+
+test("Configurações do projeto: um clique do cabeçalho ao projeto no Hub, sem o toggle de secrets (#8)", async () => {
+  const api = setup(true)
+    .on("dashboard.get", dashboard({ projects: [] }))
+    .onHub("hub.projects.list", [
+      { project: { ...HUB_PROJECT, id: 1, gh_repo: "outro", name: "outro" }, assignments: [], locations: [], sync: null },
+      { project: HUB_PROJECT, assignments: [], locations: [], sync: null },
+    ]);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await screen.findByText("visão do hub");
+  expect(screen.queryByRole("button", { name: "Secrets e variáveis" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Configurações do projeto" }));
+  // O projeto do cabeçalho (não o primeiro da lista), com os secrets dele ao alcance.
+  const detail = await screen.findByRole("group", { name: "Projeto ctower-agents" });
+  expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
+  expect(within(detail).getByRole("heading", { name: /Secrets e variáveis do projeto/ })).toBeInTheDocument();
+  expect(within(detail).getByRole("button", { name: "Gerenciar secrets do projeto" })).toBeInTheDocument();
+});
+
 test("com o hub no ar, ambiente conhecido do hub e sem atribuição do projeto não entra no início", async () => {
   const api = setup(true)
     .on("dashboard.get", dashboard({ projects: [{ project: project(), work_items: [WI62] }] }))
@@ -554,4 +604,22 @@ test("Abrir pasta de docs: no projeto e no épico pelo ambiente WSL; inacessíve
   // Sub-issue não tem a ação.
   fireEvent.contextMenu((await screen.findByText("ui: hub")).closest("li")!, { clientX: 10, clientY: 10 });
   expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: /pasta de docs/ })).not.toBeInTheDocument();
+});
+
+test("modal de início com o hub: atalhos para as regras do projeto e do épico pai (#11)", async () => {
+  const api = setup(true);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  await screen.findByText("ui: hub");
+  const user = userEvent.setup();
+
+  // Sub-issue: as regras do épico são as do pai (#64), no detalhe dele.
+  await user.click(play(62));
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Regras do épico #64 ›" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /^#64 Épico: ledger centralizado/ })).toHaveAttribute("aria-selected", "true");
+
+  await user.click(play(62));
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Regras do projeto ›" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
 });

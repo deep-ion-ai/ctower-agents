@@ -60,6 +60,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Abrir gestor",
     "Atualizar app",
     "Retomar interrompidas",
+    "Projeto: Novo…",
   ]);
   expect(items.some((i) => i.kind === "issue" || i.kind === "session" || i.kind === "project")).toBe(false);
 });

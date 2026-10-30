@@ -6,6 +6,8 @@ import { errText } from "../../hub/calls";
 export interface ProjectSecrets {
   list: SecretsList | null;
   error: string | null;
+  /** Relê a lista (ao fechar o editor dos secrets do projeto, #8). */
+  reload: () => Promise<void>;
 }
 
 /** `hub.secrets.list`, relido junto com a visão do hub (a entrega muda com os pulls). */
@@ -30,7 +32,7 @@ export function useSecrets(enabled = true): ProjectSecrets {
   useEffect(() => {
     void load();
   }, [load, hub.envs]);
-  return { list, error };
+  return { list, error, reload: load };
 }
 
 /** Secrets e variáveis próprios do projeto e a entrega deles por ambiente. */
