@@ -34,7 +34,9 @@ export type PaletteAction =
   | { type: "shell"; env: string; workItemId: number }
   /** Ação da sessão ativa do Terminal (#424), executada pelo cabeçalho dela. */
   | { type: "session-action"; id: SessionActionId }
-  | { type: "sync" };
+  | { type: "sync" }
+  /** Folha de atalhos e gestos (#27). */
+  | { type: "shortcuts" };
 
 export interface PaletteItem {
   /** Estável entre aberturas: vai para os recentes. */
@@ -346,6 +348,16 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
   return out;
 }
 
+/** A folha de atalhos (#27), também com `?` fora de campos de texto. */
+const SHORTCUTS: PaletteItem = {
+  id: "cmd:shortcuts",
+  kind: "command",
+  label: "Atalhos e gestos",
+  detail: "Teclas e gestos de cada tela (?)",
+  keywords: "atalhos teclado teclas gestos ajuda",
+  action: { type: "shortcuts" },
+};
+
 export function paletteItems(src: PaletteSources): PaletteItem[] {
   const { projects, issues } = catalog(src);
   const interrupted = src.envs.reduce((n, e) => n + (src.dashboards[e.id]?.interrupted_sessions.length ?? 0), 0);
@@ -402,6 +414,7 @@ export function paletteItems(src: PaletteSources): PaletteItem[] {
     ...sessions(src),
     ...places,
     ...commands(src, interrupted, projects),
+    SHORTCUTS,
     ...projectCommands(src, projects),
     ...projectItems,
     ...issueItems,

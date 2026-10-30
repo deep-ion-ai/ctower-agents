@@ -37,6 +37,8 @@ import {
   type PanelTab,
 } from "./layout";
 import { MobileTabs, WarningsSheet } from "./Mobile";
+import { ShortcutsSheet } from "./Shortcuts";
+import { isHelpKey } from "./shortcuts";
 import { SidePanel, SideGroup, SideRow, SideSlotProvider, useSideSlot } from "./SidePanel";
 import { connectedEnvs, interruptedCount, lastSync, plural, syncTrackers, waitingCount, warnings } from "./summary";
 import { openScreen } from "./places";
@@ -53,6 +55,8 @@ export interface ShellApi {
   paletteOpen: boolean;
   openPalette(): void;
   closePalette(): void;
+  /** Folha de atalhos e gestos (#27): `?`, a paleta e a barra de status. */
+  openShortcuts(): void;
   toggleSide(): void;
   togglePanel(): void;
   /** Abre o painel inferior na aba. */
@@ -126,6 +130,7 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [layout, setLayout] = useShellLayout();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
   const side = useSideSlot();
   const events = useEventLog(api, dashboards);
   const warns = warnings(tower, now);
@@ -153,6 +158,7 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
       paletteOpen,
       openPalette: () => setPaletteOpen(true),
       closePalette: () => setPaletteOpen(false),
+      openShortcuts: () => setKeysOpen(true),
       toggleSide: () => setLayout((l) => ({ sideOpen: !l.sideOpen })),
       togglePanel: () => setLayout((l) => ({ panelOpen: !l.panelOpen })),
       showPanel: (panelTab) => setLayout({ panelOpen: true, panelTab }),
@@ -195,6 +201,17 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
     };
     window.addEventListener("keydown", on, true);
     return () => window.removeEventListener("keydown", on, true);
+  }, []);
+
+  // `?` abre e fecha a folha de atalhos, fora de campos de texto e do console.
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || !isHelpKey(e)) return;
+      e.preventDefault();
+      setKeysOpen((o) => !o);
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
   }, []);
 
   const maintenancePending = useMaintenancePending();
@@ -334,6 +351,7 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
 
             {paletteOpen && <CommandPalette onClose={shell.closePalette} />}
             {sheet && mobile && <WarningsSheet items={warns} now={now} onClose={() => setSheet(false)} />}
+            {keysOpen && <ShortcutsSheet web={web} mobile={mobile} onClose={() => setKeysOpen(false)} />}
 
             {!mobile && (
               <StatusBar
@@ -342,6 +360,7 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
                 warnings={warns.length}
                 onWarnings={() => shell.showPanel("warnings")}
                 onSync={() => shell.showPanel("sync")}
+                onShortcuts={shell.openShortcuts}
               />
             )}
           </div>
@@ -719,6 +738,7 @@ function Resizer({ width, onWidth }: { width: number; onWidth(w: number): void }
       role="separator"
       aria-orientation="vertical"
       aria-label="Largura do painel lateral"
+      title="Arraste ou use ←/→ para mudar a largura"
       aria-valuenow={width}
       aria-valuemin={SIDE_MIN}
       aria-valuemax={SIDE_MAX}
@@ -738,12 +758,14 @@ function StatusBar({
   warnings,
   onWarnings,
   onSync,
+  onShortcuts,
 }: {
   now: number;
   term: TermStatus | null;
   warnings: number;
   onWarnings(): void;
   onSync(): void;
+  onShortcuts(): void;
 }) {
   const { envs, status, dashboards, hub, uiUpdate, api, web } = useTower();
   const nav = useNav();
@@ -814,6 +836,16 @@ function StatusBar({
         </button>
       )}
       {!web && uiUpdate?.current && <span className="sb-item">v{uiUpdate.current}</span>}
+      <button
+        type="button"
+        className="sb-item"
+        aria-label="Atalhos e gestos"
+        aria-keyshortcuts="?"
+        title="Atalhos e gestos (?)"
+        onClick={onShortcuts}
+      >
+        ?
+      </button>
     </footer>
   );
 }
