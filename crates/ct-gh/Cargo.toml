@@ -1,0 +1,24 @@
+[package]
+name = "ct-gh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ct-core.workspace = true
+ct-ledger.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Só este crate fala HTTPS (api.github.com): rustls, sem OpenSSL.
+ureq = { workspace = true, features = ["tls", "json"] }
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Servidor GitHub falso e `gh` falso para testes de outros crates.
+test-support = []
+# Tipos TypeScript para a UI (ts-rs).
+ts = ["dep:ts-rs"]
+
+[dev-dependencies]
+tempfile.workspace = true

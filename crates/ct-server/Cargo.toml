@@ -1,0 +1,40 @@
+[package]
+name = "ct-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ct-core.workspace = true
+ct-gh.workspace = true
+ct-git.workspace = true
+ct-http.workspace = true
+ct-ledger.workspace = true
+ct-secrets.workspace = true
+ct-sessions.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+futures-util.workspace = true
+uuid.workspace = true
+ureq.workspace = true
+# Cliente do canal reverso com o hub (/sync/channel, #198): ws:// sem TLS,
+# como o ureq do hub_sync.
+tokio-tungstenite.workspace = true
+toml_edit.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Exporta os tipos do protocolo para ui/src/protocol/gen (teste export_ts).
+ts = ["dep:ts-rs", "ct-core/ts", "ct-gh/ts", "ct-ledger/ts", "ct-sessions/ts"]
+
+[dev-dependencies]
+cthubd.workspace = true
+ct-gh = { workspace = true, features = ["test-support"] }
+ct-jira = { workspace = true, features = ["test-support"] }
+ct-sessions = { workspace = true, features = ["test-support"] }
+http-body-util.workspace = true
+tempfile.workspace = true
+tower.workspace = true

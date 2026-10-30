@@ -1,0 +1,1247 @@
+/* Shell estilo VS Code (#319). Medidas do mockup; cores só por token. */
+.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Barra de título */
+.titlebar {
+  flex: 0 0 38px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+}
+
+.titlebar .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.brand-logo {
+  color: var(--attention);
+}
+
+.cmd-trigger {
+  flex: 0 1 520px;
+  min-width: 0;
+  margin: 0 auto;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cmd-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbd {
+  margin-left: auto;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.titlebar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ibtn {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.ibtn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ibtn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.ibtn-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+
+/* Área de trabalho: barra de atividades, painel lateral e principal. */
+.shell-work {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.activitybar {
+  flex: 0 0 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 0;
+  background: var(--bg-header);
+  border-right: 1px solid var(--border);
+  z-index: 3;
+}
+
+.ab-item {
+  position: relative;
+  width: 48px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ab-item:hover,
+.ab-item[aria-current="page"] {
+  color: var(--text);
+}
+
+.ab-item[aria-current="page"] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.ab-item:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Dica do ícone (o `title` viraria descrição acessível repetindo o nome). */
+.ab-item[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.ab-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--attention);
+  color: var(--on-attention);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.ab-spacer {
+  flex: 1;
+}
+
+/* Painel lateral */
+.sidepanel {
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  background: var(--bg-side);
+  border-right: 1px solid var(--border);
+}
+
+.sidepanel[hidden] {
+  display: none;
+}
+
+.sidepanel-slot {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidepanel-slot:empty {
+  display: none;
+}
+
+.sidepanel-resizer {
+  flex: 0 0 4px;
+  margin-left: -4px;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+}
+
+.sidepanel-resizer:hover,
+.sidepanel-resizer:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+.sidepanel-scrim {
+  display: none;
+}
+
+.sp {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Rodapé do painel lateral: preso embaixo quando sobra espaço. */
+.sp-foot {
+  margin-top: auto;
+  padding: 0 12px 12px;
+}
+
+.sp-head {
+  flex: 0 0 35px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 0 6px 0 16px;
+}
+
+.sp-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.sp-body {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 8px;
+}
+
+.sp-group {
+  margin-top: 4px;
+}
+
+.sp-group-head {
+  display: flex;
+  align-items: center;
+  padding-right: 6px;
+}
+
+.sp-group-toggle {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sp-group-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.sp-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sp-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-right: 6px;
+}
+
+.sp-row:hover {
+  background: var(--hover);
+}
+
+.sp-row[data-selected="true"] {
+  background: var(--selected);
+}
+
+.sp-row-main {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 8px;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sp-row[data-selected="true"] .sp-row-main,
+.sp-row:hover .sp-row-main {
+  color: var(--text);
+}
+
+.sp-row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Linha com segunda linha (`sub`): altura livre, ponto alinhado à primeira. */
+.sp-row-2 .sp-row-main {
+  height: auto;
+  min-height: 26px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  align-items: flex-start;
+}
+
+.sp-row-2 .sp-dot {
+  margin-top: 5px;
+}
+
+.sp-row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sp-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sp-row-trailing {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Ações inline: aparecem ao passar o mouse ou focar a linha. */
+.sp-row-actions {
+  display: flex;
+  gap: 2px;
+  visibility: hidden;
+}
+
+.sp-row:hover .sp-row-actions,
+.sp-row:focus-within .sp-row-actions {
+  visibility: visible;
+}
+
+.sp-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.sp-dot[data-tone="attention"] {
+  background: var(--attention);
+}
+.sp-dot[data-tone="running"] {
+  background: var(--running);
+}
+.sp-dot[data-tone="done"] {
+  background: var(--done);
+}
+.sp-dot[data-tone="error"] {
+  background: var(--error);
+}
+
+/* Principal: banners, abas, editor e painel inferior. */
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Faixa de abas e, com abas que não cabem, o ⌄ da lista (#427). */
+.etabs-bar {
+  position: relative;
+  flex: 0 0 35px;
+  display: flex;
+  background: var(--bg-side);
+  border-bottom: 1px solid var(--border);
+}
+
+.etabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+}
+
+.etabs-more {
+  flex: none;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 4px;
+}
+
+/* Lista de abas abertas (como o "Show Opened Editors" do VS Code). */
+.otabs {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 4px;
+  z-index: 25;
+  width: min(420px, calc(100vw - 32px));
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-3);
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.otabs input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.otabs-list {
+  max-height: 50vh;
+  overflow: auto;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.otabs-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.otabs-list li[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.otabs-list li[data-current="true"] .otabs-title {
+  font-weight: 600;
+}
+
+.otabs-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.otabs-project {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.otabs-empty {
+  margin: 8px;
+}
+
+/* Confirmação de fechar várias abas com shells ocupados. */
+.etabs-confirm {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--error-soft);
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-side);
+}
+
+.etab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding-right: 6px;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.etab[data-on="true"] {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 var(--accent);
+}
+
+.etab-main {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.etab-main:focus-visible {
+  outline-offset: -2px;
+}
+
+.etab-title {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.etab-close,
+.etab-pin {
+  width: 20px;
+  height: 20px;
+  visibility: hidden;
+}
+
+.etab[data-on="true"] .etab-close,
+.etab:hover .etab-close,
+.etab-close:focus-visible,
+.etab[data-on="true"] .etab-pin,
+.etab:hover .etab-pin,
+.etab-pin:focus-visible,
+.etab[data-pinned="true"] .etab-pin {
+  visibility: visible;
+}
+
+/* Aba provisória (substituída pelo próximo item): título em itálico. */
+.etab[data-preview="true"] .etab-title {
+  font-style: italic;
+}
+
+/* Alfinete inclinado = provisória; de pé, na cor de destaque = fixada. */
+.etab-pin svg {
+  transform: rotate(45deg);
+}
+
+.etab-pin[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.etab-pin[aria-pressed="true"] svg {
+  transform: none;
+}
+
+/* Só a tela rola; abas, banners e painel inferior ficam fixos. */
+.editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor > * {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Painel inferior */
+.bpanel {
+  flex: 0 0 180px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-side);
+  border-top: 1px solid var(--border);
+}
+
+.bpanel-head {
+  flex: 0 0 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px 0 16px;
+}
+
+.bpanel-tabs {
+  flex: 1;
+  display: flex;
+  gap: 18px;
+}
+
+.bpanel-tabs button {
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.bpanel-tabs button[aria-selected="true"] {
+  color: var(--text);
+  box-shadow: inset 0 -1px 0 var(--text);
+}
+
+.bpanel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 16px 8px;
+  font-size: 12px;
+}
+
+.bpanel-empty {
+  margin: 8px 0;
+}
+
+.bpanel-log,
+.bpanel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  color: var(--text-2);
+}
+
+.bpanel-log li {
+  display: flex;
+  gap: 12px;
+  line-height: 1.7;
+}
+
+.bpanel-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  flex-wrap: wrap;
+}
+
+.bpanel-list svg {
+  color: var(--attention);
+}
+
+.bpanel-env {
+  min-width: 80px;
+  color: var(--muted);
+}
+
+.bpanel-title {
+  color: var(--text);
+}
+
+.bpanel-detail[data-warn="true"] {
+  color: var(--error-soft);
+}
+
+/* Barra de status */
+.statusbar {
+  flex: 0 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  background: var(--statusbar-bg);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sb-item {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+
+button.sb-item {
+  cursor: pointer;
+}
+
+button.sb-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.sb-warn,
+.sb-update {
+  color: var(--attention);
+}
+
+.sb-spacer {
+  flex: 1;
+}
+
+.sb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+.sb-dot[data-on="true"] {
+  background: var(--ok);
+}
+
+/* Paleta de comandos (#312): sob a barra de título, centrada. */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 44px 16px 16px;
+}
+
+.palette-backdrop::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  opacity: 0.4;
+}
+
+.palette {
+  position: relative;
+  width: 600px;
+  max-width: 100%;
+  max-height: min(480px, 100%);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 32px var(--shadow);
+  overflow: hidden;
+}
+
+.palette-input {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 40px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.palette-input input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.palette-input input::placeholder {
+  color: var(--faint);
+}
+
+.palette-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.palette-opt {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.palette-opt[aria-selected="true"] {
+  background: var(--selected);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.palette-label {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-label mark {
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.palette-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.palette-kind {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.palette-empty {
+  margin: 0;
+  padding: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.palette-foot {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.palette-foot .kbd {
+  margin: 0 3px 0 0;
+}
+
+/* Tela estreita: o painel lateral vira gaveta sobre a área de editor. */
+@media (max-width: 900px) {
+  .sidepanel {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 48px;
+    z-index: 2;
+    max-width: calc(100% - 64px);
+    box-shadow: 4px 0 16px var(--shadow);
+  }
+
+  .sidepanel-resizer {
+    display: none;
+  }
+
+  .sidepanel-scrim {
+    display: block;
+    position: absolute;
+    inset: 0 0 0 48px;
+    z-index: 1;
+    background: var(--scrim);
+    opacity: 0.5;
+  }
+
+  .cmd-text {
+    display: none;
+  }
+
+  .palette-detail {
+    display: none;
+  }
+
+  .statusbar .sb-item:not(button) {
+    display: none;
+  }
+}
+
+/* Menu de contexto (árvores do Projeto e do Terminal). */
+.ctx-menu {
+  position: fixed;
+  z-index: 25;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-3);
+  box-shadow: 0 8px 24px var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+
+.ctx-menu:focus {
+  outline: none;
+}
+
+.ctx-menu button {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctx-menu button:hover:not(:disabled),
+.ctx-menu button:focus {
+  background: var(--selected);
+  outline: none;
+}
+
+.ctx-menu button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* Aviso no topo do menu (ex.: prompts com permissão pendente, #425). */
+.ctx-menu .ctx-note {
+  max-width: 280px;
+  margin: 0 0 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--attention);
+  font-size: 12px;
+}
+
+/*
+ * Celular (modo web abaixo de 768 px, épico #205 §10.3): barra de atividades
+ * embaixo, painel lateral em gaveta, uma aba por vez (lista no cabeçalho),
+ * sem painel inferior nem barra de status, alvos de toque de var(--touch).
+ */
+.shell[data-mobile="true"] .titlebar {
+  flex: 0 0 auto;
+  min-height: calc(var(--touch) + 8px);
+  gap: 4px;
+  padding: 4px 4px 4px 4px;
+  padding-top: max(4px, env(safe-area-inset-top));
+}
+
+.shell[data-mobile="true"] .cmd-trigger {
+  flex: none;
+  width: var(--touch);
+  height: var(--touch);
+  margin: 0;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.shell[data-mobile="true"] .cmd-trigger .kbd {
+  display: none;
+}
+
+.shell[data-mobile="true"] .ibtn {
+  width: var(--touch);
+  height: var(--touch);
+}
+
+/* Todo controle tocável cresce até o alvo mínimo (painel da sessão, Sessões web, menus). */
+.shell[data-mobile="true"] :is(button, select, input:not([type="checkbox"], [type="radio"]), a.btn, [role="button"]) {
+  min-height: var(--touch);
+}
+
+.shell[data-mobile="true"] .btn-sm {
+  padding: 0 12px;
+}
+
+.shell[data-mobile="true"] .sp-row-actions {
+  opacity: 1;
+  visibility: visible;
+}
+
+.shell[data-mobile="true"] .sidepanel {
+  left: 0;
+  width: min(320px, calc(100% - 48px));
+  max-width: none;
+}
+
+.shell[data-mobile="true"] .sidepanel-scrim {
+  inset: 0;
+}
+
+.shell[data-mobile="true"] .web-session {
+  padding: 16px;
+}
+
+/* Lista de abas no cabeçalho. */
+.mtabs {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.mtabs-trigger {
+  width: 100%;
+  height: var(--touch);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.mtabs-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.mtabs-count {
+  flex: none;
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--idle-bg);
+  color: var(--text-2);
+  font-size: 12px;
+  text-align: center;
+}
+
+.mtabs-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 60vh;
+  overflow: auto;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-3);
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.mtabs-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
+}
+
+.mtabs-row[data-on="true"] {
+  background: var(--selected);
+}
+
+.mtabs-open {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--touch);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* Barra inferior. */
+.activitybar.bottombar {
+  flex: none;
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: space-around;
+  padding: 0 0 env(safe-area-inset-bottom);
+  border-right: 0;
+  border-top: 1px solid var(--border);
+}
+
+.bottombar .ab-item {
+  flex: 1;
+  width: auto;
+  min-width: var(--touch);
+  height: auto;
+  min-height: calc(var(--touch) + 12px);
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bottombar .ab-item[aria-current="page"] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.bottombar .ab-badge {
+  top: 4px;
+  right: calc(50% - 20px);
+  bottom: auto;
+}
+
+.ab-name {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+/* Folha de avisos (sino do cabeçalho). */
+.msheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-end;
+}
+
+.msheet-scrim::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  opacity: 0.6;
+}
+
+.msheet {
+  position: relative;
+  width: 100%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-strong);
+  border-radius: 12px 12px 0 0;
+  background: var(--surface);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.msheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.msheet-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.msheet-body {
+  overflow: auto;
+  padding: 8px 0;
+}
+
+.msheet .ibtn {
+  width: var(--touch);
+  height: var(--touch);
+}
+
+.msheet .btn {
+  min-height: var(--touch);
+}

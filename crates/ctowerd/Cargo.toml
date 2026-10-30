@@ -1,0 +1,29 @@
+[package]
+name = "ctowerd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+clap.workspace = true
+ct-core.workspace = true
+ct-gh.workspace = true
+ct-ledger.workspace = true
+ct-http.workspace = true
+ct-server.workspace = true
+ct-sessions.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+ct-gh = { workspace = true, features = ["test-support"] }
+cthubd.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio-tungstenite.workspace = true
+ureq = { workspace = true, features = ["json"] }

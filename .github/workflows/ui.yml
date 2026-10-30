@@ -1,0 +1,210 @@
+name: ui
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+  # Com tag, recompila e reenvia o app de uma release que já existe
+  # (recuperação de uma publicação que falhou). Sem tag, só roda os checks.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag de uma release existente para republicar (ex.: v0.3.0)'
+        type: string
+        default: ''
+      # App de teste de uma branch (ex.: a de um épico antes do merge):
+      # sem assinatura, sem release e sem o updater; fica como artefato do run.
+      preview:
+        description: 'Gerar app de teste (.dmg) da branch (artefato do run, sem release)'
+        type: boolean
+        default: false
+  # Chamado pelo release.yml depois que o release-please cria a release: a tag
+  # criada pelo GITHUB_TOKEN não dispara workflows por push.
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Chamado pelo release.yml, o github.ref é o da main: a tag no grupo evita que
+# o push na main cancele a publicação.
+concurrency:
+  group: ui-${{ inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Decide quais jobs rodam num PR. No push em develop/main o filtro não roda e
+  # os jobs de Linux rodam. Um job fora do filtro aparece como skipped, não como pendente.
+  # O macOS só roda no PR develop → main, no disparo manual e na publicação de
+  # release (input tag). Os runners são os hospedados do GitHub (ubuntu-22.04 e macos-14);
+  # CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON) trocam por runners próprios.
+  changes:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    permissions:
+      pull-requests: read
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      platforms: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'develop') }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            web:
+              - 'ui/**'
+              - '!ui/src-tauri/**'
+              - '.github/workflows/ui.yml'
+
+  # Frontend: tipos, testes de componentes e build do Vite (app desktop e o
+  # modo web que o cthubd embute, #199).
+  web:
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.platforms == 'true' || needs.changes.outputs.web == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # A suíte de novo com a configuração do modo web (#201): o plugin que
+      # recusa `@tauri-apps/*` vale também para tudo que os testes importam.
+      - run: npm run test:web
+      - run: npm run build
+      - run: npm run build:web
+      # O bundle web tem a página e os assets com hash que o cthubd serve, e
+      # nada do runtime do Tauri.
+      - run: test -f dist-web/index.html && ls dist-web/assets/*.js
+      - run: "! grep -rl '__TAURI_INTERNALS__' dist-web"
+
+  # App Tauri (macOS, Apple Silicon): testes e lint do lado Rust. O .app/.dmg só é
+  # gerado na publicação de release (input tag) e no app de teste (preview).
+  macos:
+    needs: changes
+    if: inputs.tag != '' || needs.changes.outputs.platforms == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_MACOS || '"macos-14"') }}
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      # cache-bin: false: num runner próprio o CARGO_HOME é persistente, e
+      # restaurar um ~/.cargo/bin antigo apaga os proxies do rustup.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ui/src-tauri -> target
+          cache-bin: false
+      - run: npm ci
+      - run: npm run build
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      # .app.tar.gz + .sig para o updater e .dmg para a primeira instalação. A chave
+      # do updater fica nos secrets; os artefatos do updater só são ligados aqui,
+      # para o build local não exigir a chave. Sem Developer ID nem notarização.
+      - name: App
+        if: inputs.tag != ''
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --bundles app,dmg --config src-tauri/tauri.updater.conf.json
+      - name: App de teste
+        if: inputs.tag == '' && inputs.preview
+        run: npx tauri build --bundles dmg
+      - uses: actions/upload-artifact@v4
+        if: inputs.tag == '' && inputs.preview
+        with:
+          name: control-tower-macos-preview
+          path: ui/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: inputs.tag != ''
+        with:
+          name: control-tower-macos
+          path: |
+            ui/src-tauri/target/release/bundle/dmg/*.dmg
+            ui/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            ui/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: error
+
+  # Anexa o app (.dmg e .app.tar.gz) e o latest.json (manifesto do updater do app) à release
+  # que o release-please criou como rascunho; não cria release. Só roda depois
+  # que web e macos passam. As notas do latest.json são as da release (o
+  # CHANGELOG). A release só sai do rascunho no fim: até lá, releases/latest
+  # continua na anterior e o updater do app não vê uma release sem latest.json.
+  # O latest.json aponta para a URL de API do asset: o repositório é privado e
+  # o app baixa com token.
+  release:
+    needs: [web, macos]
+    if: inputs.tag != ''
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: control-tower-macos
+          path: dist
+      - name: Publicar na release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Sem checkout: o gh precisa saber o repositório.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release view "$TAG" >/dev/null || { echo "::error::Release $TAG não existe"; exit 1; }
+          # Os nomes originais têm espaço ("Control Tower.app.tar.gz"), que o GitHub
+          # troca por ponto; renomeia para um nome estável.
+          VER="${TAG#v}"
+          # O artefato guarda subpastas (dmg/, macos/): procura em qualquer nível e
+          # falha com mensagem clara se faltar algum arquivo.
+          achar() {
+            local f
+            f=$(find dist -type f -name "$1" | head -1)
+            [ -n "$f" ] || { echo "::error::Artefato sem $1 (conteúdo de dist: $(find dist -type f | tr '\n' ' '))"; exit 1; }
+            printf '%s' "$f"
+          }
+          DMG=$(achar '*.dmg')
+          TGZ=$(achar '*.app.tar.gz')
+          SIG=$(achar '*.app.tar.gz.sig')
+          mv "$DMG" "dist/control-tower_${VER}_aarch64.dmg"
+          mv "$SIG" "dist/control-tower_${VER}_aarch64.app.tar.gz.sig"
+          mv "$TGZ" "dist/control-tower_${VER}_aarch64.app.tar.gz"
+          ARQ="control-tower_${VER}_aarch64.app.tar.gz"
+          gh release upload "$TAG" dist/*.dmg dist/*.app.tar.gz dist/*.app.tar.gz.sig --clobber
+          # releases/tags/{tag} não acha rascunho; a listagem acha.
+          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == env.TAG) | .assets[] | select(.name == \"$ARQ\") | .id" | head -1)
+          NOTES=$(gh release view "$TAG" --json body --jq .body)
+          jq -n --arg v "$VER" --arg notes "$NOTES" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg sig "$(cat "dist/$ARQ.sig")" \
+            --arg url "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$ID" \
+            '{version: $v, notes: $notes, pub_date: $date,
+              platforms: {"darwin-aarch64": {signature: $sig, url: $url}}}' > latest.json
+          gh release upload "$TAG" latest.json --clobber
+          gh release edit "$TAG" --draft=false --latest

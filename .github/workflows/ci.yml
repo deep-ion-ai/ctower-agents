@@ -1,0 +1,112 @@
+name: ci
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Decide quais jobs rodam num PR. No push em develop/main o filtro não roda e
+  # todos os jobs rodam. Um job fora do filtro aparece como skipped, não como pendente.
+  # Os jobs rodam em runners hospedados do GitHub (ubuntu-22.04 e macos-14, ARM). Para
+  # usar runners próprios, defina CI_RUNNER_LINUX/CI_RUNNER_MACOS (labels em JSON, docs/ci.md).
+  changes:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    permissions:
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      platforms: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'develop') }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          # ui/src/protocol/gen: o passo dos tipos TS confere se o gerado bate com o Rust.
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'scripts/provision/**'
+              - 'scripts/migrate-to-cthubd.sh'
+              - 'scripts/test-migrate-to-cthubd.sh'
+              - 'packaging/**'
+              - 'ui/src/protocol/gen/**'
+              - '.github/workflows/ci.yml'
+
+  # Mesma versão nos quatro arquivos de versão e nos três lockfiles. Roda sempre:
+  # é barato e pega um bump parcial em qualquer PR.
+  versions:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check-versions.py
+
+  rust:
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.platforms == 'true' || needs.changes.outputs.rust == 'true'
+    strategy:
+      # Uma plataforma que falha não cancela a outra.
+      fail-fast: false
+      matrix:
+        os: [linux, macos]
+    runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || '"macos-14"') || (vars.CI_RUNNER_LINUX || '"ubuntu-22.04"')) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      # cache-bin: false: num runner próprio (CI_RUNNER_*) o CARGO_HOME é o do usuário, e
+      # o pós-job do cache apaga de ~/.cargo/bin todo binário que não foi
+      # instalado no job (rustup, ctowerd e ctower do ambiente da máquina).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      # O hub (cthubd) não linka sessões, PTY nem git (issue #174).
+      - name: cthubd sem ct-sessions, ct-pty e ct-git
+        run: |
+          if cargo tree -p cthubd --locked --prefix none | grep -E '^(ct-sessions|ct-pty|ct-git|portable-pty) '; then
+            echo "cthubd depende de sessões/PTY/git" >&2
+            exit 1
+          fi
+      # provision.sh --hub --env com HOME temporário e sudo/systemctl/cargo
+      # falsos: o ambiente sai ligado ao hub local, e rodar de novo não muda nada.
+      - name: provision.sh (máquina única, sem tocar no sistema)
+        if: matrix.os == 'linux'
+        run: |
+          cargo build -p cthubd -p ctowerd -p ctower --locked
+          bash scripts/provision/test-provision.sh target/debug
+      # provision.sh --env sem Rust: baixa o asset ctower-env da release da
+      # versão do checkout, confere o sha256 e testa o asset adulterado e o
+      # --from-source (#359). Roda nos dois SOs: Linux x86_64 e macOS aarch64.
+      - name: provision.sh --env sem Rust (asset da release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/provision/test-provision-release.sh
+      # migrate-to-cthubd.sh (passos 2 a 6 da migração, docs/hub.md §5) com
+      # HOME temporário e git/curl/systemctl/ctower/cthubd falsos.
+      - name: migrate-to-cthubd.sh (sem tocar no sistema)
+        if: matrix.os == 'linux'
+        run: bash scripts/test-migrate-to-cthubd.sh
+      - name: Tipos TypeScript da UI em dia
+        if: matrix.os == 'linux'
+        run: |
+          cargo clippy -p ct-server --features ts --all-targets --locked -- -D warnings
+          cargo clippy -p cthubd --features ts --all-targets --locked -- -D warnings
+          cargo test -p ct-server --features ts --locked export_ts
+          cargo test -p cthubd --features ts --locked export_ts
+          git add -N ui/src/protocol/gen ui/src/protocol/hub-gen
+          git diff --exit-code ui/src/protocol/gen ui/src/protocol/hub-gen

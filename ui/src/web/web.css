@@ -1,0 +1,113 @@
+/* Modo web (épico #205): login e painel da sessão no lugar do terminal. Só tokens de theme.css. */
+
+.web-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.web-card {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.web-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.web-error {
+  margin: 0;
+  color: var(--error-soft);
+}
+
+.web-notice {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--attention-border);
+  background: var(--attention-card);
+  color: var(--text);
+}
+
+/* Painel da sessão (no lugar do terminal). */
+.web-session {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 760px;
+}
+
+.web-session-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.web-session-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.web-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px 18px;
+  margin: 0;
+}
+
+.web-facts dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.web-facts dd {
+  margin: 2px 0 0;
+}
+
+.web-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.web-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.web-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.web-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

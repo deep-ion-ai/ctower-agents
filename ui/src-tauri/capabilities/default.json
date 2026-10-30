@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Janela principal: eventos e canais do núcleo. Os comandos do app são do próprio app; abrir URLs e o VS Code acontece no lado Rust.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

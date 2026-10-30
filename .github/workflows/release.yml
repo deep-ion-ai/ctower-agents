@@ -1,0 +1,205 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Cada push na main abre ou atualiza o PR de release com a versão nos quatro
+  # arquivos e o CHANGELOG.md. Mesclar esse PR cria a tag vX.Y.Z e a release.
+  # O release-type é simple: o rust não lida com o workspace (members em glob,
+  # versão em [workspace.package]); os lockfiles ficam com um passo à parte.
+  release-please:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      pr: ${{ steps.rp.outputs.pr }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # Explícito: a branch padrão do repositório é a develop, e sem isso
+          # o release-please abriria o PR de release contra ela.
+          target-branch: main
+
+  # O release-please não mexe nos lockfiles: com o PR de release aberto, ajusta
+  # o Cargo.lock do workspace, o ui/src-tauri/Cargo.lock e o ui/package-lock.json
+  # para a versão nova e faz o commit na branch dele. Só a versão dos crates
+  # locais e do app muda; as dependências ficam como estão. O release-please
+  # reescreve a branch a cada push na main, e este job refaz o commit em seguida.
+  lockfiles:
+    needs: release-please
+    if: needs.release-please.outputs.pr != ''
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Sincronizar os lockfiles
+        run: |
+          (cd ui && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
+          cargo update --workspace
+          cargo update --workspace --manifest-path ui/src-tauri/Cargo.toml
+          python3 scripts/check-versions.py
+      - name: Commit na branch do PR de release
+        run: |
+          if git diff --quiet; then
+            echo "Lockfiles já em dia."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am 'chore: sincroniza os lockfiles com a versão da release'
+          git push
+
+  # Binário do hub (cthubd) para Linux na release ainda em rascunho, para
+  # instalar um hub sem toolchain de Rust (docs/hub.md). O `cthubd update`
+  # compila do fonte. Não há binário do hub para macOS (o ctowerd e o ctower
+  # têm, no job envbins). Roda antes do publish, que tira a release do
+  # rascunho. O binário leva a UI web embutida (#199): o build do Vite roda
+  # antes, e CTHUB_WEB_REQUIRED=1 faz o cargo falhar se o bundle faltar.
+  cthubd:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bundle web
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build:web
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compilar
+        env:
+          CTHUB_WEB_REQUIRED: '1'
+        run: cargo build --release --locked -p cthubd
+      - name: Anexar à release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          NAME="cthubd-${TAG}-$(uname -m)-linux"
+          mkdir -p "dist/$NAME"
+          cp target/release/cthubd packaging/systemd/cthubd.service "dist/$NAME/"
+          tar -czf "dist/$NAME.tar.gz" -C dist "$NAME"
+          (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+          gh release upload "$TAG" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" --clobber
+
+  # Binários do ambiente (ctowerd e ctower) na release em rascunho, para
+  # `provision.sh --env` e `ctower update` instalarem sem toolchain de Rust.
+  # Mesmo formato do cthubd: tar.gz com os binários e a unidade de serviço,
+  # mais o .sha256. Os runners são os hospedados do GitHub (ubuntu-22.04, para
+  # a glibc 2.35 servir a Ubuntu 22.04 em diante, e macos-14); CI_RUNNER_MACOS e
+  # CI_RUNNER_LINUX trocam por runners próprios (docs/ci.md).
+  envbins:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner_var: CI_RUNNER_LINUX
+            default_runner: '"ubuntu-22.04"'
+            unit: packaging/systemd/ctowerd.service
+          - os: macos
+            runner_var: CI_RUNNER_MACOS
+            default_runner: '"macos-14"'
+            unit: packaging/launchd/ai.deep-ion.ctowerd.plist
+    runs-on: ${{ fromJSON(matrix.os == 'macos' && (vars.CI_RUNNER_MACOS || matrix.default_runner) || (vars.CI_RUNNER_LINUX || matrix.default_runner)) }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compilar
+        run: cargo build --release --locked -p ctowerd -p ctower
+      - name: Anexar à release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          UNIT: ${{ matrix.unit }}
+          OS_NAME: ${{ matrix.os }}
+        run: |
+          ARCH=$(uname -m)
+          [ "$ARCH" = arm64 ] && ARCH=aarch64
+          NAME="ctower-env-${TAG}-${ARCH}-${OS_NAME}"
+          mkdir -p "dist/$NAME"
+          cp target/release/ctowerd target/release/ctower "$UNIT" "dist/$NAME/"
+          tar -czf "dist/$NAME.tar.gz" -C dist "$NAME"
+          (cd dist && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+          gh release upload "$TAG" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" --clobber
+
+  # Instalador assinado, .exe.sig e latest.json na release recém-criada.
+  publish:
+    needs: [release-please, cthubd, envbins]
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+      pull-requests: read
+    uses: ./.github/workflows/ui.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
+
+  # Traz o commit de release (versão e CHANGELOG.md) de volta para a develop,
+  # para o próximo develop → main não dar conflito. Só abre o PR; a mesclagem
+  # segue a revisão normal. Um PR main → develop já aberto recebe os commits
+  # novos sozinho, então não se abre outro.
+  back-merge:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    # contents: read é preciso: o gh lê o repositório (defaultBranchRef) antes
+    # de listar ou abrir o PR, e as permissões do job zeram o que não é listado.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: PR main → develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Sem checkout: o gh precisa saber o repositório.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          OPEN=$(gh pr list --base develop --head main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$OPEN" ]; then
+            echo "PR main → develop já aberto: #$OPEN"
+            exit 0
+          fi
+          gh pr create --base develop --head main --title "chore: back-merge $TAG" --body "$(cat <<BODY
+          Traz o commit de release de $TAG (versão nos arquivos, lockfiles e CHANGELOG.md) da main para a develop.
+
+          Mesclar com **merge commit** (não squash/rebase), para a develop conter os commits da main e o próximo develop → main não dar conflito.
+          BODY
+          )"

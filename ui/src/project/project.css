@@ -1,0 +1,375 @@
+/* Tela Projeto no shell (#317): árvore no painel lateral, item como aba. */
+.project-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pj-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px 24px;
+  min-width: 0;
+}
+
+.project-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.project-head h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.project-sync {
+  margin-left: auto;
+  font-size: 13px;
+}
+
+.pj-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pj-stats li {
+  min-width: 140px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pj-stats strong {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.start-error {
+  margin: 0;
+  color: var(--error-soft);
+}
+
+.hub-badge {
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+/* Painel lateral: seletor, Árvore | Quadro, filtro e a árvore. */
+.pj-pick {
+  margin: 0 10px 8px;
+}
+
+.pj-pick select {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.pj-name {
+  margin: 0 16px 8px;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.views {
+  display: flex;
+  margin: 0 10px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.views button {
+  flex: 1;
+  height: 26px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.views button[aria-pressed="true"] {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.tree-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 10px 6px;
+}
+
+.tree-search {
+  width: 100%;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.tree-more {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chip {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--running-bg);
+  border-color: var(--running);
+  color: var(--text);
+}
+
+.ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.ctl select {
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  padding: 0 6px;
+}
+
+.ctl input {
+  accent-color: var(--running);
+  width: 14px;
+  height: 14px;
+}
+
+.pj-empty {
+  margin: 8px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.pj-row {
+  padding-left: 4px;
+}
+
+.pj-row .sp-row-main {
+  padding-left: 2px;
+}
+
+.pj-row.closed .sp-row-label {
+  color: var(--muted);
+}
+
+.pj-toggle,
+.pj-indent {
+  width: 18px;
+  height: 22px;
+  flex: none;
+}
+
+.pj-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.pj-num {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pj-row.is-epic .pj-num {
+  color: var(--text-2);
+}
+
+/* PR mesclado na base com a issue aberta (#375). */
+.pj-warn {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--attention-border);
+  border-radius: 4px;
+  background: var(--attention-bg);
+  color: var(--attention);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.pj-live {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+/* ▶ inline: ao passar o mouse, com foco na linha e na linha selecionada. */
+.pj-row[data-selected="true"] .sp-row-actions {
+  visibility: visible;
+}
+
+.pj-play {
+  width: 24px;
+  height: 24px;
+  color: var(--accent);
+}
+
+.pj-play:hover {
+  background: var(--running-bg);
+  color: var(--accent);
+}
+
+/* Quadro (Kanban) somente leitura, na aba do projeto. */
+.board-wrap { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.board-note { margin: 0; font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.board-note .lock { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-strong); color: var(--text-2); }
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: start; }
+.col { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; min-width: 0; }
+.col-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.col-head .count { margin-left: auto; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.col-body { list-style: none; margin: 0; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.col-empty { color: var(--faint); font-size: 12.5px; padding: 6px 4px; }
+.card { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); cursor: pointer; text-align: left; color: var(--text); font: inherit; width: 100%; }
+.card:hover { border-color: var(--border-strong); background: var(--surface-3); }
+.card:focus-visible { outline: 2px solid var(--running); outline-offset: 2px; }
+.card[aria-current="true"] { border-color: var(--running); box-shadow: inset 3px 0 0 var(--running); }
+.card.is-epic { border-style: dashed; }
+.card-top { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.card-epic { font-size: 11px; color: var(--epic); font-family: var(--mono); margin-left: auto; white-space: nowrap; }
+.card-title { font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; }
+.card .branch { overflow-wrap: anywhere; font-size: 12px; }
+.card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.card-meta .ago { margin-left: auto; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card .pr { font-family: var(--mono); font-size: 12px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border-strong); color: var(--text-2); white-space: nowrap; }
+.card .pr[data-state="open"] { color: var(--running); }
+.card .pr[data-state="merged"] { color: var(--epic); }
+.card .dec { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+.card .dec.pending { color: var(--attention); font-weight: 600; }
+.card .live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+
+
+/* Ícone do provedor (#352): na árvore, ao lado do seletor, e no cabeçalho. */
+.provider-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-2);
+  align-self: center;
+}
+
+.pj-picker {
+  display: flex;
+  align-items: center;
+}
+
+.pj-picker > .provider-icon {
+  margin: 0 0 8px 14px;
+  align-self: center;
+}
+
+.pj-picker > .pj-pick,
+.pj-picker > .pj-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.pj-picker > .provider-icon + .pj-name {
+  margin-left: 8px;
+}
+
+.pj-picker > .provider-icon + .pj-pick {
+  margin-left: 8px;
+}
+
+/* Filtro por sprint (projetos Jira). */
+.tree-sprint select {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  font: inherit;
+  font-size: 12px;
+}
+
+/* Aviso discreto: projeto Jira sem nenhuma sprint lida no espelho. */
+.tree-sprint-hint {
+  margin: 0;
+  font-size: 11px;
+}
+
+/* Sprint atual do item (projetos Jira), discreta. */
+.pj-sprint {
+  flex: none;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
+.pj-sprint[data-state="active"] {
+  border-color: var(--running);
+  color: var(--text-2);
+}

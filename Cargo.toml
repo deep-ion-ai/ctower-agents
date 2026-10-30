@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# O app Tauri compila à parte (precisa de WebView2/webkit), com Cargo.lock próprio.
+exclude = ["ui/src-tauri"]
+
+[workspace.package]
+version = "0.15.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+ct-core = { path = "crates/ct-core" }
+ct-ledger = { path = "crates/ct-ledger" }
+ct-git = { path = "crates/ct-git" }
+ct-pty = { path = "crates/ct-pty" }
+ct-gh = { path = "crates/ct-gh" }
+ct-jira = { path = "crates/ct-jira" }
+ct-gitlab = { path = "crates/ct-gitlab" }
+ct-proc = { path = "crates/ct-proc" }
+ct-sessions = { path = "crates/ct-sessions" }
+ct-server = { path = "crates/ct-server" }
+ct-client = { path = "crates/ct-client" }
+ct-http = { path = "crates/ct-http" }
+ct-update = { path = "crates/ct-update" }
+ct-secrets = { path = "crates/ct-secrets" }
+cthubd = { path = "crates/cthubd" }
+portable-pty = "0.9"
+libc = "0.2"
+toml = "0.8"
+toml_edit = "0.22"
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+tokio-tungstenite = "0.27"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4", "v7"] }
+clap = { version = "4", features = ["derive"] }
+ureq = { version = "2", default-features = false }
+sha2 = "0.10"
+# Assinatura SigV4 do cliente S3/B2 do backup remoto (#263).
+hmac = "0.12"
+# Store de secrets do hub (ct-secrets): só X25519, sem plugins nem SSH.
+age = { version = "0.12", default-features = false }
+zeroize = "1"
+# Transporte do arquivo age da entrega de secrets no JSON do sync (#184).
+base64 = "0.22"
+# UI web embutida no cthubd (#199); a pasta vem do build.rs.
+rust-embed = { version = "8.13", features = ["interpolate-folder-path", "debug-embed", "mime-guess"] }
+# JWT do Cloudflare Access no login web do hub (#200): RS256 com ring.
+jsonwebtoken = { version = "9.3", default-features = false }
+# Web Push do hub (#203): ECDH, HKDF, AES-128-GCM e ES256 do RFC 8291/8292,
+# com o mesmo ring que o rustls e o jsonwebtoken já trazem.
+ring = "0.17"
+# Pacote diário dos docs do hub (#442): tar + zstd, sem ferramenta externa.
+tar = { version = "0.4", default-features = false }
+zstd = { version = "0.13", default-features = false }
+ts-rs = { version = "10.1", features = ["serde-json-impl", "no-serde-warnings"] }
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+# Debug leve no perfil de dev: no macOS a informação de debug fica nos .o de
+# target/debug/deps (split-debuginfo = "unpacked"), e com debug completo cada
+# build acumula gigabytes. Panics e backtraces mantêm arquivo:linha; o lldb
+# perde as variáveis locais. Dependências sem informação de debug.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

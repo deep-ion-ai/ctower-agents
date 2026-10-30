@@ -1,0 +1,757 @@
+.hub-project {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hub-project:last-of-type {
+  border-bottom: none;
+}
+
+.hub-assignments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.hub-sub {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hub-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  overflow-wrap: anywhere;
+}
+
+.hub-state {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.hub-state[data-state="applied"] {
+  color: var(--ok);
+}
+
+.hub-state[data-state="pending"] {
+  color: var(--attention);
+}
+
+.hub-state[data-state="delivered"] {
+  color: var(--ok);
+}
+
+.hub-state[data-state="no_key"] {
+  color: var(--error-soft);
+}
+
+.hub-list .small {
+  font-size: 12px;
+}
+
+.hub-state[data-state="error"] {
+  color: var(--error-soft);
+}
+
+.hub-assign {
+  align-self: flex-start;
+}
+
+.hub-wide {
+  flex-basis: 100%;
+  grid-column: 1 / -1;
+}
+
+.hub-warnings {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--attention);
+  line-height: 1.5;
+}
+
+.hub-screen .small {
+  font-size: 12px;
+}
+
+/* Gestor de projetos (spec do gestor §11). */
+.gestor-launch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.gestor-live {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gestor-dialog {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.gestor-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  border: none;
+  padding: 0;
+}
+
+.proposal-why {
+  color: var(--text-2);
+  white-space: pre-wrap;
+}
+
+.proposals-past summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.health-counts {
+  display: flex;
+  gap: 6px;
+}
+
+/* Tabelas de propostas (issue #241): a de prioridade na ordem resultante. */
+.proposals-table {
+  margin: 8px 0 12px;
+}
+
+.proposals-table td {
+  vertical-align: top;
+}
+
+.proposals-table .nowrap {
+  white-space: nowrap;
+}
+
+.proposals-table .proposal-why {
+  min-width: 220px;
+  max-width: 420px;
+}
+
+.proposals-table .proposal-why summary {
+  cursor: pointer;
+}
+
+.proposals-table .proposal-title {
+  color: var(--text-2);
+}
+
+.proposals-table.compact td,
+.proposals-table.compact th {
+  padding: 4px 8px;
+}
+
+.proposal-move {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.proposal-move[data-move="up"] {
+  color: var(--ok);
+}
+
+.proposal-move[data-move="down"] {
+  color: var(--error-soft);
+}
+
+.proposal-move[data-move="new"] {
+  color: var(--running);
+}
+
+.recovery-key {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* Hub em seções (#313): trilha, conteúdo da seção e Visão geral. */
+.hub-crumbs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hub-crumbs ol {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hub-crumbs li + li::before {
+  content: "›";
+  margin-right: 6px;
+}
+
+.hub-crumbs [aria-current="page"] {
+  color: var(--text);
+}
+
+.hub-content {
+  padding: 20px 24px 28px;
+}
+
+/* Hub não configurado ou indisponível: estado vazio da área de editor. */
+.hub-empty {
+  max-width: 560px;
+  margin: 48px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: center;
+  align-items: center;
+}
+
+.hub-empty h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.hub-page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.hub-page-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.hub-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.hub-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.hub-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hub-card-head h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.hub-card-head .btn {
+  margin-left: auto;
+}
+
+.hub-card-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hub-card-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hub-card-list li:last-child {
+  border-bottom: 0;
+}
+
+.hub-card-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hub-card-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hub-card-empty,
+.hub-card-msg {
+  margin: 0;
+  padding: 10px 14px;
+}
+
+.hub-card-table th,
+.hub-card-table td {
+  padding: 8px 14px;
+  vertical-align: middle;
+}
+
+.hub-card-table .nowrap {
+  white-space: nowrap;
+}
+
+.hub-card-action {
+  text-align: right;
+}
+
+.hub-envs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hub-envs li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 10px 14px;
+}
+
+.hub-envs strong {
+  font-weight: 600;
+}
+
+/* Painel lateral do Hub: estado da conexão, contadores e dados no rodapé. */
+.hub-conn {
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--error-bg);
+  color: var(--error-soft);
+}
+
+.hub-conn[data-on="true"] {
+  background: var(--done-bg);
+  color: var(--done);
+}
+
+.hub-count[data-tone="attention"] {
+  color: var(--attention);
+  font-weight: 700;
+}
+
+.hub-count[data-tone="error"] {
+  color: var(--error-soft);
+  font-weight: 700;
+}
+
+.hub-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.hub-facts dd {
+  margin: 0;
+}
+
+.hub-facts .label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Projetos e atribuições em lista e detalhe (#314). */
+.hub-flush {
+  padding: 0;
+}
+
+.hub-flush > .settings-main {
+  gap: 0;
+}
+
+.hub-split {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: calc(100vh - 160px);
+}
+
+.hub-plist {
+  flex: 1 1 300px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+
+.hub-plist-tool {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hub-plist-tool input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.hub-pitems {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hub-pitems li {
+  position: relative;
+  border-bottom: 1px solid var(--border);
+}
+
+.hub-pitems li[data-dragging="true"] {
+  opacity: 0.5;
+}
+
+.hub-pitems li[data-drop="before"] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.hub-pitems li[data-drop="after"] {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.hub-pitem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hub-pitem:hover {
+  background: var(--hover);
+}
+
+.hub-pitem[aria-current="true"] {
+  background: var(--selected);
+}
+
+.hub-pitem:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.hub-pitem-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hub-pitem-top strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.hub-pitem-top .badge {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.hub-pitem-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.hub-plist-foot {
+  margin: auto 0 0;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.hub-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+  vertical-align: middle;
+}
+
+.hub-dot[data-tone="ok"] {
+  background: var(--ok);
+}
+
+.hub-dot[data-tone="attention"] {
+  background: var(--attention);
+}
+
+.hub-dot[data-tone="error"] {
+  background: var(--error);
+}
+
+.hub-pdetail {
+  flex: 999 1 480px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px 28px;
+}
+
+.hub-pdetail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hub-ptitle {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.hub-page-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.hub-kv {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin: 0;
+  padding: 14px;
+}
+
+.hub-kv dt {
+  margin-bottom: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.hub-kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hub-order {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hub-card-form {
+  margin: 12px 14px;
+}
+
+.hub-card-head h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.hub-danger {
+  border-color: var(--error-border);
+}
+
+.hub-danger .hub-card-head h3 {
+  color: var(--error-soft);
+}
+
+.hub-danger-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.hub-impact {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+/* Prontidão do ambiente de sync do projeto Jira + GitLab (#348). */
+.readiness-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.readiness-group h4 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.readiness {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.readiness li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+/* Hub › Dispositivos (#203): um cartão por aparelho inscrito na Web Push. */
+.hub-devices-this {
+  margin-bottom: 12px;
+}
+.hub-devices-this h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+.hub-devices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hub-device {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  padding: 10px 12px;
+}
+.hub-device-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.hub-device p {
+  margin: 4px 0 8px;
+}
+.hub-device-events {
+  border: 0;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.hub-device-events label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+.shell[data-mobile="true"] .hub-device-events label {
+  min-height: var(--touch);
+}
+
+/* Docs do projeto no formulário (#444): o grupo ocupa a linha inteira. */
+.hub-docs {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px 16px;
+}
+
+.hub-docs legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.hub-docs textarea {
+  width: 100%;
+  font-family: var(--mono, monospace);
+}

@@ -1,0 +1,703 @@
+/* Tela Terminal no shell (#316): a árvore fica no painel lateral; aqui, um
+   ou dois painéis de sessão lado a lado numa grade (cabeçalho, console,
+   faixa do pedido pendente). Os consoles são filhos diretos da grade para
+   não remontarem ao dividir ou trocar de lado. */
+.terminal-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* O console rola sozinho (scrollback do xterm); a tela não. */
+.editor > .terminal-screen {
+  overflow: hidden;
+}
+
+.term-pick {
+  padding: 16px 24px 0;
+}
+
+.tree-head {
+  padding: 2px 12px 8px;
+}
+
+.tree-head input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.tree {
+  margin: 0;
+  padding: 4px 8px 8px;
+  list-style: none;
+}
+
+.tree-group {
+  margin-bottom: 2px;
+  border-radius: 6px;
+}
+
+.tree-group:focus-visible,
+.tree-session:focus-visible {
+  outline: 2px solid var(--running);
+  outline-offset: -2px;
+}
+
+.tree-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tree-group-row:hover,
+.tree-session:hover {
+  background: var(--surface-3);
+}
+
+.tree-chevron {
+  flex: none;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tree-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.tree-waiting {
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--attention-bg);
+  color: var(--attention);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tree-count {
+  min-width: 16px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tree-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 0 15px;
+  padding: 0 0 0 6px;
+  list-style: none;
+  border-left: 1px solid var(--border);
+}
+
+.tree-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.tree-session[data-selected="true"] {
+  background: var(--selected);
+  box-shadow: inset 2px 0 0 var(--running);
+  color: var(--text);
+}
+
+.tree-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.tree-dot[data-tone="running"] {
+  background: var(--running);
+}
+.tree-dot[data-tone="attention"] {
+  background: var(--attention);
+}
+.tree-dot[data-tone="error"] {
+  background: var(--error);
+}
+
+.tree-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-session-title,
+.tree-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-session-title {
+  font-size: 13px;
+}
+
+.tree-state {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.tree-state[data-tone="running"] {
+  color: var(--running);
+}
+.tree-state[data-tone="attention"] {
+  color: var(--attention);
+}
+.tree-state[data-tone="error"] {
+  color: var(--error-soft);
+}
+
+.tree-epic {
+  padding: 0 5px;
+  border: 1px solid var(--epic-border);
+  border-radius: 4px;
+  color: var(--epic);
+  font-size: 11px;
+}
+
+.tree-empty {
+  margin: 0;
+  padding: 0 16px 12px;
+  font-size: 12px;
+}
+
+.tree-foot {
+  margin: 0 -12px -12px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Consoles e o painel de contexto (#426) lado a lado. O contêiner mede a
+   largura: estreito, o painel sobrepõe o console em vez de dividir, para o
+   PTY não ficar estreito demais. */
+.term-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  container-type: inline-size;
+  container-name: term-body;
+}
+
+.term-split {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.term-split[data-split="true"] {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.term-split > [data-col="2"] {
+  border-left: 1px solid var(--border);
+}
+
+.pane-bar {
+  grid-row: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-header);
+  font-size: 12px;
+}
+
+.pane-id {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+}
+
+.session-title {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  color: var(--muted);
+}
+
+.pane-meta > * + *::before {
+  content: "·";
+  margin-right: 6px;
+}
+
+.session-state {
+  font-weight: 600;
+}
+
+.session-state[data-tone="attention"] {
+  color: var(--attention);
+}
+.session-state[data-tone="running"] {
+  color: var(--running);
+}
+
+.pane-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.pane-actions .ibtn:disabled {
+  cursor: default;
+}
+
+.confirm {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--error-soft);
+}
+
+.session-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--error-soft);
+}
+
+/* Pedido pendente logo abaixo do console. */
+.term-ask {
+  grid-row: 3;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--attention-border);
+  background: var(--attention-card);
+  font-size: 13px;
+}
+
+.term-ask-kind {
+  font-weight: 600;
+  color: var(--attention);
+}
+
+.term-ask-text {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.term-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.term-host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  min-height: 120px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--term-bg);
+  /* Barras de rolagem do xterm escuras também no tema claro. */
+  color-scheme: dark;
+}
+
+.term-host[hidden] {
+  display: none;
+}
+
+.session-state[data-tone="error"] {
+  color: var(--error-soft);
+}
+
+.term-pane {
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  padding: 10px 12px 12px;
+}
+
+.term-pane[hidden] {
+  display: none;
+}
+
+.term-search {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  box-shadow: 0 4px 12px var(--shadow);
+  color: var(--term-text);
+}
+
+.term-search input {
+  width: 200px;
+  max-width: 40vw;
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--term-border);
+  background: var(--term-bg);
+  color: var(--term-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.term-search-count {
+  min-width: 64px;
+  color: var(--term-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.term-search-btn {
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--term-muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.term-search-btn[aria-pressed="true"] {
+  background: var(--term-selection);
+  color: var(--term-text);
+}
+
+.term-search-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Remote Control (#197): selo no cabeçalho do painel, indicador na árvore e
+   o link com o QR code. */
+.rc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--btn-bg);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+button.rc-chip {
+  cursor: pointer;
+}
+
+button.rc-chip:hover {
+  background: var(--hover);
+}
+
+.rc-chip[data-state="on"] {
+  border-color: var(--ok);
+  color: var(--text);
+}
+
+.rc-chip[data-state="failed"] {
+  border-color: var(--error-border);
+  color: var(--error-soft);
+}
+
+.tree-rc {
+  display: inline-flex;
+  flex: none;
+  color: var(--ok);
+}
+
+.rc-panel {
+  position: fixed;
+  top: 88px;
+  right: 24px;
+  z-index: 30;
+  width: 272px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-3);
+  box-shadow: 0 8px 24px var(--shadow);
+  color: var(--text);
+  font-size: 13px;
+  text-align: center;
+}
+
+.rc-panel p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.rc-panel-head {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rc-close {
+  margin-left: auto;
+}
+
+.rc-panel-title {
+  align-self: stretch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rc-link {
+  max-width: 100%;
+  color: var(--link);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.rc-panel-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* Módulos escuros sobre fundo claro nos dois temas (tokens do terminal). */
+.rc-qr {
+  border-radius: 4px;
+}
+
+.rc-qr-bg {
+  fill: var(--term-text);
+}
+
+.rc-qr-fg {
+  fill: var(--term-bg);
+}
+
+/* Shell livre (#423): na árvore, um nível abaixo da linha do item; no
+   cabeçalho, o ícone de prompt e o aviso do clone principal (#0). */
+.tree-shell {
+  min-height: 28px;
+  margin-left: 18px;
+}
+
+.tree-shell-icon {
+  flex: none;
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.tree-session[data-item="true"] {
+  cursor: default;
+}
+
+.pane-shell-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pane-warn {
+  color: var(--attention);
+}
+
+/* Painel de contexto (#426; spec da #87, §3): à direita, como a barra
+   lateral secundária do VS Code. */
+.term-context {
+  flex: 0 0 320px;
+  width: 320px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 13px;
+}
+
+/* Um console abaixo de ~480 px (dois abaixo de ~400 px cada): sobrepõe. */
+@container term-body (max-width: 800px) {
+  .term-context {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    box-shadow: -6px 0 18px var(--shadow);
+  }
+}
+
+@container term-body (max-width: 1120px) {
+  .term-body[data-split="true"] > .term-context {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    box-shadow: -6px 0 18px var(--shadow);
+  }
+}
+
+.ctx-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-header);
+  font-size: 12px;
+}
+
+.ctx-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ctx-item {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ctx-body .sec {
+  padding: 12px 14px;
+}
+
+.ctx-error {
+  margin: 10px 14px 0;
+}
+
+.ctx-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.ctx-facts dt {
+  color: var(--muted);
+}
+
+.ctx-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ctx-status {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* O menu de status ocupa a largura da linha (o painel é estreito). */
+.ctx-status .status-menu {
+  position: static;
+}
+
+.ctx-status .status-pop {
+  left: 0;
+  right: 0;
+  width: auto;
+}
+
+.ctx-sub {
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ctx-sub .n {
+  color: var(--faint);
+}
+
+.ctx-wrap {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.ctx-create {
+  align-self: flex-start;
+}

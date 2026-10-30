@@ -1,0 +1,45 @@
+[package]
+name = "control-tower-ui"
+version = "0.15.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Control Tower — app de Windows (Tauri)"
+
+# Fora do workspace raiz (exclude): só compila onde há WebView2/webkit.
+[lib]
+name = "ct_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "control-tower"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ct-client = { path = "../../crates/ct-client" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+# Debug leve no perfil de dev: no macOS a informação de debug fica nos .o de
+# target/debug/deps (split-debuginfo = "unpacked"), e com debug completo cada
+# build acumula gigabytes. Panics e backtraces mantêm arquivo:linha; o lldb
+# perde as variáveis locais. Dependências sem informação de debug.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

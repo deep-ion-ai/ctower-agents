@@ -1,0 +1,593 @@
+<title>Tela Projeto — mockup #45</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: cabeçalho do app · cabeçalho do projeto · barra de controles · árvore (esq.) + painel de detalhe (dir.).
+   Tokens copiados de ui/src/theme.css: o mockup usa o tema escuro do app, de propósito. */
+:root {
+  --bg: #0f1115; --bg-header: #13161c; --surface: #171a21; --surface-2: #181c24; --surface-3: #1b1f28;
+  --border: #262b35; --border-strong: #343b48; --row-line: #222631;
+  --text: #e6e8ec; --text-2: #aeb6c4; --muted: #9aa3b2; --faint: #6f7787;
+  --attention: #f2a33a; --attention-bg: #3d2e10; --on-attention: #1a1206; --attention-border: #5a4318;
+  --running: #8ab8ff; --running-bg: #16263f; --done: #7fd4bc; --done-bg: #13241f; --ok: #5fc9a8;
+  --error: #f0705a; --error-soft: #f7a796; --error-bg: #2a1714; --idle-bg: #232832;
+  --epic: #c7a4f5; --link: #8ab8ff; --selected: #1f2532; --note-bg: #17150f;
+  --mono: "IBM Plex Mono", "Cascadia Mono", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { background: var(--bg); color: var(--text); }
+body { font-family: var(--sans); font-size: 14px; }
+a { color: var(--link); }
+:focus-visible { outline: 2px solid var(--running); outline-offset: 2px; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+.mock-note { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; padding-block: 8px; background: var(--note-bg); border-bottom: 1px solid var(--attention-border); color: var(--text-2); font-size: 12.5px; }
+.mock-note strong { color: var(--attention); letter-spacing: .06em; font-size: 11px; }
+
+.app-header { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding-block: 12px; border-bottom: 1px solid var(--border); background: var(--bg-header); }
+.brand { font-weight: 700; font-size: 16px; letter-spacing: .02em; }
+.app-nav { display: flex; flex-wrap: wrap; gap: 4px; }
+.app-nav span { padding: 8px 12px; border-radius: 6px; color: var(--text-2); }
+.app-nav span[aria-current] { background: #222733; color: var(--text); font-weight: 600; }
+
+.project-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding-block: 20px 0; }
+.project-head h1 { margin: 0; font-size: 22px; }
+.project-sync { margin-left: auto; font-size: 13px; }
+
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 16px 0; }
+.search { flex: 0 1 260px; min-width: 0; height: 36px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid var(--border-strong); background: none; color: var(--text-2); font: inherit; font-size: 12.5px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--running-bg); border-color: var(--running); color: var(--text); }
+.ctl { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; }
+.ctl select { height: 32px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; padding: 0 6px; }
+.ctl input { accent-color: var(--running); width: 16px; height: 16px; }
+
+.project-body { display: flex; flex-wrap: wrap; gap: 24px; padding-block: 16px 32px; align-items: flex-start; }
+.tree { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.empty { color: var(--muted); padding: 24px; border: 1px dashed var(--border-strong); border-radius: 8px; }
+
+.epic-card { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.epic-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px 10px 8px; background: var(--surface-3); cursor: pointer; }
+.epic-head[aria-selected="true"] { background: var(--selected); box-shadow: inset 3px 0 0 var(--running); }
+.toggle { min-width: 32px; min-height: 32px; border: none; border-radius: 6px; background: none; color: var(--text-2); font: inherit; cursor: pointer; }
+.toggle:hover { background: var(--idle-bg); }
+.epic-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--epic); }
+.epic-title { font-weight: 600; font-size: 15px; flex: 1 1 200px; min-width: 0; }
+.progress { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.loose-head { padding: 12px 16px; font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.collapsed-hint { font-size: 12px; color: var(--faint); }
+
+ul.rows { list-style: none; margin: 0; padding: 0; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 9px 16px; border-top: 1px solid var(--row-line); cursor: pointer; }
+.row.child { padding-left: 48px; }
+.row:hover, .epic-head:hover { background: var(--surface-2); }
+.row[aria-selected="true"] { background: var(--selected); box-shadow: inset 3px 0 0 var(--running); }
+.row.closed .title { color: var(--muted); }
+.num { width: 40px; flex: none; color: var(--muted); font-family: var(--mono); font-size: 13px; }
+.title { flex: 1 1 220px; min-width: 0; }
+.branch { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+.meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; }
+.pr { font-family: var(--mono); font-size: 12px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border-strong); color: var(--text-2); text-decoration: none; white-space: nowrap; }
+.pr[data-state="open"] { color: var(--running); border-color: #2c4468; }
+.pr[data-state="merged"] { color: var(--epic); border-color: #4a3a63; }
+.pr[data-state="closed"] { color: var(--muted); }
+.dec { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+.dec.pending { color: var(--attention); font-weight: 600; }
+.ago { font-size: 12.5px; color: var(--muted); width: 64px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.live { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px #5fc9a833; flex: none; }
+
+.badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; white-space: nowrap; background: var(--idle-bg); color: var(--text-2); }
+.badge[data-tone="attention"] { background: var(--attention-bg); color: var(--attention); }
+.badge[data-tone="running"] { background: var(--running-bg); color: var(--running); }
+.badge[data-tone="done"] { background: var(--done-bg); color: var(--done); }
+.badge[data-tone="error"] { background: var(--error-bg); color: var(--error-soft); }
+
+.btn { min-height: 34px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border-strong); background: #1b1f27; color: var(--text); font: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.btn-primary { border: none; background: var(--attention); color: var(--on-attention); font-weight: 700; }
+.btn:hover { filter: brightness(1.15); }
+
+/* Painel de detalhe */
+.panel { flex: 1 1 380px; max-width: 480px; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+.panel-head { padding: 16px 18px 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.panel-head h2 { margin: 0; font-size: 16px; text-wrap: balance; }
+.panel-sub { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.close { margin-left: auto; border: none; background: none; color: var(--muted); font-size: 18px; cursor: pointer; min-width: 32px; min-height: 32px; border-radius: 6px; }
+.close:hover { background: var(--idle-bg); }
+.panel-top { display: flex; align-items: flex-start; gap: 8px; }
+
+.status-menu { position: relative; }
+.status-menu summary { list-style: none; }
+.status-menu summary::-webkit-details-marker { display: none; }
+.status-pop { position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; width: 240px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-3); display: flex; flex-direction: column; gap: 6px; box-shadow: 0 8px 24px #0008; }
+.status-pop button.opt { text-align: left; border: none; background: none; color: var(--text); font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+.status-pop button.opt:hover, .status-pop button.opt[aria-current] { background: var(--idle-bg); }
+.status-pop input { height: 32px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; padding: 0 8px; }
+.status-pop label { font-size: 12px; color: var(--muted); }
+
+.sec { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.sec:last-child { border-bottom: none; }
+.sec h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+.sec h3 .n { color: var(--faint); font-weight: 600; letter-spacing: 0; }
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sess { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); }
+.sess .when { grid-column: 2 / 4; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sess.alive { cursor: pointer; border: 1px solid #285446; }
+.ev { display: grid; grid-template-columns: 64px 1fr; gap: 10px; font-size: 13px; }
+.ev time { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; padding-top: 1px; }
+.ev .k { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.ev .d { color: var(--muted); }
+.more { align-self: flex-start; border: none; background: none; color: var(--link); font: inherit; font-size: 13px; cursor: pointer; padding: 0; }
+.decision { padding: 10px 12px; border-radius: 6px; background: var(--surface-2); display: flex; flex-direction: column; gap: 6px; border: 1px solid transparent; }
+.decision.pending { border-color: var(--attention-border); background: var(--note-bg); }
+.decision .dt { font-weight: 600; }
+.decision p { margin: 0; color: var(--text-2); font-size: 13px; line-height: 1.45; }
+.decision .lbl { color: var(--faint); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; margin-right: 4px; }
+.origin { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.origin.autonoma { color: var(--attention); }
+.origin.orientada { color: var(--running); }
+.prline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.none { color: var(--faint); font-size: 13px; margin: 0; }
+
+.start { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--attention-border); background: var(--note-bg); }
+.start h3 { margin: 0; font-size: 14px; }
+.start .f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.start select, .start textarea { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; font: inherit; padding: 6px 8px; }
+.start textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+.start .row-btns { display: flex; justify-content: flex-end; gap: 8px; }
+
+.toast { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); padding: 10px 14px; border-radius: 8px; background: var(--surface-3); border: 1px solid var(--border-strong); font-size: 13px; }
+
+/* Alternância Árvore | Kanban */
+.views { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+.views button { height: 34px; padding: 0 12px; border: none; background: none; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
+.views button + button { border-left: 1px solid var(--border-strong); }
+.views button[aria-pressed="true"] { background: #222733; color: var(--text); font-weight: 600; }
+
+/* Kanban: só visualização. Colunas = status do work item; não há arrastar e soltar. */
+.board-wrap { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.board-note { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.board-note .lock { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-strong); color: var(--text-2); }
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: start; }
+.col { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; min-width: 0; }
+.col-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.col-head .count { margin-left: auto; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.col-body { list-style: none; margin: 0; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.col-empty { color: var(--faint); font-size: 12.5px; padding: 6px 4px; }
+.card { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); cursor: pointer; text-align: left; color: var(--text); font: inherit; width: 100%; user-select: text; }
+.card:hover { border-color: var(--border-strong); background: var(--surface-3); }
+.card[aria-selected="true"] { border-color: var(--running); box-shadow: inset 3px 0 0 var(--running); }
+.card.is-epic { border-style: dashed; }
+.card-top { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.card-top .num { width: auto; }
+.card-epic { font-size: 11px; color: var(--epic); font-family: var(--mono); margin-left: auto; white-space: nowrap; }
+.card-title { font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; }
+.card .branch { overflow-wrap: anywhere; }
+.card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.card-meta .ago { width: auto; margin-left: auto; }
+
+@media (max-width: 720px) {
+  .panel { position: static; max-height: none; max-width: none; }
+  .row.child { padding-left: 24px; }
+  .meta { margin-left: 52px; }
+}
+@media (prefers-reduced-motion: no-preference) { .row, .epic-head { transition: background .12s; } }
+</style>
+
+<div class="mock-note gutter" role="note">
+  <strong>MOCKUP · #45</strong>
+  <span>Dados fictícios. Tudo é clicável: Árvore ou Kanban, busca, chips, ordenação, "mostrar concluídos", expandir épicos, clicar numa linha ou card e mudar status.</span>
+</div>
+
+<header class="app-header gutter">
+  <span class="brand">Control Tower</span>
+  <nav class="app-nav" aria-label="Telas"><span>Sala de controle</span><span aria-current="page">Projeto</span><span>Revisão</span><span>Recuperação</span><span>Configurações</span></nav>
+</header>
+
+<main>
+  <div class="project-head gutter">
+    <h1>control-tower</h1>
+    <span class="mono muted">deep-ion-ai/ctower-agents · base develop · protegidas develop, main</span>
+    <span class="muted project-sync">sincronizado há 2 min</span>
+  </div>
+
+  <div class="controls gutter" role="toolbar" aria-label="Filtros da árvore">
+    <div class="views" id="views" aria-label="Visão"><button type="button" data-view="tree" aria-pressed="true">Árvore</button><button type="button" data-view="board" aria-pressed="false">Kanban</button></div>
+    <input id="q" class="search" type="search" placeholder="Buscar #número ou título" aria-label="Buscar por número ou título">
+    <div class="chips" id="chips" aria-label="Filtrar por status"></div>
+    <label class="ctl" for="sort">Ordenar
+      <select id="sort"><option value="activity">atividade recente</option><option value="number">número</option></select>
+    </label>
+    <label class="ctl" for="showDone"><input id="showDone" type="checkbox"> mostrar concluídos</label>
+  </div>
+
+  <div class="project-body gutter">
+    <section class="tree" id="tree" aria-label="Árvore do projeto"></section>
+    <section class="board-wrap" id="boardWrap" aria-label="Kanban do projeto" hidden>
+      <div class="board-note"><span class="lock">somente leitura</span><span>Os cards não se movem por aqui. Para mudar o status, use o menu Status no painel do item.</span></div>
+      <div class="board" id="board"></div>
+    </section>
+    <aside class="panel" id="panel" aria-label="Detalhe do item"></aside>
+  </div>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const MIN = 60e3, H = 60 * MIN, D = 24 * H;
+const NOW = Date.now();
+
+const STATUS = {
+  backlog: { text: "backlog", tone: "neutral" },
+  em_execucao: { text: "em execução", tone: "running" },
+  aguardando_voce: { text: "aguardando você", tone: "attention" },
+  em_revisao: { text: "em revisão", tone: "running" },
+  bloqueado: { text: "bloqueado", tone: "error" },
+  pausado: { text: "pausado", tone: "neutral" },
+  concluido: { text: "concluído", tone: "done" },
+};
+
+// Nó = issue do espelho + work item (wi) + summary do tree.get. `wi: null` = issue que nunca teve sessão.
+const wi = (status, branch, extra = {}) => ({ status, branch, ...extra });
+const done = (n, title, ago) => ({ n, title, state: "closed", wi: wi("concluido", `feat/${n}`, { pr: { n: n + 100, state: "merged" }, dec: { total: 1, pending: 0 }, last: ago }) });
+
+const TREE = {
+  epics: [
+    { n: 38, title: "Épico: cadastro de projetos pela UI", state: "open", wi: wi("em_execucao", "wip/38-epico-cadastro-de-projetos", { dec: { total: 2, pending: 0 }, last: 40 * MIN }),
+      children: [
+        done(39, "ct-server: project.add e project.remove", 4 * D),
+        done(40, "ui: formulário de projeto em Configurações", 2 * D),
+        { n: 41, title: "ui: validar o repositório antes de salvar", state: "open", wi: wi("em_revisao", "feat/41-validar-repositorio", { pr: { n: 52, state: "open" }, dec: { total: 2, pending: 0 }, last: 3 * H }) },
+        { n: 42, title: "ct-server: detectar a branch base pelo GitHub", state: "open", wi: wi("aguardando_voce", "feat/42-detectar-branch-base", { pr: null, dec: { total: 3, pending: 1 }, last: 5 * MIN, live: true }) },
+        { n: 43, title: "Sessão do projeto: criar issues pelo terminal", state: "open", wi: null },
+      ] },
+    { n: 60, title: "Épico: notificações nativas", state: "open", wi: wi("em_execucao", "wip/60-epico-notificacoes", { dec: { total: 0, pending: 0 }, last: 3 * D }),
+      children: [
+        { n: 61, title: "ui: agrupar notificações repetidas", state: "open", wi: wi("bloqueado", "feat/61-agrupar-notificacoes", { pr: { n: 63, state: "open" }, dec: { total: 1, pending: 1 }, last: 3 * D }) },
+        { n: 62, title: "ui: som opcional para \"aguardando você\"", state: "open", wi: wi("pausado", "feat/62-som-opcional", { pr: null, dec: { total: 0, pending: 0 }, last: 5 * D }) },
+      ] },
+    { n: 20, title: "Épico: sincronização com o GitHub", state: "open", wi: wi("em_execucao", "wip/20-epico-sincronizacao", { dec: { total: 4, pending: 0 }, last: 12 * D }),
+      children: [
+        done(21, "ct-sync: cliente GraphQL com paginação", 30 * D), done(22, "ct-sync: espelho de issues", 29 * D),
+        done(23, "ct-sync: sub-issues e épicos", 27 * D), done(24, "ct-sync: PRs ligados ao work item", 25 * D),
+        done(25, "ct-sync: backoff em rate limit", 22 * D), done(26, "ct-server: sync.now", 20 * D),
+        done(27, "ui: indicador de sincronização", 18 * D), done(28, "ct-sync: ETag nas consultas", 15 * D),
+        done(29, "ct-sync: limpar issues apagadas", 13 * D),
+        { n: 30, title: "ct-sync: webhook opcional em vez de polling", state: "open", wi: null },
+      ] },
+    { n: 10, title: "Épico: fundação (daemon, ledger, protocolo)", state: "closed", wi: wi("concluido", "wip/10-epico-fundacao", { dec: { total: 6, pending: 0 }, last: 40 * D }),
+      children: [done(11, "ct-ledger: esquema e migrações", 45 * D), done(12, "ct-server: protocolo JSON-RPC", 43 * D), done(13, "ct-server: gerador de tipos TS", 41 * D)] },
+  ],
+  loose: [
+    { n: 44, title: "Brainstorm: evolução da tela Projeto", state: "open", wi: wi("em_execucao", "feat/44-brainstorm-evolucao-da-tela-projeto", { pr: { n: 53, state: "open" }, dec: { total: 6, pending: 0 }, last: 25 * MIN, live: true }) },
+    { n: 55, title: "Terminal: copiar com Ctrl+Shift+C", state: "open", wi: null },
+    { n: 57, title: "Recuperação: mostrar o tamanho do transcript", state: "open", wi: wi("backlog", null, { pr: null, dec: { total: 0, pending: 0 }, last: 9 * D }) },
+    { n: 31, title: "ui: tela Revisão lista PRs fechados", state: "closed", wi: wi("concluido", "fix/31-revisao-prs-fechados", { pr: { n: 34, state: "merged" }, dec: { total: 1, pending: 0 }, last: 6 * D }) },
+  ],
+};
+
+const statusOf = (x) => x.wi ? x.wi.status : (x.state === "closed" ? "concluido" : "backlog");
+const lastOf = (x) => x.wi?.last ?? null; // ms atrás; null = sem work item
+const isOpen = (x) => x.state === "open";
+function ago(ms) {
+  if (ms == null) return "—";
+  if (ms < H) return `há ${Math.max(1, Math.round(ms / MIN))} min`;
+  if (ms < D) return `há ${Math.round(ms / H)} h`;
+  return `há ${Math.round(ms / D)} d`;
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const all = () => [...TREE.epics.flatMap((e) => [e, ...e.children]), ...TREE.loose];
+const find = (n) => all().find((x) => x.n === n);
+
+// Estado da tela
+const ui = { view: "tree", q: "", chips: new Set(), sort: "activity", showDone: false, open: {}, selected: 42, starting: false, evPage: 1 };
+
+// Expansão inicial: só épicos com sessão viva ou atividade nos últimos 7 dias.
+for (const e of TREE.epics) {
+  const fam = [e, ...e.children];
+  ui.open[e.n] = fam.some((x) => x.wi?.live) || fam.some((x) => lastOf(x) != null && lastOf(x) <= 7 * D);
+}
+
+// ---------- chips ----------
+const chipsEl = document.getElementById("chips");
+chipsEl.innerHTML = Object.entries(STATUS).map(([k, s]) => `<button type="button" class="chip" data-k="${k}" aria-pressed="false">${s.text}</button>`).join("");
+chipsEl.addEventListener("click", (ev) => {
+  const b = ev.target.closest(".chip"); if (!b) return;
+  const k = b.dataset.k; ui.chips.has(k) ? ui.chips.delete(k) : ui.chips.add(k);
+  b.setAttribute("aria-pressed", ui.chips.has(k)); render();
+});
+document.getElementById("q").addEventListener("input", (e) => { ui.q = e.target.value.trim().toLowerCase(); render(); });
+document.getElementById("sort").addEventListener("change", (e) => { ui.sort = e.target.value; render(); });
+document.getElementById("showDone").addEventListener("change", (e) => { ui.showDone = e.target.checked; render(); });
+
+// ---------- filtros ----------
+function matchesQuery(x) {
+  if (!ui.q) return true;
+  const q = ui.q.replace(/^#/, "");
+  return String(x.n) === q || (/^\d+$/.test(q) ? String(x.n).startsWith(q) : x.title.toLowerCase().includes(ui.q));
+}
+const matchesChips = (x) => ui.chips.size === 0 || ui.chips.has(statusOf(x));
+const narrowing = () => ui.q !== "" || ui.chips.size > 0;
+
+function sortItems(list) {
+  const key = (x) => x.kind === "epic" ? Math.min(...[x, ...x.children].map((c) => lastOf(c) ?? Infinity)) : (lastOf(x) ?? Infinity);
+  return [...list].sort((a, b) => {
+    if (ui.sort === "number") return a.n - b.n;
+    const ka = key(a), kb = key(b);
+    return ka === kb ? a.n - b.n : ka - kb; // sem work item (Infinity) vai para o fim
+  });
+}
+
+function visibleEpics() {
+  const out = [];
+  for (const e of TREE.epics) {
+    // Visibilidade: o épico aparece se ele ou uma sub-issue está aberta; então traz todas as sub-issues.
+    if (!ui.showDone && !isOpen(e) && !e.children.some(isOpen)) continue;
+    let kids = e.children;
+    if (narrowing()) {
+      const selfHit = matchesQuery(e) && matchesChips(e);
+      const hits = kids.filter((c) => matchesQuery(c) && matchesChips(c));
+      if (!selfHit && hits.length === 0) continue;
+      kids = (matchesQuery(e) && ui.chips.size === 0) ? kids : hits;
+    }
+    out.push({ ...e, kind: "epic", shown: sortItems(kids) });
+  }
+  return sortItems(out);
+}
+function visibleLoose() {
+  return sortItems(TREE.loose.filter((x) => (ui.showDone || isOpen(x)) && matchesQuery(x) && matchesChips(x)));
+}
+
+// ---------- árvore ----------
+function meta(x) {
+  const s = x.wi; const st = STATUS[statusOf(x)];
+  const pr = s?.pr ? `<a class="pr" data-state="${s.pr.state}" href="#" title="PR #${s.pr.n} ${prText(s.pr.state)}" onclick="event.stopPropagation(); toast('Abre o PR #${s.pr.n} no GitHub'); return false;">PR #${s.pr.n} ${prText(s.pr.state)}</a>` : "";
+  const dec = s?.dec?.total ? `<span class="dec ${s.dec.pending ? "pending" : ""}" title="${s.dec.total} decisões${s.dec.pending ? `, ${s.dec.pending} autônoma(s) pendente(s) de revisão` : ""}">◆${s.dec.total}${s.dec.pending ? "!" : ""}</span>` : "";
+  return `<span class="meta">${pr}${dec}<span class="ago" title="última atividade">${ago(lastOf(x))}</span><span class="badge" data-tone="${st.tone}">${st.text}</span></span>`;
+}
+const prText = (s) => ({ open: "aberto", merged: "mesclado", closed: "fechado" }[s]);
+
+function row(x, child) {
+  const sel = ui.selected === x.n;
+  return `<li class="row ${child ? "child" : ""} ${x.state === "closed" ? "closed" : ""}" data-n="${x.n}" tabindex="0" aria-selected="${sel}">
+    <span class="num">#${x.n}</span>
+    <span class="title">${x.wi?.live ? '<span class="live" title="sessão viva" style="display:inline-block;margin-right:8px;vertical-align:middle"></span>' : ""}${esc(x.title)}</span>
+    ${x.wi?.branch ? `<span class="branch">${esc(x.wi.branch)}</span>` : ""}
+    ${meta(x)}
+  </li>`;
+}
+
+document.getElementById("views").addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-view]"); if (!b) return;
+  ui.view = b.dataset.view;
+  for (const x of document.querySelectorAll("#views [data-view]")) x.setAttribute("aria-pressed", x.dataset.view === ui.view);
+  render();
+});
+
+// Kanban: mesmos filtros e a mesma visibilidade da árvore. Uma coluna por status e um card por item (épicos incluídos).
+function renderBoard() {
+  const items = [];
+  for (const e of visibleEpics()) {
+    if (!narrowing() || (matchesQuery(e) && matchesChips(e))) items.push({ ...e, epicOf: null });
+    for (const c of e.shown) items.push({ ...c, epicOf: e.n });
+  }
+  for (const x of visibleLoose()) items.push({ ...x, epicOf: null });
+  const cols = Object.keys(STATUS).filter((k) => ui.chips.size === 0 || ui.chips.has(k));
+  document.getElementById("board").innerHTML = cols.map((k) => {
+    const list = sortItems(items.filter((x) => statusOf(x) === k));
+    return `<section class="col" aria-label="${STATUS[k].text}">
+      <div class="col-head"><span class="badge" data-tone="${STATUS[k].tone}">${STATUS[k].text}</span><span class="count">${list.length}</span></div>
+      <ul class="col-body">${list.length ? list.map(card).join("") : '<li class="col-empty">Nenhum item.</li>'}</ul>
+    </section>`;
+  }).join("");
+}
+function card(x) {
+  const s = x.wi, isEpic = x.kind === "epic";
+  const pr = s?.pr ? `<span class="pr" data-state="${s.pr.state}">PR #${s.pr.n} ${prText(s.pr.state)}</span>` : "";
+  const dec = s?.dec?.total ? `<span class="dec ${s.dec.pending ? "pending" : ""}">◆${s.dec.total}${s.dec.pending ? "!" : ""}</span>` : "";
+  const prog = isEpic ? `<span class="progress">${x.children.filter((c) => statusOf(c) === "concluido").length}/${x.children.length}</span>` : "";
+  return `<li><button type="button" class="card ${isEpic ? "is-epic" : ""}" data-n="${x.n}" aria-selected="${ui.selected === x.n}" draggable="false">
+    <span class="card-top">${x.wi?.live ? '<span class="live" title="sessão viva"></span>' : ""}<span class="num">#${x.n}</span>${isEpic ? '<span class="epic-label">ÉPICO</span>' : ""}${x.epicOf ? `<span class="card-epic">épico #${x.epicOf}</span>` : ""}</span>
+    <span class="card-title">${esc(x.title)}</span>
+    ${s?.branch ? `<span class="branch">${esc(s.branch)}</span>` : ""}
+    <span class="card-meta">${prog}${pr}${dec}<span class="ago">${ago(lastOf(x))}</span></span>
+  </button></li>`;
+}
+document.getElementById("board").addEventListener("click", (ev) => {
+  const c = ev.target.closest(".card[data-n]"); if (c) select(+c.dataset.n);
+});
+// Sem arrastar: o board não aceita drop nem inicia drag.
+document.getElementById("board").addEventListener("dragstart", (ev) => ev.preventDefault());
+
+function render() {
+  const isBoard = ui.view === "board";
+  document.getElementById("tree").hidden = isBoard;
+  document.getElementById("boardWrap").hidden = !isBoard;
+  if (isBoard) { renderBoard(); renderPanel(); return; }
+  const tree = document.getElementById("tree");
+  const epics = visibleEpics(), loose = visibleLoose();
+  let html = "";
+  for (const e of epics) {
+    const doneN = e.children.filter((c) => statusOf(c) === "concluido").length;
+    const expanded = narrowing() ? true : ui.open[e.n];
+    const anyLive = [e, ...e.children].some((x) => x.wi?.live);
+    html += `<div class="epic-card">
+      <div class="epic-head" data-n="${e.n}" tabindex="0" aria-selected="${ui.selected === e.n}">
+        <button type="button" class="toggle" data-toggle="${e.n}" aria-expanded="${expanded}" aria-label="${expanded ? "Recolher" : "Expandir"} épico #${e.n}">${expanded ? "▾" : "▸"}</button>
+        <span class="epic-label">ÉPICO</span>
+        <span class="num">#${e.n}</span>
+        <span class="epic-title">${anyLive ? '<span class="live" title="sessão viva no épico" style="display:inline-block;margin-right:8px;vertical-align:middle"></span>' : ""}${esc(e.title)}</span>
+        <span class="progress">${doneN}/${e.children.length}</span>
+        ${meta(e)}
+      </div>
+      ${expanded ? `<ul class="rows">${e.shown.map((c) => row(c, true)).join("")}</ul>`
+        : `<div class="row" style="cursor:default;padding-left:56px"><span class="collapsed-hint">${e.children.length} sub-issues · sem sessão viva nem atividade nos últimos 7 dias</span></div>`}
+    </div>`;
+  }
+  if (loose.length) html += `<div class="epic-card"><div class="loose-head">ISSUES AVULSAS</div><ul class="rows">${loose.map((x) => row(x, false)).join("")}</ul></div>`;
+  if (!html) html = `<p class="empty">Nada casa com a busca e os filtros. Limpe a busca ou desmarque os chips de status.</p>`;
+  tree.innerHTML = html;
+  renderPanel();
+}
+
+const treeEl = document.getElementById("tree");
+treeEl.addEventListener("click", (ev) => {
+  const t = ev.target.closest("[data-toggle]");
+  if (t) { const n = +t.dataset.toggle; ui.open[n] = !(narrowing() ? true : ui.open[n]); render(); return; }
+  const r = ev.target.closest("[data-n]"); if (r) select(+r.dataset.n);
+});
+treeEl.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  const r = ev.target.closest("[data-n]"); if (r && ev.target === r) { ev.preventDefault(); select(+r.dataset.n); }
+});
+function select(n) { ui.selected = n; ui.starting = false; ui.evPage = 1; render(); }
+
+// ---------- histórico (workitem.history) ----------
+function itemHistory(x) {
+  if (!x.wi) return null;
+  const s = x.wi, base = s.last ?? D;
+  const sessions = [], events = [], decisions = [], prs = [];
+  if (s.live) sessions.push({ tool: "claude", state: "viva", start: base + 50 * MIN, end: null, code: null, alive: true });
+  if (s.status !== "backlog") sessions.push({ tool: "claude", state: "encerrada", start: base + 1 * D + 3 * H, end: base + 1 * D + 1 * H, code: 0 });
+  if (statusOf(x) === "concluido") sessions.push({ tool: "claude", state: "encerrada", start: base + 2 * D, end: base + 2 * D - 2 * H, code: 0 });
+  const evs = [
+    ["status", `→ ${STATUS[statusOf(x)].text}`, base],
+    ...(s.pr ? [["pr", `PR #${s.pr.n} ${prText(s.pr.state)}`, base + 20 * MIN]] : []),
+    ...(s.dec.total ? [["decision_recorded", `${s.dec.total} decisão(ões) registrada(s)`, base + 1 * H]] : []),
+    ["session_started", "claude · worktree criado", base + 50 * MIN],
+    ["commit", "3 commits na branch", base + 2 * H],
+    ["session_ended", "código 0", base + 1 * D + 1 * H],
+    ["session_started", "claude", base + 1 * D + 3 * H],
+    ["status", "→ em execução", base + 1 * D + 3 * H],
+    ["workitem_created", s.branch ?? "sem branch", base + 1 * D + 3 * H + MIN],
+  ];
+  events.push(...evs.map(([k, d, t]) => ({ k, d, t })).sort((a, b) => a.t - b.t));
+  const pool = [
+    { origin: "autonoma", title: "Usar a API REST para ler a branch padrão", decision: "Ler default_branch via GET /repos em vez de GraphQL.", consequences: "Uma chamada extra no cadastro; sem novo escopo de token.", context: "O cliente GraphQL não expõe esse campo no espelho atual." },
+    { origin: "orientada", title: "Base do épico é a wip/ do épico", decision: "PRs das sub-issues apontam para a wip/ do épico, nunca para develop.", consequences: null, context: "Pedido do humano no início da sessão." },
+    { origin: "autonoma", title: "Cache de 10 min para o repositório validado", decision: "Guardar o resultado da validação por 10 minutos.", consequences: "Repositório renomeado nesse intervalo aparece como válido.", context: "Evitar uma chamada ao GitHub a cada tecla." },
+    { origin: "orientada", title: "Mensagens de erro em português", decision: "Todas as mensagens de validação em português.", consequences: null, context: "Definido pelo humano." },
+  ];
+  for (let i = 0; i < s.dec.total; i++) {
+    const d = { ...pool[i % pool.length] };
+    d.pending = i < s.dec.pending; if (d.pending) d.origin = "autonoma";
+    if (!d.pending && d.origin === "autonoma") d.reviewed = s.pr ? `revisada no PR #${s.pr.n}` : "revisada";
+    d.at = base + (i + 1) * H;
+    decisions.push(d);
+  }
+  decisions.sort((a, b) => Number(b.pending) - Number(a.pending));
+  if (s.pr) prs.push({ n: s.pr.n, head: s.branch, base: x.n === 44 ? "develop" : (TREE.epics.find((e) => e.children.includes(x))?.wi.branch ?? "develop"), state: s.pr.state });
+  return { sessions, events, decisions, prs };
+}
+
+function renderPanel() {
+  const panel = document.getElementById("panel");
+  const x = find(ui.selected);
+  if (!x) { panel.innerHTML = `<div class="sec"><p class="none">Clique num item da árvore para ver o histórico e as ações.</p></div>`; return; }
+  const isEpic = TREE.epics.some((e) => e.n === x.n);
+  const st = STATUS[statusOf(x)];
+  const h = itemHistory(x);
+  const live = x.wi?.live;
+  const canStart = !live && x.state === "open" && statusOf(x) !== "concluido";
+  const startBtn = live ? `<button type="button" class="btn btn-primary" data-act="terminal">Abrir terminal</button>`
+    : canStart ? `<button type="button" class="btn btn-primary" data-act="start">▶ Iniciar${isEpic ? " épico" : ""}</button>` : "";
+
+  let html = `<div class="panel-head">
+    <div class="panel-top"><h2><span class="mono muted">#${x.n}</span> ${esc(x.title)}</h2><button type="button" class="close" data-act="close" aria-label="Fechar painel">×</button></div>
+    <div class="panel-sub">${isEpic ? '<span class="epic-label">ÉPICO</span>' : ""}<span class="badge" data-tone="${st.tone}">${st.text}</span>${x.wi?.branch ? `<span class="branch">${esc(x.wi.branch)}</span>` : ""}<span class="muted">${x.wi ? "última atividade " + ago(lastOf(x)) : ""}</span></div>
+    <div class="actions">
+      ${startBtn}
+      <a class="btn" href="#" data-act="gh">GitHub ↗</a>
+      ${x.wi?.pr ? `<a class="btn" href="#" data-act="ghpr">PR #${x.wi.pr.n} ↗</a>` : ""}
+      <details class="status-menu" id="statusMenu"><summary class="btn">Status ▾</summary>
+        <div class="status-pop" role="menu">
+          <label for="reason">Motivo (opcional)</label>
+          <input id="reason" type="text" placeholder="ex.: aguardando a API do GitHub">
+          ${Object.entries(STATUS).map(([k, s]) => `<button type="button" class="opt" role="menuitem" data-status="${k}" ${k === statusOf(x) ? "aria-current=\"true\"" : ""}><span>${s.text}</span>${k === statusOf(x) ? '<span class="muted">atual</span>' : ""}</button>`).join("")}
+        </div>
+      </details>
+    </div>
+  </div>`;
+
+  if (ui.starting) {
+    html += `<div class="start"><h3>Iniciar sessão · #${x.n}</h3>
+      <label class="f" for="tool">Ferramenta<select id="tool"><option>Claude Code</option><option disabled>Codex (fase 2)</option></select></label>
+      <div class="f">Branch e worktree ${x.wi?.branch ? "(já existentes)" : "(criados se não existirem)"}<span class="mono" style="color:var(--text)">${esc(x.wi?.branch ?? `feat/${x.n}-${x.title.toLowerCase().normalize("NFD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32)}`)}</span></div>
+      <label class="f" for="prompt">Prompt inicial (template de ${isEpic ? "épico" : "issue"})<textarea id="prompt" rows="5">Trabalhe na ${isEpic ? "épico" : "issue"} #${x.n} de deep-ion-ai/ctower-agents…</textarea></label>
+      <div class="row-btns"><button type="button" class="btn" data-act="cancel">Cancelar</button><button type="button" class="btn btn-primary" data-act="go">▶ Iniciar sessão</button></div>
+    </div>`;
+  }
+
+  if (!h) {
+    html += `<div class="sec"><p class="none">Sem histórico: esta issue ainda não teve sessão. Use ▶ Iniciar para criar o work item, ou mude o status manualmente.</p></div>`;
+    panel.innerHTML = html; return;
+  }
+
+  const sess = h.sessions.length ? `<ul class="list">${h.sessions.map((s) => `<li class="sess ${s.alive ? "alive" : ""}" ${s.alive ? 'data-act="terminal" tabindex="0" title="Abrir terminal"' : ""}>
+      ${s.alive ? '<span class="live"></span>' : '<span style="width:8px"></span>'}<span><span class="mono">${s.tool}</span> · ${s.state}</span>
+      <span class="muted mono" style="font-size:12px">${s.alive ? "abrir ↗" : `saída ${s.code}`}</span>
+      <span class="when">início ${ago(s.start)}${s.end != null ? ` · fim ${ago(s.end)} · duração ${Math.round((s.start - s.end) / H)} h` : " · em andamento"}</span></li>`).join("")}</ul>` : `<p class="none">Nenhuma sessão.</p>`;
+
+  const per = 5, evShown = h.events.slice(0, per * ui.evPage);
+  const evs = `<ul class="list">${evShown.map((e) => `<li class="ev"><time>${ago(e.t)}</time><span><span class="k">${e.k}</span> <span class="d">${esc(e.d)}</span></span></li>`).join("")}</ul>
+    ${h.events.length > evShown.length ? `<button type="button" class="more" data-act="more">Mostrar mais (${h.events.length - evShown.length})</button>` : ""}`;
+
+  const decs = h.decisions.length ? `<ul class="list">${h.decisions.map((d) => `<li class="decision ${d.pending ? "pending" : ""}">
+      <span><span class="origin ${d.origin}">${d.origin === "autonoma" ? "autônoma" : "orientada"}</span>${d.pending ? ' <span class="badge" data-tone="attention">pendente de revisão</span>' : d.reviewed ? ` <span class="muted" style="font-size:12px">${d.reviewed}</span>` : ""}</span>
+      <span class="dt">${esc(d.title)}</span>
+      <p><span class="lbl">decisão</span>${esc(d.decision)}</p>
+      ${d.consequences ? `<p><span class="lbl">consequências</span>${esc(d.consequences)}</p>` : ""}
+    </li>`).join("")}</ul>` : `<p class="none">Nenhuma decisão registrada.</p>`;
+
+  const prs = h.prs.length ? `<ul class="list">${h.prs.map((p) => `<li class="prline"><a class="pr" data-state="${p.state}" href="#" data-act="ghpr">PR #${p.n} ${prText(p.state)}</a><span class="mono muted" style="font-size:12px;overflow-wrap:anywhere">${esc(p.head)} → ${esc(p.base)}</span></li>`).join("")}</ul>` : `<p class="none">Nenhum PR.</p>`;
+
+  const pend = h.decisions.filter((d) => d.pending).length;
+  html += `<section class="sec"><h3>Sessões <span class="n">${h.sessions.length}</span></h3>${sess}</section>
+    <section class="sec"><h3>Eventos <span class="n">${h.events.length}</span></h3>${evs}</section>
+    <section class="sec"><h3>Decisões <span class="n">${h.decisions.length}${pend ? ` · <span style="color:var(--attention)">${pend} pendente</span>` : ""}</span></h3>${decs}</section>
+    <section class="sec"><h3>PRs <span class="n">${h.prs.length}</span></h3>${prs}</section>`;
+  panel.innerHTML = html;
+}
+
+document.getElementById("panel").addEventListener("click", (ev) => {
+  const x = find(ui.selected);
+  const st = ev.target.closest("[data-status]");
+  if (st) {
+    const k = st.dataset.status, reason = document.getElementById("reason").value.trim();
+    if (!x.wi) x.wi = wi(k, null, { pr: null, dec: { total: 0, pending: 0 }, last: 0 }); // issue sem work item: cria com o status
+    else { x.wi.status = k; x.wi.last = 0; }
+    toast(`Status de #${x.n}: ${STATUS[k].text}${reason ? ` (${reason})` : ""}. Vale até o próximo gatilho automático.`);
+    render(); return;
+  }
+  const a = ev.target.closest("[data-act]"); if (!a) return;
+  ev.preventDefault();
+  switch (a.dataset.act) {
+    case "close": ui.selected = null; ui.starting = false; render(); break;
+    case "start": ui.starting = true; renderPanel(); break;
+    case "cancel": ui.starting = false; renderPanel(); break;
+    case "go": toast("Inicia a sessão e abre o terminal."); ui.starting = false; renderPanel(); break;
+    case "terminal": toast(`Abre o terminal da sessão viva de #${x.n}.`); break;
+    case "gh": toast(`Abre a issue #${x.n} no GitHub.`); break;
+    case "ghpr": toast(`Abre o PR #${x.wi.pr.n} no GitHub.`); break;
+    case "more": ui.evPage++; renderPanel(); break;
+  }
+});
+document.addEventListener("click", (ev) => {
+  const m = document.getElementById("statusMenu");
+  if (m?.open && !m.contains(ev.target)) m.open = false;
+});
+
+let toastT;
+function toast(msg) {
+  const t = document.getElementById("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 3200);
+}
+
+render();
+</script>

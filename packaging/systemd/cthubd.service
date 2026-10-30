@@ -1,0 +1,23 @@
+# Unidade systemd de usuário do hub do Control Tower (cthubd).
+# Instalação: `provision.sh --hub` copia para ~/.config/systemd/user/ e
+# habilita com `systemctl --user enable --now cthubd` (com `loginctl
+# enable-linger`). Atualização: `cthubd update` (docs/hub.md).
+#
+# O hub não roda sessões nem PTYs: reiniciar não encerra trabalho de agentes.
+# O `hub.db` usa WAL; os subcomandos (`add-env`, `revoke-env`) funcionam com o
+# serviço no ar, e o `restore` exige o serviço parado.
+
+[Unit]
+Description=Control Tower hub (cthubd)
+After=network.target
+
+[Service]
+ExecStart=%h/.cargo/bin/cthubd serve
+# `gh` no PATH: token do GitHub do hub na falta de ~/.config/cthub/github.token.
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=RUST_LOG=info
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

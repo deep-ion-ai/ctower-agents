@@ -1,0 +1,205 @@
+/* Regras do agente por projeto e por épico (#357). Serve ao cartão do Hub
+   (`hub-card`) e ao do painel do item (`sec iv-card`). */
+.rules {
+  min-width: 0;
+}
+
+.rules-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rules-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rules-head .n {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.rules-pend {
+  color: var(--attention);
+  font-weight: 600;
+}
+
+.rules-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* O input de arquivo fica dentro do botão (o rótulo abre o seletor). */
+.rules-file {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.rules-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.rules-msg,
+.rules-current,
+.rules-editor,
+.rules-history {
+  margin: 0;
+  padding: 10px 14px;
+}
+
+.rules-meta {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.rules-text,
+.rules-diff {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rules-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.rules-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.rules-field textarea {
+  width: 100%;
+  min-height: 200px;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rules-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.rules-size {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rules-size[data-state="warn"] {
+  color: var(--attention);
+}
+
+.rules-size[data-state="over"] {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.rules-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rules-proposals {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rules-proposal {
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--attention-card);
+}
+
+.rules-reason {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.rules-warn {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--attention-border);
+  border-radius: 6px;
+  background: var(--attention-bg);
+  font-size: 12px;
+}
+
+.rules-stats {
+  margin: 0;
+  font-size: 12px;
+}
+
+.rules-line {
+  display: block;
+}
+
+.rules-line[data-op="add"] {
+  background: var(--done-bg);
+  color: var(--ok);
+}
+
+.rules-line[data-op="del"] {
+  background: var(--error-bg);
+  color: var(--error);
+  text-decoration: line-through;
+}
+
+.rules-history summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.rules-versions {
+  margin: 8px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.rules-v {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+.rules-note {
+  display: block;
+  color: var(--text-2);
+}
+
+.iv-rules {
+  margin-top: 16px;
+}

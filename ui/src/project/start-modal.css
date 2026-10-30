@@ -1,0 +1,320 @@
+/* Modal de início de sessão (#317): medidas do mockup "Projeto · Iniciar sessão". */
+.sm-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.sm-scrim::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  opacity: 0.66;
+}
+
+.sm-modal {
+  position: relative;
+  width: 100%;
+  max-width: 760px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 24px 64px var(--shadow);
+  font-size: 13px;
+}
+
+.sm-modal:focus {
+  outline: none;
+}
+
+.sm-head {
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-kind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.sm-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.sm-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--idle-bg);
+  color: var(--text-2);
+}
+
+.sm-chip[data-kind="epic"] {
+  color: var(--epic);
+}
+.sm-chip[data-kind="issue"] {
+  background: var(--running-bg);
+  color: var(--running);
+}
+.sm-chip[data-tone="done"] {
+  background: var(--done-bg);
+  color: var(--done);
+}
+
+.sm-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sm-field > label,
+.sm-label,
+.sm-prompt-head label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.sm-field select,
+.sm-field textarea {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.sm-field select {
+  height: 30px;
+  padding: 0 10px;
+}
+
+.sm-field textarea {
+  min-height: 150px;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.sm-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.sm-where {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-side);
+}
+
+.sm-where-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sm-path {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sm-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--attention-border);
+  border-radius: 6px;
+  background: var(--attention-card);
+}
+
+.sm-note-text {
+  flex: 1;
+  min-width: 220px;
+}
+
+.sm-note strong {
+  font-weight: 600;
+}
+
+.sm-blocked {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--error-border);
+  border-radius: 6px;
+  background: var(--error-bg);
+  color: var(--error-soft);
+}
+
+.sm-scope {
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.sm-subs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sm-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 13px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sm-sub:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.sm-back {
+  align-self: flex-start;
+  margin-top: -8px;
+}
+
+.sm-prompt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sm-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.sm-spacer {
+  flex: 1;
+}
+
+.sm-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.sm-kbd {
+  margin-left: 8px;
+  border-color: currentColor;
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* Aviso depois de iniciar, no canto de baixo (acima da barra de status). */
+.sm-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 40px;
+  z-index: 31;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--done);
+  border-radius: 8px;
+  background: var(--done-bg);
+  color: var(--text);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+
+@media (max-width: 600px) {
+  .sm-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Itens que faltam no jira-cli e no glab do ambiente (#351). */
+.sm-readiness {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+/* Remote Control na modal de início (#197). */
+.sm-rc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/*
+ * Celular (PWA abaixo de 768 px, épico #205 §10.3, #343): a modal ocupa a
+ * tela e os controles têm o alvo de toque mínimo. Ela fica fora do `.shell`
+ * (o `StartSessionHost` o envolve), por isso a regra é por largura.
+ */
+@media (max-width: 767px) {
+  .sm-scrim {
+    padding: 0;
+  }
+
+  .sm-modal {
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .sm-modal :is(button, select, textarea, input:not([type="checkbox"], [type="radio"])),
+  .sm-check {
+    min-height: var(--touch);
+  }
+
+  .sm-toast {
+    left: 16px;
+    right: 16px;
+    bottom: calc(var(--touch) + 24px);
+  }
+}

@@ -1,0 +1,12 @@
+[package]
+name = "ct-pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+portable-pty.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

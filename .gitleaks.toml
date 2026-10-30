@@ -1,0 +1,14 @@
+# Valores falsos de fixtures de teste (mascaramento de PTY, chave age de exemplo,
+# token de exemplo da UI). Nenhum é um segredo real.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "fixtures de teste"
+paths = [
+  '''crates/ct-pty/src/mask\.rs''',
+  '''crates/cthubd/tests/secrets_cli\.rs''',
+  '''crates/cthubd/src/ws\.rs''',
+  '''ui/src/hub/HubRecovery\.test\.tsx''',
+  '''ui/src/settings/SettingsScreen\.test\.tsx''',
+]

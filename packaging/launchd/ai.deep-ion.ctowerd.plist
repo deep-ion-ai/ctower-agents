@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent do ambiente do Control Tower (ctowerd) no macOS.
+  `provision.sh --env` troca @HOME@ pelo HOME do usuário e instala em
+  ~/Library/LaunchAgents/ai.deep-ion.ctowerd.plist; à mão:
+
+    sed "s|@HOME@|$HOME|g" packaging/launchd/ai.deep-ion.ctowerd.plist \
+      > ~/Library/LaunchAgents/ai.deep-ion.ctowerd.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.deep-ion.ctowerd.plist
+
+  O launchd não expande ~ nem $HOME, daí o marcador. Log em
+  ~/Library/Logs/ctowerd.log. O LaunchAgent sobe no login do usuário (não há
+  linger como no systemd): para o ambiente voltar sozinho depois de um
+  reboot, ligue o login automático desse usuário. O Claude Code guarda a
+  credencial no Keychain de login, que só abre com a sessão aberta.
+
+  Reiniciar o serviço encerra as sessões (PTYs filhas), como KillMode=
+  control-group no systemd; `ctower restart` recusa com sessões vivas.
+
+  O ctowerd sobe por um /bin/sh que confere o executável antes do exec (o
+  último argumento; `ctower status` lê dali). Sem ele, o launchd falharia o
+  spawn com exit 78 em loop, sem dizer o que falta (#360); assim o log diz o
+  caminho e o sh sai com 0, que o KeepAlive abaixo não reinicia. Depois de
+  restaurar o binário, `ctower restart`.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.deep-ion.ctowerd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>[ -x "$1" ] || { echo "ctowerd: executável ausente: $1 (restaure o binário e rode ctower restart)"; exit 0; }; exec "$@"</string>
+    <string>ctowerd</string>
+    <string>@HOME@/.cargo/bin/ctowerd</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>@HOME@</string>
+    <!-- claude (~/.local/bin), gh/node/tmux (Homebrew) e ctower/ctowerd (~/.cargo/bin). -->
+    <key>PATH</key>
+    <string>@HOME@/.local/bin:@HOME@/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>RUST_LOG</key>
+    <string>info</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Reinicia se cair com erro (como Restart=on-failure do systemd). -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <!-- Intervalo mínimo entre spawns: um crash em loop não passa de 6/min. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>@HOME@/Library/Logs/ctowerd.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/Library/Logs/ctowerd.log</string>
+</dict>
+</plist>

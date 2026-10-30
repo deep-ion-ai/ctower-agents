@@ -1,0 +1,220 @@
+/* Tela Manutenção (#335): trilha e conteúdo reaproveitam os do Hub (hub.css). */
+.maint-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 880px;
+}
+
+.maint-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.maint-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+/* Tela estreita: o seletor de ambiente vai para a linha de baixo, na largura toda. */
+@media (max-width: 720px) {
+  .maint-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* Atualizações (#336, vindas das Configurações). */
+.update-row .wide {
+  grid-column: 1 / -1;
+}
+
+/* Linha de baixo de cada ambiente (estado, commits, log): colada na de cima. */
+.update-table tbody + tbody tr:first-child td {
+  border-top-color: var(--border-strong);
+}
+
+.update-table .update-detail td {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.update-table .update-detail details {
+  margin-top: 4px;
+}
+
+.commit-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.update-log {
+  margin: 6px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+/* Estado de atualização e limpeza (#336, #337: vindos de settings.css). */
+.update-state {
+  font-size: 13px;
+}
+
+.state-busy {
+  color: var(--text-2);
+}
+
+.state-muted {
+  color: var(--muted);
+}
+
+.update-state.state-on {
+  font-weight: 400;
+}
+
+/* Limpeza (#337, vinda das Configurações). */
+.cleanup-row .wide {
+  grid-column: 1 / -1;
+}
+
+.cleanup-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cleanup-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.cleanup-item-action {
+  margin-left: auto;
+}
+
+.cleanup-steps {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.cleanup-steps [data-state="pendente"] {
+  color: var(--text-2);
+}
+
+.cleanup-steps [data-state="bloqueada"] {
+  color: var(--muted);
+}
+
+/* Visão geral (#339): cada célula leva à seção; o que pede ação em destaque. */
+.maint-ov th[scope="row"] {
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+  color: var(--text);
+  vertical-align: top;
+}
+
+.maint-ov td {
+  vertical-align: top;
+}
+
+.maint-ov-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.maint-ov-link:hover .mono,
+.maint-ov-link:hover > span:first-child {
+  text-decoration: underline;
+}
+
+.maint-ov-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.maint-ov-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.maint-ov tr[data-attention] th[scope="row"] {
+  box-shadow: inset 2px 0 0 var(--attention);
+}
+
+.maint-ov-backup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.maint-ov-backup-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.maint-ov-warnings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Tela estreita: cada ambiente vira um bloco, com o nome da coluna em cada célula. */
+@media (max-width: 720px) {
+  .maint-ov thead {
+    display: none;
+  }
+
+  .maint-ov tr,
+  .maint-ov th[scope="row"],
+  .maint-ov td {
+    display: block;
+  }
+
+  .maint-ov tr {
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .maint-ov th[scope="row"],
+  .maint-ov td {
+    border-top: 0;
+    padding: 4px 8px;
+  }
+
+  .maint-ov td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+  }
+}

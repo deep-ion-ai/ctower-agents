@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent do hub do Control Tower (cthubd) no macOS (ex.: Mac mini).
+  `provision.sh --hub` troca @HOME@ pelo HOME do usuário e instala em
+  ~/Library/LaunchAgents/ai.deep-ion.cthubd.plist; à mão:
+
+    sed "s|@HOME@|$HOME|g" packaging/launchd/ai.deep-ion.cthubd.plist \
+      > ~/Library/LaunchAgents/ai.deep-ion.cthubd.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.deep-ion.cthubd.plist
+
+  O launchd não expande ~ nem $HOME, daí o marcador. Log em
+  ~/Library/Logs/cthubd.log. O LaunchAgent sobe no login do usuário: para o
+  hub ficar no ar depois de um reboot, ligue o login automático desse usuário.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.deep-ion.cthubd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@HOME@/.cargo/bin/cthubd</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>@HOME@</string>
+    <!-- `gh` no PATH (Homebrew): token do GitHub do hub na falta de github.token. -->
+    <key>PATH</key>
+    <string>@HOME@/.local/bin:@HOME@/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>RUST_LOG</key>
+    <string>info</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Reinicia se cair com erro (como Restart=on-failure do systemd). -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>2</integer>
+  <key>StandardOutPath</key>
+  <string>@HOME@/Library/Logs/cthubd.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/Library/Logs/cthubd.log</string>
+</dict>
+</plist>

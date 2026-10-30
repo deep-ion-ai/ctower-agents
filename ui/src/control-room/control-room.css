@@ -1,0 +1,399 @@
+/* Painel lateral (#316): linhas de ambiente e do hub com mais de uma linha de texto. */
+.cr-item {
+  padding-left: 18px;
+}
+
+.cr-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border: none;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+button.cr-item-main {
+  cursor: pointer;
+}
+
+.cr-item-main .sp-dot {
+  margin-top: 5px;
+}
+
+.cr-item-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cr-item-name {
+  color: var(--text);
+}
+
+.cr-sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.cr-sub[data-warn="true"] {
+  color: var(--attention);
+}
+
+.cr-sub[role="status"]:empty {
+  display: none;
+}
+
+.cr-sync {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+/* Cabeçalho da área de editor: título da visão, agrupar e densidade. */
+.control-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.control-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.control-spacer {
+  flex: 1;
+}
+
+.control-seg {
+  display: flex;
+  gap: 2px;
+}
+
+.btn[aria-pressed="true"] {
+  background: var(--selected);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.tile-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tile-group-title {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.tile-grid[data-density="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tile-grid[data-density="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 700px) {
+  .tile-grid[data-density="2"],
+  .tile-grid[data-density="3"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.control-main {
+  min-width: 0;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.attention {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.attention-title {
+  color: var(--attention);
+}
+
+.attention-grid,
+.tile-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.attention-grid {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.tile-grid {
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
+.attention-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--attention-card);
+  border: 1px solid var(--attention-border);
+}
+
+.attention-card[data-tone="error"] {
+  border-color: var(--error-border);
+}
+
+.attention-card[data-tone="neutral"] {
+  border-color: var(--border-strong);
+}
+
+.attention-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.attention-head .muted {
+  margin-left: auto;
+}
+
+.attention-kind {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--attention);
+}
+
+.attention-card[data-tone="error"] .attention-kind {
+  color: var(--error);
+}
+
+.attention-card[data-tone="neutral"] .attention-kind {
+  color: var(--text-2);
+}
+
+.attention-item-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.attention-detail {
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.attention-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tiles-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tile {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tile:hover {
+  border-color: var(--border-strong);
+}
+
+.tile-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tile-head .badge {
+  margin-left: auto;
+}
+
+.tile-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.tile-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tile-tail {
+  margin: 0;
+  /* Linhas longas quebram: alinhado embaixo, o que transborda some por cima. */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--term-bg);
+  color: var(--term-fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow: hidden;
+  height: 72px;
+}
+
+.control-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.footer-col {
+  flex: 1 1 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.footer-list,
+.done-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 8px;
+}
+
+.footer-list {
+  flex-direction: column;
+}
+
+.done-list {
+  flex-wrap: wrap;
+}
+
+.review-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-title {
+  flex: 1;
+}
+
+.pending {
+  color: var(--attention);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.done-chip {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--done-bg);
+  color: var(--done);
+  font-size: 13px;
+}
+
+/* "Aguardando você" em destaque (web, épico #205 §10.3): o cartão inteiro é o alvo de toque. */
+.waiting-now {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.waiting-now-title {
+  color: var(--attention);
+}
+
+.waiting-now-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.waiting-now-card {
+  width: 100%;
+  min-height: var(--touch);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 14px;
+  border: 2px solid var(--attention);
+  border-radius: 8px;
+  background: var(--attention-card);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.waiting-now-card:hover {
+  background: var(--attention-bg);
+}
+
+.waiting-now-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.waiting-now-head .muted {
+  margin-left: auto;
+}
+
+.waiting-now-go {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-weight: 600;
+  color: var(--attention);
+}

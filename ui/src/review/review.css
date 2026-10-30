@@ -1,0 +1,206 @@
+.review {
+  max-width: 1100px;
+}
+
+.review h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.review-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.review-num {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.review-spacer {
+  flex: 1;
+}
+
+.review-sub {
+  margin: -6px 0 0;
+}
+
+.review-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Filtro: um por vez (aria-pressed). */
+.chip-btn {
+  height: 22px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--idle-bg);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chip-btn[aria-pressed="true"] {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.chip-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.review-help {
+  margin: 0;
+  max-width: 760px;
+  line-height: 1.5;
+}
+
+.review-help strong {
+  color: var(--text);
+}
+
+.rv-side-empty {
+  margin: 8px 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rv-dec {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.rv-dec-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.rv-dec-head h2 {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rv-dec-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rv-dec-toggle svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.rv-dec-meta {
+  font-size: 12px;
+}
+
+/* Comentário no PR: o texto da decisão, editável antes de enviar. */
+.rv-dec-comment {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.rv-dec-comment label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.rv-dec-comment textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.rv-dec-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.rv-dec-note {
+  margin: 0;
+  padding: 0 14px 10px;
+  font-size: 12px;
+}
+
+.rv-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.rv-link:hover {
+  text-decoration: underline;
+}
+
+.rv-dec-body {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.rv-dec-body[hidden] {
+  display: none;
+}
+
+.rv-dec-body h3 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.rv-dec-body p {
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .rv-dec-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,66 @@
+/* Item aberto como aba de editor (#317, mockup "Projeto"). */
+.item-view { padding: 20px 24px 28px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.iv-crumbs { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin: -8px 0 0; padding: 0; list-style: none; }
+.iv-crumbs li + li::before { content: "›"; margin-right: 6px; }
+.iv-crumbs [aria-current] { color: var(--text); }
+.iv-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.iv-title { flex: 1; min-width: 320px; }
+.iv-title h1 { margin: 0; font-size: 22px; font-weight: 600; text-wrap: balance; }
+.iv-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+.iv-chip { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; background: var(--idle-bg); color: var(--text-2); }
+.iv-chip[data-kind="epic"] { color: var(--epic); }
+.iv-chip[data-kind="issue"] { background: var(--running-bg); color: var(--running); }
+.item-view .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.item-view .small { font-size: 12px; margin: 0; }
+.iv-progress { display: flex; align-items: center; gap: 10px; max-width: 520px; font-size: 12px; }
+.iv-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--idle-bg); overflow: hidden; }
+.iv-bar span { display: block; height: 100%; background: var(--done); }
+.iv-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.iv-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.iv-card { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.iv-review { margin-left: auto; text-transform: none; letter-spacing: 0; }
+.iv-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.iv-table th { text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.iv-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.iv-table tr:last-child td { border-bottom: 0; }
+.iv-table .iv-sub { font-size: 13px; color: var(--text); text-align: left; padding: 0; }
+.iv-act { width: 32px; }
+.iv-play { color: var(--accent); }
+.iv-play:hover { background: var(--running-bg); }
+@media (max-width: 1100px) { .iv-grid { grid-template-columns: minmax(0, 1fr); } }
+.item-view .wrap { overflow-wrap: anywhere; font-size: 12px; }
+.status-menu { position: relative; }
+.status-pop { position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; width: 240px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-3); display: flex; flex-direction: column; gap: 6px; box-shadow: 0 8px 24px var(--shadow); }
+.status-pop button.opt { text-align: left; border: none; background: none; color: var(--text); font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+.status-pop button.opt:hover, .status-pop button.opt[aria-current] { background: var(--idle-bg); }
+.status-pop input { height: 32px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; padding: 0 8px; }
+.status-pop label { font-size: 12px; color: var(--muted); }
+.sec { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.sec:last-child { border-bottom: none; }
+.sec h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+.sec h3 .n { color: var(--faint); font-weight: 600; letter-spacing: 0; text-transform: none; }
+.sec h3 .pend { color: var(--attention); }
+.sec .none { margin: 0; color: var(--muted); font-size: 13px; }
+.sec .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sess { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); border: 1px solid transparent; }
+.sess.alive { border-color: var(--ok); }
+.sess .when { grid-column: 2 / 4; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sess .live { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+.sess .live.off { background: none; box-shadow: none; }
+.linklike { border: none; background: none; color: var(--link); font: inherit; font-size: 12px; cursor: pointer; padding: 4px; }
+.ev { display: grid; grid-template-columns: 72px 1fr; gap: 10px; font-size: 13px; }
+.ev time { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; padding-top: 1px; }
+.ev .k { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.ev .d { color: var(--muted); overflow-wrap: anywhere; }
+.more { align-self: flex-start; border: none; background: none; color: var(--link); font: inherit; font-size: 13px; cursor: pointer; padding: 4px 0; }
+.decision { padding: 10px 12px; border-radius: 6px; background: var(--surface-2); display: flex; flex-direction: column; gap: 6px; border: 1px solid transparent; }
+.decision.pending { border-color: var(--attention-border); background: var(--attention-bg); }
+.decision .dt { font-weight: 600; }
+.decision p { margin: 0; font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
+.decision .lbl { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.decision .origin { font-size: 12px; font-weight: 600; }
+.decision .origin.autonoma { color: var(--attention); }
+.prline { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.prline .pr { font-family: var(--mono); font-size: 12px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border-strong); background: none; color: var(--text-2); cursor: pointer; }
+.prline .pr[data-state="open"] { color: var(--running); }
+.prline .pr[data-state="merged"] { color: var(--epic); }

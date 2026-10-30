@@ -1,0 +1,19 @@
+[package]
+name = "ct-jira"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ct-core.workspace = true
+ct-ledger.workspace = true
+ct-proc.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[features]
+# `jira` falso (script) para testes de outros crates.
+test-support = []
+
+[dev-dependencies]
+tempfile.workspace = true

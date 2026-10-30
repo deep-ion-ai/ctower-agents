@@ -1,0 +1,60 @@
+[package]
+name = "cthubd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Hub (plano de controle): hub.db, snapshots, GitHub de todos os projetos e
+# o /ws do hub. Não depende de ct-sessions, ct-pty nem ct-git (verifique com
+# `cargo tree -p cthubd`).
+[dependencies]
+ct-core.workspace = true
+ct-gh.workspace = true
+ct-http.workspace = true
+ct-ledger.workspace = true
+ct-secrets.workspace = true
+ct-update.workspace = true
+axum.workspace = true
+# Chave VAPID e campos do Web Push em base64url (#203).
+base64.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+# Web Push (#203): RFC 8291 (aes128gcm) e VAPID (RFC 8292).
+ring.workspace = true
+# Cf-Access-Jwt-Assertion (#200).
+jsonwebtoken.workspace = true
+# Bundle da UI web (ui/dist-web ou a página de aviso; veja o build.rs).
+rust-embed.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Conferência dos snapshots de secrets contra o store (#168).
+sha2.workspace = true
+hmac.workspace = true
+# Pacote dos docs (docs_backup, #442).
+tar.workspace = true
+zstd.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+# Cliente do /ws na sonda de saúde do `cthubd update` (hub.info).
+tokio-tungstenite.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ureq = { workspace = true, features = ["tls", "json"] }
+uuid.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Exporta os tipos do /ws do hub para ui/src/protocol/hub-gen (teste export_ts).
+ts = ["dep:ts-rs", "ct-core/ts", "ct-gh/ts", "ct-ledger/ts", "ct-secrets/ts", "ct-update/ts"]
+
+[dev-dependencies]
+ct-gh = { workspace = true, features = ["test-support"] }
+assert_cmd.workspace = true
+http-body-util.workspace = true
+predicates.workspace = true
+rusqlite.workspace = true
+tempfile.workspace = true
+tower.workspace = true
+ureq = { workspace = true, features = ["json"] }

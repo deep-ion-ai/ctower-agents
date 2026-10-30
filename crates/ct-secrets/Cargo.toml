@@ -1,0 +1,25 @@
+[package]
+name = "ct-secrets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Store cifrado de secrets e variáveis (issue #164): usado pelo `cthubd` e,
+# depois, pelo `ctowerd` no cache cifrado do ambiente. Não depende do
+# ledger nem de SQLite: o `rev` de cada mudança vem de quem chama.
+[dependencies]
+ct-core.workspace = true
+age.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Tipos TypeScript do escopo e do tipo para a UI do hub (ts-rs).
+ts = ["dep:ts-rs"]
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,38 @@
+[package]
+name = "ct-sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ct-core.workspace = true
+ct-gh.workspace = true
+ct-git.workspace = true
+ct-gitlab.workspace = true
+ct-jira.workspace = true
+ct-ledger.workspace = true
+ct-pty.workspace = true
+ct-secrets.workspace = true
+ct-update.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+tempfile = { workspace = true, optional = true }
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Ambiente de teste (repo git temporário + claude falso) para outros crates.
+test-support = ["dep:tempfile"]
+# Tipos TypeScript para a UI (ts-rs).
+ts = ["dep:ts-rs", "ct-core/ts", "ct-ledger/ts", "ct-update/ts"]
+
+[dev-dependencies]
+ct-gh = { workspace = true, features = ["test-support"] }
+ct-gitlab = { workspace = true, features = ["test-support"] }
+ct-jira = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "ct-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Atualização por build local, comum ao ctowerd/ctower (`ctower update`) e ao
+# cthubd (`cthubd update`): clone dedicado do `update_ref`, build, backup dos
+# binários e snapshot dos bancos, restart e rollback. Não depende de
+# ct-sessions, ct-pty nem ct-git (o cthubd usa este crate).
+[dependencies]
+ct-core.workspace = true
+ct-ledger.workspace = true
+libc.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Tipos TypeScript para a UI (ts-rs).
+ts = ["dep:ts-rs", "ct-core/ts", "ct-ledger/ts"]
+
+[dev-dependencies]
+tempfile.workspace = true

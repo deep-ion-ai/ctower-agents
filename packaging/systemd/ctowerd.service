@@ -1,0 +1,22 @@
+# Unidade systemd de usuário do daemon do Control Tower.
+# Instalação: provision.sh copia para ~/.config/systemd/user/ e habilita com
+# `systemctl --user enable --now ctowerd` (com `loginctl enable-linger`).
+#
+# KillMode=control-group: parar/reiniciar o serviço encerra também as sessões
+# (PTYs filhas). No próximo boot elas aparecem como `interrupted` na tela de
+# recuperação. Por isso `ctower restart` recusa reiniciar com sessões vivas.
+
+[Unit]
+Description=Control Tower daemon (ctowerd)
+After=network.target
+
+[Service]
+ExecStart=%h/.cargo/bin/ctowerd
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=RUST_LOG=info
+Restart=on-failure
+RestartSec=2
+KillMode=control-group
+
+[Install]
+WantedBy=default.target
