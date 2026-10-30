@@ -8,6 +8,7 @@ import { AgentRules } from "../hub/AgentRules";
 import { isJira } from "../hub/tracker";
 import {
   AssignmentsCard,
+  CleanupCard,
   DangerZone,
   DocsCard,
   ProjectSecretsCard,
@@ -154,6 +155,9 @@ export function ProjectSettings({
       break;
     case "docs":
       body = <DocsCard project={p} settings={settings} readOnly={web} />;
+      break;
+    case "cleanup":
+      body = <CleanupCard project={p} />;
       break;
     case "danger":
       body = (

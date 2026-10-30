@@ -10,7 +10,7 @@ import { useTower } from "../state/tower";
 import { useTermPrefs } from "../terminal/prefs";
 import { WEB_SETTINGS } from "../web/mode";
 import { useWebSession } from "../web/WebGate";
-import { CLEANUP_KEYS, CleanupRules } from "./CleanupRules";
+import { CLEANUP_KEYS } from "../maintenance/CleanupRules";
 import { DEFAULT_PROMPTS, DEFAULT_UI_CONFIG } from "./defaults";
 import { promptsChanged, ReadyPromptsControl } from "./ReadyPrompts";
 import {
@@ -773,30 +773,21 @@ function useEnvItems(env: string | undefined): Item[] {
       description: "Onde o daemon cria o worktree de cada sessão.",
       control: <span className="mono">{info?.worktrees_root ?? (on ? "—" : "sem conexão")}</span>,
     },
-    {
-      id: "cleanup",
-      section: "cleanup",
-      category: "Limpeza",
-      name: "Regras",
-      shownKey: "[cleanup]",
-      keys: ["cleanup", ...CLEANUP_KEYS],
-      keywords: "worktree target branch sessões transcripts automática intervalo",
-      description:
-        "Quando o ambiente verifica e o que pode limpar sozinho, com o valor aplicado. Edite [cleanup] no config.toml do ambiente e reinicie o daemon.",
-      control: <CleanupRules env={env} />,
-    },
-    // Ponte (#337): plano, verificar e limpar ficam em Manutenção; a busca por eles cai aqui.
+    // Atalho (#22): a Limpeza (regras, plano e limpar, com filtro por
+    // projeto) fica só em Manutenção › Limpeza; a busca por ela cai aqui.
     {
       id: "cleanup-maintenance",
-      section: "cleanup",
+      section: "local-projects",
       category: "Limpeza",
-      name: "Plano e limpeza",
-      keywords: "limpar pendentes bloqueados verificar concluídos sessões abertas fora do hub restos clones manutenção",
+      name: "Regras, plano e limpeza",
+      keys: ["cleanup", ...CLEANUP_KEYS],
+      keywords:
+        "limpar regras auto automática intervalo worktree target branch sessões transcripts pendentes bloqueados verificar concluídos sessões abertas fora do hub restos clones projeto manutenção",
       description:
-        "O plano de limpeza (pendentes, bloqueados e por quê), verificar, limpar e o que ficou fora do hub ficam em Manutenção › Limpeza.",
+        "As regras ([cleanup]), o plano (pendentes, bloqueados e por quê), verificar, limpar e o que ficou fora do hub ficam em Manutenção › Limpeza, com filtro por projeto.",
       control: (
         <button type="button" className="link-btn" onClick={() => nav.openTab(maintenanceTab("cleanup", env))}>
-          Ver e limpar em Manutenção ›
+          Abrir em Manutenção › Limpeza ›
         </button>
       ),
     },

@@ -743,6 +743,7 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
     "Regras do agente",
     "Secrets e variáveis",
     "Docs",
+    "Limpeza",
     "Zona de perigo",
   ]);
   await user.click(within(secoes).getByRole("button", { name: "Repositório e rastreador" }));
@@ -757,6 +758,15 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
   const geral = await screen.findByRole("group", { name: "Geral" });
   await user.click(within(geral).getByRole("button", { name: /^Editar/ }));
   expect(within(geral).getByRole("form", { name: "Editar ctower-agents" })).toBeInTheDocument();
+  await user.click(within(geral).getByRole("button", { name: "Cancelar" }));
+
+  // Limpeza (#22): um clique leva a Manutenção › Limpeza filtrada pelo projeto.
+  await user.click(within(secoes).getByRole("button", { name: "Limpeza" }));
+  const limpeza = await screen.findByRole("group", { name: "Limpeza" });
+  await user.click(within(limpeza).getByRole("button", { name: "Abrir a limpeza do projeto ›" }));
+  expect(screen.getByRole("tab", { name: "Manutenção · Limpeza" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByLabelText("Projeto da limpeza")).toHaveValue("deep-ion-ai/ctower-agents");
+  expect(screen.getByLabelText("Ambiente da manutenção")).toHaveValue("wsl");
 });
 
 test("projeto local (hub fora, #17): Sessões pelo ambiente e Configurações apontam para o hub", async () => {

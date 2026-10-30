@@ -339,6 +339,7 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
           screen: projectsPlace({ project, assign: true }),
         }),
         at("secrets", "Secrets", "secrets variáveis env tokens chaves", "settings", "secrets"),
+        at("cleanup", "Limpeza", "limpeza limpar worktree target concluídos manutenção", "settings", "cleanup"),
         at("danger", "Excluir", "excluir apagar remover zona de perigo", "settings", "danger"),
       );
     }

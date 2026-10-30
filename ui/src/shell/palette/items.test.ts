@@ -52,7 +52,6 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Configurações › Ambiente › GitHub",
     "Configurações › Ambiente › Atualização do daemon",
     "Configurações › Ambiente › Projetos locais",
-    "Configurações › Ambiente › Limpeza",
     "Configurações › Ambiente › Notificações",
   ]);
   expect(byKind(items, "command").map((i) => i.label)).toEqual([

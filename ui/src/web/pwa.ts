@@ -25,7 +25,7 @@ export const PUSH_EVENTS: { event: PushEvent; label: string; hint: string }[] = 
  * `go=hub:proposals`, `go=hub:envs`, `go=hub:devices` ou `go=control`. E,
  * desde a #17, o projeto numa aba: `go=project&project=<o>/<r>` com
  * `view=overview|items|sessions|settings` e, nas Configurações,
- * `section=general|tracker|envs|rules|secrets|docs|danger` (aba ou seção
+ * `section=general|tracker|envs|rules|secrets|docs|cleanup|danger` (aba ou seção
  * desconhecida = a padrão, para um link de uma versão mais nova não falhar).
  * `go=hub:projects` (o antigo Hub › Projetos e atribuições, #18) segue
  * valendo: com `project=<o>/<r>`, as Configurações dele; sem, o índice de
