@@ -2,7 +2,7 @@
   "name": "control-tower-ui",
   "private": true,
   "license": "Apache-2.0",
-  "version": "0.15.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
