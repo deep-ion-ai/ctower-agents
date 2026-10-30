@@ -129,6 +129,11 @@ test("ignora o que não pede o humano", () => {
   expect(attention(input({ dashboards: { wsl: d } }))).toEqual([]);
 });
 
+test("sync atrasado de projeto fora da lista não avisa", () => {
+  const d = dashboard({ sync: [sync({ project_id: 99, last_ok_at: null, last_error: "timeout" })] }, [workItem()]);
+  expect(attention(input({ dashboards: { wsl: d } }))).toEqual([]);
+});
+
 test("ordem: aguardando primeiro, mais antigo antes", () => {
   const a = session({ id: "a", work_item_id: 31, last_event_at: NOW - 5 * MIN });
   const b = session({ id: "b", work_item_id: 32, last_event_at: NOW - 30 * MIN });

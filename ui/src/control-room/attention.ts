@@ -296,6 +296,8 @@ export function attention(input: AttentionInput): AttentionItem[] {
     for (const sync of d.sync) {
       const ref = sync.last_ok_at ?? null;
       const project = d.projects.find((p) => p.project.id === sync.project_id)?.project;
+      // Projeto fora da lista (desatribuído ou excluído): ninguém o sincroniza mais.
+      if (!project) continue;
       const interval = isJiraProject(project) ? JIRA_SYNC_INTERVAL_MS : SYNC_INTERVAL_MS;
       const late = ref === null ? sync.last_error !== null : now - ref > SYNC_LATE_FACTOR * interval;
       if (!late) continue;
@@ -304,7 +306,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
         kind: "sync_late",
         env: env.id,
         label: "Sync atrasado",
-        title: `${trackerLabel(project)} de ${project?.name ?? `projeto ${sync.project_id}`} sem sincronizar`,
+        title: `${trackerLabel(project)} de ${project.name} sem sincronizar`,
         detail:
           sync.last_error ??
           (ref === null ? "Ainda não sincronizou" : `Último sucesso há ${duration(now - ref)}`),

@@ -306,6 +306,10 @@ impl Ledger {
                         "UPDATE project SET unassigned_at = ?2 WHERE id = ?1",
                         params![p.id, now],
                     )?;
+                    // Ninguém mais sincroniza o projeto: a última falha ficaria
+                    // parada e a Sala de controle a mostraria como "sync atrasado".
+                    self.conn
+                        .execute("DELETE FROM sync_state WHERE project_id = ?1", [p.id])?;
                     out.unassigned.push(key);
                 }
             }
@@ -556,6 +560,8 @@ mod tests {
         assert!(projetos_no_outbox(&l).is_empty());
         assert_eq!(l.pending_applies().unwrap().len(), 2);
 
+        l.record_sync_error(legado.id, "falha de rede").unwrap();
+
         // Remoção pela ausência em `projects`: sai da lista, a linha fica.
         let r = l
             .apply_hub_config(&resp(7, vec![cp("novo", 6)]), path)
@@ -573,6 +579,10 @@ mod tests {
         assert_eq!(fora.len(), 1);
         assert!(fora[0].unassigned_at.is_some());
         assert!(!l.project_active(legado.id).unwrap());
+        assert!(
+            l.sync_state(legado.id).unwrap().is_none(),
+            "sem sync_state de projeto fora do hub"
+        );
         assert!(projetos_no_outbox(&l).is_empty());
 
         // `changed: false`: só a hora do pull.
