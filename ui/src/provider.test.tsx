@@ -298,7 +298,7 @@ describe("projeto Jira + GitLab", () => {
     const footer = screen.getByRole("region", { name: /Em revisão/ }).closest("footer")!;
     expect(footer).toHaveTextContent("app PROJ-5450");
     // Título e status do sync dizem Jira.
-    expect(screen.getByRole("button", { name: "Sincronizar agora" })).toHaveAttribute("title", "Sincronizar com o Jira agora");
+    expect(screen.getByRole("button", { name: "Buscar issues agora" })).toHaveAttribute("title", "Buscar agora as issues do Jira em todos os ambientes conectados");
     expect(screen.getByRole("contentinfo", { name: "Barra de status" })).toHaveTextContent(/Jira sincronizado/);
     expectNeutral();
 
@@ -381,7 +381,7 @@ describe("projeto Jira + GitLab", () => {
     expectNeutral();
   });
 
-  test("paleta ⌘K: issue pela chave e Sincronizar com o Jira", async () => {
+  test("paleta ⌘K: issue pela chave e Buscar issues agora no Jira", async () => {
     const api = envApi();
     render(<App api={api} />);
     const user = userEvent.setup();
@@ -392,7 +392,7 @@ describe("projeto Jira + GitLab", () => {
     const opts = within(screen.getByRole("listbox", { name: "Resultados" })).getAllByRole("option");
     expect(opts.some((o) => o.textContent?.includes("PROJ-5450 Portar o plugin"))).toBe(true);
     await user.clear(within(dialog).getByRole("combobox"));
-    await user.type(within(dialog).getByRole("combobox"), ">sincronizar");
+    await user.type(within(dialog).getByRole("combobox"), ">buscar issues");
     expect(within(screen.getByRole("listbox", { name: "Resultados" })).getAllByRole("option")[0]).toHaveTextContent(
       "Jira, nos ambientes conectados",
     );

@@ -85,7 +85,7 @@ function setup(sync: () => unknown) {
   return { api, side: screen.getByRole("complementary", { name: "Ambientes e projetos" }) };
 }
 
-test("sincronizar com o hub: progresso, resultado e contador atualizado", async () => {
+test("enviar ao hub: progresso, resultado e contador atualizado", async () => {
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
   const { api, side } = setup(async () => {
@@ -94,10 +94,10 @@ test("sincronizar com o hub: progresso, resultado e contador atualizado", async 
   });
   const user = userEvent.setup();
   expect(await within(side).findByText("hub: 4 pendentes")).toBeInTheDocument();
-  await user.click(within(side).getByRole("button", { name: "Sincronizar wsl com o hub" }));
-  const btn = within(side).getByRole("button", { name: "Sincronizar wsl com o hub" });
+  await user.click(within(side).getByRole("button", { name: "Enviar ao hub o estado de wsl" }));
+  const btn = within(side).getByRole("button", { name: "Enviar ao hub o estado de wsl" });
   expect(btn).toBeDisabled();
-  expect(btn).toHaveTextContent("Sincronizando…");
+  expect(btn).toHaveTextContent("Enviando…");
   const infosAntes = api.callsTo("env.info").length;
   release();
   expect(await within(side).findByText("4 mudanças enviadas ao hub")).toBeInTheDocument();
@@ -107,12 +107,12 @@ test("sincronizar com o hub: progresso, resultado e contador atualizado", async 
   expect(api.callsTo("hub.sync.now")).toHaveLength(1);
 });
 
-test("sincronizar com o hub fora mostra o motivo", async () => {
+test("enviar ao hub fora mostra o motivo", async () => {
   const { side } = setup(() =>
     result({ ok: false, sent: 0, batches: 0, acked_seq: null, pending: 4, error: "hub inacessível: conexão recusada" }),
   );
   const user = userEvent.setup();
-  await user.click(await within(side).findByRole("button", { name: "Sincronizar wsl com o hub" }));
+  await user.click(await within(side).findByRole("button", { name: "Enviar ao hub o estado de wsl" }));
   const msg = await within(side).findByText("falhou: hub inacessível: conexão recusada");
   expect(msg).toHaveAttribute("data-warn", "true");
 });
@@ -122,7 +122,7 @@ test("erro do daemon vira mensagem legível", async () => {
     throw new Error("este ambiente não envia ao hub");
   });
   const user = userEvent.setup();
-  await user.click(await within(side).findByRole("button", { name: "Sincronizar wsl com o hub" }));
+  await user.click(await within(side).findByRole("button", { name: "Enviar ao hub o estado de wsl" }));
   expect(await within(side).findByText("falhou: este ambiente não envia ao hub")).toBeInTheDocument();
 });
 

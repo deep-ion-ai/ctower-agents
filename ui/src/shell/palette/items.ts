@@ -213,9 +213,9 @@ function commands(src: PaletteSources, interrupted: number, projects: ProjectRef
     {
       id: "cmd:sync",
       kind: "command",
-      label: "Sincronizar agora",
+      label: "Buscar issues agora",
       detail: `${trackersText(projects.map((p) => p.provider))}, nos ambientes conectados`,
-      keywords: "sync github jira",
+      keywords: "sync sincronizar github jira",
       action: { type: "sync" },
     },
   ];

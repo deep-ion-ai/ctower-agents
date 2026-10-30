@@ -668,7 +668,7 @@ function useEnvItems(env: string | undefined): Item[] {
       shownKey: "gh_sync_interval_secs",
       keys: ["gh_sync_interval_secs"],
       keywords: "sync sincronizar segundos laço",
-      description: `Segundos entre os ciclos do sync com o GitHub (padrão ${syncItem?.default ?? 180}); 0 desliga o laço e o Sincronizar continua funcionando. Vale na hora, sem reiniciar o daemon.${readOnlyHint}`,
+      description: `Segundos entre os ciclos do sync com o GitHub (padrão ${syncItem?.default ?? 180}); 0 desliga o laço e o "Buscar issues agora" continua funcionando. Vale na hora, sem reiniciar o daemon.${readOnlyHint}`,
       modified: configChanged(syncItem),
       restore: syncItem && (() => void cfg.set("gh_sync_interval_secs", syncItem.default)),
       control: (
@@ -678,6 +678,7 @@ function useEnvItems(env: string | undefined): Item[] {
             type="button"
             className="btn"
             disabled={!on || syncing}
+            title="Buscar agora as issues de todos os projetos deste ambiente no rastreador"
             onClick={async () => {
               setSyncing(true);
               try {
@@ -690,7 +691,7 @@ function useEnvItems(env: string | undefined): Item[] {
               }
             }}
           >
-            {syncing ? "Sincronizando…" : "Sincronizar agora"}
+            {syncing ? "Buscando issues…" : "Buscar issues agora"}
           </button>
         </div>
       ),
