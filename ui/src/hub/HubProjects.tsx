@@ -19,7 +19,7 @@ import type {
   SyncState,
 } from "../protocol/hub-gen";
 import { projectCounts } from "./HubHealth";
-import { DELIVERY_TEXT } from "./HubSecrets";
+import { DELIVERY_TEXT, HubSecrets } from "./HubSecrets";
 import { errText, needsConfirm } from "./calls";
 import { hubTab, type ProjectRef } from "./sections";
 import { TrackerReadiness } from "./TrackerReadiness";
@@ -136,9 +136,9 @@ export function projectState(p: HubProjectView, now: number): { text: string; to
  * Alt+↑/↓ ou pelos botões do detalhe), com filtro e "Cadastrar". À direita,
  * o projeto escolhido (`project`, senão o primeiro): repositório e edição,
  * atribuições por ambiente (estado, clone, sessões vivas, remover,
- * atribuir), secrets e variáveis do projeto com a entrega por ambiente, e a
- * exclusão, que mostra o impacto (`DeleteImpact`) e pede a confirmação que
- * o hub pedir.
+ * atribuir), secrets e variáveis do projeto com a entrega por ambiente e o
+ * editor do escopo do projeto (#8), e a exclusão, que mostra o impacto
+ * (`DeleteImpact`) e pede a confirmação que o hub pedir.
  */
 export function HubProjects({
   project,
@@ -176,7 +176,10 @@ export function HubProjects({
   const [done, setDone] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
-  const secrets = useSecrets(!web);
+  // Projeto (chave) com o editor dos secrets aberto no detalhe (#8: antes, um toggle no cabeçalho do Projeto).
+  const [editSecrets, setEditSecrets] = useState<string | null>(null);
+  // Fechar o editor relê o resumo.
+  const secrets = useSecrets(!web, editSecrets);
 
   useEffect(() => {
     if (addUrl !== null) setAdd({ ...EMPTY, ...hostsOf(addKind ?? "github"), url: addUrl });
@@ -1214,11 +1217,21 @@ export function HubProjects({
             <section className="hub-card" aria-labelledby={`pc-sec-${pr.id}`}>
               <div className="hub-card-head">
                 <h3 id={`pc-sec-${pr.id}`}>Secrets e variáveis do projeto · {own.length}</h3>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  aria-expanded={editSecrets === key}
+                  onClick={() => setEditSecrets(editSecrets === key ? null : key)}
+                >
+                  Gerenciar secrets do projeto
+                </button>
                 <button type="button" className="btn btn-sm" onClick={() => nav.openTab(hubTab("secrets"))}>
                   Abrir Secrets e variáveis
                 </button>
               </div>
-              {secrets.error ? (
+              {editSecrets === key ? (
+                <HubSecrets project={{ owner: pr.gh_owner, repo: pr.gh_repo }} />
+              ) : secrets.error ? (
                 <p className="muted hub-card-msg">Secrets indisponíveis: {secrets.error}</p>
               ) : !secrets.list ? (
                 <p className="muted hub-card-msg">Carregando…</p>
@@ -1538,7 +1551,7 @@ function DeleteImpactText({ impact, secrets, local }: { impact: DeleteImpact; se
 }
 
 /** `hub.secrets.list`, relido junto com a visão do hub (a entrega muda com os pulls). */
-function useSecrets(enabled = true): { list: SecretsList | null; error: string | null } {
+function useSecrets(enabled = true, reload?: unknown): { list: SecretsList | null; error: string | null } {
   const { api, hub } = useTower();
   const [list, setList] = useState<SecretsList | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1558,6 +1571,6 @@ function useSecrets(enabled = true): { list: SecretsList | null; error: string |
   }, [api, enabled]);
   useEffect(() => {
     void load();
-  }, [load, hub.envs]);
+  }, [load, hub.envs, reload]);
   return { list, error };
 }

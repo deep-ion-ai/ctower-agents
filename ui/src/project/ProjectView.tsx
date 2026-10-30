@@ -72,7 +72,6 @@ export interface ProjectViewProps<T extends ProjectNode> {
   picker: ReactNode;
   headExtra?: ReactNode;
   banner?: ReactNode;
-  below?: ReactNode;
   /** Projeto sem nenhuma issue no espelho. */
   emptyText: string;
   /** Revisão das decisões do item, se houver work item num ambiente conhecido. */
@@ -507,7 +506,6 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
             {p.error}
           </p>
         )}
-        {p.below}
         {viewMode === "board" ? (
           <Board
             view={view}
