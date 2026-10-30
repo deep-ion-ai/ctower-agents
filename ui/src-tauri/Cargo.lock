@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "control-tower-ui"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ct-client",
  "reqwest",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "ct-client"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "futures-util",
  "serde_json",

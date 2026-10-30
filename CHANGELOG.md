@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.1.0...v1.2.0) (2026-10-30)
+
+
+### Features
+
+* **ui:** índice de projetos na atividade Projetos ([#42](https://github.com/deep-ion-ai/ctower-agents/issues/42)) ([1061544](https://github.com/deep-ion-ai/ctower-agents/commit/10615446a54fbe233be041d911efcb4ec7bd35a9)), closes [#16](https://github.com/deep-ion-ai/ctower-agents/issues/16)
+* **ui:** saúde, sincronização e gestor na Visão geral do projeto ([#43](https://github.com/deep-ion-ai/ctower-agents/issues/43)) ([2f3277a](https://github.com/deep-ion-ai/ctower-agents/commit/2f3277a749fb85862d2b450a0242c7233f55abd0)), closes [#19](https://github.com/deep-ion-ai/ctower-agents/issues/19)
+
+
+### Bug Fixes
+
+* alerta de sync atrasado de projeto desatribuído ([3a9fdc6](https://github.com/deep-ion-ai/ctower-agents/commit/3a9fdc600df65be69e286d7f9c4d4713e4fc70ac))
+
 ## [1.1.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.0.0...v1.1.0) (2026-10-30)
 
 
