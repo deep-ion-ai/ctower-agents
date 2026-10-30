@@ -488,3 +488,12 @@
 .pj-mitems .tree-controls {
   margin: 0;
 }
+
+.pj-settings-nav button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pj-settings-note {
+  margin: 6px 10px 0;
+}

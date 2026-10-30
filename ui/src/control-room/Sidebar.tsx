@@ -14,6 +14,7 @@ import { ago } from "../util/time";
 import { configLine } from "../util/hub";
 import type { ControlView } from "./grid";
 import type { EnvInfo, HubSyncResult } from "../protocol/gen";
+import { DesktopOnlyIcon } from "../web/DesktopOnly";
 
 /** Envio ao hub: pendências e erro (spec do ledger centralizado §5). */
 function hubLine(info: EnvInfo | undefined, now: number): string | null {
@@ -271,17 +272,22 @@ export function Sidebar({
           title="Projetos"
           count={projects.length}
           actions={
-            editable && (
-              <button
-                type="button"
-                className="ibtn"
-                aria-label="Novo projeto"
-                title="Novo projeto"
-                // O cadastro abre no índice de Projetos (#18).
-                onClick={() => nav.go(projectsPlace({ register: { url: "" } }))}
-              >
-                <Icon name="plus" size={15} />
-              </button>
+            // Web: o "+" fica desabilitado com o motivo (#26).
+            web && hub.connected ? (
+              <DesktopOnlyIcon label="Novo projeto" icon="plus" />
+            ) : (
+              editable && (
+                <button
+                  type="button"
+                  className="ibtn"
+                  aria-label="Novo projeto"
+                  title="Novo projeto"
+                  // O cadastro abre no índice de Projetos (#18).
+                  onClick={() => nav.go(projectsPlace({ register: { url: "" } }))}
+                >
+                  <Icon name="plus" size={15} />
+                </button>
+              )
             )
           }
         >

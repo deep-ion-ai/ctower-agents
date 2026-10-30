@@ -1,5 +1,5 @@
 import "../hub/hub.css";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useNow } from "../App";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -25,14 +25,16 @@ import {
   PROJECT_SECTION_LABEL,
   type ProjectSettingsSection,
 } from "./sections";
+import { DesktopOnly } from "../web/DesktopOnly";
 
 /**
  * Aba Configurações do projeto pela visão do hub (#17): o índice das seções
  * à esquerda e a seção pedida (`section` do endereço) à direita, uma por
  * vez, cada uma composta pelos cartões de `project/settings` (épico #12),
  * os que o Hub › Projetos usava antes da #18. Uma por vez para a seção ser o endereço
- * (paleta, deep link) sem depender de rolagem. Na web (só leitura), sem
- * Secrets e Zona de perigo e sem as ações de mudar (`readOnly`).
+ * (paleta, deep link) sem depender de rolagem. Na web (só leitura), Secrets
+ * e Zona de perigo e o Editar ficam desabilitados com o motivo (#26), e os
+ * cartões, sem as ações de mudar (`readOnly`).
  */
 export function ProjectSettings({
   owner,
@@ -61,6 +63,7 @@ export function ProjectSettings({
   const { busy, run, fail, error, done } = useSettingsRun();
   const settings = { busy, run, fail };
   const [editing, setEditing] = useState(false);
+  const noteId = useId();
   // Secrets: só onde aparecem (a seção e a contagem da exclusão); a web não lê.
   const secrets = useSecrets(!web && (section === "secrets" || section === "danger"));
 
@@ -77,7 +80,8 @@ export function ProjectSettings({
   }
 
   const pr = p.project;
-  const sections = PROJECT_SECTIONS.filter((s) => !web || !DESKTOP_ONLY_SECTIONS.has(s));
+  /** Na web, Secrets e Zona de perigo ficam no índice, desabilitadas com o motivo (#26). */
+  const desktopOnly = (s: ProjectSettingsSection) => web && DESKTOP_ONLY_SECTIONS.has(s);
   /** Sessões vivas relatadas no hub para o projeto (o impacto de remover e de excluir). */
   const live: HubSession[] = (() => {
     const d = hub.dashboard;
@@ -174,11 +178,13 @@ export function ProjectSettings({
     <div className="pj-settings">
       <nav className="pj-settings-nav" aria-label="Seções das configurações do projeto">
         <ul>
-          {sections.map((s) => (
+          {PROJECT_SECTIONS.map((s) => (
             <li key={s}>
               <button
                 type="button"
                 aria-current={s === section ? "page" : undefined}
+                disabled={desktopOnly(s)}
+                aria-describedby={desktopOnly(s) ? noteId : undefined}
                 onClick={() => {
                   setEditing(false);
                   onSection(s);
@@ -189,6 +195,11 @@ export function ProjectSettings({
             </li>
           ))}
         </ul>
+        {web && (
+          <p id={noteId} className="muted desktop-only-note pj-settings-note">
+            Secrets e exclusão do projeto no app desktop
+          </p>
+        )}
       </nav>
       {/* `key`: cada projeto e seção guarda o próprio rascunho; trocar descarta. */}
       <div key={`${pr.id}:${section}`} className="pj-settings-body" role="group" aria-label={PROJECT_SECTION_LABEL[section]}>
@@ -199,6 +210,17 @@ export function ProjectSettings({
               <button type="button" className="btn" onClick={() => setEditing(true)}>
                 Editar <span className="sr-only">{pr.name}</span>
               </button>
+            </div>
+          )}
+          {section === "general" && web && (
+            <div className="hub-page-actions">
+              <DesktopOnly
+                labels={
+                  <>
+                    Editar <span className="sr-only">{pr.name}</span>
+                  </>
+                }
+              />
             </div>
           )}
         </div>
