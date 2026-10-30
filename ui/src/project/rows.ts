@@ -4,7 +4,6 @@
 // visão consolidada, na ordem de prioridade do hub; sem ele, os projetos
 // locais de cada ambiente.
 import { lookup } from "../control-room/attention";
-import { hubTab } from "../hub/sections";
 import type { HubProjectView } from "../protocol/hub-gen";
 import type { SyncState } from "../protocol/gen";
 import type { MenuItem } from "../shell/ContextMenu";
@@ -13,7 +12,7 @@ import type { Nav, Screen } from "../state/nav";
 import { useTower } from "../state/tower";
 import { forgeLabel, jiraProjectUrl, repoUrl, type ProviderProject } from "../util/item";
 import { hubClones, localClone } from "./clones";
-import { projectAt } from "./sections";
+import { projectAt, projectsPlace } from "./sections";
 
 export interface ProjectRow {
   key: string;
@@ -134,7 +133,8 @@ export function projectMenuItems(
     // A aba Configurações do próprio projeto (#17), que vem do hub.
     ...(ctx.hubConnected ? [{ label: "Configurações", run: () => nav.go(projectAt(p.screen, "settings")) }] : []),
     ...(ctx.editable
-      ? [{ label: "Atribuir a ambiente", run: () => nav.openTab(hubTab("projects", { project: ref, assign: true })) }]
+      ? // Configurações › Ambientes do próprio projeto, com o formulário aberto (#18).
+        [{ label: "Atribuir a ambiente", run: () => nav.go(projectsPlace({ project: ref, assign: true })) }]
       : []),
     ...(p.start ? [{ label: "Sessão de planejamento", run: () => startSession(p.start!, origin) }] : []),
     { label: `Abrir no ${forgeLabel(p.project)}`, run: () => openUrl(repoUrl(p.project)) },

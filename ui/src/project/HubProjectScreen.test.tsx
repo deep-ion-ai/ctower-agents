@@ -480,7 +480,7 @@ test("sem ambiente conectado com o projeto atribuído: acompanha, mas não inici
   expect(screen.queryByRole("button", { name: /^Iniciar sessão/ })).not.toBeInTheDocument();
 });
 
-test("aviso sem ambiente: Atribuir a um ambiente abre o formulário do projeto no Hub, a cada pedido (#7)", async () => {
+test("aviso sem ambiente: Atribuir a um ambiente abre o formulário nas Configurações › Ambientes do projeto, a cada pedido (#7, #18)", async () => {
   const api = setup(true)
     .on("dashboard.get", dashboard({ projects: [] }))
     .onHub("hub.envs.list", [
@@ -493,20 +493,25 @@ test("aviso sem ambiente: Atribuir a um ambiente abre o formulário do projeto n
   render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Atribuir a um ambiente" }));
-  // O projeto do aviso (não o primeiro da lista), com o formulário aberto e o foco nele.
+  // Na aba do próprio projeto (não do primeiro da lista), Configurações › Ambientes, com o formulário
+  // aberto e o foco nele.
   const form = await screen.findByRole("form", { name: "Atribuir ctower-agents" });
   const env = within(form).getByRole("combobox", { name: "Ambiente" });
   expect(env).toHaveValue("daemon-wsl");
   expect(env).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "ctower-agents · Configurações › Ambientes e atribuições" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   expect(screen.queryByRole("form", { name: "Atribuir outro" })).not.toBeInTheDocument();
 
   // O pedido sai do endereço da aba: voltar à aba não reabre o formulário, e um novo clique abre.
   await user.click(within(form).getByRole("button", { name: "Cancelar" }));
+  await user.click(within(screen.getByRole("navigation", { name: "Telas" })).getByRole("button", { name: "Hub" }));
   await user.click(screen.getByRole("tab", { name: /ctower-agents/ }));
-  await user.click(screen.getByRole("tab", { name: /Projetos e atribuições/ }));
-  expect(await screen.findByRole("heading", { name: /Atribuições/ })).toBeInTheDocument();
+  expect(await screen.findByRole("group", { name: "Ambientes e atribuições" })).toBeInTheDocument();
   expect(screen.queryByRole("form", { name: "Atribuir ctower-agents" })).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: /ctower-agents/ }));
+  await user.click(within(screen.getByRole("navigation", { name: "Abas do projeto" })).getByRole("button", { name: "Itens" }));
   await user.click(await screen.findByRole("button", { name: "Atribuir a um ambiente" }));
   expect(await screen.findByRole("form", { name: "Atribuir ctower-agents" })).toBeInTheDocument();
 });
@@ -632,7 +637,11 @@ test("modal de início com o hub: atalhos para as regras do projeto e do épico 
   await user.click(play(62));
   await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Regras do projeto ›" }));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: /Projetos e atribuições/ })).toHaveAttribute("aria-selected", "true");
+  // Configurações › Regras do agente do próprio projeto (#18), na aba dele.
+  expect(screen.getByRole("tab", { name: "ctower-agents · Configurações › Regras do agente" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
 // Abas do projeto (#17): Visão geral, Itens, Sessões e Configurações.

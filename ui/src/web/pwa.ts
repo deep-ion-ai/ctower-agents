@@ -27,7 +27,9 @@ export const PUSH_EVENTS: { event: PushEvent; label: string; hint: string }[] = 
  * `view=overview|items|sessions|settings` e, nas Configurações,
  * `section=general|tracker|envs|rules|secrets|docs|danger` (aba ou seção
  * desconhecida = a padrão, para um link de uma versão mais nova não falhar).
- * `null` = sem `go` ou desconhecido.
+ * `go=hub:projects` (o antigo Hub › Projetos e atribuições, #18) segue
+ * valendo: com `project=<o>/<r>`, as Configurações dele; sem, o índice de
+ * Projetos. `null` = sem `go` ou desconhecido.
  */
 export function deepLinkTab(search: string): OpenTab | null {
   const q = new URLSearchParams(search);
@@ -54,6 +56,12 @@ export function deepLinkTab(search: string): OpenTab | null {
           isSection(section) ? section : undefined,
         ),
       };
+    }
+    case "hub:projects": {
+      // Link de uma versão anterior à #18: o lugar novo, por `hubTab` (o mesmo da paleta e dos botões).
+      const key = q.get("project") ?? "";
+      const { owner, repo } = splitProjectKey(key);
+      return hubTab("projects", key.includes("/") && owner && repo ? { project: { owner, repo } } : {});
     }
     case "hub:proposals":
       return hubTab("proposals");

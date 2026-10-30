@@ -204,8 +204,14 @@ test("comandos de projeto (#9): \"novo projeto\" abre o cadastro; \"configurar c
   await user.type(input(), "novo projeto");
   expect(activeOption()).toHaveTextContent("Projeto: Novo…");
   await user.keyboard("{Enter}");
-  expect(await screen.findByRole("tab", { name: "Hub · Projetos e atribuições" })).toHaveAttribute("aria-selected", "true");
+  // O cadastro abre no índice de Projetos (#18); sem hub, ele leva a configurar a conexão.
+  expect(await screen.findByRole("tab", { name: "Projetos" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("button", { name: "Configurar o hub" })).toBeInTheDocument();
+  // O lugar antigo segue na paleta como sinônimo e leva ao índice.
   await open(user);
+  await user.type(input(), "hub projetos");
+  expect(activeOption()).toHaveTextContent("Hub › Projetos e atribuições");
+  await user.clear(input());
   await user.type(input(), "configurar ctower");
   expect(activeOption()).toHaveTextContent("Projeto: Configurações — ctower-agents");
   await user.clear(input());

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { HubTree, HubTreeNode } from "../protocol/hub-gen";
 import { useNav, type ItemIntent } from "../state/nav";
 import { useTower } from "../state/tower";
-import { hubTab } from "../hub/sections";
 import { Icon } from "../shell/icons";
 import { useNow } from "../App";
 import { hubClones, liveSessions } from "./clones";
@@ -14,14 +13,13 @@ import { syncPlan } from "./overview";
 import { isJira } from "../hub/tracker";
 import { ProjectSessions } from "./ProjectSessions";
 import { ProjectSettings } from "./ProjectSettings";
-import { sectionOf, type ProjectPage, type ProjectSettingsSection } from "./sections";
+import { projectsPlace, sectionOf, type ProjectPage, type ProjectSettingsSection } from "./sections";
 import { projectSessions, sessionCounts } from "./sessions";
 import { projectKey } from "./tabs";
 import { cacheTree, cachedTree } from "./ui-store";
 import { changeLabel, itemTitle, trackerLabel } from "../util/item";
 import { assignmentText } from "../util/hub";
-import { projectState } from "../hub/HubProjects";
-import { syncText, type Tone } from "./settings";
+import { projectState, syncText, type Tone } from "./settings";
 import type { AssignmentState } from "../protocol/hub-gen";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -38,6 +36,7 @@ export function HubProjectScreen({
   item,
   view,
   section,
+  assign,
 }: {
   owner: string;
   repo: string;
@@ -46,6 +45,8 @@ export function HubProjectScreen({
   view?: ProjectPage;
   /** Seção das Configurações. */
   section?: ProjectSettingsSection;
+  /** Pedido de atribuição (#18): nas Configurações › Ambientes, abre o formulário. */
+  assign?: true;
 }) {
   const tower = useTower();
   const { api, hub, web, dashboards } = tower;
@@ -172,6 +173,10 @@ export function HubProjectScreen({
             repo={ref.repo}
             section={sectionOf({ name: "project", section }, web)}
             onSection={(s) => goPage("settings", s)}
+            // A web é só leitura: o pedido de atribuição não abre nada lá.
+            assign={!web && assign}
+            // Atendido, o pedido sai do endereço (a aba fica em Ambientes): voltar a ela não reabre o formulário.
+            onAssignHandled={() => goPage("settings", "envs")}
           />
         ),
       }}
@@ -228,7 +233,8 @@ export function HubProjectScreen({
                 <button
                   type="button"
                   className="btn btn-sm"
-                  onClick={() => nav.openTab(hubTab("projects", { project: ref, assign: true }))}
+                  // Desde a #18, na seção Ambientes das Configurações do próprio projeto.
+                  onClick={() => nav.go(projectsPlace({ project: ref, assign: true }))}
                 >
                   Atribuir a um ambiente
                 </button>

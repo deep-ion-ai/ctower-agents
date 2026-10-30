@@ -94,3 +94,18 @@ test("inscrição com outra chave VAPID é refeita", () => {
   expect(sameKey(new Uint8Array([4, 1, 3]).buffer, key)).toBe(false);
   expect(sameKey(new Uint8Array([4, 1]).buffer, key)).toBe(false);
 });
+
+test("deep link do antigo Hub › Projetos (#18): as Configurações do projeto ou o índice de Projetos", () => {
+  expect(deepLinkTab("?go=hub:projects")).toEqual({ screen: { name: "project" } });
+  expect(deepLinkTab("?go=hub:projects&project=deep-ion-ai/demo")).toEqual({
+    screen: { name: "project", owner: "deep-ion-ai", repo: "demo", view: "settings" },
+  });
+  // GitLab: o `owner` tem barras; corta na última.
+  expect(deepLinkTab("?go=hub:projects&project=grupo/projeto/app")?.screen).toEqual({
+    name: "project",
+    owner: "grupo/projeto",
+    repo: "app",
+    view: "settings",
+  });
+  expect(deepLinkTab("?go=hub:projects&project=sem-barra")).toEqual({ screen: { name: "project" } });
+});

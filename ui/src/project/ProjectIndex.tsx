@@ -1,8 +1,7 @@
 import "./project-index.css";
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { useNow } from "../App";
 import { projectCounts, useHubHealth } from "../hub/HubHealth";
-import { projectState } from "../hub/HubProjects";
 import type { HubHealth } from "../protocol/hub-gen";
 import { settingsTab } from "../settings/sections";
 import { ContextMenu } from "../shell/ContextMenu";
@@ -15,7 +14,7 @@ import { useProjectOrder, type ProjectOrder } from "./order";
 import { ProviderIcon } from "./ProviderIcon";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "./rows";
 import { projectAt } from "./sections";
-import { keyOf, plural, syncText, useSettingsRun, type Tone } from "./settings";
+import { keyOf, plural, projectState, syncText, useSettingsRun, type Tone } from "./settings";
 
 /**
  * Índice da atividade Projetos (#16): `{ name: "project" }` sem chave. Lista
@@ -26,8 +25,15 @@ import { keyOf, plural, syncText, useSettingsRun, type Tone } from "./settings";
  * reordenação da prioridade (arrastar ou Alt+↑/↓). Abrir um projeto abre a
  * aba dele (`project:<chave>`), e esta aba segue sendo o índice: o projeto
  * aberto continua na faixa de abas ao voltar para cá.
+ *
+ * `register` (#18) é o pedido de cadastro do endereço, que antes ia ao Hub ›
+ * Projetos: o "+" da Sala de controle e a paleta (vazio) e o "Cadastrar
+ * projeto" da Quarentena (com a URL, ou em Jira + GitLab). Abre o formulário
+ * e sai do endereço, como o `assign` nas Configurações do projeto. `notice`
+ * é o aviso de quem chegou aqui ao terminar (a exclusão do projeto, com o
+ * snapshot anterior): fica na tela (a mensagem de uma ação seguinte o cobre), fora do endereço.
  */
-export function ProjectIndex() {
+export function ProjectIndex({ register, notice: noticeReq }: { register?: RegisterIntent; notice?: string } = {}) {
   const { hub, web, api } = useTower();
   const nav = useNav();
   const now = useNow();
@@ -38,11 +44,29 @@ export function ProjectIndex() {
   const [filter, setFilter] = useState("");
   /** Cadastro aberto; `id` novo a cada pedido, para o formulário recomeçar. */
   const [add, setAdd] = useState<{ id: number; intent: RegisterIntent } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; row: ProjectRow; origin: HTMLElement } | null>(null);
 
   const viaHub = hub.up && !!hub.dashboard;
   // Cadastro, ordem e atribuição: no hub e só no desktop (a web é só leitura).
   const editable = hub.connected && !web;
+
+  // Pedido de cadastro do endereço: abre o formulário (de novo a cada pedido,
+  // pelo `id`) e sai do endereço, para voltar à aba não reabrir o formulário.
+  // Com o hub ainda conectando (deep link na abertura), espera por ele; na
+  // web (só leitura) o pedido só sai.
+  useEffect(() => {
+    if (!noticeReq) return;
+    setNotice(noticeReq);
+    nav.go({ name: "project" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- só o aviso dispara
+  }, [noticeReq]);
+  useEffect(() => {
+    if (!register || (!hub.connected && !web)) return;
+    if (editable) setAdd((a) => ({ id: (a?.id ?? 0) + 1, intent: register }));
+    nav.go({ name: "project" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- só o pedido e a conexão disparam
+  }, [register, hub.connected]);
   // A ordem é a do hub: só os projetos dele (todos com `view`) reordenam.
   const ranked = viaHub ? rows.flatMap((r) => (r.view ? [r.view.project] : [])) : [];
   const order = useProjectOrder(ranked, settings, viaHub && editable);
@@ -136,9 +160,9 @@ export function ProjectIndex() {
           {settings.error}
         </p>
       )}
-      {settings.done && (
+      {(settings.done ?? notice) && (
         <p role="status" className="state-on">
-          {settings.done}
+          {settings.done ?? notice}
         </p>
       )}
 

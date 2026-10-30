@@ -1,4 +1,4 @@
-import { pageOf, pageSuffix, projectAt, sectionOf, type ProjectAddr } from "./sections";
+import { pageOf, pageSuffix, projectAt, projectsPlace, sectionOf, type ProjectAddr } from "./sections";
 import { itemTab } from "./tabs";
 
 const BASE: ProjectAddr = { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" };
@@ -40,4 +40,21 @@ test("itemTab: a aba do item não leva a aba nem a seção do projeto", () => {
   const t = itemTab({ ...BASE, view: "settings", section: "docs" }, 5, "x");
   expect(t.id).toBe("project:deep-ion-ai/ctower-agents#5");
   expect(t.screen).toEqual({ ...BASE, item: { ghNumber: 5 } });
+});
+
+test("projectsPlace (#18): o lugar novo do antigo Hub › Projetos; projectAt tira os pedidos", () => {
+  const ref = { owner: "deep-ion-ai", repo: "ctower-agents" };
+  expect(projectsPlace({})).toEqual({ name: "project" });
+  expect(projectsPlace({ register: { url: "u", kind: "jira" } })).toEqual({ name: "project", register: { url: "u", kind: "jira" } });
+  expect(projectsPlace({ project: ref })).toEqual({ ...BASE, view: "settings" });
+  expect(projectsPlace({ project: ref, assign: true })).toEqual({ ...BASE, view: "settings", section: "envs", assign: true });
+  // Com projeto, o pedido de cadastro não vale (o projeto já existe).
+  expect(projectsPlace({ project: ref, register: { url: "u" } })).toEqual({ ...BASE, view: "settings" });
+  // Os pedidos valem uma vez: trocar de aba ou seção os tira do endereço.
+  expect(projectAt({ ...BASE, view: "settings", section: "envs", assign: true }, "settings", "envs")).toEqual({
+    ...BASE,
+    view: "settings",
+    section: "envs",
+  });
+  expect(projectAt({ name: "project", register: { url: "" }, notice: "x" })).toEqual({ name: "project" });
 });

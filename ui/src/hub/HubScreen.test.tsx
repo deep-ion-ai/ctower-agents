@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
@@ -23,6 +23,8 @@ import {
   RC_AVAILABLE,
 } from "../test/fixtures";
 import type { HubSection } from "./sections";
+import type { Screen } from "../state/nav";
+import type { ProjectSettingsSection } from "../project/sections";
 
 const NOW = Date.now();
 
@@ -52,6 +54,8 @@ function setup(
     status?: HubStatus;
     connected?: boolean;
     section?: HubSection;
+    /** Outro endereço inicial (as Configurações de um projeto, o índice de Projetos). */
+    at?: Screen;
     proposals?: () => HubProposals;
     health?: HubHealth;
   } = {},
@@ -99,7 +103,7 @@ function setup(
     })
     .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 0, recovery_configured: true }, items: [], delivery: [] })
     .onHub("hub.recovery.status", recoveryStatus());
-  render(<App api={api} initial={{ name: "hub", section: opts.section }} />);
+  render(<App api={api} initial={opts.at ?? { name: "hub", section: opts.section }} />);
   return {
     api,
     user: userEvent.setup(),
@@ -108,6 +112,19 @@ function setup(
 }
 
 const section = (name: RegExp) => screen.getByRole("region", { name });
+/**
+ * Configurações do projeto na seção (#17). Desde a #18 é o único lugar de
+ * configurar um projeto: os cartões que o Hub › Projetos mostrava (e estes
+ * testes exercitavam lá) estão aqui, um por seção.
+ */
+const settingsOf = (section: ProjectSettingsSection, repo = "ctower-agents"): Screen => ({
+  name: "project",
+  owner: "deep-ion-ai",
+  repo,
+  view: "settings",
+  section,
+});
+const INDEX: Screen = { name: "project" };
 /** Linha da seção no painel lateral. */
 const sideRow = (name: string) => screen.getByRole("button", { name });
 
@@ -172,35 +189,27 @@ test("informações, avisos de hub.status e token do GitHub do hub", async () =>
 });
 
 test("atribuições com estado; a mensagem só aparece no estado de erro", async () => {
-  const { user } = setup({ section: "projects" });
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
-  expect(within(ct).getByText("aplicada")).toBeInTheDocument();
+  setup({ at: settingsOf("envs") });
+  const ct = await screen.findByRole("group", { name: "Ambientes e atribuições" });
+  expect(await within(ct).findByText("aplicada")).toBeInTheDocument();
   expect(within(ct).getByText("com erro: não é um clone de deep-ion-ai/ctower-agents")).toBeInTheDocument();
   expect(within(ct).getByText("/home/user/projetos/ctower-agents")).toBeInTheDocument();
-  // Na lista, o estado de cada projeto; o detalhe é o do projeto escolhido.
-  const list = screen.getByRole("region", { name: "Projetos cadastrados" });
-  expect(within(list).getByRole("button", { name: "ctower-agents" })).toHaveAccessibleDescription(
-    "deep-ion-ai/ctower-agents 1 atribuição com erro",
-  );
-  expect(within(list).getByRole("button", { name: "demo" })).toHaveAccessibleDescription(
-    "deep-ion-ai/demo 1 atribuição pendente",
-  );
-  expect(screen.queryByRole("group", { name: "Projeto demo" })).not.toBeInTheDocument();
-  await user.click(within(list).getByRole("button", { name: "demo" }));
-  const demo = await screen.findByRole("group", { name: "Projeto demo" });
-  expect(within(demo).getByText("pendente")).toBeInTheDocument();
-  expect(within(list).getByRole("button", { name: "demo" })).toHaveAttribute("aria-current", "true");
-  expect(screen.getByRole("navigation", { name: "Trilha" })).toHaveTextContent("deep-ion-ai/demo");
+});
+
+test("atribuição pendente com a mensagem de um relato antigo: a mensagem não aparece", async () => {
+  setup({ at: settingsOf("envs", "demo") });
+  const demo = await screen.findByRole("group", { name: "Ambientes e atribuições" });
+  expect(await within(demo).findByText("pendente")).toBeInTheDocument();
   expect(screen.queryByText(/erro velho/)).not.toBeInTheDocument();
 });
 
-test("cadastrar projeto pela URL: só os campos preenchidos vão ao hub", async () => {
-  const { api, user, setProjects } = setup({ projects: [], section: "projects" });
+test("cadastrar projeto pela URL (índice de Projetos, #18): só os campos preenchidos vão ao hub", async () => {
+  const { api, user, setProjects } = setup({ projects: [], at: INDEX });
   api.onHub("hub.projects.add", () => {
     setProjects([hubProjectView(CT)]);
     return { project: CT, rev: 8, reapplied: 4, restored: false };
   });
-  await user.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
+  await user.click(await screen.findByRole("button", { name: "+ Novo projeto" }));
   const form = screen.getByRole("form", { name: "Novo projeto" });
   await user.type(within(form).getByLabelText("URL do GitHub"), "https://github.com/deep-ion-ai/ctower-agents");
   await user.type(within(form).getByLabelText(/^Protegidas/), "develop, main");
@@ -212,16 +221,17 @@ test("cadastrar projeto pela URL: só os campos preenchidos vão ao hub", async 
     protected_branches: ["develop", "main"],
   });
   expect(api.hubCallsTo("hub.projects.list").length).toBeGreaterThan(before);
-  expect(await screen.findByRole("group", { name: "Projeto ctower-agents" })).toBeInTheDocument();
+  // O formulário fecha; o índice relê os projetos do hub (acima) e segue aberto.
   expect(screen.queryByRole("form", { name: "Novo projeto" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1, name: "Projetos" })).toBeInTheDocument();
 });
 
 test("erro do hub no cadastro fica na tela", async () => {
-  const { api, user } = setup({ projects: [], section: "projects" });
+  const { api, user } = setup({ projects: [], at: INDEX });
   api.onHub("hub.projects.add", () => {
     throw new Error("branch base develop não existe em deep-ion-ai/x");
   });
-  await user.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
+  await user.click(await screen.findByRole("button", { name: "+ Novo projeto" }));
   const form = screen.getByRole("form", { name: "Novo projeto" });
   await user.type(within(form).getByLabelText("URL do GitHub"), "https://github.com/deep-ion-ai/x");
   await user.click(within(form).getByRole("button", { name: "Cadastrar" }));
@@ -230,9 +240,9 @@ test("erro do hub no cadastro fica na tela", async () => {
 });
 
 test("editar manda só o que mudou", async () => {
-  const { api, user } = setup({ section: "projects" });
+  const { api, user } = setup({ at: settingsOf("general") });
   api.onHub("hub.projects.update", { ...CT, base_branch: "main" });
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
+  const ct = await screen.findByRole("group", { name: "Geral" });
   await user.click(within(ct).getByRole("button", { name: "Editar ctower-agents" }));
   const form = screen.getByRole("form", { name: "Editar ctower-agents" });
   await user.clear(within(form).getByLabelText("Branch base"));
@@ -248,9 +258,9 @@ test("editar manda só o que mudou", async () => {
 
 test("editar os docs do projeto manda o objeto inteiro, com as pastas uma por linha (#444)", async () => {
   const docs = { enabled: false, project_dirs: ["analises"], epic_dirs: [] };
-  const { api, user } = setup({ section: "projects", projects: [hubProjectView(hubProject({ docs }))] });
+  const { api, user } = setup({ at: settingsOf("general"), projects: [hubProjectView(hubProject({ docs }))] });
   api.onHub("hub.projects.update", hubProject({ docs }));
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
+  const ct = await screen.findByRole("group", { name: "Geral" });
   expect(within(ct).getByText("desligados")).toBeInTheDocument();
   await user.click(within(ct).getByRole("button", { name: "Editar ctower-agents" }));
   const form = screen.getByRole("form", { name: "Editar ctower-agents" });
@@ -271,9 +281,9 @@ test("editar os docs do projeto manda o objeto inteiro, com as pastas uma por li
 
 test("hub sem docs (anterior à #440): a edição avisa e não manda docs", async () => {
   const old = { ...hubProject(), docs: undefined as never };
-  const { api, user } = setup({ section: "projects", projects: [hubProjectView(old)] });
+  const { api, user } = setup({ at: settingsOf("general"), projects: [hubProjectView(old)] });
   api.onHub("hub.projects.update", { ...old, name: "CT" });
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
+  const ct = await screen.findByRole("group", { name: "Geral" });
   expect(within(ct).queryByText("Docs")).not.toBeInTheDocument();
   await user.click(within(ct).getByRole("button", { name: "Editar ctower-agents" }));
   const form = screen.getByRole("form", { name: "Editar ctower-agents" });
@@ -287,7 +297,7 @@ test("hub sem docs (anterior à #440): a edição avisa e não manda docs", asyn
 });
 
 test("excluir: impacto exato do hub e, com atribuições, um clique com confirm: true", async () => {
-  const { api, user } = setup({ section: "projects" });
+  const { api, user } = setup({ at: settingsOf("danger") });
   api
     .onHub("hub.projects.impact", {
       project: CT,
@@ -295,7 +305,7 @@ test("excluir: impacto exato do hub e, com atribuições, um clique com confirm:
       live_sessions: [{ id: "s1", env_id: "daemon-wsl", work_item_id: 50 }],
     })
     .onHub("hub.projects.delete", { rev: 9, snapshot: "/b/hub-20261018-1200-pre-delete.db", assignments: [], live_sessions: [] });
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
+  const ct = await screen.findByRole("group", { name: "Zona de perigo" });
   await user.click(within(ct).getByRole("button", { name: "Excluir projeto… ctower-agents" }));
   const box = screen.getByRole("group", { name: "Confirmar exclusão de ctower-agents" });
   expect(box).toHaveTextContent(/apaga o histórico do projeto no hub/);
@@ -307,14 +317,16 @@ test("excluir: impacto exato do hub e, com atribuições, um clique com confirm:
   expect(api.hubCallsTo("hub.projects.impact").map((c) => c.params)).toEqual([{ owner: "deep-ion-ai", repo: "ctower-agents" }]);
   expect(api.hubCallsTo("hub.projects.delete")).toHaveLength(0);
   await user.click(within(box).getByRole("button", { name: "Excluir projeto" }));
+  // A exclusão leva ao índice de Projetos (o projeto não existe mais), com a mensagem e o snapshot.
   expect(await screen.findByText(/excluído do hub\. Snapshot anterior: \/b\/hub-20261018-1200-pre-delete\.db/)).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1, name: "Projetos" })).toBeInTheDocument();
   expect(api.hubCallsTo("hub.projects.delete").map((c) => c.params)).toEqual([
     { owner: "deep-ion-ai", repo: "ctower-agents", confirm: true },
   ]);
 });
 
 test("excluir: sem impacto vai sem confirm; se o hub recusar, vale a mensagem dele", async () => {
-  const { api, user } = setup({ section: "projects" });
+  const { api, user } = setup({ at: settingsOf("danger") });
   api.onHub("hub.projects.impact", { project: CT, assignments: [], live_sessions: [] });
   // Uma atribuição chegou entre a consulta e a exclusão.
   api.onHub("hub.projects.delete", (p: { confirm?: boolean }) => {
@@ -325,7 +337,7 @@ test("excluir: sem impacto vai sem confirm; se o hub recusar, vale a mensagem de
     }
     return { rev: 9, snapshot: "/b/s.db", assignments: [], live_sessions: [] };
   });
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
+  const ct = await screen.findByRole("group", { name: "Zona de perigo" });
   await user.click(within(ct).getByRole("button", { name: "Excluir projeto… ctower-agents" }));
   const box = screen.getByRole("group", { name: "Confirmar exclusão de ctower-agents" });
   const impact = await within(box).findByRole("list", { name: "Impacto da exclusão" });
@@ -342,13 +354,13 @@ test("excluir: sem impacto vai sem confirm; se o hub recusar, vale a mensagem de
 });
 
 test("atribuir a um ambiente sem atribuição, com caminho opcional", async () => {
-  const { api, user } = setup({ section: "projects" });
+  const { api, user } = setup({ at: settingsOf("envs") });
   api.onHub("hub.assignments.add", {
     assignment: hubAssignment({ env_id: "daemon-note", env_name: "notebook", state: "pending" }),
     changed: true,
     reassigned: false,
   });
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
+  const ct = await screen.findByRole("group", { name: "Ambientes e atribuições" });
   await user.click(within(ct).getByRole("button", { name: /Atribuir a ambiente/ }));
   const form = screen.getByRole("form", { name: "Atribuir ctower-agents" });
   // Só os ambientes que ainda não executam o projeto.
@@ -366,7 +378,7 @@ test("atribuir a um ambiente sem atribuição, com caminho opcional", async () =
 });
 
 test("remover atribuição com sessões vivas pede a confirmação do hub", async () => {
-  const { api, user } = setup({ section: "projects" });
+  const { api, user } = setup({ at: settingsOf("envs") });
   api.onHub("hub.assignments.remove", (p: { confirm?: boolean }) => {
     if (!p.confirm) {
       throw new Error(
@@ -375,7 +387,7 @@ test("remover atribuição com sessões vivas pede a confirmação do hub", asyn
     }
     return { rev: 10, assignment: hubAssignment(), live_sessions: [{}] };
   });
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
+  const ct = await screen.findByRole("group", { name: "Ambientes e atribuições" });
   await user.click(within(ct).getByRole("button", { name: "Remover atribuição a wsl-pc" }));
   const box = await screen.findByRole("group", { name: "Confirmar remoção de wsl-pc" });
   expect(box).toHaveTextContent(/não encerra as sessões/);
@@ -427,12 +439,17 @@ test("quarentena: descartar com confirmação e cadastrar a partir dela", async 
   // Um projeto em quarentena (com linhas de dois ambientes).
   expect(sideRow("Quarentena")).toHaveAccessibleDescription("1 projeto");
 
-  // "Cadastrar projeto" abre a seção Projetos com a URL preenchida.
+  // "Cadastrar projeto" abre o cadastro no índice de Projetos (#18) com a URL preenchida.
   await user.click(within(group).getByRole("button", { name: "Cadastrar projeto" }));
   const form = await screen.findByRole("form", { name: "Novo projeto" });
   expect(within(form).getByLabelText("URL do GitHub")).toHaveValue("https://github.com/deep-ion-ai/perdido");
-  expect(screen.getByRole("tab", { name: "Hub · Projetos e atribuições" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "Projetos" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("heading", { level: 1, name: "Projetos" })).toBeInTheDocument();
   await user.click(within(form).getByRole("button", { name: "Cancelar" }));
+  expect(screen.queryByRole("form", { name: "Novo projeto" })).not.toBeInTheDocument();
+  // O pedido saiu do endereço: voltar à aba não reabre o formulário.
+  await user.click(screen.getByRole("tab", { name: "Hub · Quarentena" }));
+  await user.click(screen.getByRole("tab", { name: "Projetos" }));
   expect(screen.queryByRole("form", { name: "Novo projeto" })).not.toBeInTheDocument();
 
   // A aba da Quarentena continua aberta.
@@ -517,7 +534,8 @@ test("contadores do painel lateral batem com avisos, propostas, sinais e quarent
   await waitFor(() => expect(sideRow("Saúde dos projetos")).toHaveAccessibleDescription("2 sinais"));
   expect(sideRow("Quarentena")).toHaveAccessibleDescription("2 projetos");
   expect(sideRow("Chave de recuperação")).toHaveAccessibleDescription("pede atenção");
-  expect(sideRow("Projetos e atribuições")).toHaveAccessibleDescription("2 projetos");
+  // Projetos e atribuições saiu do Hub (#18): o Cadastro fica só com Ambientes.
+  expect(screen.queryByRole("button", { name: "Projetos e atribuições" })).not.toBeInTheDocument();
   expect(sideRow("Ambientes")).toHaveAccessibleDescription("3 ambientes");
   expect(sideRow("Token do GitHub")).toHaveAccessibleDescription("");
   // Os mesmos números nos títulos da Visão geral.
@@ -577,55 +595,8 @@ test("Visão geral: aprovar e recusar ali mesmo, sinais em tabela, ambientes e g
   );
 });
 
-test("lista: filtro, reordenar por arrasto e por Alt+↑/↓", async () => {
-  const { api, user } = setup({ section: "projects" });
-  api.onHub("hub.projects.move", { ...CT, rank: 2 });
-  const list = await screen.findByRole("region", { name: "Projetos cadastrados" });
-  const items = () => within(list).getAllByRole("listitem");
-  // A região aparece antes do hub.projects.list responder.
-  await waitFor(() =>
-    expect(items().map((li) => within(li).getByRole("button").getAttribute("aria-label"))).toEqual(["ctower-agents", "demo"]),
-  );
-  expect(within(items()[1]).getByText("#2")).toBeInTheDocument();
-
-  // Filtro por nome ou owner/repo.
-  await user.type(within(list).getByLabelText("Filtrar projetos"), "dem");
-  expect(items()).toHaveLength(1);
-  await user.clear(within(list).getByLabelText("Filtrar projetos"));
-  await user.type(within(list).getByLabelText("Filtrar projetos"), "nada");
-  expect(within(list).getByText(/Nenhum projeto com/)).toBeInTheDocument();
-  await user.clear(within(list).getByLabelText("Filtrar projetos"));
-
-  // Arrastar ctower-agents para a metade de baixo de demo: depois dele.
-  const [ct, demo] = items();
-  fireEvent.dragStart(ct);
-  fireEvent.dragOver(demo, { clientY: 10 });
-  expect(demo).toHaveAttribute("data-drop", "after");
-  fireEvent.drop(demo, { clientY: 10 });
-  await waitFor(() => expect(api.hubCallsTo("hub.projects.move")).toHaveLength(1));
-  expect(api.hubCallsTo("hub.projects.move")[0].params).toEqual({
-    owner: "deep-ion-ai",
-    repo: "ctower-agents",
-    after: { owner: "deep-ion-ai", repo: "demo" },
-  });
-  expect(await screen.findByText("ctower-agents desceu na ordem dos projetos.")).toBeInTheDocument();
-
-  // Soltar sobre si mesmo não muda nada.
-  fireEvent.dragStart(items()[0]);
-  fireEvent.drop(items()[0]);
-  // Teclado: Alt+↑ em demo sobe para antes de ctower-agents.
-  within(items()[1]).getByRole("button").focus();
-  await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
-  await waitFor(() => expect(api.hubCallsTo("hub.projects.move")).toHaveLength(2));
-  expect(api.hubCallsTo("hub.projects.move")[1].params).toEqual({
-    owner: "deep-ion-ai",
-    repo: "demo",
-    before: { owner: "deep-ion-ai", repo: "ctower-agents" },
-  });
-});
-
-test("detalhe: repositório, sessões vivas, secrets com entrega e atalhos", async () => {
-  const { api, user } = setup();
+test("Configurações do projeto: repositório, sessões vivas, secrets com entrega e atalhos", async () => {
+  const { api, user } = setup({ at: settingsOf("general") });
   api
     .onHub("hub.dashboard.get", {
       ...HUB_DASHBOARD,
@@ -650,53 +621,39 @@ test("detalhe: repositório, sessões vivas, secrets com entrega e atalhos", asy
       ],
       rotate_pending: null,
     });
-  await user.click(await screen.findByRole("button", { name: "Projetos e atribuições" }));
-  const ct = await screen.findByRole("group", { name: "Projeto ctower-agents" });
-  expect(within(ct).getByText("ainda não sincronizado")).toBeInTheDocument();
-  expect(within(ct).getByText("#1 de 2")).toBeInTheDocument();
+  const nav = await screen.findByRole("navigation", { name: "Seções das configurações do projeto" });
+  const go = async (name: string) => {
+    await user.click(within(nav).getByRole("button", { name }));
+    return screen.findByRole("group", { name });
+  };
+  const geral = await screen.findByRole("group", { name: "Geral" });
+  expect(within(geral).getByText("ainda não sincronizado")).toBeInTheDocument();
+  expect(within(geral).getByText("#1 de 2")).toBeInTheDocument();
   // Sessões vivas por ambiente, só as do projeto.
-  const atr = within(ct).getByRole("table", { name: "Atribuições de ctower-agents" });
+  const envs = await go("Ambientes e atribuições");
+  const atr = within(envs).getByRole("table", { name: "Atribuições de ctower-agents" });
   await waitFor(() => expect(within(atr).getByRole("row", { name: /wsl-pc/ })).toHaveTextContent("2 ativas"));
   expect(within(atr).getByRole("row", { name: /mac-mini/ })).toHaveTextContent("nenhuma");
   // Secrets do projeto (não os globais), com a entrega por ambiente.
-  const sec = await within(ct).findByRole("table", { name: "Secrets e variáveis de ctower-agents" });
+  const secrets = await go("Secrets e variáveis");
+  const sec = await within(secrets).findByRole("table", { name: "Secrets e variáveis de ctower-agents" });
   expect(within(sec).getByRole("row", { name: /GH_RELEASE_TOKEN/ })).toHaveTextContent("secret1/2 ambientes · rev 12");
   expect(within(sec).getByRole("row", { name: /RUST_LOG/ })).toHaveTextContent("variável2/2 ambientes · rev 8");
-  expect(within(ct).queryByText("GLOBAL_X")).not.toBeInTheDocument();
-  const entrega = within(ct).getByRole("list", { name: "Entrega dos secrets de ctower-agents por ambiente" });
+  expect(within(secrets).queryByText("GLOBAL_X")).not.toBeInTheDocument();
+  const entrega = within(secrets).getByRole("list", { name: "Entrega dos secrets de ctower-agents por ambiente" });
   expect(entrega).toHaveTextContent("wsl-pcentregue");
   expect(entrega).toHaveTextContent("mac-minipendente");
   // A exclusão mostra as sessões e os secrets atingidos; sem hub.projects.impact
   // (hub antigo), o impacto é o que a UI calcula.
-  await user.click(within(ct).getByRole("button", { name: "Excluir projeto… ctower-agents" }));
-  const impact = await within(ct).findByRole("list", { name: "Impacto da exclusão" });
+  const perigo = await go("Zona de perigo");
+  await user.click(within(perigo).getByRole("button", { name: "Excluir projeto… ctower-agents" }));
+  const impact = await within(perigo).findByRole("list", { name: "Impacto da exclusão" });
   expect(impact).toHaveTextContent("Impacto estimado pela UI");
   expect(impact).toHaveTextContent("2 sessões vivas");
-  expect(impact).toHaveTextContent("2 secrets e variáveis do projeto");
-  await user.click(within(ct).getByRole("button", { name: "Cancelar" }));
-  // Fixada, a aba dos Projetos não é substituída pela seção seguinte.
-  await user.click(screen.getByRole("button", { name: "Fixar aba" }));
-  // Atalho para a seção de Secrets.
-  await user.click(within(ct).getByRole("button", { name: "Abrir Secrets e variáveis" }));
+  expect(await within(perigo).findByText(/2 secrets e variáveis do projeto/)).toBeInTheDocument();
+  await user.click(within(perigo).getByRole("button", { name: "Cancelar" }));
+  // Atalho para a seção de Secrets do Hub.
+  const again = await go("Secrets e variáveis");
+  await user.click(within(again).getByRole("button", { name: "Abrir Secrets e variáveis" }));
   expect(await screen.findByRole("tab", { name: "Hub · Secrets e variáveis" })).toHaveAttribute("aria-selected", "true");
-  // De volta: o projeto escolhido continua, e "Abrir árvore" leva à tela do projeto.
-  await user.click(screen.getByRole("tab", { name: "Hub · Projetos e atribuições" }));
-  const again = await screen.findByRole("group", { name: "Projeto ctower-agents" });
-  await user.click(within(again).getByRole("button", { name: "Abrir árvore" }));
-  expect(await screen.findByRole("heading", { level: 1, name: /ctower-agents/ })).toBeInTheDocument();
-});
-
-test("cadastrar seleciona o projeto novo", async () => {
-  const { api, user, setProjects } = setup({ section: "projects" });
-  const NEW = hubProject({ id: 3, gh_repo: "novo", name: "novo" });
-  api.onHub("hub.projects.add", () => {
-    setProjects([hubProjectView(CT), hubProjectView(DEMO), hubProjectView(NEW)]);
-    return { project: NEW, rev: 8, reapplied: 0, restored: false };
-  });
-  await user.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
-  const form = screen.getByRole("form", { name: "Novo projeto" });
-  await user.type(within(form).getByLabelText("URL do GitHub"), "https://github.com/deep-ion-ai/novo");
-  await user.click(within(form).getByRole("button", { name: "Cadastrar" }));
-  expect(await screen.findByRole("group", { name: "Projeto novo" })).toBeInTheDocument();
-  expect(screen.getByText("deep-ion-ai/novo cadastrado no hub.")).toBeInTheDocument();
 });

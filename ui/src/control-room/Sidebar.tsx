@@ -1,6 +1,6 @@
 // Painel lateral da Sala de controle (#316): visões, hub, ambientes e projetos.
 import { useState } from "react";
-import { hubTab } from "../hub/sections";
+import { projectsPlace } from "../project/sections";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "../project/rows";
 import { ContextMenu, type MenuItem } from "../shell/ContextMenu";
 import { Icon } from "../shell/icons";
@@ -277,7 +277,8 @@ export function Sidebar({
                 className="ibtn"
                 aria-label="Novo projeto"
                 title="Novo projeto"
-                onClick={() => nav.openTab(hubTab("projects", { register: { url: "" } }))}
+                // O cadastro abre no índice de Projetos (#18).
+                onClick={() => nav.go(projectsPlace({ register: { url: "" } }))}
               >
                 <Icon name="plus" size={15} />
               </button>

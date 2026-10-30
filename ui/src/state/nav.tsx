@@ -6,7 +6,7 @@ import { useTower } from "./tower";
 import type { HubSection, ProjectRef, RegisterIntent } from "../hub/sections";
 import type { MaintenanceSection } from "../maintenance/sections";
 import type { SettingsScope, SettingsSection, TemplateKey } from "../settings/sections";
-import type { ProjectPage, ProjectSettingsSection } from "../project/sections";
+import { projectsPlace, type ProjectPage, type ProjectSettingsSection } from "../project/sections";
 
 /**
  * Item do projeto mostrado na aba (detalhe no editor, linha selecionada na
@@ -38,6 +38,25 @@ export type Screen =
       view?: ProjectPage;
       /** Seção das Configurações do projeto (só com `view: "settings"`); sem ela, Geral. */
       section?: ProjectSettingsSection;
+      /**
+       * Pedido de atribuição (#18, o `assign` do antigo Hub › Projetos):
+       * com `view: "settings"` e `section: "envs"`, abre o formulário de
+       * atribuição do projeto. Atendido, sai do endereço; a web (só
+       * leitura) ignora. Monte com `projectsPlace` (project/sections.ts).
+       */
+      assign?: true;
+      /**
+       * Pedido de cadastro (#18), só no índice (sem chave): abre o
+       * `NewProjectDialog` com a URL (ex.: a partir da Quarentena) ou vazio
+       * (o "+" da Sala de controle, a paleta). Atendido, sai do endereço.
+       */
+      register?: RegisterIntent;
+      /**
+       * Aviso de uma ação que terminou no índice (sem chave): a exclusão do
+       * projeto, com o snapshot anterior (#18). Mostrado uma vez; sai do
+       * endereço como o `register`.
+       */
+      notice?: string;
     }
   /** Recuperação (#318): a sessão interrompida mostrada (sem ela, a primeira). */
   | { name: "recovery"; env?: string; session?: string }
@@ -48,14 +67,15 @@ export type Screen =
   | {
       name: "hub";
       section?: HubSection;
-      /** Seção Projetos: abrir o cadastro com a URL (ex.: a partir da quarentena). */
-      register?: RegisterIntent;
-      /** Seção Projetos: o projeto mostrado no detalhe (sem ele, o primeiro). */
-      project?: ProjectRef;
       /**
-       * Seção Projetos: abrir o formulário de atribuição do `project` (#7).
-       * Atendido, sai do endereço; a web (só leitura) ignora.
+       * `register`, `project` e `assign` são do antigo Hub › Projetos e
+       * atribuições (#314, #7). Desde a #18 a seção não existe mais: um
+       * endereço com `section: "projects"` (deep link, aba de uma versão
+       * antiga, código que o monte à mão) vira o lugar novo em
+       * `screenTab`, por `projectsPlace` — ninguém renderiza estes campos.
        */
+      register?: RegisterIntent;
+      project?: ProjectRef;
       assign?: true;
     }
   /**
@@ -275,6 +295,18 @@ export function mainTabId(s: Screen): string {
 }
 
 function screenTab(t: OpenTab): ScreenTab {
+  // Antigo Hub › Projetos e atribuições (#18): vira o projeto (Configurações)
+  // ou o índice de Projetos, já com o `id` do lugar novo. Aqui, e não num
+  // redirecionamento na tela do Hub, porque todo caminho passa por aqui
+  // (abrir, `go`, a aba inicial) e a aba nasce certa: sem uma aba
+  // "hub:projects" que pisca e fica para trás, e sem `id` velho (o
+  // `nav.current` de quem trocava só o endereço) prendendo o projeto na aba
+  // de outra tela.
+  if (t.screen.name === "hub" && t.screen.section === "projects") {
+    const { project, assign, register } = t.screen;
+    const screen = projectsPlace({ project, assign, register });
+    return { kind: "screen", id: mainTabId(screen), screen };
+  }
   return { kind: "screen", id: t.id ?? mainTabId(t.screen), screen: t.screen, title: t.title };
 }
 

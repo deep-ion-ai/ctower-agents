@@ -12,12 +12,11 @@ import type { Dashboard, Session, WorkItemKind, WorkItemStatus } from "../../pro
 import type { HubView } from "../../state/tower";
 import type { OpenTab, Screen } from "../../state/nav";
 import { itemTab } from "../../project/tabs";
-import { projectAt, type ProjectPage, type ProjectSettingsSection } from "../../project/sections";
+import { projectAt, projectsPlace, type ProjectPage, type ProjectSettingsSection } from "../../project/sections";
 import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../../util/item";
 import { liveGestorLabel } from "../../hub/HubGestor";
 import { PLACES, type Place } from "../places";
 import { maintenanceTab } from "../../maintenance/sections";
-import { hubTab } from "../../hub/sections";
 import type { StartTarget } from "../start";
 import type { SessionAction, SessionActionId } from "../../terminal/actions";
 import { placeOnWeb, webPlaceLabel } from "../../web/mode";
@@ -301,9 +300,10 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
       id: "cmd:project-new",
       kind: "command",
       label: "Projeto: Novo…",
-      detail: "Cadastrar no Hub › Projetos e atribuições",
-      keywords: "novo cadastrar criar adicionar repositório",
-      action: { type: "tab", tab: hubTab("projects", { register: { url: "" } }) },
+      // O cadastro abre no índice de Projetos (#18; antes, no Hub › Projetos e atribuições).
+      detail: "Cadastrar no hub, pelo índice de Projetos",
+      keywords: "novo cadastrar criar adicionar repositório hub",
+      action: { type: "screen", screen: projectsPlace({ register: { url: "" } }) },
     });
   }
   for (const p of projects) {
@@ -333,9 +333,10 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
     );
     if (!src.web) {
       out.push(
+        // Nas Configurações › Ambientes do próprio projeto, com o formulário aberto (#18).
         item("assign", `Projeto: Atribuir ${p.name} a ambiente`, "atribuir atribuição", {
-          type: "tab",
-          tab: hubTab("projects", { project, assign: true }),
+          type: "screen",
+          screen: projectsPlace({ project, assign: true }),
         }),
         at("secrets", "Secrets", "secrets variáveis env tokens chaves", "settings", "secrets"),
         at("danger", "Excluir", "excluir apagar remover zona de perigo", "settings", "danger"),

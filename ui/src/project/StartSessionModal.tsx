@@ -20,7 +20,6 @@ import type {
 } from "../protocol/gen";
 import type { HubTree } from "../protocol/hub-gen";
 import { CLAUDE_MODELS, DEFAULT_MODEL_VALUE, SESSION_MODES } from "../settings/session-options";
-import { hubTab } from "../hub/sections";
 import { templateTab } from "../settings/sections";
 import { shortcutLabel } from "../shell/layout";
 import { sessionReadiness } from "../hub/tracker";
@@ -31,6 +30,7 @@ import { lastTermSize } from "../terminal/size";
 import { changeLabel, itemKey, itemShort, PROJECT_ITEM } from "../util/item";
 import { branchFor, branchFromPattern, patternOf, worktreeDirName } from "./branch";
 import { STATE_SUFFIX, hubClones, liveSessions, localClone, type Clone } from "./clones";
+import { projectAt } from "./sections";
 import { itemTab, projectKey } from "./tabs";
 import { renderGestorTemplate, renderTemplate, scopeText, templateKeyFor } from "./templates";
 import { cachedTree } from "./ui-store";
@@ -670,7 +670,10 @@ function ItemStartModal({
                     type="button"
                     className="linklike"
                     onClick={() =>
-                      onOpenTab(hubTab("projects", { project: { owner: project.gh_owner, repo: project.gh_repo } }))
+                      // Configurações › Regras do agente do próprio projeto (#18).
+                      onOpenTab({
+                        screen: projectAt({ name: "project", owner: project.gh_owner, repo: project.gh_repo }, "settings", "rules"),
+                      })
                     }
                   >
                     Regras do projeto ›

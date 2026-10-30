@@ -172,8 +172,9 @@ function SettingsEditor({ screen }: { screen: SettingsAddress }) {
                 ))}
               </select>
             )}
-            <button type="button" className="link-btn set-hub-link" onClick={() => nav.openTab(hubTab("projects"))}>
-              Projetos e secrets ficam no Hub ›
+            {/* Desde a #18, o índice de Projetos: cada projeto se configura (secrets inclusos) na aba dele. */}
+            <button type="button" className="link-btn set-hub-link" onClick={() => nav.go({ name: "project" })}>
+              Projetos e os secrets deles ficam em Projetos ›
             </button>
           </div>
         )}
