@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.1.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.0.0...v1.1.0) (2026-10-30)
+
+
+### Features
+
+* **cthubd,ui:** "Ver issue" mostra a descrição no app, sem guardar ([44f8ee0](https://github.com/deep-ion-ai/ctower-agents/commit/44f8ee0395af999a2af1899afc15ebc19d2846ab))
+* **cthubd,ui:** "Ver issue" mostra a descrição no app, sem guardar ([5a1f0ca](https://github.com/deep-ion-ai/ctower-agents/commit/5a1f0ca15f9f052019343d5123a644458bba09e5)), closes [#3](https://github.com/deep-ion-ai/ctower-agents/issues/3)
+* **ui:** "+" e menu de contexto no grupo Projetos da Sala de controle ([da9d52f](https://github.com/deep-ion-ai/ctower-agents/commit/da9d52f78e2a449d2c02666194163e4c0918e343)), closes [#10](https://github.com/deep-ion-ai/ctower-agents/issues/10)
+* **ui:** "Atribuir a um ambiente" no aviso do projeto sem ambiente ([8bc782c](https://github.com/deep-ion-ai/ctower-agents/commit/8bc782c9c326591422fda033360caf8f5097ecb1)), closes [#7](https://github.com/deep-ion-ai/ctower-agents/issues/7)
+* **ui:** atalhos para o template e as regras na modal de início ([121d326](https://github.com/deep-ion-ai/ctower-agents/commit/121d326a5d0bba85129d5a297450571747e46b56)), closes [#11](https://github.com/deep-ion-ai/ctower-agents/issues/11)
+* **ui:** botão "Configurações do projeto" no cabeçalho do projeto ([19153c1](https://github.com/deep-ion-ai/ctower-agents/commit/19153c1e37e0db3415762e092052baba94b3e582)), closes [#8](https://github.com/deep-ion-ai/ctower-agents/issues/8)
+* **ui:** comandos de projeto na paleta ([0a12d41](https://github.com/deep-ion-ai/ctower-agents/commit/0a12d4146360c5dd64610f16f4410a08631bcf87)), closes [#9](https://github.com/deep-ion-ai/ctower-agents/issues/9)
+
+
+### Bug Fixes
+
+* **ui:** estado vazio de Projetos aponta para o cadastro no Hub ([399d2a3](https://github.com/deep-ion-ai/ctower-agents/commit/399d2a30b42d2397ea9dcc37ac20b0c6ff94605f)), closes [#6](https://github.com/deep-ion-ai/ctower-agents/issues/6)
+
 ## [1.0.0](https://github.com/deep-ion-ai/ctower-agents/compare/v0.15.0...v1.0.0) (2026-10-30)
 
 
