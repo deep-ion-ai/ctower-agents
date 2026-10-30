@@ -18,8 +18,14 @@ REAL_HOME="$HOME"
 
 # Antes da primeira release (ou numa bifurcação sem releases) não há asset para
 # baixar: avisa e sai sem falhar, em vez de quebrar o CI.
-if ! "$REAL_GH" release view "$TAG" ${GH_REPO:+--repo "$GH_REPO"} >/dev/null 2>&1; then
+if ! DRAFT="$("$REAL_GH" release view "$TAG" ${GH_REPO:+--repo "$GH_REPO"} --json isDraft --jq .isDraft 2>/dev/null)"; then
   echo "AVISO: a release $TAG não existe neste repositório; teste do asset ignorado." >&2
+  exit 0
+fi
+# No commit de release, a release ainda é rascunho e o envbins pode não ter
+# anexado o asset (#45): o teste vale para a release já publicada.
+if [[ $DRAFT == true ]]; then
+  echo "AVISO: a release $TAG ainda é rascunho; teste do asset ignorado." >&2
   exit 0
 fi
 
