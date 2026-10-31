@@ -731,6 +731,8 @@ impl JiraGitlabSync {
                 jira.url
             ));
         }
+        // Catálogo do mesmo servidor do cadastro; sem a seção, lista vazia.
+        j.custom_fields = cli.config_custom_fields();
         let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
             .map_err(|e| e.to_string())?;
         j.credential_ok = true;
@@ -1485,7 +1487,35 @@ mod tests {
         assert!(jr.config_present && jr.server_matches && jr.credential_ok && jr.me_ok);
         assert_eq!(jr.server_version.as_deref(), Some("8.5.2"));
         assert_eq!(jr.error, None);
+        assert!(
+            jr.custom_fields.is_empty(),
+            "configuração sem issue.fields.custom"
+        );
         assert!(rd[0].checked_at > 0);
+
+        // Com o catálogo do `jira init`, a prontidão o publica.
+        let cfg = j.fake.config_file();
+        let mut text = std::fs::read_to_string(&cfg).unwrap();
+        text.push_str(concat!(
+            "issue:\n",
+            "    fields:\n",
+            "        custom:\n",
+            "            - name: Responsável pela implementação\n",
+            "              key: customfield_10099\n",
+            "              schema:\n",
+            "                datatype: user\n",
+        ));
+        std::fs::write(&cfg, text).unwrap();
+        j.sync.sync_all().unwrap();
+        let jr = &j.sync.readiness()[0].jira;
+        assert_eq!(jr.custom_fields.len(), 1);
+        assert_eq!(
+            (
+                jr.custom_fields[0].id.as_str(),
+                jr.custom_fields[0].datatype.as_str()
+            ),
+            ("customfield_10099", "user")
+        );
 
         // `jira me` falhando fica anotado, sem parar o ciclo.
         j.fake.fail_me(true);

@@ -1,3 +1,4 @@
+import type { HubTrackerStatus } from "../protocol/hub-gen";
 import { jiraHubProject } from "../test/fixtures";
 import {
   DEFAULT_TYPE_MAP,
@@ -5,6 +6,7 @@ import {
   branchPreview,
   hostsOf,
   hubSupportsJira,
+  jiraFieldCatalog,
   jiraFormOf,
   kindOf,
   parseTypeMap,
@@ -64,4 +66,19 @@ test("hubSupportsJira: protocolo 1.5 ou maior; sem hub.info não bloqueia", () =
   expect(hubSupportsJira("0.9")).toBe(false);
   expect(hubSupportsJira(null)).toBe(true);
   expect(hubSupportsJira(undefined)).toBe(true);
+});
+
+test("catálogo de campos do Jira vem do tracker_status, ou vazio", () => {
+  const field = { id: "customfield_10099", name: "Responsável pela implementação", datatype: "user" };
+  const status = (custom_fields: unknown) =>
+    ({
+      env_id: "e",
+      env_name: "e",
+      received_at: 1,
+      readiness: { jira: { custom_fields } },
+    }) as unknown as HubTrackerStatus;
+  expect(jiraFieldCatalog({ tracker_status: status([field]) })).toEqual([field]);
+  expect(jiraFieldCatalog({ tracker_status: null })).toEqual([]);
+  // Hub anterior: o status chega sem a chave.
+  expect(jiraFieldCatalog({ tracker_status: status(undefined) })).toEqual([]);
 });

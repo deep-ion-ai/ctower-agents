@@ -31,8 +31,9 @@ pub use ct_proc::{run_credential, CredentialError, Secret, CREDENTIAL_DEADLINE};
 pub mod fake;
 
 pub use cli::{
-    parse_cli_version, server_version, JiraCli, JiraError, ListEvent, ListQuery, DEADLINE,
-    DEFAULT_CONFIG, LIST_DEADLINE, LIST_RETRY_WAITS, PAGE_SIZE,
+    parse_cli_version, parse_custom_fields, server_version, JiraCli, JiraError, ListEvent,
+    ListQuery, DEADLINE, DEFAULT_CONFIG, LIST_DEADLINE, LIST_RETRY_WAITS, MAX_CUSTOM_FIELDS,
+    PAGE_SIZE,
 };
 pub use issue::{issue_row, list_entry, parse_jira_time, ListEntry};
 pub use markdown::description_markdown;

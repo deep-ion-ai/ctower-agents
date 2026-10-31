@@ -35,6 +35,7 @@ export type { HubSyncStatus } from "./HubSyncStatus";
 export type { IssueRow } from "./IssueRow";
 export type { ItemRun } from "./ItemRun";
 export type { JiraConfig } from "./JiraConfig";
+export type { JiraFieldInfo } from "./JiraFieldInfo";
 export type { JiraReadiness } from "./JiraReadiness";
 export type { JiraTypeRole } from "./JiraTypeRole";
 export type { JsonValue } from "./serde_json/JsonValue";
