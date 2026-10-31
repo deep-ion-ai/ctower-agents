@@ -415,6 +415,11 @@ mod tests {
         let novo = env.sessions.open_shell(wi.id, None).unwrap();
         assert_eq!(env.sessions.list_shells().len(), SHELL_LIMIT);
         assert_eq!(env.sessions.close_shells_in(&wt), SHELL_LIMIT);
+        // `close_shells_in` espera os processos saírem; quem tira o shell da
+        // lista é a thread que emite `shell_exited`, logo depois.
+        for id in ids[1..].iter().chain([&novo.id]) {
+            env.wait_notice(|n, d| n == "shell_exited" && d["shell_id"] == id.as_str());
+        }
         assert!(env.sessions.list_shells().is_empty(), "{novo:?}");
     }
 
