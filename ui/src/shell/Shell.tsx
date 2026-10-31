@@ -37,7 +37,7 @@ import {
   type PanelTab,
 } from "./layout";
 import { MobileTabs, WarningsSheet } from "./Mobile";
-import { ShortcutsSheet } from "./Shortcuts";
+import { ShortcutsSheet } from "./ShortcutsSheet";
 import { isHelpKey } from "./shortcuts";
 import { SidePanel, SideGroup, SideRow, SideSlotProvider, useSideSlot } from "./SidePanel";
 import { connectedEnvs, interruptedCount, lastSync, plural, syncTrackers, waitingCount, warnings } from "./summary";

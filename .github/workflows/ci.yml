@@ -38,6 +38,17 @@ jobs:
         with:
           python-version: '3.12'
       - run: python3 scripts/check-versions.py
+      # macOS e Windows não diferenciam caixa (#63). Dois caminhos iguais a
+      # menos da caixa viram um só no checkout; dois módulos JS/TS cujo nome
+      # sem extensão só difere na caixa (Shortcuts.tsx e shortcuts.ts) fazem o
+      # import sem extensão resolver para o arquivo errado. Este job roda em
+      # todo PR e push, ao contrário do job macos do ui.yml.
+      - name: Sem caminhos que só diferem na caixa (macOS/Windows)
+        run: |
+          dup=$(git ls-files | sort -f | uniq -di)
+          [ -z "$dup" ] || { echo "::error::Caminhos que colidem sem diferenciar caixa:"; echo "$dup"; exit 1; }
+          dup=$(git ls-files | sed -nE 's/\.(c|m)?(j|t)sx?$//p' | sort -u | sort -f | uniq -di)
+          [ -z "$dup" ] || { echo "::error::Módulos JS/TS que colidem sem diferenciar caixa (sem extensão):"; echo "$dup"; exit 1; }
 
   rust:
     needs: changes
