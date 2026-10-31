@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.3.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.2.0...v1.3.0) (2026-10-31)
+
+
+### Features
+
+* tela Logs com os logs do hub, dos ambientes e da própria UI ([#65](https://github.com/deep-ion-ai/ctower-agents/issues/65)) ([725f002](https://github.com/deep-ion-ai/ctower-agents/commit/725f0025245f2af4c1e30ff56f533f9948f071d6))
+* tela Logs com os logs do hub, dos ambientes e da própria UI ([#65](https://github.com/deep-ion-ai/ctower-agents/issues/65)) ([89d054e](https://github.com/deep-ion-ai/ctower-agents/commit/89d054e0fa1877be4f22f7f29bf21271d9399f08))
+* **ui:** ações só do desktop aparecem desabilitadas com explicação na web ([6278804](https://github.com/deep-ion-ai/ctower-agents/commit/6278804e2cf1c95519de8bfc895d80987a810f0e))
+* **ui:** ações só do desktop aparecem desabilitadas com explicação na web ([cfe95f0](https://github.com/deep-ion-ai/ctower-agents/commit/cfe95f0ca36c592683da8c6a4a711a7adbc86e4e)), closes [#26](https://github.com/deep-ion-ai/ctower-agents/issues/26)
+* **ui:** folha de atalhos (?) e dicas de gestos ([8541c6c](https://github.com/deep-ion-ai/ctower-agents/commit/8541c6cbe17813d693d9e8b468003841174e033f))
+* **ui:** folha de atalhos (?) e dicas de gestos ([067ecdd](https://github.com/deep-ion-ai/ctower-agents/commit/067ecddde9d6a97bc464cb99bb04d2a268b89bd1)), closes [#27](https://github.com/deep-ion-ai/ctower-agents/issues/27)
+* **ui:** índice e itens do projeto no conteúdo principal no celular ([8a37311](https://github.com/deep-ion-ai/ctower-agents/commit/8a373117ecb22aa398b200e19504a55de09eafa8))
+* **ui:** índice e itens do projeto no conteúdo principal no celular ([fdb331b](https://github.com/deep-ion-ai/ctower-agents/commit/fdb331b19d1e6df57327f491d8d1b37f9923efea)), closes [#25](https://github.com/deep-ion-ai/ctower-agents/issues/25)
+* **ui:** tela de detalhe do ambiente ([89070de](https://github.com/deep-ion-ai/ctower-agents/commit/89070de9e64cd2e4e9928ff761b81fac449c9493))
+* **ui:** tela de detalhe do ambiente ([2e06ca0](https://github.com/deep-ion-ai/ctower-agents/commit/2e06ca081f0958b5cbead94c8a987ded1481d536)), closes [#23](https://github.com/deep-ion-ai/ctower-agents/issues/23)
+
+
+### Bug Fixes
+
+* **ui:** nomes distintos para as ações de "Sincronizar" ([cfe6999](https://github.com/deep-ion-ai/ctower-agents/commit/cfe699925d3cff00ceaee49cca7309ad9d6b421f))
+* **ui:** nomes distintos para as ações de "Sincronizar" ([0bf8ce1](https://github.com/deep-ion-ai/ctower-agents/commit/0bf8ce196190de728ac2bb31d38179614a461b9b))
+* **ui:** renomeia Shortcuts.tsx para ShortcutsSheet.tsx e barra colisões de caixa no CI ([#63](https://github.com/deep-ion-ai/ctower-agents/issues/63)) ([713a034](https://github.com/deep-ion-ai/ctower-agents/commit/713a034067914c5dd9ce6474f8f3e4787aa54f2d))
+* **ui:** renomeia Shortcuts.tsx para ShortcutsSheet.tsx e barra colisões de caixa no CI ([#63](https://github.com/deep-ion-ai/ctower-agents/issues/63)) ([8dab977](https://github.com/deep-ion-ai/ctower-agents/commit/8dab977541dbe876c6a75decfd820bf9c3e64186))
+
 ## [1.2.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.1.0...v1.2.0) (2026-10-30)
 
 
