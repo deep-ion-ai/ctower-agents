@@ -1,5 +1,6 @@
 //! Metadados do Jira para a tela da issue: valor do campo → texto.
 
+use ct_core::JiraExtraField;
 use ct_ledger::IssueMeta;
 use serde_json::Value;
 
@@ -37,15 +38,22 @@ pub fn field_text(v: &Value) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// `fields` da issue → metadados dos campos padrão, na ordem, sem os vazios.
-pub fn issue_meta(fields: &Value) -> Vec<IssueMeta> {
-    STANDARD_FIELDS
+/// `fields` da issue → metadados: os campos padrão, na ordem, e depois os
+/// campos próprios do cadastro (`extra`), na ordem do cadastro, com o
+/// rótulo cadastrado. Os vazios ficam de fora.
+pub fn issue_meta(fields: &Value, extra: &[JiraExtraField]) -> Vec<IssueMeta> {
+    let standard = STANDARD_FIELDS.iter().map(|(id, label)| (*id, *label));
+    let extra = extra
         .iter()
+        .map(|e| (e.id.trim(), e.label.trim()))
+        .filter(|(id, _)| !id.is_empty());
+    standard
+        .chain(extra)
         .filter_map(|(id, label)| {
             Some(IssueMeta {
                 field: id.to_string(),
                 label: label.to_string(),
-                value: field_text(fields.get(*id)?)?,
+                value: field_text(fields.get(id)?)?,
             })
         })
         .collect()
@@ -93,6 +101,43 @@ mod tests {
         assert_eq!(field_text(&Value::Null), None);
         assert_eq!(field_text(&json!("  ")), None);
         assert_eq!(field_text(&json!({ "value": null })), None);
+    }
+
+    fn extra(id: &str, label: &str) -> JiraExtraField {
+        JiraExtraField {
+            id: id.into(),
+            label: label.into(),
+        }
+    }
+
+    /// Padrão primeiro, extras depois na ordem do cadastro, sem os vazios.
+    #[test]
+    fn extras_depois_dos_padrao() {
+        let fields = json!({
+            "status": { "name": "Aberto" },
+            "customfield_2": { "value": "Alta" },
+            "customfield_1": { "name": "fulano", "displayName": "Fulano" },
+            "customfield_3": null,
+        });
+        let extras = [
+            extra("customfield_1", "Implementação"),
+            extra("customfield_3", "Vazio"),
+            extra("customfield_2", "Criticidade"),
+            extra("customfield_9", "Ausente"),
+        ];
+        let got: Vec<_> = issue_meta(&fields, &extras)
+            .into_iter()
+            .map(|m| (m.field, m.label, m.value))
+            .collect();
+        let m = |f: &str, l: &str, v: &str| (f.to_string(), l.to_string(), v.to_string());
+        assert_eq!(
+            got,
+            vec![
+                m("status", "Situação", "Aberto"),
+                m("customfield_1", "Implementação", "Fulano"),
+                m("customfield_2", "Criticidade", "Alta"),
+            ]
+        );
     }
 
     #[test]

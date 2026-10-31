@@ -12,6 +12,8 @@ import {
   jiraOf,
   providerParams,
   DEFAULT_MAX_ISSUES,
+  extraFieldsChanged,
+  jiraFieldCatalog,
   type JiraForm,
 } from "../../hub/tracker";
 import { docsDirName, docsFormOf, docsPatch, docsText } from "../../hub/docs";
@@ -101,6 +103,18 @@ export function RepositoryCard({
                   {gitlab && <span className="hub-card-sub mono">{gitlab.credential_cmd}</span>}
                 </dd>
               </div>
+              {(jira.extra_fields ?? []).length > 0 && (
+                <div>
+                  <dt>Campos na tela da issue</dt>
+                  <dd>
+                    {(jira.extra_fields ?? []).map((x, i) => (
+                      <span key={x.id} className={i === 0 ? undefined : "hub-card-sub"}>
+                        {x.label} <span className="mono muted">({x.id})</span>
+                      </span>
+                    ))}
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt>Padrão de branch</dt>
                 <dd>
@@ -191,7 +205,10 @@ function RepositoryEdit({
       const was = jiraFormOf(cur);
       const j = f.jira;
       const same = (keys: (keyof JiraForm)[]) => keys.every((k) => String(j[k]).trim() === String(was[k]).trim());
-      if (!same(["jira_url", "jira_key", "active_sprint_only", "jql", "max_issues", "jira_cmd", "type_map", "epic_link_field", "epic_name_field", "sprint_field", "gitlab_url", "gitlab_cmd"])) {
+      if (
+        !same(["jira_url", "jira_key", "active_sprint_only", "jql", "max_issues", "jira_cmd", "type_map", "epic_link_field", "epic_name_field", "sprint_field", "gitlab_url", "gitlab_cmd"]) ||
+        extraFieldsChanged(j.extra_fields, was.extra_fields)
+      ) {
         const pv = providerParams(j);
         if ("error" in pv) {
           settings.fail(pv.error);
@@ -225,7 +242,7 @@ function RepositoryEdit({
         void update();
       }}
     >
-      <GeneralForm form={form} onChange={setForm} prefix={`ep-${pr.id}`} withUrl={false} />
+      <GeneralForm form={form} onChange={setForm} prefix={`ep-${pr.id}`} withUrl={false} jiraCatalog={jiraFieldCatalog(p)} />
       <DocsForm form={form} onChange={setForm} prefix={`ep-${pr.id}`} />
       <div className="form-actions">
         <button type="button" className="btn" onClick={onDone}>

@@ -111,6 +111,24 @@ pub struct JiraConfig {
     pub sprint_field: String,
     /// Nome do tipo de issue → papel.
     pub type_map: BTreeMap<String, JiraTypeRole>,
+    /// Campos próprios do projeto na tela da issue, depois dos 5 padrão e
+    /// na ordem do cadastro. Ausente (cadastro anterior) = nenhum.
+    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<JiraExtraField>>", optional))]
+    pub extra_fields: Vec<JiraExtraField>,
+}
+
+/// Teto de campos próprios no cadastro do projeto Jira.
+pub const MAX_JIRA_EXTRA_FIELDS: usize = 20;
+
+/// Campo próprio do projeto Jira mostrado na tela da issue.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
+pub struct JiraExtraField {
+    /// ID do campo no Jira (`customfield_10099`).
+    pub id: String,
+    /// Rótulo na tela ("Responsável pela implementação").
+    pub label: String,
 }
 
 impl Default for JiraConfig {
@@ -127,6 +145,7 @@ impl Default for JiraConfig {
             epic_name_field: String::new(),
             sprint_field: String::new(),
             type_map: BTreeMap::new(),
+            extra_fields: Vec::new(),
         }
     }
 }
