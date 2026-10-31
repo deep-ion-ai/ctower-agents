@@ -4,6 +4,7 @@ import type {
   DashboardWorkItem,
   EnvInfo,
   HubConfigStatus,
+  IssueMeta,
   Project,
   RemoteControlStatus,
   Session,
@@ -27,6 +28,19 @@ import type {
 } from "../protocol/hub-gen";
 
 export const NOW = Date.UTC(2026, 9, 15, 15, 0, 0);
+
+/**
+ * `IssueRow.meta` de uma issue Jira (#67): os 5 campos padrão e um campo
+ * do projeto, na ordem da tela; o valor longo testa a quebra de linha.
+ */
+export const JIRA_META: IssueMeta[] = [
+  { field: "status", label: "Situação", value: "Em desenvolvimento" },
+  { field: "issuetype", label: "Tipo", value: "História" },
+  { field: "priority", label: "Prioridade", value: "Alta" },
+  { field: "assignee", label: "Responsável", value: "Maria Souza" },
+  { field: "reporter", label: "Criador", value: "João Lima" },
+  { field: "customfield_12303", label: "Responsável pela Codificação", value: "Ana Pereira da Silva Cavalcanti" },
+];
 export const MIN = 60_000;
 
 export function project(p: Partial<Project> = {}): Project {
