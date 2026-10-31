@@ -1003,6 +1003,7 @@ mod tests {
                 prs,
                 etags: vec![],
                 synced_at: ct_core::now_ms(),
+                gone: Vec::new(),
             })
             .unwrap();
     }

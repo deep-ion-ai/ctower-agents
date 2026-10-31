@@ -75,7 +75,40 @@ pub struct GithubSnapshot {
     /// `(chave, etag)` das consultas que mudaram.
     pub etags: Vec<(String, String)>,
     pub synced_at: i64,
+    /// Issues que não existem mais no GitHub (apagadas ou transferidas,
+    /// #89): saem do espelho, e o work item delas vai para concluído.
+    pub gone: Vec<GoneIssue>,
 }
+
+/// Issue que sumiu do GitHub (#89): um épico do espelho que respondeu
+/// `status` (`404` ou `410`) nas sub-issues, ou uma sub-issue dele (`epic`)
+/// que também não aparece mais nas listagens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoneIssue {
+    pub gh_number: i64,
+    pub status: u16,
+    /// Épico apagado de que esta era sub-issue; `None` = o próprio épico.
+    pub epic: Option<i64>,
+}
+
+impl std::fmt::Display for GoneIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let n = self.gh_number;
+        match self.epic {
+            None => write!(f, "issue #{n} não existe mais no GitHub ({})", self.status),
+            Some(e) => write!(
+                f,
+                "issue #{n} não aparece mais no GitHub (sub-issue do épico #{e}, que respondeu {})",
+                self.status
+            ),
+        }
+    }
+}
+
+/// `cause` do `status_changed` que conclui o work item de uma issue que
+/// sumiu do GitHub (#89), e o motivo que vai junto no evento.
+pub const GH_ISSUE_GONE_CAUSE: &str = "issue_gone";
+pub const GH_ISSUE_GONE_REASON: &str = "issue apagada ou transferida no GitHub";
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GithubApplied {
@@ -90,6 +123,8 @@ pub struct GithubApplied {
     pub mirrored: usize,
     /// MRs que mudaram e entraram no outbox como `pr_mirror` (idem).
     pub mirrored_prs: usize,
+    /// Issues que sumiram do GitHub e saíram do espelho nesta rodada (#89).
+    pub removed: Vec<GoneIssue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -158,6 +193,13 @@ pub fn gh_issue_closed_uid(owner: &str, repo: &str, number: i64) -> String {
         "gh:issue:{}#{number}:closed",
         crate::project_key(owner, repo)
     )
+}
+
+/// `uid` do `status_changed` que conclui o work item de uma issue que sumiu
+/// do GitHub (`gh:issue:<owner>/<repo>#<n>:gone`, #89): igual no ambiente e
+/// no hub.
+pub fn gh_issue_gone_uid(owner: &str, repo: &str, number: i64) -> String {
+    format!("gh:issue:{}#{number}:gone", crate::project_key(owner, repo))
 }
 
 /// `uid` do `status_changed` que conclui a sub-issue `sub` no merge do PR do
@@ -277,6 +319,14 @@ impl GhMirror<'_> {
             ],
         )?;
         Ok(prev)
+    }
+
+    /// Tira a issue do espelho; `true` = estava nele.
+    pub(crate) fn delete_issue(&self, project_id: i64, gh_number: i64) -> Result<bool> {
+        Ok(self.0.execute(
+            "DELETE FROM issue_cache WHERE project_id = ?1 AND gh_number = ?2",
+            params![project_id, gh_number],
+        )? == 1)
     }
 
     /// Caminho do PR: a base é a branch de um épico? Então só vale para uma
@@ -471,7 +521,7 @@ impl GhMirror<'_> {
 }
 
 impl Ledger {
-    fn gh(&self) -> GhMirror<'_> {
+    pub(crate) fn gh(&self) -> GhMirror<'_> {
         GhMirror(&self.conn)
     }
 
@@ -594,6 +644,31 @@ impl Ledger {
             }
         }
 
+        // Issues que sumiram do GitHub (#89): saem do espelho, e o work item
+        // delas conclui, sem tocar em sessões nem worktree (a limpeza de
+        // sempre cuida delas depois).
+        for g in &s.gone {
+            let Some(issue) = self.gh().get_issue(s.project_id, g.gh_number)? else {
+                continue;
+            };
+            self.remove_issue_row(s.project_id, &owner, &repo, issue, mirror)?;
+            out.removed.push(*g);
+            let Some(wi) = self.find_work_item(s.project_id, g.gh_number)? else {
+                continue;
+            };
+            let uid = gh_issue_gone_uid(&owner, &repo, g.gh_number);
+            if self.set_status_full(
+                wi.id,
+                WorkItemStatus::Concluido,
+                GH_ISSUE_GONE_CAUSE,
+                Some(&uid),
+                None,
+                Some(GH_ISSUE_GONE_REASON),
+            )? {
+                out.status_changes.push((wi.id, WorkItemStatus::Concluido));
+            }
+        }
+
         if finish {
             self.gh().finish_ok(s)?;
         }
@@ -690,6 +765,7 @@ mod tests {
             prs,
             etags: vec![("k".into(), "e1".into())],
             synced_at: 100,
+            gone: Vec::new(),
         }
     }
 
@@ -1115,6 +1191,7 @@ mod tests {
             prs: vec![pr(30, 999, PrState::Open)],
             etags: vec![("k".into(), "e1".into())],
             synced_at: 100,
+            gone: Vec::new(),
         };
         assert!(l.apply_github(&s).is_err());
         assert!(l.list_issues(p.id).unwrap().is_empty());

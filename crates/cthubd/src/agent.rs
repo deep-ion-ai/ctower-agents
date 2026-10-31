@@ -433,6 +433,7 @@ mod tests {
                     prs: vec![],
                     etags: vec![],
                     synced_at: 1,
+                    gone: Vec::new(),
                 },
                 "hub-id",
             )

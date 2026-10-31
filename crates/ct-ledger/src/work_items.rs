@@ -174,7 +174,7 @@ impl Ledger {
 
     /// Núcleo das mudanças de status: `session_id` e `reason` (opcionais)
     /// vão no evento, o `reason` no payload como no `status_set_manual` do hub.
-    fn set_status_full(
+    pub(crate) fn set_status_full(
         &self,
         id: i64,
         status: WorkItemStatus,

@@ -141,6 +141,9 @@ impl GithubSync {
         let result = match fetch(&self.client, &input) {
             Ok(snap) => {
                 let applied = self.sessions.ledger().apply_github(&snap)?;
+                for g in &applied.removed {
+                    tracing::warn!("github: projeto {project_id}: {g}, removida do espelho");
+                }
                 for (wi, status) in &applied.status_changes {
                     self.sessions.notify(
                         "work_item_status",

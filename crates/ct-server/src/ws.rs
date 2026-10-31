@@ -2805,6 +2805,7 @@ mod tests {
                 }],
                 etags: vec![],
                 synced_at: 1,
+                gone: Vec::new(),
             })
             .unwrap();
             let dec = |wi: i64, origin| {

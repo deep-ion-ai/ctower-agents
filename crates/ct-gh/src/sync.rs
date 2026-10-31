@@ -6,7 +6,8 @@ use crate::{time, Fetched, GhClient, GhError};
 use ct_core::branch::issue_number_from_branch;
 use ct_core::{PrState, WorkItemKind, WorkItemStatus};
 use ct_ledger::{
-    project_key, GithubSnapshot, Hub, IssueMeta, IssueRow, Ledger, PrRow, Project, WorkItem,
+    project_key, GithubSnapshot, GoneIssue, Hub, IssueMeta, IssueRow, Ledger, PrRow, Project,
+    WorkItem,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -335,7 +336,9 @@ pub fn pr_row(v: &Value, work_item_id: i64) -> Option<PrRow> {
 /// Busca o projeto: issues abertas e fechadas na janela, filhas dos épicos
 /// abertos, PRs das branches dos work items e PRs das sub-issues para a
 /// branch de cada épico. Consultas em `304` não entram no snapshot; os ETags
-/// novos sim.
+/// novos sim. Um épico do espelho que responde `404` ou `410` nas
+/// sub-issues sumiu do GitHub: entra em `gone` com as sub-issues dele que
+/// também não aparecem nas listagens, e a rodada segue (#89).
 pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhError> {
     let (o, r) = (&input.project.gh_owner, &input.project.gh_repo);
     let mut etags = Vec::new();
@@ -344,8 +347,10 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
     if input.mirror_stale {
         etags.push((mirror_key(o, r), MIRROR_VERSION.to_string()));
     }
-    let mut get = |path: String| -> Result<Option<Vec<Value>>, GhError> {
-        match api.get_all(&path, input.etags.get(&path).map(String::as_str))? {
+    // `etag = false`: consulta sem o ETag gravado (resposta inteira).
+    let mut get = |path: String, etag: bool| -> Result<Option<Vec<Value>>, GhError> {
+        let inm = input.etags.get(&path).filter(|_| etag).map(String::as_str);
+        match api.get_all(&path, inm)? {
             Fetched::NotModified => Ok(None),
             Fetched::Modified { body, etag } => {
                 if let Some(e) = etag {
@@ -359,13 +364,21 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
     // Última ocorrência vence; as filhas de `sub_issues` vêm depois das listagens.
     let mut issues: BTreeMap<i64, IssueRow> = BTreeMap::new();
     let since = closed_since(input.now_ms);
-    for path in [
+    let listings = [
         issues_path(o, r, "open", None),
         issues_path(o, r, "closed", Some(&since)),
-    ] {
-        for v in get(path)?.unwrap_or_default() {
-            if let Some(row) = issue_row(&v) {
-                issues.insert(row.gh_number, row);
+    ];
+    // Listagens em `304`: só se sabe quais issues elas trazem relendo-as.
+    let mut not_modified = Vec::new();
+    for path in &listings {
+        match get(path.clone(), true)? {
+            None => not_modified.push(path.clone()),
+            Some(body) => {
+                for v in body {
+                    if let Some(row) = issue_row(&v) {
+                        issues.insert(row.gh_number, row);
+                    }
+                }
             }
         }
     }
@@ -381,12 +394,69 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
                 .map(|i| i.gh_number),
         )
         .collect();
+    // Épicos do espelho que não existem mais no GitHub (#89): `(número, erro)`.
+    let mut gone_epics: Vec<(i64, GhError)> = Vec::new();
     for epic in epics {
-        for v in get(sub_issues_path(o, r, epic))?.unwrap_or_default() {
+        let body = match get(sub_issues_path(o, r, epic), true) {
+            Ok(body) => body,
+            // Apagado (`410`) ou transferido / sem acesso (`404`): só o
+            // épico que veio do espelho e não apareceu nas listagens desta
+            // rodada. Os outros erros cancelam a rodada como sempre.
+            Err(
+                e @ GhError::Http {
+                    status: 404 | 410, ..
+                },
+            ) if input.open_epics.contains(&epic) && !issues.contains_key(&epic) => {
+                gone_epics.push((epic, e));
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        for v in body.unwrap_or_default() {
             if let Some(mut row) = issue_row(&v) {
                 row.parent_number = Some(epic);
                 issues.insert(row.gh_number, row);
             }
+        }
+    }
+
+    let mut gone = Vec::new();
+    if !gone_epics.is_empty() {
+        // As sub-issues saem só se também não estão nas listagens: as que
+        // vieram em `304` são relidas inteiras, sem trocar o que as
+        // `sub_issues` desta rodada já trouxeram.
+        for path in not_modified {
+            for v in get(path, false)?.unwrap_or_default() {
+                if let Some(row) = issue_row(&v) {
+                    issues.entry(row.gh_number).or_insert(row);
+                }
+            }
+        }
+        for (epic, err) in gone_epics {
+            // Nas listagens, afinal: o erro não era de issue apagada.
+            if issues.contains_key(&epic) {
+                return Err(err);
+            }
+            let GhError::Http { status, .. } = err else {
+                unreachable!("só `GhError::Http` entra em `gone_epics`")
+            };
+            gone.push(GoneIssue {
+                gh_number: epic,
+                status,
+                epic: None,
+            });
+            let mut subs: Vec<i64> = input
+                .parents
+                .iter()
+                .filter(|(n, p)| **p == epic && !issues.contains_key(n))
+                .map(|(n, _)| *n)
+                .collect();
+            subs.sort_unstable();
+            gone.extend(subs.into_iter().map(|n| GoneIssue {
+                gh_number: n,
+                status,
+                epic: Some(epic),
+            }));
         }
     }
 
@@ -396,7 +466,7 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
         let Some(branch) = wi.branch.as_deref() else {
             continue;
         };
-        for v in get(pulls_path(o, r, branch))?.unwrap_or_default() {
+        for v in get(pulls_path(o, r, branch), true)?.unwrap_or_default() {
             // PR para a branch de um épico vem da consulta pela base, abaixo.
             if let Some(row) = pr_row(&v, wi.id).filter(|p| !epic_wis.iter().any(|e| e.1 == p.base))
             {
@@ -414,7 +484,7 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
             .filter_map(|i| Some((i.gh_number, i.parent_number?))),
     );
     for (epic, branch) in &epic_wis {
-        for v in get(pulls_base_path(o, r, branch))?.unwrap_or_default() {
+        for v in get(pulls_base_path(o, r, branch), true)?.unwrap_or_default() {
             if let Some(row) = pr_row(&v, epic.id)
                 .filter(|p| sub_issue_of_head(&p.head, epic.gh_number, &parents).is_some())
             {
@@ -431,6 +501,7 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
         prs,
         etags,
         synced_at: input.now_ms,
+        gone,
     })
 }
 
@@ -941,6 +1012,190 @@ mod tests {
         );
     }
 
+    fn numeros(l: &Ledger, project: i64) -> Vec<(i64, Option<i64>)> {
+        l.list_issues(project)
+            .unwrap()
+            .iter()
+            .map(|i| (i.gh_number, i.parent_number))
+            .collect()
+    }
+
+    /// #89: o épico 1 do espelho foi apagado (ou transferido) com as filhas 2
+    /// e 3; a 4 saiu do épico e segue nas listagens. As `sub_issues` do 1
+    /// respondem `status`: a rodada termina, grava o snapshot e tira do
+    /// espelho o épico e as filhas que sumiram; os work items concluem.
+    fn epico_apagado_sai_do_espelho(status: u16) {
+        let e = Env::new();
+        let open = issues_path("o", "r", "open", None);
+        let subs = sub_issues_path("o", "r", 1);
+        let w1 =
+            e.l.ensure_work_item(e.project, 1, WorkItemKind::Epic)
+                .unwrap();
+        let w2 =
+            e.l.ensure_work_item(e.project, 2, WorkItemKind::Issue)
+                .unwrap();
+        let w5 =
+            e.l.ensure_work_item(e.project, 5, WorkItemKind::Issue)
+                .unwrap();
+        e.gh.set(
+            &open,
+            json!([
+                gh_issue(1, "open", None, 3),
+                gh_issue(2, "open", Some(1), 0),
+                gh_issue(5, "open", None, 0)
+            ]),
+        );
+        e.gh.set(
+            &subs,
+            json!([
+                gh_issue(2, "open", Some(1), 0),
+                gh_issue(3, "closed", Some(1), 0),
+                gh_issue(4, "open", Some(1), 0)
+            ]),
+        );
+        e.sync();
+        assert_eq!(
+            numeros(&e.l, e.project),
+            vec![
+                (1, None),
+                (2, Some(1)),
+                (3, Some(1)),
+                (4, Some(1)),
+                (5, None)
+            ]
+        );
+
+        e.gh.set(
+            &open,
+            json!([gh_issue(4, "open", None, 0), gh_issue(5, "open", None, 0)]),
+        );
+        e.gh.fail_next(&subs, status, &[]);
+        let r = e.sync();
+        let gone = |n, epic| GoneIssue {
+            gh_number: n,
+            status,
+            epic,
+        };
+        assert_eq!(
+            r.removed,
+            vec![gone(1, None), gone(2, Some(1)), gone(3, Some(1))]
+        );
+        assert_eq!(numeros(&e.l, e.project), vec![(4, None), (5, None)]);
+        assert_eq!(
+            r.removed[0].to_string(),
+            format!("issue #1 não existe mais no GitHub ({status})")
+        );
+        // Snapshot gravado: sync em dia e ETags da rodada.
+        let st = e.l.sync_state(e.project).unwrap().unwrap();
+        assert_eq!((st.last_ok_at, st.last_error), (Some(now()), None));
+        assert!(e.l.etag(&open).unwrap().is_some());
+        assert_eq!(
+            r.status_changes,
+            vec![
+                (w1.id, WorkItemStatus::Concluido),
+                (w2.id, WorkItemStatus::Concluido)
+            ]
+        );
+        let ev = &e.l.list_events(w2.id, 1).unwrap()[0];
+        assert_eq!(ev.uid, "gh:issue:o/r#2:gone");
+        assert_eq!(ev.payload["cause"], "issue_gone");
+        assert_eq!(
+            ev.payload["reason"],
+            "issue apagada ou transferida no GitHub"
+        );
+        assert_eq!(
+            e.l.get_work_item(w5.id).unwrap().status,
+            WorkItemStatus::Backlog
+        );
+
+        // Fora do espelho, o épico deixa de ser consultado.
+        e.gh.clear_requests();
+        e.sync();
+        assert!(e.gh.requests().iter().all(|(p, _)| *p != subs));
+    }
+
+    #[test]
+    fn epico_apagado_410_sai_do_espelho() {
+        epico_apagado_sai_do_espelho(410);
+    }
+
+    #[test]
+    fn epico_transferido_404_sai_do_espelho() {
+        epico_apagado_sai_do_espelho(404);
+    }
+
+    /// Com as listagens em `304`, não dá para saber se uma filha do épico
+    /// apagado ainda existe: elas são relidas sem ETag, e só sai a filha
+    /// que não aparece nelas.
+    #[test]
+    fn epico_apagado_com_listagens_em_304_rele_as_listagens() {
+        let e = Env::new();
+        let open = issues_path("o", "r", "open", None);
+        let subs = sub_issues_path("o", "r", 1);
+        // O épico 1 e a filha 2 só estão no espelho; a filha 4 é listada.
+        e.l.apply_github(&GithubSnapshot {
+            project_id: e.project,
+            issues: vec![
+                issue_row(&gh_issue(1, "open", None, 2)).unwrap(),
+                issue_row(&gh_issue(2, "open", Some(1), 0)).unwrap(),
+            ],
+            synced_at: now(),
+            ..GithubSnapshot::default()
+        })
+        .unwrap();
+        e.gh.set(&open, json!([gh_issue(4, "open", Some(1), 0)]));
+        e.gh.set(
+            &subs,
+            json!([
+                gh_issue(2, "open", Some(1), 0),
+                gh_issue(4, "open", Some(1), 0)
+            ]),
+        );
+        e.sync();
+        assert_eq!(
+            numeros(&e.l, e.project),
+            vec![(1, None), (2, Some(1)), (4, Some(1))]
+        );
+
+        e.gh.fail_next(&subs, 410, &[]);
+        e.gh.clear_requests();
+        let r = e.sync();
+        let nums: Vec<i64> = r.removed.iter().map(|g| g.gh_number).collect();
+        assert_eq!(nums, vec![1, 2]);
+        assert_eq!(numeros(&e.l, e.project), vec![(4, Some(1))]);
+        let reqs: Vec<_> =
+            e.gh.requests()
+                .into_iter()
+                .filter(|(p, _)| *p == open)
+                .collect();
+        assert_eq!(reqs.len(), 2, "{reqs:?}");
+        assert!(reqs[0].1.is_some() && reqs[1].1.is_none(), "{reqs:?}");
+    }
+
+    /// Outro status nas `sub_issues` de um épico do espelho (aqui `500`)
+    /// continua cancelando a rodada, sem snapshot.
+    #[test]
+    fn erro_500_nas_sub_issues_do_epico_do_espelho_cancela_a_rodada() {
+        let e = Env::new();
+        let open = issues_path("o", "r", "open", None);
+        let subs = sub_issues_path("o", "r", 1);
+        e.gh.set(&open, json!([gh_issue(1, "open", None, 1)]));
+        e.gh.set(&subs, json!([gh_issue(2, "open", Some(1), 0)]));
+        e.sync();
+        let antes = numeros(&e.l, e.project);
+        let etag = e.l.etag(&open).unwrap();
+
+        e.gh.set(&open, json!([]));
+        e.gh.fail_next(&subs, 500, &[]);
+        let input = SyncInput::load(&e.l, e.project, now()).unwrap();
+        let err = fetch(&e.api, &input).unwrap_err();
+        assert!(matches!(err, GhError::Http { status: 500, .. }), "{err}");
+        assert_eq!(numeros(&e.l, e.project), antes);
+        assert_eq!(e.l.etag(&open).unwrap(), etag);
+    }
+
+    /// O `404` nas `sub_issues` de um épico que não veio do espelho, só das
+    /// listagens desta rodada, não é de issue apagada: cancela a rodada.
     #[test]
     fn erro_numa_consulta_nao_gera_snapshot() {
         let e = Env::new();

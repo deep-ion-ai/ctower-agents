@@ -516,6 +516,7 @@ impl JiraGitlabSync {
                                 prs: Vec::new(),
                                 etags: Vec::new(),
                                 synced_at: now,
+                                ..GithubSnapshot::default()
                             })
                             .map_err(|e| e.to_string())?;
                         batched += a.issues;
@@ -559,6 +560,7 @@ impl JiraGitlabSync {
                         prs: Vec::new(),
                         etags: f.etags,
                         synced_at: now,
+                        ..GithubSnapshot::default()
                     };
                     if let (Some(gl), Some(t)) = (&gitlab, &gl_token) {
                         snap.prs = fetch_mrs(&self.gitlab_cli(gl), t, &project, gl, &input)?;
