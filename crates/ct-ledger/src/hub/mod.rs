@@ -76,8 +76,8 @@ use crate::github::{sub_issue_pr_trigger, GhMirror, PrRoute};
 use crate::schema::migrate_with;
 use crate::sync::project_key;
 use crate::{
-    gh_epic_merged_uid, gh_issue_closed_uid, gh_pr_uid, GithubApplied, GithubSnapshot, IssueRow,
-    PrRow, SyncState,
+    gh_epic_merged_uid, gh_issue_closed_uid, gh_issue_gone_uid, gh_pr_uid, GithubApplied,
+    GithubSnapshot, IssueRow, PrRow, SyncState, GH_ISSUE_GONE_CAUSE, GH_ISSUE_GONE_REASON,
 };
 use crate::{
     json_col, opt_parse_col, parse_col, DecisionChange, EventChange, LedgerError, OutboxEntry,
@@ -1764,6 +1764,40 @@ impl Hub {
                 }
             }
         }
+        // Como no ambiente (#89): a issue que sumiu do GitHub sai do espelho
+        // do hub, e o work item dela conclui com o motivo no evento.
+        for g in &s.gone {
+            if !self.gh().delete_issue(s.project_id, g.gh_number)? {
+                continue;
+            }
+            out.removed.push(*g);
+            let wi: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT id FROM work_item WHERE project_id = ?1 AND gh_number = ?2",
+                    params![s.project_id, g.gh_number],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(wi) = wi else {
+                continue;
+            };
+            let status = self.work_item_status(wi)?;
+            if status == WorkItemStatus::Concluido {
+                continue;
+            }
+            self.gh_event(
+                env_id,
+                s.project_id,
+                wi,
+                &gh_issue_gone_uid(&owner, &repo, g.gh_number),
+                "status_changed",
+                json!({ "from": status, "to": WorkItemStatus::Concluido,
+                        "cause": GH_ISSUE_GONE_CAUSE, "reason": GH_ISSUE_GONE_REASON }),
+            )?;
+            self.recompute_status(wi)?;
+            out.status_changes.push((wi, WorkItemStatus::Concluido));
+        }
         self.gh().finish_ok(s)?;
         tx.commit()?;
         Ok(out)
@@ -3401,6 +3435,7 @@ mod tests {
                 }],
                 etags: vec![("/repos/deep-ion-ai/demo/issues?x".into(), "e".into())],
                 synced_at: 5,
+                gone: Vec::new(),
             },
             "hub",
         )
@@ -3919,6 +3954,7 @@ mod tests {
             prs,
             etags: vec![("k".into(), "e".into())],
             synced_at: 5,
+            gone: Vec::new(),
         };
         let r = hub
             .apply_github(&snap(vec![pr(PrState::Open)], vec![issue("open")]), "hub")

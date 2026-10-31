@@ -167,6 +167,9 @@ impl HubGithub {
         Ok(match fetched {
             Ok(snap) => {
                 let applied = h.apply_github(&snap, &self.hub_id)?;
+                for g in &applied.removed {
+                    tracing::warn!("github: projeto {project_id}: {g}, removida do espelho");
+                }
                 ProjectSync {
                     project_id,
                     ok: true,
@@ -255,7 +258,7 @@ mod tests {
     use super::*;
     use ct_core::{WorkItemKind, WorkItemStatus};
     use ct_gh::fake::{fake_gh, FakeGitHub};
-    use ct_gh::sync::{closed_since, issues_path, pulls_path};
+    use ct_gh::sync::{closed_since, issues_path, pulls_path, sub_issues_path};
     use ct_gh::GhConfig;
     use ct_ledger::{Hub, Ledger, NewHubProject, NewProject};
 
@@ -338,6 +341,88 @@ mod tests {
         let ev = rx.try_recv().unwrap();
         assert_eq!(ev["event"], "hub_sync_status");
         assert_eq!(ev["data"]["ok"], true);
+    }
+
+    /// #89: o hub busca pelo mesmo `fetch`. O épico 1 do espelho do hub é
+    /// apagado com a filha 2: a rodada não falha, os dois saem do espelho do
+    /// hub e o work item da filha conclui com o motivo.
+    #[test]
+    fn epico_apagado_sai_do_espelho_do_hub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let bin = fake_gh(tmp.path(), "tok");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("o", "r");
+        let issue = |n: i64, parent: Option<i64>, subs: i64| {
+            json!({ "number": n, "title": format!("Issue {n}"), "state": "open",
+                    "labels": [], "html_url": format!("https://github.com/o/r/issues/{n}"),
+                    "updated_at": "2026-10-14T10:00:00Z",
+                    "parent_issue_url": parent.map(|p| format!("https://api.github.com/repos/o/r/issues/{p}")),
+                    "sub_issues_summary": { "total": subs } })
+        };
+        let open = issues_path(o, r, "open", None);
+        let subs = sub_issues_path(o, r, 1);
+        gh.set(
+            &open,
+            json!([issue(1, None, 1), issue(2, Some(1), 0), issue(3, None, 0)]),
+        );
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        gh.set(&subs, json!([issue(2, Some(1), 0)]));
+
+        // Um ambiente tem o work item da filha 2 e envia ao hub.
+        let outro = Ledger::open_in_memory().unwrap();
+        let p = outro
+            .add_project(&NewProject {
+                name: "r".into(),
+                gh_owner: o.into(),
+                gh_repo: r.into(),
+                repo_path: "/longe".into(),
+                base_branch: "develop".into(),
+                protected_branches: vec![],
+            })
+            .unwrap();
+        outro
+            .ensure_work_item(p.id, 2, WorkItemKind::Issue)
+            .unwrap();
+        let hub = hub_com(o, r);
+        hub.lock()
+            .ingest(outro.env_id(), "outro", &outro.outbox_pending(100).unwrap())
+            .unwrap();
+        let (events, _) = broadcast::channel(16);
+        let sync = HubGithub::new(hub.clone(), client, "hub-id", events);
+        assert!(sync.sync_all().unwrap()[0].ok);
+        let pid = hub.lock().list_projects().unwrap()[0].id;
+        let nums = || -> Vec<i64> {
+            let h = hub.lock();
+            h.list_issues(pid)
+                .unwrap()
+                .iter()
+                .map(|i| i.gh_number)
+                .collect()
+        };
+        assert_eq!(nums(), vec![1, 2, 3]);
+
+        gh.set(&open, json!([issue(3, None, 0)]));
+        gh.fail_next(&subs, 410, &[]);
+        let res = sync.sync_all().unwrap();
+        assert!(res[0].ok && res[0].status_changes == 1, "{res:?}");
+        assert_eq!(nums(), vec![3]);
+        let h = hub.lock();
+        assert_eq!(h.sync_states().unwrap()[0].last_error, None);
+        let w = h.find_work_item(o, r, 2).unwrap().unwrap();
+        assert_eq!(w.status, WorkItemStatus::Concluido);
+        let ev = &h.list_events(w.id, 1).unwrap()[0];
+        assert_eq!(ev.payload["cause"], "issue_gone");
+        assert_eq!(
+            ev.payload["reason"],
+            "issue apagada ou transferida no GitHub"
+        );
     }
 
     #[test]
