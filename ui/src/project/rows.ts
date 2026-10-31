@@ -13,6 +13,7 @@ import { useTower } from "../state/tower";
 import { forgeLabel, jiraProjectUrl, repoUrl, type ProviderProject } from "../util/item";
 import { hubClones, localClone } from "./clones";
 import { projectAt, projectsPlace } from "./sections";
+import type { SyncAddr } from "./sync-now";
 
 export interface ProjectRow {
   key: string;
@@ -31,6 +32,8 @@ export interface ProjectRow {
   view: HubProjectView | null;
   /** Sem hub: a sincronização relatada pelo ambiente. */
   sync: SyncState | null;
+  /** Projeto do "Sincronizar este projeto" (#90): a visão que o endereço abre. */
+  syncAddr: SyncAddr;
 }
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -77,6 +80,7 @@ export function useProjectRows(): ProjectRow[] {
             views.find((v) => same(v.project.gh_owner, project.gh_owner) && same(v.project.gh_repo, project.gh_repo)) ??
             null,
           sync: null,
+          syncAddr: { owner: project.gh_owner, repo: project.gh_repo },
         };
       });
   }
@@ -104,6 +108,7 @@ export function useProjectRows(): ProjectRow[] {
         env: { id: e.id, name: e.name },
         view: null,
         sync: d.sync.find((x) => x.project_id === project.id) ?? null,
+        syncAddr: { env: e.id, projectId: project.id },
       };
     });
   });
@@ -123,6 +128,11 @@ export function projectMenuItems(
     startSession: StartSession;
     openUrl(url: string): void;
     origin: HTMLElement;
+    /**
+     * "Sincronizar este projeto" (#90), com o mesmo plano e feedback do
+     * cartão "Buscar issues". `web` = desabilitado com a nota do app desktop.
+     */
+    sync?: { run(): void; web: boolean; busy: boolean; reason: string | null };
   },
 ): MenuItem[] {
   const { nav, startSession, openUrl, origin } = ctx;
@@ -137,7 +147,18 @@ export function projectMenuItems(
         [{ label: "Atribuir a ambiente", run: () => nav.go(projectsPlace({ project: ref, assign: true })) }]
       : []),
     ...(p.start ? [{ label: "Sessão de planejamento", run: () => startSession(p.start!, origin) }] : []),
+    ...(ctx.sync ? [syncItem(ctx.sync)] : []),
     { label: `Abrir no ${forgeLabel(p.project)}`, run: () => openUrl(repoUrl(p.project)) },
     ...(jira ? [{ label: "Abrir no Jira", run: () => openUrl(jira) }] : []),
   ];
+}
+
+/** Nota do "Sincronizar este projeto" desabilitado na web (#26): o canal reverso recusa `sync.now`. */
+export const SYNC_MENU_NOTE = "Fica no app desktop";
+
+function syncItem(s: NonNullable<Parameters<typeof projectMenuItems>[1]["sync"]>): MenuItem {
+  if (s.web) return { label: "Sincronizar este projeto", run: () => {}, disabled: true, note: SYNC_MENU_NOTE };
+  if (s.busy) return { label: "Buscando issues…", run: () => {}, disabled: true };
+  if (s.reason) return { label: "Sincronizar este projeto", run: () => {}, disabled: true, note: s.reason };
+  return { label: "Sincronizar este projeto", run: s.run, title: "Buscar agora no rastreador as issues só deste projeto" };
 }

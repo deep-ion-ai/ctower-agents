@@ -599,6 +599,12 @@ ALTER TABLE project ADD COLUMN docs_config TEXT NOT NULL DEFAULT '{}';
     r#"
 ALTER TABLE issue_cache ADD COLUMN meta TEXT NOT NULL DEFAULT '[]';
 "#,
+    // 27: falhas seguidas do sync do projeto e o início da sequência, as
+    // mesmas colunas da migração 17 do `ledger.db` (issue #90).
+    r#"
+ALTER TABLE sync_state ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -4598,7 +4604,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 26);
+        assert_eq!(v, 27);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

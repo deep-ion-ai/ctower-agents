@@ -199,6 +199,12 @@ pub struct TrackerStatusChange {
     /// Motivo da falha do último ciclo, sem a senha (§6.5).
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Rodadas seguidas com falha e o início da sequência (issue #90).
+    /// Ambiente anterior não manda: 0 e `None`.
+    #[serde(default)]
+    pub failures: i64,
+    #[serde(default)]
+    pub failing_since: Option<i64>,
     #[serde(default)]
     pub readiness: TrackerReadiness,
 }
@@ -950,6 +956,8 @@ mod tests {
                 last_attempt_at: 3,
                 last_ok_at: None,
                 last_error: err.map(String::from),
+                failures: 0,
+                failing_since: None,
                 readiness: TrackerReadiness::default(),
             })
         };

@@ -16,6 +16,8 @@ import { loadRecent, pushRecent } from "./palette/recent";
 import { openPlace } from "./places";
 import { useShell } from "./Shell";
 import { useStartSession } from "./start";
+import { projectAt } from "../project/sections";
+import { projectSyncInfo, runProjectSync, syncAddrOf } from "../project/sync-now";
 
 const LIST_ID = "palette-list";
 const optId = (i: number) => `palette-opt-${i}`;
@@ -67,6 +69,10 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
         const s = dashboardSessions(dashboards[t.env]).find((x) => x.id === t.session);
         return s ? lookup(dashboards[t.env], s) : {};
       });
+  // Projeto da aba ativa (#90): o "Sincronizar este projeto" usa o mesmo endereço.
+  const here = nav.screen.name === "project" ? syncAddrOf(tower, nav.screen) : null;
+  const activeProject =
+    here && nav.screen.name === "project" ? { screen: nav.screen, name: projectSyncInfo(tower, here).name } : null;
   const items = paletteItems({
     envs,
     status,
@@ -77,6 +83,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
     web,
     shellTarget: target,
     sessionActions: published,
+    activeProject,
   });
   const results = search(items, query, recent);
   const cur = Math.min(active, results.length - 1);
@@ -105,11 +112,28 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
         return published?.run(a.id);
       case "shortcuts":
         return shell.openShortcuts();
+      case "sync-project": {
+        const addr = syncAddrOf(tower, a.screen);
+        if (!addr) return;
+        // De outro lugar, abre a Visão geral do projeto: o cartão mostra o resultado.
+        if (a.open) nav.go(projectAt(a.screen, "overview"));
+        return void runProjectSync(tower.api, projectSyncInfo(tower, addr));
+      }
+      case "query":
+        return;
     }
   };
 
   const run = (it: PaletteItem) => {
+    if (it.disabled) return;
     pushRecent(it.id, recent);
+    if (it.action.type === "query") {
+      // Fica aberta, com a busca trocada (ex.: a lista de projetos do sync).
+      setQuery(it.action.query);
+      setActive(0);
+      input.current?.focus();
+      return;
+    }
     onClose();
     exec(it.action);
   };
@@ -181,6 +205,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
               id={optId(i)}
               role="option"
               aria-selected={i === cur}
+              aria-disabled={r.item.disabled || undefined}
               className="palette-opt"
               onMouseMove={() => i !== cur && setActive(i)}
               // Sem tirar o foco do campo.

@@ -100,13 +100,23 @@ impl Hub {
                 // sucesso ainda não visto (`last_ok_at` nulo) não apaga o
                 // último sucesso conhecido.
                 self.conn.execute(
-                    "INSERT INTO sync_state (project_id, last_attempt_at, last_ok_at, last_error)
-                     VALUES (?1, ?2, ?3, ?4)
+                    "INSERT INTO sync_state (project_id, last_attempt_at, last_ok_at, last_error,
+                        failures, failing_since)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT (project_id) DO UPDATE SET
                         last_attempt_at = excluded.last_attempt_at,
                         last_ok_at = coalesce(excluded.last_ok_at, sync_state.last_ok_at),
-                        last_error = excluded.last_error",
-                    params![pid, t.last_attempt_at, t.last_ok_at, t.last_error],
+                        last_error = excluded.last_error,
+                        failures = excluded.failures,
+                        failing_since = excluded.failing_since",
+                    params![
+                        pid,
+                        t.last_attempt_at,
+                        t.last_ok_at,
+                        t.last_error,
+                        t.failures,
+                        t.failing_since
+                    ],
                 )?;
                 let readiness =
                     serde_json::to_string(&t.readiness).expect("TrackerReadiness serializa");
@@ -313,6 +323,8 @@ mod tests {
             last_attempt_at: 30,
             last_ok_at: ok,
             last_error: error.map(String::from),
+            failures: i64::from(error.is_some()),
+            failing_since: error.map(|_| 30),
             readiness: TrackerReadiness {
                 owner: OWNER.into(),
                 repo: REPO.into(),
@@ -656,6 +668,8 @@ mod tests {
             st.last_error.as_deref(),
             Some("o Jira recusou a senha (401)")
         );
+        // A sequência de falhas vem do ambiente de sync (issue #90).
+        assert_eq!((st.failures, st.failing_since), (1, Some(30)));
 
         // Trocado o ambiente de sync, o antigo deixa de valer.
         hub.update_project(
@@ -894,6 +908,8 @@ mod tests {
                 last_attempt_at: at,
                 last_ok_at: Some(at),
                 last_error: None,
+                failures: 0,
+                failing_since: None,
                 readiness: TrackerReadiness::default(),
             })
         };

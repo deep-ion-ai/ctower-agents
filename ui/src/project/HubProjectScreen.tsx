@@ -9,15 +9,14 @@ import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
 import { ProjectGestorCard, ProjectHealthCard, ProjectSyncCard } from "./OverviewCards";
-import { syncPlan } from "./overview";
-import { isJira } from "../hub/tracker";
+import { projectSyncInfo } from "./sync-now";
 import { ProjectSessions } from "./ProjectSessions";
 import { ProjectSettings } from "./ProjectSettings";
 import { projectsPlace, sectionOf, type ProjectPage, type ProjectSettingsSection } from "./sections";
 import { projectSessions, sessionCounts } from "./sessions";
 import { projectKey } from "./tabs";
 import { cacheTree, cachedTree } from "./ui-store";
-import { changeLabel, itemTitle, trackerLabel } from "../util/item";
+import { itemTitle, trackerLabel } from "../util/item";
 import { assignmentText } from "../util/hub";
 import { projectState, syncText, type Tone } from "./settings";
 import type { AssignmentState } from "../protocol/hub-gen";
@@ -109,6 +108,9 @@ export function HubProjectScreen({
         : null,
     );
   const TONE: Record<AssignmentState, Tone> = { applied: "ok", pending: "attention", error: "error" };
+  // "Sincronizar este projeto" no cabeçalho e no cartão (#90); o projeto Jira
+  // sincroniza só no ambiente de sync.
+  const syncInfo = projectSyncInfo(tower, { owner: ref.owner, repo: ref.repo });
 
   return (
     <ProjectView<HubTreeNode>
@@ -118,17 +120,7 @@ export function HubProjectScreen({
         overview: () => {
           const groups = sessions();
           const sync = syncText(hubProject?.sync ?? mine?.sync ?? null, now);
-          // Projeto Jira: o sync é do ambiente de sync (id do hub → ambiente da UI).
           const hp = hubProject?.project;
-          const jira =
-            hp && isJira(hp)
-              ? {
-                  env: hp.sync_env_id ? (hub.envByDaemon[hp.sync_env_id] ?? null) : null,
-                  name: hp.sync_env_id
-                    ? (hubProject.assignments.find((a) => a.env_id === hp.sync_env_id)?.env_name ?? hp.sync_env_id)
-                    : null,
-                }
-              : null;
           return (
             <ProjectOverview
               state={hubProject ? projectState(hubProject, now) : null}
@@ -152,7 +144,7 @@ export function HubProjectScreen({
               extra={
                 <>
                   <ProjectHealthCard owner={ref.owner} repo={ref.repo} project={hp ?? p} />
-                  <ProjectSyncCard plan={syncPlan(clones, jira)} change={changeLabel(hp ?? p)} />
+                  <ProjectSyncCard info={syncInfo} />
                   <ProjectGestorCard owner={ref.owner} repo={ref.repo} />
                 </>
               }
@@ -185,6 +177,7 @@ export function HubProjectScreen({
       project={p}
       roots={mine?.roots ?? null}
       syncedAt={mine?.sync?.last_ok_at ?? null}
+      sync={syncInfo}
       error={error}
       item={item}
       liveOf={liveOf}

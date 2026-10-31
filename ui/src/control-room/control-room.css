@@ -42,6 +42,15 @@ button.cr-item-main {
   overflow-wrap: anywhere;
 }
 
+/* Resultado do "Sincronizar este projeto" sob a lista de Projetos (#90). */
+.cr-sync-note {
+  margin: 4px 12px;
+}
+
+.cr-sub.start-error {
+  color: var(--error);
+}
+
 .cr-sub[data-warn="true"] {
   color: var(--attention);
 }

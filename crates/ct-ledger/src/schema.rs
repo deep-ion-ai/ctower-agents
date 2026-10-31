@@ -320,6 +320,13 @@ ALTER TABLE project ADD COLUMN docs_config TEXT NOT NULL DEFAULT '{}';
     r#"
 ALTER TABLE issue_cache ADD COLUMN meta TEXT NOT NULL DEFAULT '[]';
 "#,
+    // 17: falhas seguidas do sync do projeto e o início da sequência (issue
+    // #90): a UI só avisa a partir de algumas falhas, para não alarmar por
+    // uma queda de rede passageira. Zeram na primeira rodada bem-sucedida.
+    r#"
+ALTER TABLE sync_state ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo

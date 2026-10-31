@@ -99,7 +99,20 @@ pub struct SyncState {
     pub last_attempt_at: i64,
     pub last_ok_at: Option<i64>,
     pub last_error: Option<String>,
+    /// Rodadas seguidas com falha (issue #90); zera na primeira rodada
+    /// bem-sucedida. Opcional na UI: ambiente ou hub anterior não manda.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<i64>", optional))]
+    pub failures: i64,
+    /// Início da sequência de falhas; `None` = a última rodada deu certo.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub failing_since: Option<i64>,
 }
+
+/// Colunas de `row_to_sync`.
+const SYNC_COLS: &str =
+    "project_id, last_attempt_at, last_ok_at, last_error, failures, failing_since";
 
 const ISSUE_COLS: &str =
     "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints, meta";
@@ -139,6 +152,8 @@ fn row_to_sync(r: &Row) -> rusqlite::Result<SyncState> {
         last_attempt_at: r.get(1)?,
         last_ok_at: r.get(2)?,
         last_error: r.get(3)?,
+        failures: r.get(4)?,
+        failing_since: r.get(5)?,
     })
 }
 
@@ -361,26 +376,40 @@ impl GhMirror<'_> {
              VALUES (?1, ?2, ?2, NULL)
              ON CONFLICT (project_id) DO UPDATE SET
                 last_attempt_at = excluded.last_attempt_at, last_ok_at = excluded.last_ok_at,
-                last_error = NULL",
+                last_error = NULL, failures = 0, failing_since = NULL",
             params![s.project_id, s.synced_at],
         )?;
         Ok(())
     }
 
+    /// Rodada com falha: conta mais uma na sequência e marca o início dela.
     pub(crate) fn record_sync_error(&self, project_id: i64, error: &str) -> Result<()> {
         self.0.execute(
-            "INSERT INTO sync_state (project_id, last_attempt_at, last_error) VALUES (?1, ?2, ?3)
+            "INSERT INTO sync_state (project_id, last_attempt_at, last_error, failures, failing_since)
+             VALUES (?1, ?2, ?3, 1, ?2)
              ON CONFLICT (project_id) DO UPDATE SET
-                last_attempt_at = excluded.last_attempt_at, last_error = excluded.last_error",
+                last_attempt_at = excluded.last_attempt_at, last_error = excluded.last_error,
+                failures = sync_state.failures + 1,
+                failing_since = coalesce(sync_state.failing_since, excluded.failing_since)",
             params![project_id, ct_core::now_ms(), error],
         )?;
         Ok(())
     }
 
-    pub(crate) fn sync_states(&self) -> Result<Vec<SyncState>> {
-        let mut stmt = self.0.prepare(
-            "SELECT project_id, last_attempt_at, last_ok_at, last_error FROM sync_state ORDER BY project_id",
+    /// Rodada concluída com aviso (issues não lidas no Jira): guarda a
+    /// mensagem sem contar como falha, já que o cursor avançou.
+    pub(crate) fn record_sync_warning(&self, project_id: i64, warning: &str) -> Result<()> {
+        self.0.execute(
+            "UPDATE sync_state SET last_error = ?2 WHERE project_id = ?1",
+            params![project_id, warning],
         )?;
+        Ok(())
+    }
+
+    pub(crate) fn sync_states(&self) -> Result<Vec<SyncState>> {
+        let mut stmt = self.0.prepare(&format!(
+            "SELECT {SYNC_COLS} FROM sync_state ORDER BY project_id"
+        ))?;
         let rows = stmt.query_map([], row_to_sync)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -389,7 +418,7 @@ impl GhMirror<'_> {
         Ok(self
             .0
             .query_row(
-                "SELECT project_id, last_attempt_at, last_ok_at, last_error FROM sync_state WHERE project_id = ?1",
+                &format!("SELECT {SYNC_COLS} FROM sync_state WHERE project_id = ?1"),
                 [project_id],
                 row_to_sync,
             )
@@ -604,6 +633,11 @@ impl Ledger {
     /// Registra uma falha de sync, preservando `last_ok_at` e o cache.
     pub fn record_sync_error(&self, project_id: i64, error: &str) -> Result<()> {
         self.gh().record_sync_error(project_id, error)
+    }
+
+    /// Aviso de uma rodada concluída: fica no `last_error` sem contar falha.
+    pub fn record_sync_warning(&self, project_id: i64, warning: &str) -> Result<()> {
+        self.gh().record_sync_warning(project_id, warning)
     }
 
     pub fn sync_states(&self) -> Result<Vec<SyncState>> {
@@ -1133,5 +1167,34 @@ mod tests {
         assert!(st.last_attempt_at >= 100);
         l.apply_github(&snap(p.id, vec![], vec![])).unwrap();
         assert_eq!(l.sync_state(p.id).unwrap().unwrap().last_error, None);
+    }
+
+    #[test]
+    fn falhas_seguidas_contam_e_zeram_no_sucesso() {
+        let (l, p) = ledger_with_project();
+        // Primeira rodada já com falha: sem linha anterior.
+        l.record_sync_error(p.id, "HTTP 410").unwrap();
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!(st.failures, 1);
+        let desde = st.failing_since.unwrap();
+        assert_eq!(desde, st.last_attempt_at);
+        l.record_sync_error(p.id, "HTTP 410").unwrap();
+        l.record_sync_error(p.id, "rede").unwrap();
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!((st.failures, st.failing_since), (3, Some(desde)));
+        assert_eq!(st.last_error.as_deref(), Some("rede"));
+
+        l.apply_github(&snap(p.id, vec![], vec![])).unwrap();
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!(
+            (st.failures, st.failing_since, st.last_error),
+            (0, None, None)
+        );
+
+        // Aviso de rodada concluída não conta como falha.
+        l.record_sync_warning(p.id, "2 issues não lidas").unwrap();
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!((st.failures, st.failing_since), (0, None));
+        assert_eq!(st.last_error.as_deref(), Some("2 issues não lidas"));
     }
 }

@@ -56,9 +56,18 @@
 
 .pidx-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding-right: 8px;
+}
+
+/* Resultado do "Sincronizar este projeto" pedido pelo menu (#90). */
+.pidx-sync-msg {
+  flex-basis: 100%;
+  margin: 0 0 8px;
+  padding: 0 12px;
+  font-size: 12px;
 }
 
 .pidx-row + .pidx-row {

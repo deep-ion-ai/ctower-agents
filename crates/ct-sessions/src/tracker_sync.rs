@@ -592,7 +592,7 @@ impl JiraGitlabSync {
                 let warning = failed_warning(&failed);
                 if let Some(w) = &warning {
                     tracing::warn!("jira: {slug}: {w}");
-                    self.sessions.ledger().record_sync_error(project_id, w)?;
+                    self.sessions.ledger().record_sync_warning(project_id, w)?;
                 }
                 ProjectSync {
                     project_id,

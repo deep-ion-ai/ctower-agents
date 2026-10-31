@@ -263,3 +263,49 @@ test("avisos do backup dos docs levam a Manutenção › Backup (na web, ao hub)
   for (const i of items) expect(i.action).toEqual({ to: "maintenance", section: "backup" });
   for (const i of attention(input({ hub, web: true }))) expect(i.action).toEqual({ to: "hub" });
 });
+
+// #90: sync de um projeto falhando seguidas vezes.
+describe("sync falhando (#90)", () => {
+  const failing = (failures: number) =>
+    dashboard({
+      sync: [
+        sync({
+          last_ok_at: NOW - 60 * MIN,
+          last_attempt_at: NOW - MIN,
+          last_error: "GitHub: HTTP 410",
+          failures,
+          failing_since: NOW - 30 * MIN,
+        }),
+      ],
+    });
+
+  test("a partir de 3 falhas seguidas: aviso com o projeto, os ciclos, o erro e o link", () => {
+    const items = attention(input({ dashboards: { wsl: failing(3) } }));
+    expect(items).toEqual([
+      expect.objectContaining({
+        kind: "sync_failing",
+        label: "Sync falhando",
+        title: "ctower-agents: sync falhando há 3 ciclos",
+        detail: "GitHub: HTTP 410",
+        since: NOW - 30 * MIN,
+        actionLabel: "Ver projeto",
+        action: { to: "project", env: "wsl", projectId: 1 },
+      }),
+    ]);
+    // Também na aba Avisos.
+    const tower = { envs: [env], status: ok, dashboards: { wsl: failing(3) }, alerts: [], hub: { conn: null } };
+    expect(warnings(tower as unknown as Parameters<typeof warnings>[0], NOW).map((w) => w.kind)).toEqual(["sync_failing"]);
+  });
+
+  test("abaixo do limiar não avisa (queda de rede passageira)", () => {
+    const d = dashboard({ sync: [sync({ last_ok_at: NOW - 5 * MIN, last_error: "rede", failures: 2 })] });
+    expect(attention(input({ dashboards: { wsl: d } }))).toEqual([]);
+    // Duas falhas com o último sucesso antigo: continua o "Sync atrasado" de antes.
+    expect(attention(input({ dashboards: { wsl: failing(2) } })).map((i) => i.kind)).toEqual(["sync_late"]);
+  });
+
+  test("some na primeira rodada bem-sucedida", () => {
+    const ok1 = dashboard({ sync: [sync({ last_ok_at: NOW - MIN, failures: 0 })] });
+    expect(attention(input({ dashboards: { wsl: ok1 } }))).toEqual([]);
+  });
+});

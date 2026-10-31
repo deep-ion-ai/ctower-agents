@@ -51,8 +51,10 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// shell em `session.attach|detach|input|resize` e nos frames binários, o
 /// push `shell_exited` e `events.list` (#422) — na branch do épico eram 2.5 e
 /// 2.6, renumeradas acima das da develop. 2.10 (#434): `tracker.issue_body`
-/// (descrição da issue do Jira para o "Ver issue", pelo canal do hub).
-pub const PROTOCOL_VERSION: &str = "2.10";
+/// (descrição da issue do Jira para o "Ver issue", pelo canal do hub). 2.11
+/// (#90): `failures` e `failing_since` no `SyncState` (falhas seguidas do
+/// sync do projeto).
+pub const PROTOCOL_VERSION: &str = "2.11";
 
 #[derive(Clone)]
 pub struct AppState {
