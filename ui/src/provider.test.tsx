@@ -122,7 +122,7 @@ function readiness(p: { jira?: Partial<TrackerReadiness["jira"]>; gitlab?: Parti
     owner: "grupo/projeto",
     repo: "app",
     checked_at: NOW,
-    jira: { cli: "1.7.0", config_present: true, server_matches: true, credential_ok: true, me_ok: true, server_version: "8.5.2", error: null, ...p.jira },
+    jira: { cli: "1.7.0", config_present: true, server_matches: true, credential_ok: true, me_ok: true, server_version: "8.5.2", error: null, custom_fields: [], ...p.jira },
     gitlab: { cli: "1.124.0", credential_ok: true, api_ok: true, error: null, ...p.gitlab },
   };
 }
