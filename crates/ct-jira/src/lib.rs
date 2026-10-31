@@ -8,7 +8,7 @@
 //! - [`run_credential`]: o comando de credencial do projeto (`pass show ... |
 //!   head -1`), cuja primeira linha vira um [`Secret`];
 //! - [`issue_row`]: o JSON da API v2 (`issue view --raw`) → linha do espelho,
-//!   com as sprints ([`parse_sprints`]);
+//!   com as sprints ([`parse_sprints`]) e os metadados ([`issue_meta`]);
 //! - [`description_markdown`]: a descrição da issue (wiki markup ou ADF) →
 //!   Markdown, em memória, para o "Ver issue" (#434).
 //!
@@ -20,6 +20,7 @@
 mod cli;
 pub mod issue;
 pub mod markdown;
+pub mod meta;
 pub mod sprint;
 
 /// O processo com prazo, o comando de credencial e o [`Secret`] ficam no
@@ -37,4 +38,5 @@ pub use cli::{
 };
 pub use issue::{issue_row, list_entry, parse_jira_time, ListEntry};
 pub use markdown::description_markdown;
+pub use meta::{field_text, issue_meta, STANDARD_FIELDS};
 pub use sprint::{detect_sprint_field, issue_sprints, parse_sprints};

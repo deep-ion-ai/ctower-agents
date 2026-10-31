@@ -924,7 +924,7 @@ mod tests {
                     has_sub_issues: false,
                     url: "https://jira.example.com/browse/PROJ-5450".into(),
                     updated_at: 1,
-                    sprints: Vec::new(),
+                    ..Default::default()
                 },
                 removed: false,
             })

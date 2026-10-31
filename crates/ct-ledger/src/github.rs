@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct IssueRow {
     pub gh_number: i64,
@@ -30,6 +30,22 @@ pub struct IssueRow {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(as = "Option<Vec<Sprint>>", optional))]
     pub sprints: Vec<Sprint>,
+    /// Metadados do tracker prontos para exibir, na ordem da tela (Situação,
+    /// Tipo, Prioridade…). Vazio no GitHub e no espelho anterior à coluna;
+    /// ausente no protocolo = vazio, como `sprints`.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<IssueMeta>>", optional))]
+    pub meta: Vec<IssueMeta>,
+}
+
+/// Um metadado do tracker: `field` é o ID no tracker (`status`,
+/// `customfield_12303`…), `label` o rótulo e `value` o valor já em texto.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct IssueMeta {
+    pub field: String,
+    pub label: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -86,7 +102,7 @@ pub struct SyncState {
 }
 
 const ISSUE_COLS: &str =
-    "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints";
+    "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints, meta";
 const PR_COLS: &str = "number, work_item_id, head, base, state, url, updated_at, head_sha";
 
 fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
@@ -100,6 +116,7 @@ fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
         url: r.get(6)?,
         updated_at: r.get(7)?,
         sprints: json_col(r, 8)?,
+        meta: json_col(r, 9)?,
     })
 }
 
@@ -234,15 +251,16 @@ impl GhMirror<'_> {
             .optional()?;
         let labels = serde_json::to_string(&i.labels).expect("Vec<String> serializa");
         let sprints = serde_json::to_string(&i.sprints).expect("Vec<Sprint> serializa");
+        let meta = serde_json::to_string(&i.meta).expect("Vec<IssueMeta> serializa");
         self.0.execute(
             "INSERT INTO issue_cache (project_id, gh_number, title, state, labels, parent_number,
-                                      has_sub_issues, url, updated_at, synced_at, sprints)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                                      has_sub_issues, url, updated_at, synced_at, sprints, meta)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT (project_id, gh_number) DO UPDATE SET
                 title = excluded.title, state = excluded.state, labels = excluded.labels,
                 parent_number = excluded.parent_number, has_sub_issues = excluded.has_sub_issues,
                 url = excluded.url, updated_at = excluded.updated_at, synced_at = excluded.synced_at,
-                sprints = excluded.sprints",
+                sprints = excluded.sprints, meta = excluded.meta",
             params![
                 project_id,
                 i.gh_number,
@@ -254,7 +272,8 @@ impl GhMirror<'_> {
                 i.url,
                 i.updated_at,
                 synced_at,
-                sprints
+                sprints,
+                meta
             ],
         )?;
         Ok(prev)
@@ -647,7 +666,7 @@ mod tests {
             has_sub_issues: false,
             url: format!("https://github.com/o/r/issues/{n}"),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -672,6 +691,27 @@ mod tests {
             etags: vec![("k".into(), "e1".into())],
             synced_at: 100,
         }
+    }
+
+    /// `IssueRow` de uma versão anterior (sem `sprints` nem `meta`)
+    /// desserializa com as listas vazias, e a vazia vai e volta como `[]`.
+    #[test]
+    fn issue_sem_meta_desserializa() {
+        let v = json!({
+            "gh_number": 7, "title": "t", "state": "open", "labels": [],
+            "parent_number": null, "has_sub_issues": false, "url": "u", "updated_at": 1,
+        });
+        let i: IssueRow = serde_json::from_value(v).unwrap();
+        assert!(i.meta.is_empty() && i.sprints.is_empty());
+        assert_eq!(serde_json::to_value(&i).unwrap()["meta"], json!([]));
+        let mut com = issue(8, "open");
+        com.meta = vec![IssueMeta {
+            field: "status".into(),
+            label: "Situação".into(),
+            value: "Aberto".into(),
+        }];
+        let back: IssueRow = serde_json::from_value(serde_json::to_value(&com).unwrap()).unwrap();
+        assert_eq!(back, com);
     }
 
     fn events(l: &Ledger, wi: i64, kind: &str) -> usize {

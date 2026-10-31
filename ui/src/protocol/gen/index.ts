@@ -32,6 +32,7 @@ export type { GitlabReadiness } from "./GitlabReadiness";
 export type { HubConfigStatus } from "./HubConfigStatus";
 export type { HubSyncResult } from "./HubSyncResult";
 export type { HubSyncStatus } from "./HubSyncStatus";
+export type { IssueMeta } from "./IssueMeta";
 export type { IssueRow } from "./IssueRow";
 export type { ItemRun } from "./ItemRun";
 export type { JiraConfig } from "./JiraConfig";
