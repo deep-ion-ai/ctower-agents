@@ -60,6 +60,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Abrir gestor",
     "Atualizar app",
     "Retomar interrompidas",
+    "Atalhos e gestos",
     "Projeto: Novo…",
   ]);
   expect(items.some((i) => i.kind === "issue" || i.kind === "session" || i.kind === "project")).toBe(false);
@@ -183,7 +184,7 @@ test("web: sem os lugares e comandos exclusivos do desktop (#201)", () => {
     "Configurações › Aparência",
     "Configurações › Acesso web",
   ]);
-  expect(byKind(items, "command").map((i) => i.label)).toEqual(["Ver interrompidas"]);
+  expect(byKind(items, "command").map((i) => i.label)).toEqual(["Ver interrompidas", "Atalhos e gestos"]);
 });
 
 test("shell (#423): comando com a aba ativa no work item; sem ela ou na web, nada", () => {
@@ -195,4 +196,11 @@ test("shell (#423): comando com a aba ativa no work item; sem ela ou na web, nad
   });
   expect(cmd({ shellTarget: null })).toBeUndefined();
   expect(cmd({ shellTarget: target, web: true })).toBeUndefined();
+});
+
+test("atalhos (#27): o comando abre a folha, no desktop e na web", () => {
+  for (const web of [false, true]) {
+    const it = paletteItems(src({ web })).find((i) => i.id === "cmd:shortcuts");
+    expect(it).toMatchObject({ kind: "command", label: "Atalhos e gestos", action: { type: "shortcuts" } });
+  }
 });

@@ -6,7 +6,7 @@ import { App } from "../App";
 import { FakeDaemonApi, FakeWebAuth } from "../api/fake";
 import type { HubWebSession } from "../protocol/hub-gen";
 import type { Screen } from "../state/nav";
-import { hubEnv } from "../test/fixtures";
+import { hubEnv, hubStatus } from "../test/fixtures";
 import { envCalls, hubItem, hubSession, now, webApi } from "../test/web";
 import { ENDED_NOTICE, LEFT_NOTICE, WebGate } from "./WebGate";
 
@@ -14,7 +14,7 @@ function renderApp(api: FakeDaemonApi, initial?: Screen) {
   return render(<App api={api} initial={initial} />);
 }
 
-describe("modo web: seções exclusivas do desktop ocultas", () => {
+describe("modo web: seções exclusivas do desktop ocultas ou desabilitadas", () => {
   it("barra de atividades e de título sem Terminal, Manutenção, sync e versão", async () => {
     const api = webApi();
     renderApp(api);
@@ -40,15 +40,21 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(screen.getAllByText(/sem envio ao hub há 10 min/).length).toBeGreaterThan(0);
   });
 
-  it("Hub sem o grupo Segurança, com Sessões web; o antigo Hub › Projetos cai no índice, só leitura", async () => {
+  it("Hub com Segurança só no desktop (#26), com Sessões web; o antigo Hub › Projetos cai no índice", async () => {
+    const user = userEvent.setup();
     const api = webApi();
     renderApp(api, { name: "hub" });
     const side = await screen.findByRole("region", { name: "Painel lateral" });
     await waitFor(() => expect(within(side).getByText("Sessões web")).toBeInTheDocument());
-    expect(within(side).queryByText("Segurança")).toBeNull();
-    expect(within(side).queryByText("Secrets e variáveis")).toBeNull();
-    expect(within(side).queryByText("Chave de recuperação")).toBeNull();
-    expect(within(side).queryByText("Token do GitHub")).toBeNull();
+    // O grupo não some: cada linha avisa que é do desktop e abre a explicação.
+    expect(within(side).getByText("Segurança")).toBeInTheDocument();
+    for (const s of ["Secrets e variáveis", "Chave de recuperação", "Token do GitHub"]) {
+      const row = within(side).getByText(s).closest("button")!;
+      expect(row).toHaveTextContent("Só no app desktop");
+    }
+    await user.click(within(side).getByText("Token do GitHub"));
+    expect(await screen.findByText(/fica só no app desktop/)).toBeInTheDocument();
+    expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
     // Projetos e atribuições saiu do Hub (#18).
     expect(within(side).queryByText("Projetos e atribuições")).toBeNull();
   });
@@ -58,11 +64,38 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     renderApp(api, { name: "hub", section: "projects", register: { url: "" } });
     expect(await screen.findByRole("heading", { level: 1, name: "Projetos" })).toBeInTheDocument();
     await screen.findByRole("button", { name: "ctower-agents" });
-    // O pedido de cadastro não abre nada na web.
-    expect(screen.queryByRole("button", { name: "+ Novo projeto" })).toBeNull();
+    // O pedido de cadastro não abre nada na web; o botão fica, desabilitado com o motivo (#26).
+    const novo = screen.getByRole("button", { name: "+ Novo projeto" });
+    expect(novo).toBeDisabled();
+    expect(novo).toHaveAccessibleDescription("Cadastro e edição no app desktop");
     expect(screen.queryByRole("form", { name: "Novo projeto" })).toBeNull();
     // `hub.secrets.list` está fora do /web/ws.
     expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
+  });
+
+  it("Hub (#26): gestor, cadastrar e descartar da quarentena desabilitados com o motivo", async () => {
+    const q = {
+      project_key: "deep-ion-ai/perdido",
+      env_id: "daemon-wsl",
+      env_name: "wsl-pc",
+      rows: 12,
+      first_received_at: now - 3_600_000,
+      last_received_at: now - 60_000,
+    };
+    const api = webApi().onHub("hub.status", hubStatus({ quarantine: [q] }));
+    const { unmount } = renderApp(api, { name: "hub" });
+    const gestor = await screen.findByRole("button", { name: "Abrir sessão do gestor" });
+    expect(gestor).toBeDisabled();
+    expect(gestor).toHaveAccessibleDescription("Iniciar o gestor fica no app desktop");
+    unmount();
+    renderApp(api, { name: "hub", section: "quarantine" });
+    const group = await screen.findByRole("group", { name: "Quarentena de deep-ion-ai/perdido" });
+    for (const name of ["Cadastrar projeto", "Descartar"]) {
+      const b = within(group).getByRole("button", { name });
+      expect(b).toBeDisabled();
+      expect(b).toHaveAccessibleDescription("Cadastro e edição no app desktop");
+    }
+    expect(api.hubCallsTo("hub.quarantine.discard")).toEqual([]);
   });
 
   it("seção sensível aberta por endereço: só o aviso, sem chamar o hub", async () => {
@@ -99,21 +132,26 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(screen.queryByRole("button", { name: "Atribuir a um ambiente" })).toBeNull();
   });
 
-  it("Configurações do projeto (#8, #17): a aba do projeto, só leitura e sem secrets nem exclusão", async () => {
+  it("Configurações do projeto (#8, #17, #26): só leitura, Editar, secrets e exclusão desabilitados", async () => {
     const user = userEvent.setup();
     const api = webApi();
     renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
     await user.click(await screen.findByRole("button", { name: "Configurações do projeto" }));
     await screen.findByRole("group", { name: "Geral" });
     expect(screen.getByRole("tab", { name: /ctower-agents · Configurações/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByRole("button", { name: /^Editar/ })).toBeNull();
+    const editar = screen.getByRole("button", { name: /^Editar/ });
+    expect(editar).toBeDisabled();
+    expect(editar).toHaveAccessibleDescription("Cadastro e edição no app desktop");
     const secoes = screen.getByRole("navigation", { name: "Seções das configurações do projeto" });
-    expect(within(secoes).queryByRole("button", { name: "Secrets e variáveis" })).toBeNull();
-    expect(within(secoes).queryByRole("button", { name: "Zona de perigo" })).toBeNull();
+    for (const s of ["Secrets e variáveis", "Zona de perigo"]) {
+      const b = within(secoes).getByRole("button", { name: s });
+      expect(b).toBeDisabled();
+      expect(b).toHaveAccessibleDescription("Secrets e exclusão do projeto no app desktop");
+    }
     // A seção do desktop pedida pelo endereço cai em Geral; Ambientes, sem atribuir nem remover.
     await user.click(within(secoes).getByRole("button", { name: "Ambientes e atribuições" }));
     await screen.findByRole("group", { name: "Ambientes e atribuições" });
-    expect(screen.queryByRole("button", { name: /Atribuir/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Atribuir a ambiente/ })).toBeDisabled();
     expect(screen.queryByRole("button", { name: /^Remover/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Gerenciar secrets do projeto" })).toBeNull();
     expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
@@ -130,11 +168,13 @@ describe("modo web: seções exclusivas do desktop ocultas", () => {
     expect(screen.queryByRole("form", { name: /^Atribuir/ })).toBeNull();
   });
 
-  it("Projetos na Sala de controle (#10): sem '+' e sem Atribuir a ambiente no menu", async () => {
+  it("Projetos na Sala de controle (#10, #26): '+' desabilitado e sem Atribuir a ambiente no menu", async () => {
     renderApp(webApi());
     const side = await screen.findByRole("complementary", { name: "Ambientes e projetos" });
     const linha = await within(side).findByRole("button", { name: "ctower-agents" });
-    expect(within(side).queryByRole("button", { name: "Novo projeto" })).toBeNull();
+    const mais = within(side).getByRole("button", { name: "Novo projeto" });
+    expect(mais).toBeDisabled();
+    expect(mais).toHaveAccessibleDescription("Cadastro e edição no app desktop");
     fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
     const menu = screen.getByRole("menu", { name: "Ações do projeto ctower-agents" });
     expect(within(menu).getByRole("menuitem", { name: "Configurações" })).toBeInTheDocument();

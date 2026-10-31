@@ -111,3 +111,19 @@
   flex-direction: column;
   gap: 2px;
 }
+
+/* Ação só do desktop (#26): o botão desabilitado e o motivo ao lado. */
+.desktop-only {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.desktop-only-note {
+  font-size: 12px;
+}
+
+.ibtn.desktop-only-icon:disabled {
+  cursor: not-allowed;
+}

@@ -103,6 +103,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
         return void openShell(a.env, a.workItemId);
       case "session-action":
         return published?.run(a.id);
+      case "shortcuts":
+        return shell.openShortcuts();
     }
   };
 

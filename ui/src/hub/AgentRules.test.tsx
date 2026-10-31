@@ -236,13 +236,17 @@ test("nas regras do projeto, avisa das propostas pendentes de épicos; o push re
   await waitFor(() => expect(api.hubCallsTo("hub.rules.get").length).toBe(before + 1));
 });
 
-test("web: regras e propostas só para leitura, sem editar, importar nem decidir", async () => {
+test("web: regras e propostas só para leitura; editar, importar e decidir desabilitados com o motivo", async () => {
   setup({ epic: 5014, label: "PROJ-5014", proposals: [proposal()], web: true });
   const card = await screen.findByRole("region", { name: /Regras do agente/ });
   expect(await within(card).findByText("o bot recusou o MR sem o CHANGELOG")).toBeInTheDocument();
   expect(within(card).getByText(/Branch exatamente PROJ-NNNN\./)).toBeInTheDocument();
-  expect(within(card).queryByRole("button", { name: "Editar" })).toBeNull();
-  expect(within(card).queryByText("Importar CLAUDE.md")).toBeNull();
-  expect(within(card).queryByRole("button", { name: /Aprovar proposta/ })).toBeNull();
-  expect(within(card).queryByRole("button", { name: /Rejeitar proposta/ })).toBeNull();
+  // #26: os botões ficam, desabilitados, e não há campo de arquivo para importar.
+  expect(within(card).getByRole("button", { name: "Editar" })).toBeDisabled();
+  expect(within(card).getByRole("button", { name: "Importar CLAUDE.md" })).toBeDisabled();
+  expect(within(card).queryByLabelText(/Importar CLAUDE.md para/)).toBeNull();
+  const aprovar = within(card).getByRole("button", { name: /Aprovar proposta/ });
+  expect(aprovar).toBeDisabled();
+  expect(aprovar).toHaveAccessibleDescription("Decidir propostas fica no app desktop");
+  expect(within(card).getByRole("button", { name: /Rejeitar proposta/ })).toBeDisabled();
 });
