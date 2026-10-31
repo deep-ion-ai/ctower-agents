@@ -1,5 +1,6 @@
 import { useTower } from "../../state/tower";
 import { JIRA_PROTOCOL, hubSupportsJira, kindOf, type CodeHostForm, type IssueHostForm } from "../../hub/tracker";
+import type { JiraFieldInfo } from "../../protocol/hub-gen";
 import type { ProjectForm } from "./form";
 import { GitlabFields, JiraFields } from "./TrackerForm";
 
@@ -12,12 +13,15 @@ export function GeneralForm({
   onChange,
   prefix,
   withUrl,
+  jiraCatalog,
 }: {
   form: ProjectForm;
   onChange: (f: ProjectForm) => void;
   prefix: string;
   /** Cadastro: pede a URL e escolhe o tipo; na edição, só mostra. */
   withUrl: boolean;
+  /** Catálogo de campos do Jira do projeto (#72), na edição. */
+  jiraCatalog?: readonly JiraFieldInfo[];
 }) {
   const { hub } = useTower();
   // Hub anterior ao protocolo 1.5 (épico #353) não cadastra Jira + GitLab (ignora `tracker` e `forge`).
@@ -77,7 +81,7 @@ export function GeneralForm({
         </div>
       )}
       {f.code === "gitlab" && <GitlabFields form={f} onChange={onChange} prefix={prefix} />}
-      {f.issues === "jira" && <JiraFields form={f} onChange={onChange} prefix={prefix} />}
+      {f.issues === "jira" && <JiraFields form={f} onChange={onChange} prefix={prefix} catalog={jiraCatalog} />}
       <div className="field">
         <label htmlFor={`${prefix}-name`}>Nome{withUrl ? " (opcional)" : ""}</label>
         <input id={`${prefix}-name`} type="text" value={f.name} onChange={(e) => onChange({ ...f, name: e.target.value })} />

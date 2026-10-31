@@ -382,7 +382,7 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// Codificação da SigV4: só `A-Za-z0-9-_.~` passam (e `/` no caminho).
+/// Implementação da SigV4: só `A-Za-z0-9-_.~` passam (e `/` no caminho).
 fn uri_encode(s: &str, encode_slash: bool) -> String {
     let mut out = String::new();
     for b in s.bytes() {

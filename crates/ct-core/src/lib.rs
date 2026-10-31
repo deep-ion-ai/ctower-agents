@@ -21,9 +21,9 @@ pub use tracker::{
     change_label, change_ref, change_short, change_url, default_type_map, glab_cli_prefix,
     issue_view_cmd, item_key, item_ref, item_short, item_url, jira_cli_prefix,
     supported_combination, ForgeConfig, ForgeKind, GitlabConfig, GitlabReadiness, JiraConfig,
-    JiraFieldInfo, JiraReadiness, JiraTypeRole, Sprint, SprintState, TrackerConfig, TrackerKind,
-    TrackerProgress, TrackerReadiness, TrackerRef, ACTIVE_SPRINT_JQL, DEFAULT_MAX_ISSUES,
-    MAX_ISSUES_CEILING,
+    JiraExtraField, JiraFieldInfo, JiraReadiness, JiraTypeRole, Sprint, SprintState, TrackerConfig,
+    TrackerKind, TrackerProgress, TrackerReadiness, TrackerRef, ACTIVE_SPRINT_JQL,
+    DEFAULT_MAX_ISSUES, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS,
 };
 
 /// Versão do Control Tower (a do workspace).

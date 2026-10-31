@@ -5,7 +5,9 @@ import {
   branchPreview,
   type JiraForm,
 } from "../../hub/tracker";
+import type { JiraFieldInfo } from "../../protocol/hub-gen";
 import type { ProjectForm } from "./form";
+import { JiraExtraFields } from "./JiraExtraFields";
 
 interface FieldsProps {
   form: ProjectForm;
@@ -59,7 +61,13 @@ export function GitlabFields(p: FieldsProps) {
  * Jira + GitLab. Credenciais: só o comando, que roda no ambiente; a senha
  * e o token nunca passam pelo hub.
  */
-export function JiraFields(p: FieldsProps) {
+export function JiraFields({
+  catalog = [],
+  ...p
+}: FieldsProps & {
+  /** Catálogo de campos do Jira do projeto (#72); vazio no cadastro novo. */
+  catalog?: readonly JiraFieldInfo[];
+}) {
   const { form: f, onChange, prefix } = p;
   const j = f.jira;
   const setJ = (patch: Partial<JiraForm>) => onChange({ ...f, jira: { ...j, ...patch } });
@@ -156,6 +164,12 @@ export function JiraFields(p: FieldsProps) {
         label="Campo da sprint (opcional)"
         placeholder="customfield_10600 (vazio = detectar)"
         hint="Permite filtrar a árvore e o quadro por sprint. Vazio = o ambiente procura o campo de sprint em cada issue."
+      />
+      <JiraExtraFields
+        prefix={prefix}
+        rows={j.extra_fields}
+        catalog={catalog}
+        onChange={(extra_fields) => setJ({ extra_fields })}
       />
       <p className="muted hint hub-wide">
         O hub não alcança o Jira nem o GitLab: guarda só os comandos de credencial, que rodam no ambiente de sync.

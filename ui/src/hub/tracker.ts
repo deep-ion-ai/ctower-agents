@@ -76,6 +76,14 @@ export interface JiraForm {
   epic_name_field: string;
   /** Campo da sprint; vazio = o ambiente detecta em cada issue. */
   sprint_field: string;
+  /** Campos do projeto na tela da issue (#68), na ordem do cadastro. */
+  extra_fields: JiraExtraFieldForm[];
+}
+
+/** Um campo do projeto no formulário: ID do Jira e rótulo na tela. */
+export interface JiraExtraFieldForm {
+  id: string;
+  label: string;
 }
 
 export const JIRA_BRANCH_PATTERN = "{prefix}/{key}-{slug}";
@@ -104,6 +112,7 @@ export const EMPTY_JIRA: JiraForm = {
   epic_link_field: "",
   epic_name_field: "",
   sprint_field: "",
+  extra_fields: [],
 };
 
 const ROLES: JiraTypeRole[] = ["epic", "issue", "bug", "chore", "ignore"];
@@ -129,6 +138,113 @@ export function gitlabOf(p: Pick<HubProject, "forge">): GitlabConfig | null {
 export function jiraFieldCatalog(p: Pick<HubProjectView, "tracker_status">): JiraFieldInfo[] {
   return p.tracker_status?.readiness.jira.custom_fields ?? [];
 }
+
+/** Teto de campos do projeto na tela da issue (`ct_core::MAX_JIRA_EXTRA_FIELDS`). */
+export const MAX_EXTRA_FIELDS = 20;
+
+/** Quantos campos do catálogo a busca mostra; acima disso, pede para refinar. */
+export const FIELD_SEARCH_LIMIT = 50;
+
+/** ID de campo próprio do Jira (`customfield_10099`). */
+export const CUSTOMFIELD_ID = /^customfield_\d+$/i;
+
+/** Texto para busca: sem acentos e em minúsculas. */
+export const searchText = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+/**
+ * Campos do catálogo cujo nome ou ID contém `query` (sem diferenciar
+ * maiúsculas nem acentos), na ordem do catálogo, até `limit`; `more` = quantos
+ * ficaram de fora.
+ */
+export function searchJiraFields(
+  catalog: readonly JiraFieldInfo[],
+  query: string,
+  limit = FIELD_SEARCH_LIMIT,
+): { options: JiraFieldInfo[]; more: number } {
+  const q = searchText(query);
+  const all = q ? catalog.filter((c) => searchText(c.name).includes(q) || c.id.toLowerCase().includes(q)) : [...catalog];
+  return { options: all.slice(0, limit), more: Math.max(0, all.length - limit) };
+}
+
+/** O campo do catálogo com o ID (sem diferenciar maiúsculas). */
+export const catalogField = (catalog: readonly JiraFieldInfo[], id: string): JiraFieldInfo | undefined => {
+  const k = id.trim().toLowerCase();
+  return k ? catalog.find((c) => c.id.toLowerCase() === k) : undefined;
+};
+
+/**
+ * O ID que o texto digitado na combobox (sem escolher uma opção) representa:
+ * sem catálogo, o próprio texto; com catálogo, o campo cujo ID ou nome é
+ * exatamente o texto (nome só se único), ou o texto que parece um ID
+ * (`customfield_…`) fora do catálogo. Senão, vazio.
+ */
+export function typedFieldId(catalog: readonly JiraFieldInfo[], text: string): string {
+  const t = text.trim();
+  if (!t || catalog.length === 0) return t;
+  const byId = catalogField(catalog, t);
+  if (byId) return byId.id;
+  const q = searchText(t);
+  const byName = catalog.filter((c) => searchText(c.name) === q);
+  if (byName.length === 1) return byName[0].id;
+  return CUSTOMFIELD_ID.test(t) ? t : "";
+}
+
+/**
+ * Erro de cada linha dos campos do projeto, para mostrar junto dela:
+ * repetido ou só uma das metades preenchida. A linha toda vazia só é
+ * recusada ao salvar (`extraFieldsParam`).
+ */
+export function extraFieldErrors(rows: readonly JiraExtraFieldForm[]): (string | null)[] {
+  const first = new Map<string, number>();
+  return rows.map((r, i) => {
+    const id = r.id.trim();
+    const label = r.label.trim();
+    if (id) {
+      const k = id.toLowerCase();
+      const at = first.get(k);
+      if (at !== undefined) return `Campo repetido: ${id} já está na linha ${at + 1}.`;
+      first.set(k, i);
+    }
+    if (id && !label) return "Informe o rótulo na tela.";
+    if (!id && label) return "Escolha um campo da lista ou digite o ID (customfield_…).";
+    return null;
+  });
+}
+
+/**
+ * `extra_fields` do cadastro, com as mesmas regras do hub
+ * (`validate_jira_extra_fields`): ID e rótulo preenchidos, sem ID repetido e
+ * no máximo `MAX_EXTRA_FIELDS`.
+ */
+export function extraFieldsParam(
+  rows: readonly JiraExtraFieldForm[],
+): { fields: JiraExtraFieldForm[] } | { error: string } {
+  if (rows.length > MAX_EXTRA_FIELDS) {
+    return { error: `campos do projeto: no máximo ${MAX_EXTRA_FIELDS} campos na tela da issue (${rows.length} informados)` };
+  }
+  const seen = new Set<string>();
+  const fields: JiraExtraFieldForm[] = [];
+  for (const [i, r] of rows.entries()) {
+    const id = r.id.trim();
+    const label = r.label.trim();
+    const n = i + 1;
+    if (!id) return { error: `campos do projeto: informe o campo do Jira na linha ${n} (ex.: customfield_10099)` };
+    if (!label) return { error: `campos do projeto: informe o rótulo na tela do campo ${id} (linha ${n})` };
+    if (seen.has(id.toLowerCase())) return { error: `campos do projeto: o campo ${id} aparece mais de uma vez (linha ${n})` };
+    seen.add(id.toLowerCase());
+    fields.push({ id, label });
+  }
+  return { fields };
+}
+
+/** Os campos do projeto mudaram (espaços à parte)? */
+export const extraFieldsChanged = (a: readonly JiraExtraFieldForm[], b: readonly JiraExtraFieldForm[]) =>
+  a.length !== b.length || a.some((r, i) => r.id.trim() !== b[i].id.trim() || r.label.trim() !== b[i].label.trim());
 
 /** `Tipo=papel, ...` → mapa; erro com o trecho inválido. */
 export function parseTypeMap(s: string): { map: Record<string, JiraTypeRole> } | { error: string } {
@@ -171,6 +287,8 @@ export function branchPreview(pattern: string, key: string | null): string | nul
 export function providerParams(f: JiraForm): { tracker: object; forge: object } | { error: string } {
   const tm = parseTypeMap(f.type_map);
   if ("error" in tm) return tm;
+  const extra = extraFieldsParam(f.extra_fields);
+  if ("error" in extra) return extra;
   const max = Number(f.max_issues.trim());
   if (!f.active_sprint_only) {
     if (!f.jql.trim()) return { error: 'informe o JQL do sync ou marque "Sincronizar somente a sprint ativa"' };
@@ -193,6 +311,7 @@ export function providerParams(f: JiraForm): { tracker: object; forge: object } 
       epic_name_field: f.epic_name_field.trim(),
       sprint_field: f.sprint_field.trim(),
       type_map: tm.map,
+      extra_fields: extra.fields,
     },
     forge: { kind: "gitlab", clone_url: f.gitlab_url.trim(), credential_cmd: f.gitlab_cmd.trim() },
   };
@@ -219,6 +338,8 @@ export function jiraFormOf(p: HubProject): JiraForm {
     epic_name_field: j?.epic_name_field ?? "",
     // Hub anterior às sprints: sem o campo.
     sprint_field: j?.sprint_field ?? "",
+    // Cadastro anterior aos campos do projeto: sem a lista.
+    extra_fields: (j?.extra_fields ?? []).map(({ id, label }) => ({ id, label })),
   };
 }
 

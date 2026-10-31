@@ -36,6 +36,7 @@ export type { IssueMeta } from "./IssueMeta";
 export type { IssueRow } from "./IssueRow";
 export type { ItemRun } from "./ItemRun";
 export type { JiraConfig } from "./JiraConfig";
+export type { JiraExtraField } from "./JiraExtraField";
 export type { JiraFieldInfo } from "./JiraFieldInfo";
 export type { JiraReadiness } from "./JiraReadiness";
 export type { JiraTypeRole } from "./JiraTypeRole";

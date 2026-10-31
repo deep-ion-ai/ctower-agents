@@ -175,8 +175,11 @@ const PRUNE_MAX_SHARE: f64 = 0.5;
 /// O que muda o resultado da leitura de cada issue: com outro valor, a
 /// reconciliação relê todas as issues listadas. O JQL fica de fora: ele
 /// muda o conjunto espelhado, não o que se lê de cada issue.
+///
+/// Os campos do projeto (`extra_fields`, ID e rótulo) só entram quando há
+/// algum: a marca do projeto sem eles fica igual à de antes.
 fn read_fingerprint(c: &JiraConfig) -> serde_json::Value {
-    json!({
+    let mut v = json!({
         "mirror": MIRROR_VERSION,
         "project_key": c.project_key,
         "type_map": c.type_map,
@@ -184,7 +187,15 @@ fn read_fingerprint(c: &JiraConfig) -> serde_json::Value {
         "epic_name_field": c.epic_name_field,
         "sprint_field": c.sprint_field.trim(),
         "url": c.url,
-    })
+    });
+    if !c.extra_fields.is_empty() {
+        v["extra_fields"] = c
+            .extra_fields
+            .iter()
+            .map(|f| json!([f.id.trim(), f.label.trim()]))
+            .collect();
+    }
+    v
 }
 
 /// Chaves da marca que dizem o conjunto espelhado (o filtro), não o que se
@@ -1195,6 +1206,7 @@ mod tests {
             epic_name_field: "customfield_10604".into(),
             sprint_field: String::new(),
             type_map: default_type_map(),
+            extra_fields: Vec::new(),
         }
     }
 
@@ -1578,6 +1590,51 @@ mod tests {
             l.get_issue(j.env.project_id, 4).unwrap().unwrap().labels,
             vec!["chore"]
         );
+    }
+
+    /// Incluir um campo do projeto relê todas as issues (o `updated` não
+    /// mudou) e o campo aparece no `meta` com o rótulo cadastrado.
+    #[test]
+    fn mudar_os_campos_do_projeto_rele_todas_as_issues() {
+        let j = setup(false);
+        let mut issues = arvore();
+        issues[3]["fields"]["customfield_10099"] =
+            serde_json::json!({ "name": "dev", "displayName": "Quem Implementa" });
+        j.fake.set_issues(&issues);
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        {
+            let l = j.env.sessions.ledger();
+            let i = l.get_issue(j.env.project_id, 4).unwrap().unwrap();
+            assert!(i.meta.iter().all(|m| m.field != "customfield_10099"));
+        }
+        let mut cfg = jira_config(&j.fake);
+        cfg.extra_fields = vec![ct_core::JiraExtraField {
+            id: "customfield_10099".into(),
+            label: "Responsável pela implementação".into(),
+        }];
+        assign(&j.env, cfg, false, 2);
+        j.fake.clear_calls();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert_eq!(j.fake.viewed().len(), 4, "relê tudo com os campos novos");
+        let l = j.env.sessions.ledger();
+        let i = l.get_issue(j.env.project_id, 4).unwrap().unwrap();
+        let last = i.meta.last().unwrap();
+        assert_eq!(
+            (
+                last.field.as_str(),
+                last.label.as_str(),
+                last.value.as_str()
+            ),
+            (
+                "customfield_10099",
+                "Responsável pela implementação",
+                "Quem Implementa"
+            )
+        );
+        drop(l);
+        j.fake.clear_calls();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert!(j.fake.viewed().is_empty(), "{:?}", j.fake.viewed());
     }
 
     #[test]
@@ -2511,6 +2568,60 @@ mod tests {
             now,
         );
         assert!(p.filter_changed && !p.reread_all && p.mark.is_some());
+    }
+
+    /// Mudar os campos do projeto (incluir, trocar o rótulo, reordenar ou
+    /// remover) relê todas as issues; o projeto sem eles mantém a marca.
+    #[test]
+    fn campos_do_projeto_releem_tudo() {
+        let extra = |id: &str, label: &str| ct_core::JiraExtraField {
+            id: id.into(),
+            label: label.into(),
+        };
+        let cfg = JiraConfig {
+            project_key: "P".into(),
+            ..JiraConfig::default()
+        };
+        assert!(read_fingerprint(&cfg).get("extra_fields").is_none());
+        let now = 10 * FULL_EVERY_MS;
+        let input = |fp: String| TrackerInput {
+            cached: HashMap::new(),
+            mark: Some((now - 60_000, fp)),
+            last_ok_at: Some(now - 60_000),
+            retry: Vec::new(),
+            pinned: Vec::new(),
+            work_items: HashSet::new(),
+            watched: Vec::new(),
+        };
+        let com = |fields: Vec<ct_core::JiraExtraField>| JiraConfig {
+            extra_fields: fields,
+            ..cfg.clone()
+        };
+        let um = com(vec![extra("customfield_1", "A")]);
+        let p = plan(&um, &input(fingerprint(&cfg)), now);
+        assert!(
+            p.reread_all && p.mark.is_some() && !p.filter_changed,
+            "{p:?}"
+        );
+        // Mesma lista (espaços à parte): incremental, sem reler.
+        let igual = com(vec![extra(" customfield_1 ", "A ")]);
+        let p = plan(&igual, &input(fingerprint(&um)), now);
+        assert!(!p.reread_all && p.mark.is_none(), "{p:?}");
+        for outro in [
+            com(vec![extra("customfield_1", "B")]),
+            com(vec![
+                extra("customfield_1", "A"),
+                extra("customfield_2", "C"),
+            ]),
+            com(vec![
+                extra("customfield_2", "C"),
+                extra("customfield_1", "A"),
+            ]),
+            cfg.clone(),
+        ] {
+            let p = plan(&outro, &input(fingerprint(&um)), now);
+            assert!(p.reread_all, "{:?}", outro.extra_fields);
+        }
     }
 
     #[test]

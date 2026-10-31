@@ -421,6 +421,46 @@ mod tests {
         // Cadastro anterior (sem JQL nem modo): a edição que não manda o
         // rastreador não confere o filtro.
         assert!(filtro("", 100).validate_base().is_ok());
+        // Campos do projeto: ID e rótulo preenchidos, sem ID repetido, até 20.
+        let extras = |fields: &[(&str, &str)]| {
+            let mut pv = jira();
+            if let TrackerConfig::Jira(j) = &mut pv.tracker {
+                j.extra_fields = fields
+                    .iter()
+                    .map(|(id, label)| ct_core::JiraExtraField {
+                        id: (*id).into(),
+                        label: (*label).into(),
+                    })
+                    .collect();
+            }
+            pv
+        };
+        let err = hub
+            .add_project_with(&novo(), &extras(&[("customfield_1", "A"), (" ", "B")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("informe o campo do Jira na linha 2"), "{err}");
+        let err = extras(&[("customfield_1", "  ")]).validate().unwrap_err();
+        assert!(
+            err.contains("informe o rótulo na tela do campo customfield_1"),
+            "{err}"
+        );
+        let err = extras(&[("customfield_1", "A"), (" customfield_1 ", "B")])
+            .validate()
+            .unwrap_err();
+        assert!(
+            err.contains("o campo customfield_1 aparece mais de uma vez (linha 2)"),
+            "{err}"
+        );
+        let ids: Vec<String> = (0..21).map(|i| format!("customfield_{i}")).collect();
+        let muitos: Vec<(&str, &str)> = ids.iter().map(|id| (id.as_str(), "X")).collect();
+        let err = extras(&muitos).validate().unwrap_err();
+        assert!(err.contains("no máximo 20 campos"), "{err}");
+        assert!(extras(&muitos[..20]).validate().is_ok());
+        // ID digitado à mão, fora do catálogo, é aceito.
+        assert!(extras(&[("customfield_99999", "Manual")])
+            .validate()
+            .is_ok());
         // Nada foi gravado.
         assert!(hub.find_project(OWNER, REPO).unwrap().is_none());
     }
