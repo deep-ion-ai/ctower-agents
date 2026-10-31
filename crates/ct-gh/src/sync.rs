@@ -5,12 +5,26 @@
 use crate::{time, Fetched, GhClient, GhError};
 use ct_core::branch::issue_number_from_branch;
 use ct_core::{PrState, WorkItemKind, WorkItemStatus};
-use ct_ledger::{GithubSnapshot, Hub, IssueRow, Ledger, PrRow, Project, WorkItem};
+use ct_ledger::{
+    project_key, GithubSnapshot, Hub, IssueMeta, IssueRow, Ledger, PrRow, Project, WorkItem,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Janela das issues fechadas (spec §7.5).
 const CLOSED_WINDOW_MS: i64 = 30 * 86_400_000;
+
+/// Versão do que `issue_row` extrai de cada issue. Subir o número faz o
+/// próximo ciclo ler as issues sem os ETags gravados (uma vez), para que as
+/// que não mudaram no GitHub ganhem o que a leitura passou a extrair, como o
+/// `MIRROR_VERSION` do Jira: 1 = com os metadados (`meta`, #70).
+pub const MIRROR_VERSION: i64 = 1;
+
+/// Chave, no `gh_etag`, da `MIRROR_VERSION` com que o espelho do projeto foi
+/// lido por último. Ausente = espelho anterior à versão 1.
+pub fn mirror_key(owner: &str, repo: &str) -> String {
+    format!("gh:mirror:{}", project_key(owner, repo))
+}
 
 /// O que a busca precisa do ledger, lido de uma vez (lock curto).
 #[derive(Debug, Clone)]
@@ -25,8 +39,12 @@ pub struct SyncInput {
     /// `sub-issue → épico` do cache: o PR para a branch de um épico só vale
     /// para uma sub-issue dele (#454).
     pub parents: HashMap<i64, i64>,
-    /// ETags gravados das consultas desta rodada.
+    /// ETags gravados das consultas desta rodada. Sem os das issues quando
+    /// `mirror_stale`.
     pub etags: HashMap<String, String>,
+    /// O espelho foi lido com outra `MIRROR_VERSION`: as consultas de issues
+    /// vão sem ETag e o snapshot grava a versão atual.
+    pub mirror_stale: bool,
     pub now_ms: i64,
 }
 
@@ -94,11 +112,14 @@ impl SyncInput {
             .map(|i| i.gh_number)
             .collect();
         let (o, r) = (&project.gh_owner, &project.gh_repo);
-        let mut paths = vec![
-            issues_path(o, r, "open", None),
-            issues_path(o, r, "closed", Some(&closed_since(now_ms))),
-        ];
-        paths.extend(open_epics.iter().map(|n| sub_issues_path(o, r, *n)));
+        let mirror_stale = etag(&mirror_key(o, r))? != Some(MIRROR_VERSION.to_string());
+        let mut paths = Vec::new();
+        // Espelho de outra versão: as issues vêm inteiras, sem `304`.
+        if !mirror_stale {
+            paths.push(issues_path(o, r, "open", None));
+            paths.push(issues_path(o, r, "closed", Some(&closed_since(now_ms))));
+            paths.extend(open_epics.iter().map(|n| sub_issues_path(o, r, *n)));
+        }
         paths.extend(
             work_items
                 .iter()
@@ -123,6 +144,7 @@ impl SyncInput {
             open_epics,
             parents,
             etags,
+            mirror_stale,
             now_ms,
         })
     }
@@ -224,8 +246,62 @@ pub fn issue_row(v: &Value) -> Option<IssueRow> {
             .and_then(Value::as_str)
             .and_then(time::parse_rfc3339)
             .unwrap_or(0),
+        meta: issue_meta(v),
         ..Default::default()
     })
+}
+
+/// Metadados da issue para a tela, na ordem e sem os vazios: Situação,
+/// Tipo (issue types), Responsável e Criador. Prioridade não existe no
+/// GitHub.
+pub fn issue_meta(v: &Value) -> Vec<IssueMeta> {
+    let login = |u: &Value| {
+        u.get("login")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+    };
+    let assignees = v
+        .get("assignees")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(login).collect::<Vec<_>>().join(", "));
+    let ty = v
+        .pointer("/type/name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(String::from);
+    [
+        ("state", "Situação", state_text(v)),
+        ("type", "Tipo", ty),
+        ("assignees", "Responsável", assignees),
+        ("user", "Criador", v.get("user").and_then(login)),
+    ]
+    .into_iter()
+    .filter_map(|(field, label, value)| {
+        Some(IssueMeta {
+            field: field.into(),
+            label: label.into(),
+            value: value.filter(|s| !s.is_empty())?,
+        })
+    })
+    .collect()
+}
+
+/// `state` mais `state_reason` → Situação. Motivo desconhecido no fechamento
+/// fica só "fechada".
+fn state_text(v: &Value) -> Option<String> {
+    let reason = v.get("state_reason").and_then(Value::as_str);
+    let text = match (v.get("state")?.as_str()?, reason) {
+        ("open", Some("reopened")) => "reaberta",
+        ("open", _) => "aberta",
+        ("closed", Some("completed")) => "fechada (concluída)",
+        ("closed", Some("not_planned")) => "fechada (não planejada)",
+        ("closed", Some("duplicate")) => "fechada (duplicada)",
+        ("closed", _) => "fechada",
+        (other, _) => other,
+    };
+    Some(text.to_string())
 }
 
 /// PR da API → linha do cache, ligado ao work item da branch.
@@ -263,6 +339,11 @@ pub fn pr_row(v: &Value, work_item_id: i64) -> Option<PrRow> {
 pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhError> {
     let (o, r) = (&input.project.gh_owner, &input.project.gh_repo);
     let mut etags = Vec::new();
+    // Releitura forçada: a versão entra com os ETags, gravada só se a
+    // rodada inteira aplicar.
+    if input.mirror_stale {
+        etags.push((mirror_key(o, r), MIRROR_VERSION.to_string()));
+    }
     let mut get = |path: String| -> Result<Option<Vec<Value>>, GhError> {
         match api.get_all(&path, input.etags.get(&path).map(String::as_str))? {
             Fetched::NotModified => Ok(None),
@@ -704,6 +785,160 @@ mod tests {
             vec![(wi.id, WorkItemStatus::EmRevisao)]
         );
         assert_eq!(e.l.prs_for_work_item(wi.id).unwrap().len(), 2);
+    }
+
+    fn meta(v: &Value) -> Vec<(String, String, String)> {
+        issue_row(v)
+            .unwrap()
+            .meta
+            .into_iter()
+            .map(|m| (m.field, m.label, m.value))
+            .collect()
+    }
+
+    fn m(field: &str, label: &str, value: &str) -> (String, String, String) {
+        (field.into(), label.into(), value.into())
+    }
+
+    /// #70: Situação, Tipo, Responsável e Criador, nessa ordem.
+    #[test]
+    fn metadados_com_assignees_e_tipo() {
+        let mut v = gh_issue(1, "closed", None, 0);
+        v["state_reason"] = json!("completed");
+        v["type"] = json!({ "id": 7, "name": "Bug", "color": "red" });
+        v["assignees"] = json!([{ "login": "ana" }, { "login": "bia" }]);
+        v["user"] = json!({ "login": "carlos" });
+        assert_eq!(
+            meta(&v),
+            vec![
+                m("state", "Situação", "fechada (concluída)"),
+                m("type", "Tipo", "Bug"),
+                m("assignees", "Responsável", "ana, bia"),
+                m("user", "Criador", "carlos"),
+            ]
+        );
+    }
+
+    /// Sem assignee e sem tipo (`type` nulo, ausente ou sem nome), os
+    /// campos ficam de fora.
+    #[test]
+    fn metadados_sem_assignee_e_sem_tipo() {
+        let mut v = gh_issue(1, "open", None, 0);
+        v["state_reason"] = Value::Null;
+        v["type"] = Value::Null;
+        v["assignees"] = json!([]);
+        v["user"] = json!({ "login": "carlos" });
+        let esperado = vec![
+            m("state", "Situação", "aberta"),
+            m("user", "Criador", "carlos"),
+        ];
+        assert_eq!(meta(&v), esperado);
+        v.as_object_mut().unwrap().remove("type");
+        v.as_object_mut().unwrap().remove("assignees");
+        assert_eq!(meta(&v), esperado);
+        v["type"] = json!({ "name": " " });
+        assert_eq!(meta(&v), esperado);
+        // Sem nada além do estado.
+        assert_eq!(
+            meta(&gh_issue(1, "open", None, 0)),
+            vec![m("state", "Situação", "aberta")]
+        );
+    }
+
+    #[test]
+    fn situacao_por_state_e_state_reason() {
+        let casos = [
+            ("open", Value::Null, "aberta"),
+            ("open", json!("reopened"), "reaberta"),
+            ("closed", json!("completed"), "fechada (concluída)"),
+            ("closed", json!("not_planned"), "fechada (não planejada)"),
+            ("closed", json!("duplicate"), "fechada (duplicada)"),
+            ("closed", Value::Null, "fechada"),
+            ("closed", json!("outro"), "fechada"),
+        ];
+        for (state, reason, texto) in casos {
+            let mut v = gh_issue(1, state, None, 0);
+            v["state_reason"] = reason;
+            assert_eq!(meta(&v), vec![m("state", "Situação", texto)], "{state}");
+        }
+    }
+
+    /// #70: um espelho lido com outra `MIRROR_VERSION` (ou anterior a ela)
+    /// relê as issues sem ETag uma vez; as que não mudaram ganham `meta`.
+    #[test]
+    fn versao_do_espelho_forca_uma_releitura() {
+        let e = Env::new();
+        let open = issues_path("o", "r", "open", None);
+        let closed = issues_path("o", "r", "closed", Some(&closed_since(now())));
+        let mut v = gh_issue(1, "open", None, 0);
+        v["user"] = json!({ "login": "carlos" });
+        e.gh.set(&open, json!([v]));
+        e.sync();
+        assert_eq!(
+            e.l.etag(&mirror_key("o", "r")).unwrap(),
+            Some(MIRROR_VERSION.to_string())
+        );
+
+        // Espelho anterior: issue sem `meta` e a versão antiga na marca,
+        // com os ETags das listagens ainda válidos.
+        let sem_meta = IssueRow {
+            meta: Vec::new(),
+            ..e.l.list_issues(e.project).unwrap()[0].clone()
+        };
+        e.l.apply_github(&GithubSnapshot {
+            project_id: e.project,
+            issues: vec![sem_meta],
+            etags: vec![(mirror_key("o", "r"), (MIRROR_VERSION - 1).to_string())],
+            synced_at: now(),
+            ..GithubSnapshot::default()
+        })
+        .unwrap();
+        assert!(e.l.list_issues(e.project).unwrap()[0].meta.is_empty());
+
+        e.gh.clear_requests();
+        let r = e.sync();
+        assert_eq!(r.issues, 1);
+        let reqs = e.gh.requests();
+        assert!(
+            reqs.iter()
+                .filter(|(p, _)| *p == open || *p == closed)
+                .all(|(_, inm)| inm.is_none()),
+            "{reqs:?}"
+        );
+        assert_eq!(
+            e.l.list_issues(e.project).unwrap()[0].meta,
+            issue_row(&v).unwrap().meta
+        );
+        assert_eq!(
+            e.l.etag(&mirror_key("o", "r")).unwrap(),
+            Some(MIRROR_VERSION.to_string())
+        );
+
+        // Só uma vez: o ciclo seguinte volta aos ETags (tudo em 304).
+        e.gh.clear_requests();
+        assert_eq!(e.sync().issues, 0);
+        assert!(e.gh.requests().iter().all(|(_, inm)| inm.is_some()));
+    }
+
+    /// Com erro na rodada, a versão não é gravada: o ciclo seguinte relê.
+    #[test]
+    fn versao_do_espelho_so_grava_com_a_rodada_inteira() {
+        let e = Env::new();
+        e.gh.set(
+            &issues_path("o", "r", "open", None),
+            json!([gh_issue(1, "open", None, 1)]),
+        );
+        let input = SyncInput::load(&e.l, e.project, now()).unwrap();
+        assert!(input.mirror_stale);
+        assert!(fetch(&e.api, &input).is_err());
+        assert_eq!(e.l.etag(&mirror_key("o", "r")).unwrap(), None);
+        e.gh.set(&sub_issues_path("o", "r", 1), json!([]));
+        e.sync();
+        assert!(
+            !SyncInput::load(&e.l, e.project, now())
+                .unwrap()
+                .mirror_stale
+        );
     }
 
     #[test]
