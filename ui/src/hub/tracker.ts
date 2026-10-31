@@ -1,7 +1,15 @@
 // Projetos Jira + GitLab no Hub (#348, spec do Jira e GitLab §5, §8.4 e §11):
 // formulário, prévia do padrão de branch e o que a prontidão do ambiente de
 // sync pede para configurar. Funções puras, testadas em tracker.test.ts.
-import type { GitlabConfig, HubProject, JiraConfig, JiraTypeRole, TrackerReadiness } from "../protocol/hub-gen";
+import type {
+  GitlabConfig,
+  HubProject,
+  HubProjectView,
+  JiraConfig,
+  JiraFieldInfo,
+  JiraTypeRole,
+  TrackerReadiness,
+} from "../protocol/hub-gen";
 
 /** Tipo do projeto no cadastro: GitHub, ou issues no Jira e repositório no GitLab. */
 export type ProjectKindForm = "github" | "jira";
@@ -111,6 +119,15 @@ export function jiraOf(p: Pick<HubProject, "tracker">): JiraConfig | null {
 
 export function gitlabOf(p: Pick<HubProject, "forge">): GitlabConfig | null {
   return p.forge?.kind === "gitlab" ? (p.forge as GitlabConfig & { kind: "gitlab" }) : null;
+}
+
+/**
+ * Catálogo de campos próprios do Jira do projeto (#72), já ordenado por nome:
+ * o que o ambiente de sync leu do `.config.yml` do jira-cli e publicou no
+ * `tracker_status`. Vazio sem status, sem a seção ou com ambiente anterior.
+ */
+export function jiraFieldCatalog(p: Pick<HubProjectView, "tracker_status">): JiraFieldInfo[] {
+  return p.tracker_status?.readiness.jira.custom_fields ?? [];
 }
 
 /** `Tipo=papel, ...` → mapa; erro com o trecho inválido. */
