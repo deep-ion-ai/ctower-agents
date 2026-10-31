@@ -3,7 +3,7 @@ name = "control-tower-ui"
 version = "1.3.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Control Tower — app de Windows (Tauri)"
+description = "Control Tower — app desktop (Tauri)"
 
 # Fora do workspace raiz (exclude): só compila onde há WebView2/webkit.
 [lib]
