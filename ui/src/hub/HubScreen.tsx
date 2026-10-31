@@ -33,6 +33,7 @@ import {
   type HubSection,
   type SectionCount,
 } from "./sections";
+import { DesktopOnly } from "../web/DesktopOnly";
 
 /**
  * Tela do hub (`cthubd`, spec do hub como plano de controle §8), em seções
@@ -231,11 +232,6 @@ function HubSide({
   const nav = useNav();
   const shell = useShell();
   const info = hub.info;
-  const groups = web
-    ? HUB_GROUPS.map((g) => ({ ...g, sections: g.sections.filter(hubSectionOnWeb) })).filter(
-        (g) => g.sections.length > 0,
-      )
-    : HUB_GROUPS;
   const backup = info?.backup ?? hub.health?.backup;
   const state = !hub.conn ? "não configurado" : hub.connected ? "conectado" : "indisponível";
   const title = hub.conn ? `Hub · ${info?.name ?? hub.conn.url}` : "Hub";
@@ -281,14 +277,18 @@ function HubSide({
         )
       }
     >
-      {groups.map((g) => (
+      {HUB_GROUPS.map((g) => (
         <SideGroup key={g.label} title={g.label}>
           {g.sections.map((s) => {
             const c = counts[s];
+            // Na web o grupo Segurança continua no índice (#26): a linha avisa que é
+            // do desktop e abre a explicação (`hidden` em HubScreen), sem chamar o hub.
+            const desktopOnly = web && !hubSectionOnWeb(s);
             return (
               <SideRow
                 key={s}
                 label={HUB_SECTION_LABEL[s]}
+                sub={desktopOnly ? "Só no app desktop" : undefined}
                 selected={s === section}
                 description={c?.text}
                 trailing={
@@ -357,7 +357,12 @@ function Quarantine({ now, onRegister }: { now: number; onRegister: (key: string
               <QFact label="Projeto" value={key} mono />
               <QFact label="Linhas" value={`${rows} · ${gs.map((g) => `${g.env_name} ${g.rows}`).join(", ")}`} />
               <QFact label="Último envio" value={ago(last, now)} />
-              {/* Web: cadastro e descarte ficam no desktop (spec do épico #205 §4.1). */}
+              {/* Web: cadastro e descarte ficam no desktop (spec do épico #205 §4.1), desabilitados com o motivo (#26). */}
+              {web && (
+                <div className="env-actions">
+                  <DesktopOnly labels={["Cadastrar projeto", "Descartar"]} />
+                </div>
+              )}
               {!web && (
                 <div className="env-actions">
                   <button type="button" className="btn" onClick={() => onRegister(key)}>

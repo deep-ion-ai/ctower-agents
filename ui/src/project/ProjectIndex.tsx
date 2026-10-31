@@ -9,12 +9,14 @@ import { Icon } from "../shell/icons";
 import { useStartSession } from "../shell/start";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
+import { isMac } from "../terminal/links";
 import { NewProjectDialog, type RegisterIntent } from "./NewProjectDialog";
 import { useProjectOrder, type ProjectOrder } from "./order";
 import { ProviderIcon } from "./ProviderIcon";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "./rows";
 import { projectAt } from "./sections";
 import { keyOf, plural, projectState, syncText, useSettingsRun, type Tone } from "./settings";
+import { DesktopOnly } from "../web/DesktopOnly";
 
 /**
  * Índice da atividade Projetos (#16): `{ name: "project" }` sem chave. Lista
@@ -137,6 +139,8 @@ export function ProjectIndex({ register, notice: noticeReq }: { register?: Regis
             + Novo projeto
           </button>
         )}
+        {/* Web: o cadastro não some, fica desabilitado com o motivo (#26). */}
+        {web && hub.connected && <DesktopOnly labels="+ Novo projeto" className="btn btn-primary" />}
       </div>
 
       {!viaHub && rows.length > 0 && (
@@ -284,7 +288,9 @@ function IndexRow({
         className="pidx-main"
         aria-label={r.name}
         aria-describedby={`${id}-d`}
-        title="Abrir"
+        // Dica do gesto escondido (#27): arrastar ou Alt+↑/↓ muda a prioridade.
+        title={order?.enabled ? `Abrir · arraste ou ${isMac() ? "⌥" : "Alt"}+↑/↓ para mudar a prioridade` : "Abrir"}
+        aria-keyshortcuts={order?.enabled ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
         onClick={onOpen}
         onKeyDown={(e) => {
           if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {

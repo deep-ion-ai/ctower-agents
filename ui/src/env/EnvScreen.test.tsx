@@ -160,10 +160,16 @@ test("índice e ambiente desconhecido", async () => {
   expect(await screen.findByText("Este ambiente não está (mais) neste app.")).toBeInTheDocument();
 });
 
-test("web: sem Atualização, Configuração e Limpeza; a conexão não se edita", async () => {
+test("web: Atualização, Configuração e Limpeza desabilitadas com o motivo (#26); a conexão não se edita", async () => {
   const api = webApi().onHub("hub.envs.list", [hubEnv()]);
   render(<App api={api} initial={envAt("daemon-wsl", "cleanup")} />);
-  await waitFor(() => expect(within(sections()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Conexão", "Hub", "Projetos atribuídos"]));
+  await waitFor(() => expect(within(sections()).getAllByRole("button")).toHaveLength(6));
+  for (const s of ["Atualização", "Configuração do daemon", "Limpeza"]) {
+    const b = within(sections()).getByRole("button", { name: s });
+    expect(b).toBeDisabled();
+    expect(b).toHaveAccessibleDescription("Atualização, configuração do daemon e limpeza no app desktop");
+  }
+  for (const s of ["Conexão", "Hub", "Projetos atribuídos"]) expect(within(sections()).getByRole("button", { name: s })).toBeEnabled();
   // A seção do desktop pedida cai em Conexão.
   expect(within(body("Conexão")).getByText(/se edita no app desktop/)).toBeInTheDocument();
 });

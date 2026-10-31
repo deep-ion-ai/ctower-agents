@@ -11,6 +11,7 @@ import { useTower } from "../state/tower";
 import { diffStats, lineDiff } from "../util/diff";
 import { ago } from "../util/time";
 import { errText } from "./calls";
+import { DesktopOnly } from "../web/DesktopOnly";
 
 /** Tamanho em bytes de UTF-8, o que o hub conta para o limite. */
 export const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
@@ -242,6 +243,12 @@ export function AgentRules({
             </span>
           )}
         </h3>
+        {/* Web: editar e importar desabilitados com o motivo (#26). */}
+        {web && rules && (
+          <span className="rules-actions">
+            <DesktopOnly className="btn btn-sm" labels={[current ? "Editar" : "Escrever regras", "Importar CLAUDE.md"]} />
+          </span>
+        )}
         {!web && !draft && rules && (
           <span className="rules-actions">
             <button type="button" className="btn btn-sm" onClick={() => startEdit()}>
@@ -418,7 +425,7 @@ function ProposalCard({
   p: HubRulesProposal;
   now: number;
   busy: boolean;
-  /** Ausente = só leitura (web). */
+  /** Ausente = só leitura (web): os botões ficam, desabilitados com o motivo (#26). */
   onDecide?: (p: HubRulesProposal, approve: boolean) => void;
 }) {
   const diff = lineDiff(p.current_content ?? "", p.content);
@@ -456,6 +463,15 @@ function ProposalCard({
           <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onDecide(p, false)}>
             Rejeitar proposta #{p.id}
           </button>
+        </div>
+      )}
+      {!onDecide && (
+        <div className="rules-buttons">
+          <DesktopOnly
+            className="btn btn-sm"
+            labels={[`Aprovar proposta #${p.id}`, `Rejeitar proposta #${p.id}`]}
+            note="Decidir propostas fica no app desktop"
+          />
         </div>
       )}
     </li>

@@ -16,6 +16,7 @@ import { useNav, type ItemIntent, type Screen } from "../state/nav";
 import { useTower } from "../state/tower";
 import { changeLabel, changeRef, itemShort, trackerLabel, type ProviderProject } from "../util/item";
 import { ago } from "../util/time";
+import { useMobile } from "../web/mode";
 import { Board, type BoardNode } from "./Board";
 import { STATUS } from "./status";
 import { itemTab } from "./tabs";
@@ -112,12 +113,18 @@ const isClosed = (n: ProjectNode) => n.issue.state === "closed" || n.work_item?.
  * Área de editor: sem item, o projeto (cabeçalho e, no Quadro, o Kanban); com
  * item (cada um em aba própria), o detalhe do item. Iniciar sessão abre a
  * modal de início (`useStartSession`).
+ *
+ * No celular (#25), sem item, a árvore (ou o quadro) vem para o corpo, na
+ * aba Itens, e o painel lateral (a gaveta) fica com o conteúdo do shell: os
+ * itens aparecem sem abrir a gaveta. Com item, a árvore segue na gaveta,
+ * para pular de um item a outro.
  */
 export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   const nav = useNav();
   const goPage = useGoPage(p.addr);
   const page = p.page ?? "items";
   const { api, envs, infos, web } = useTower();
+  const mobile = useMobile();
   const now = useNow();
   const startSession = useStartSession();
   const [docsError, setDocsError] = useState<string | null>(null);
@@ -292,7 +299,136 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
             : EMPTY_OPEN
         : null;
 
-  const side = (
+  // Peças da árvore, no painel lateral (desktop, ou com item) ou no corpo
+  // (celular, aba Itens): a mesma árvore, os mesmos filtros.
+  const filtersButton = (
+    <button
+      type="button"
+      className="ibtn"
+      aria-label="Filtros"
+      title="Filtros: status, ordem e concluídos"
+      aria-expanded={ui.showFilters}
+      aria-controls="tree-more"
+      onClick={() => setUi((u) => ({ ...u, showFilters: !u.showFilters }))}
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+        <path d="M4 6h16M7 12h10M10 18h4" />
+      </svg>
+    </button>
+  );
+  const views = (
+    <div className="views" role="group" aria-label="Visão">
+      <button
+        type="button"
+        aria-pressed={viewMode === "tree"}
+        onClick={() => {
+          setViewMode("tree");
+          // Árvore e Quadro são da aba Itens (#17).
+          if (focus === null && page !== "items") goPage("items");
+        }}
+      >
+        Árvore
+      </button>
+      <button
+        type="button"
+        aria-pressed={viewMode === "board"}
+        onClick={() => {
+          setViewMode("board");
+          // O Quadro fica na aba do projeto, em Itens (#17).
+          if (focus !== null) nav.go(p.addr);
+          else if (page !== "items") goPage("items");
+        }}
+      >
+        Quadro
+      </button>
+    </div>
+  );
+  const controls = (
+    <>
+      <TreeControls
+        value={filters}
+        onChange={(f) => {
+          if (sprintKey && f.sprint !== filters.sprint) saveSprintChoice(sprintKey, f.sprint ?? ALL_SPRINTS);
+          setUi((u) => ({ ...u, filters: f }));
+        }}
+        more={ui.showFilters}
+        sprints={sprints}
+        sprintsUnread={sprintsUnread}
+      />
+      {docsError && (
+        <p role="alert" className="pj-empty start-error">
+          {docsError}
+        </p>
+      )}
+      {!roots && !p.error && (
+        <p className="pj-empty" role="status">
+          Carregando…
+        </p>
+      )}
+      {empty && <p className="pj-empty">{empty}</p>}
+    </>
+  );
+  const tree = (
+    <>
+      {nEpics > 0 && (
+        <SideGroup title="Épicos" count={nEpics}>
+          {view.epics.flatMap(({ epic: e, shown: kids }) => {
+            const done = e.children.filter((c) => statusKey(c) === "concluido").length;
+            const expanded = isExpanded(e, filters, ui.open[e.issue.gh_number], now, isLive);
+            return [row(e, 0, { expanded, done }), ...(expanded ? kids.map((c) => row(c, 1)) : [])];
+          })}
+        </SideGroup>
+      )}
+      {view.loose.length > 0 && (
+        <SideGroup title="Issues avulsas" count={view.loose.length}>
+          {view.loose.map((n) => row(n, 0))}
+        </SideGroup>
+      )}
+    </>
+  );
+  // O menu de contexto vale nas linhas onde estiverem (painel ou corpo).
+  const contextMenu = menu && (
+    <ContextMenu
+      label="Ações do item"
+      x={menu.x}
+      y={menu.y}
+      items={[
+        { label: "Abrir", run: () => openItem(menu.n.issue.gh_number) },
+        ...(canStartNode(menu.n)
+          ? [{ label: "Iniciar sessão", run: () => start(menu.n.issue.gh_number, menu.origin) }]
+          : []),
+        { label: `Abrir no ${trackerLabel(prov)}`, run: () => openUrl(menu.n.issue.url) },
+        ...(docs && menu.n.children.length > 0
+          ? [
+              {
+                label: "Abrir pasta de docs do épico",
+                run: () => openDocs(menu.n.issue.gh_number),
+                ...(docs.enabled ? {} : { disabled: true, title: docs.reason }),
+              },
+            ]
+          : []),
+        ...(mergedOpen(menu.n, baseBranch)
+          ? [
+              {
+                label: `Fechar a issue no ${trackerLabel(prov)} (${changeLabel(prov)} mesclado)`,
+                run: () => openUrl(menu.n.issue.url),
+              },
+            ]
+          : []),
+      ]}
+      onClose={(restore) => {
+        const o = menu.origin;
+        setMenu(null);
+        if (restore) o.focus();
+      }}
+    />
+  );
+
+  // No celular sem item, a árvore está no corpo: o painel fica com o do shell.
+  const treeInBody = mobile && focus === null;
+  const side = treeInBody ? (
+    contextMenu
+  ) : (
     <SideContent>
       <SidePanel
         title="Projeto"
@@ -310,19 +446,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
                 <PlayIcon />
               </button>
             )}
-            <button
-              type="button"
-              className="ibtn"
-              aria-label="Filtros"
-              title="Filtros: status, ordem e concluídos"
-              aria-expanded={ui.showFilters}
-              aria-controls="tree-more"
-              onClick={() => setUi((u) => ({ ...u, showFilters: !u.showFilters }))}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-                <path d="M4 6h16M7 12h10M10 18h4" />
-              </svg>
-            </button>
+            {filtersButton}
           </>
         }
       >
@@ -330,103 +454,11 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
           {prov && <ProviderIcon project={prov} />}
           {p.picker}
         </div>
-        <div className="views" role="group" aria-label="Visão">
-          <button
-            type="button"
-            aria-pressed={viewMode === "tree"}
-            onClick={() => {
-              setViewMode("tree");
-              // Árvore e Quadro são da aba Itens (#17).
-              if (focus === null && page !== "items") goPage("items");
-            }}
-          >
-            Árvore
-          </button>
-          <button
-            type="button"
-            aria-pressed={viewMode === "board"}
-            onClick={() => {
-              setViewMode("board");
-              // O Quadro fica na aba do projeto, em Itens (#17).
-              if (focus !== null) nav.go(p.addr);
-              else if (page !== "items") goPage("items");
-            }}
-          >
-            Quadro
-          </button>
-        </div>
-        <TreeControls
-          value={filters}
-          onChange={(f) => {
-            if (sprintKey && f.sprint !== filters.sprint) saveSprintChoice(sprintKey, f.sprint ?? ALL_SPRINTS);
-            setUi((u) => ({ ...u, filters: f }));
-          }}
-          more={ui.showFilters}
-          sprints={sprints}
-          sprintsUnread={sprintsUnread}
-        />
-        {docsError && (
-          <p role="alert" className="pj-empty start-error">
-            {docsError}
-          </p>
-        )}
-        {!roots && !p.error && (
-          <p className="pj-empty" role="status">
-            Carregando…
-          </p>
-        )}
-        {empty && <p className="pj-empty">{empty}</p>}
-        {nEpics > 0 && (
-          <SideGroup title="Épicos" count={nEpics}>
-            {view.epics.flatMap(({ epic: e, shown: kids }) => {
-              const done = e.children.filter((c) => statusKey(c) === "concluido").length;
-              const expanded = isExpanded(e, filters, ui.open[e.issue.gh_number], now, isLive);
-              return [row(e, 0, { expanded, done }), ...(expanded ? kids.map((c) => row(c, 1)) : [])];
-            })}
-          </SideGroup>
-        )}
-        {view.loose.length > 0 && (
-          <SideGroup title="Issues avulsas" count={view.loose.length}>
-            {view.loose.map((n) => row(n, 0))}
-          </SideGroup>
-        )}
+        {views}
+        {controls}
+        {tree}
       </SidePanel>
-      {menu && (
-        <ContextMenu
-          label="Ações do item"
-          x={menu.x}
-          y={menu.y}
-          items={[
-            { label: "Abrir", run: () => openItem(menu.n.issue.gh_number) },
-            ...(canStartNode(menu.n)
-              ? [{ label: "Iniciar sessão", run: () => start(menu.n.issue.gh_number, menu.origin) }]
-              : []),
-            { label: `Abrir no ${trackerLabel(prov)}`, run: () => openUrl(menu.n.issue.url) },
-            ...(docs && menu.n.children.length > 0
-              ? [
-                  {
-                    label: "Abrir pasta de docs do épico",
-                    run: () => openDocs(menu.n.issue.gh_number),
-                    ...(docs.enabled ? {} : { disabled: true, title: docs.reason }),
-                  },
-                ]
-              : []),
-            ...(mergedOpen(menu.n, baseBranch)
-              ? [
-                  {
-                    label: `Fechar a issue no ${trackerLabel(prov)} (${changeLabel(prov)} mesclado)`,
-                    run: () => openUrl(menu.n.issue.url),
-                  },
-                ]
-              : []),
-          ]}
-          onClose={(restore) => {
-            const o = menu.origin;
-            setMenu(null);
-            if (restore) o.focus();
-          }}
-        />
-      )}
+      {contextMenu}
     </SideContent>
   );
 
@@ -495,10 +527,23 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
 
   const openCount = all.filter((x) => !isClosed(x)).length;
   const liveCount = all.filter((x) => p.liveOf(x.issue.gh_number).length > 0).length;
+  const board = (
+    <Board
+      view={view}
+      filters={filters}
+      now={now}
+      focus={null}
+      project={prov}
+      liveLabel={p.liveText}
+      onSelect={openItem}
+    />
+  );
   return (
     <main className="project-screen">
       {side}
       <div className="pj-overview">
+        {/* Celular: a trilha "Projetos › X", que no desktop abre o painel. */}
+        {mobile && <div className="pj-picker">{p.picker}</div>}
         <div className="project-head">
           <h1>{p.name}</h1>
           {p.project && <ProviderIcon project={p.project} size={16} />}
@@ -532,7 +577,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
         {/* Abas do projeto (#17): cada uma com endereço próprio (`projectAt`).
             Navegação, e não `tablist`: trocar de aba troca o endereço da aba
             de editor, e "tab" já é o papel das abas do editor. */}
-        <nav className="pj-tabs" aria-label="Abas do projeto">
+        <nav className="pj-tabs" aria-label="Abas do projeto" data-segmented={mobile ? "true" : undefined}>
           {PROJECT_PAGES.map((pg) => (
             <button
               key={pg}
@@ -552,16 +597,19 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
         )}
         {page !== "items" ? (
           p.pages[page]()
+        ) : treeInBody ? (
+          // Celular (#25): Árvore | Quadro, filtros e os itens no corpo. Sem
+          // dica de atalho de teclado: as linhas abrem e o ▶ inicia.
+          <section className="pj-mitems" aria-label="Itens do projeto">
+            <div className="pj-mitems-bar">
+              {views}
+              {filtersButton}
+            </div>
+            {controls}
+            {viewMode === "board" ? board : tree}
+          </section>
         ) : viewMode === "board" ? (
-          <Board
-            view={view}
-            filters={filters}
-            now={now}
-            focus={null}
-            project={prov}
-            liveLabel={p.liveText}
-            onSelect={openItem}
-          />
+          board
         ) : (
           <>
             {roots && (

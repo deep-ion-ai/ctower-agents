@@ -3,7 +3,7 @@ import "../project/project.css";
 import "../settings/settings.css";
 import "../maintenance/maintenance.css";
 import "./env.css";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { useNow } from "../App";
 import type { EnvView } from "../api/types";
 import { HubSyncButton } from "../control-room/Sidebar";
@@ -109,6 +109,7 @@ function EnvDetail({ env, section }: { env: string; section: EnvSection }) {
   const nav = useNav();
   const e = envs.find((x) => x.id === env);
   const st = useStateText(env);
+  const noteId = useId();
   if (!e) {
     return (
       <main className="page">
@@ -123,7 +124,8 @@ function EnvDetail({ env, section }: { env: string; section: EnvSection }) {
     );
   }
   const info = status[env]?.connected ? infos[env] : undefined;
-  const sections = ENV_SECTIONS.filter((s) => !web || !DESKTOP_ONLY_ENV_SECTIONS.has(s));
+  /** Na web, as seções do desktop ficam no índice, desabilitadas com o motivo (#26). */
+  const desktopOnly = (s: EnvSection) => web && DESKTOP_ONLY_ENV_SECTIONS.has(s);
 
   let body: ReactNode;
   switch (section) {
@@ -187,11 +189,13 @@ function EnvDetail({ env, section }: { env: string; section: EnvSection }) {
       <div className="pj-settings">
         <nav className="pj-settings-nav" aria-label="Seções do ambiente">
           <ul>
-            {sections.map((s) => (
+            {ENV_SECTIONS.map((s) => (
               <li key={s}>
                 <button
                   type="button"
                   aria-current={s === section ? "page" : undefined}
+                  disabled={desktopOnly(s)}
+                  aria-describedby={desktopOnly(s) ? noteId : undefined}
                   onClick={() => nav.openTab(envTab(env, e.name, s))}
                 >
                   {ENV_SECTION_LABEL[s]}
@@ -199,6 +203,11 @@ function EnvDetail({ env, section }: { env: string; section: EnvSection }) {
               </li>
             ))}
           </ul>
+          {web && (
+            <p id={noteId} className="muted desktop-only-note pj-settings-note">
+              Atualização, configuração do daemon e limpeza no app desktop
+            </p>
+          )}
         </nav>
         <div key={`${env}:${section}`} className="pj-settings-body" role="group" aria-label={ENV_SECTION_LABEL[section]}>
           <div className="hub-page-head">
