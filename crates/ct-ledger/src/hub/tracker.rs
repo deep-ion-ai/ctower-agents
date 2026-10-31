@@ -211,8 +211,8 @@ mod tests {
         TrackerStatusChange,
     };
     use ct_core::{
-        ForgeConfig, GitlabConfig, JiraConfig, JiraReadiness, PrState, TrackerConfig,
-        TrackerReadiness,
+        ForgeConfig, GitlabConfig, JiraConfig, JiraFieldInfo, JiraReadiness, PrState,
+        TrackerConfig, TrackerReadiness,
     };
 
     const OWNER: &str = "grupo/projeto";
@@ -321,6 +321,11 @@ mod tests {
                     cli: Some("1.7.0".into()),
                     config_present: true,
                     credential_ok: error.is_none(),
+                    custom_fields: vec![JiraFieldInfo {
+                        id: "customfield_12303".into(),
+                        name: "Responsável pela Codificação".into(),
+                        datatype: "user".into(),
+                    }],
                     ..Default::default()
                 },
                 ..Default::default()
@@ -594,6 +599,7 @@ mod tests {
         let ts = hub.tracker_status(p.id).unwrap().unwrap();
         assert_eq!((ts.env_id.as_str(), ts.env_name.as_str()), ("a", "a"));
         assert_eq!(ts.readiness.jira.cli.as_deref(), Some("1.7.0"));
+        assert_eq!(ts.readiness.jira.custom_fields[0].id, "customfield_12303");
         let v = hub.project_views().unwrap();
         assert_eq!(v[0].tracker_status.as_ref().unwrap().env_id, "a");
 

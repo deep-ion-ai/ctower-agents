@@ -42,6 +42,7 @@ function status(p: { credential_ok?: boolean } = {}): HubTrackerStatus {
         me_ok: p.credential_ok ?? true,
         server_version: "8.5.2",
         error: p.credential_ok === false ? "comando de credencial do Jira falhou (saída 2)" : null,
+        custom_fields: [],
       },
       gitlab: { cli: "1.124.0", credential_ok: true, api_ok: true, error: null },
     },
