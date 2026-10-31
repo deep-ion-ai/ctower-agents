@@ -77,7 +77,7 @@ export function settingsTab(to: { scope?: SettingsScope; section?: SettingsSecti
 const KEYWORDS: Record<SettingsSection, string> = {
   connections: "hub url token ambientes daemon ws distro wsl",
   sessions: "modelo modo padrão templates prompt",
-  appearance: "tema claro escuro sistema cores dark light",
+  appearance: "tema claro escuro sistema cores dark light abas texto fundo hex",
   terminal: "fonte tamanho zoom console",
   notifications: "avisos aguardando erro desconectado",
   "web-access": "sair logout sessão web navegador cookie revogar",

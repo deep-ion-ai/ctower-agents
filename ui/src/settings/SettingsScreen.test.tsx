@@ -545,7 +545,7 @@ test("tema: Claro, Escuro ou Seguir o sistema vai para o ui.json e vale na hora;
   await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
 
   await user.selectOptions(tema, "light");
-  await waitFor(() => expect(api.uiConfig.appearance).toEqual({ theme: "light" }));
+  await waitFor(() => expect(api.uiConfig.appearance).toEqual({ ...DEFAULT_UI_CONFIG.appearance, theme: "light" }));
   expect(document.documentElement.dataset.theme).toBe("light");
   expect(localStorage.getItem("ct.theme")).toBe("light");
   expect(within(item("Aparência: Tema")).getByTitle("Alterada")).toBeInTheDocument();
@@ -648,4 +648,88 @@ test("índice rola só o painel de conteúdo, nunca o documento (#431)", async (
     delete (Element.prototype as Partial<Element>).scrollTo;
     delete (Element.prototype as Partial<Element>).scrollIntoView;
   }
+});
+
+test("cores das abas (#73): HEX, seletor, Padrão, contraste e Restaurar padrão por tema", async () => {
+  const { api, user } = setup({ name: "settings", section: "appearance" });
+  const sec = await screen.findByRole("region", { name: "Aparência: Cores das abas" });
+  expect(within(sec).queryByText("alterada")).toBeNull();
+  // Começa no tema em uso (escuro).
+  expect(within(sec).getByRole("radio", { name: "Tema escuro" })).toHaveAttribute("aria-checked", "true");
+
+  // HEX sem # e em maiúsculas: grava #rrggbb e vale na hora.
+  const fg = within(sec).getByLabelText("Texto de Sessão (terminal) (HEX)");
+  await user.type(fg, "7FD{Enter}");
+  await waitFor(() => expect(api.uiConfig.appearance.tabs?.dark.terminal).toEqual({ fg: "#77ffdd" }));
+  expect(fg).toHaveValue("#77ffdd");
+  expect(document.documentElement.style.getPropertyValue("--tab-terminal-fg")).toBe("#77ffdd");
+  expect(within(sec).getByText("alterada")).toBeInTheDocument();
+
+  // Inválido: mostra o erro e a última cor válida continua.
+  await user.clear(fg);
+  await user.type(fg, "#12345g{Enter}");
+  expect(within(sec).getByRole("alert")).toHaveTextContent("HEX inválido");
+  expect(fg).toHaveAttribute("aria-invalid", "true");
+  expect(api.uiConfig.appearance.tabs?.dark.terminal).toEqual({ fg: "#77ffdd" });
+
+  // Fundo pelo seletor nativo; contraste baixo avisa, mas salva.
+  const bg = within(sec).getByLabelText("Fundo de Sessão (terminal) (seletor)");
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    set.call(bg, "#88ffee");
+    bg.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await waitFor(() => expect(api.uiConfig.appearance.tabs?.dark.terminal).toEqual({ fg: "#77ffdd", bg: "#88ffee" }));
+  expect(within(sec).getByLabelText("Contraste de Sessão (terminal)")).toHaveTextContent(/abaixo de 4.5:1/);
+  expect(within(sec).getByLabelText("Contraste de Shell")).not.toHaveTextContent(/abaixo/);
+
+  // Padrão limpa o campo.
+  await user.click(within(sec).getByRole("button", { name: "Padrão: Texto de Sessão (terminal)" }));
+  await waitFor(() => expect(api.uiConfig.appearance.tabs?.dark.terminal).toEqual({ bg: "#88ffee" }));
+  expect(within(sec).getByLabelText("Texto de Sessão (terminal) (HEX)")).toHaveValue("");
+
+  // O tema claro tem a sua configuração.
+  await user.click(within(sec).getByRole("radio", { name: "Tema claro" }));
+  const lfg = within(sec).getByLabelText("Texto de Issue / épico (HEX)");
+  expect(within(sec).getByLabelText("Fundo de Sessão (terminal) (HEX)")).toHaveValue("");
+  await user.type(lfg, "#1a7a5e");
+  await user.tab();
+  await waitFor(() => expect(api.uiConfig.appearance.tabs?.light.issue).toEqual({ fg: "#1a7a5e" }));
+  // Tema em uso é o escuro: a do claro não entra nas variáveis.
+  expect(document.documentElement.style.getPropertyValue("--tab-issue-fg")).toBe("");
+
+  // Restaurar padrão limpa só o tema selecionado.
+  await user.click(within(sec).getByRole("button", { name: /Restaurar padrão.*tema claro/ }));
+  await waitFor(() => expect(api.uiConfig.appearance.tabs?.light.issue).toEqual({}));
+  expect(api.uiConfig.appearance.tabs?.dark.terminal).toEqual({ bg: "#88ffee" });
+  expect(api.uiConfig.appearance.theme).toBe("dark");
+});
+
+test("cores das abas (#73): ui.json antigo sem `tabs` abre vazio e trocar o tema não apaga as cores", async () => {
+  const { api, user } = setup({ name: "settings", section: "appearance" });
+  api.uiConfig = {
+    ...api.uiConfig,
+    appearance: {
+      theme: "dark",
+      tabs: { ...DEFAULT_UI_CONFIG.appearance.tabs!, dark: { ...DEFAULT_UI_CONFIG.appearance.tabs!.dark, shell: { fg: "#abcdef" } } },
+    },
+  };
+  cleanup();
+  render(<App api={api} initial={{ name: "settings", section: "appearance" }} />);
+  const tema = (await screen.findByLabelText("Tema")) as HTMLSelectElement;
+  await user.selectOptions(tema, "light");
+  await waitFor(() => expect(api.uiConfig.appearance.theme).toBe("light"));
+  expect(api.uiConfig.appearance.tabs?.dark.shell).toEqual({ fg: "#abcdef" });
+  await user.click(screen.getByRole("button", { name: "Restaurar padrão de Tema" }));
+  await waitFor(() => expect(api.uiConfig.appearance.theme).toBe("dark"));
+  expect(api.uiConfig.appearance.tabs?.dark.shell).toEqual({ fg: "#abcdef" });
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--tab-shell-fg")).toBe("#abcdef"));
+
+  // Sem `tabs` (configuração antiga): campos vazios.
+  cleanup();
+  api.uiConfig = { ...api.uiConfig, appearance: { theme: "dark" } };
+  render(<App api={api} initial={{ name: "settings", section: "appearance" }} />);
+  const sec = await screen.findByRole("region", { name: "Aparência: Cores das abas" });
+  expect(within(sec).getByLabelText("Texto de Shell (HEX)")).toHaveValue("");
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--tab-shell-fg")).toBe(""));
 });
