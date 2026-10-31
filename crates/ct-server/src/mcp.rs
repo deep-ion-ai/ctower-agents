@@ -862,7 +862,7 @@ mod tests {
                         has_sub_issues: false,
                         url: "u".into(),
                         updated_at: 1,
-                        sprints: Vec::new(),
+                        ..Default::default()
                     }],
                     prs: vec![],
                     etags: vec![],
@@ -1102,7 +1102,7 @@ mod tests {
                     has_sub_issues: false,
                     url: "https://github.com/deep-ion-ai/demo/issues/1".into(),
                     updated_at: 0,
-                    sprints: Vec::new(),
+                    ..Default::default()
                 }],
                 prs: vec![],
                 etags: vec![],
@@ -1255,7 +1255,7 @@ mod tests {
             has_sub_issues: n == 10,
             url: String::new(),
             updated_at: 0,
-            sprints: Vec::new(),
+            ..Default::default()
         };
         srv.env
             .sessions

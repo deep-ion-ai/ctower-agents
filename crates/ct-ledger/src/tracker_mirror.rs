@@ -153,7 +153,7 @@ mod tests {
             has_sub_issues: false,
             url: format!("https://jira.exemplo.test/browse/P-{n}"),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 

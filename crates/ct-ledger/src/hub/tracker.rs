@@ -283,7 +283,7 @@ mod tests {
                 has_sub_issues: false,
                 url: format!("https://jira.example.com/browse/PROJ-{n}"),
                 updated_at: 10,
-                sprints: Vec::new(),
+                ..Default::default()
             },
             removed: false,
         })
@@ -689,6 +689,53 @@ mod tests {
             .collect();
         let i = all.iter().find(|i| i.gh_number == 5450).unwrap();
         assert_eq!(i.sprints, vec![sprint]);
+    }
+
+    /// Os metadados vêm no `issue_mirror` e saem na árvore do hub; a linha
+    /// de um ambiente anterior (sem `meta`) entra com a lista vazia.
+    #[test]
+    fn espelho_com_metadados_e_de_ambiente_anterior() {
+        let hub = hub_jira();
+        hub.add_assignment(OWNER, REPO, "a", None).unwrap();
+        let meta = vec![
+            crate::IssueMeta {
+                field: "status".into(),
+                label: "Situação".into(),
+                value: "Em andamento".into(),
+            },
+            crate::IssueMeta {
+                field: "assignee".into(),
+                label: "Responsável".into(),
+                value: "Fulano".into(),
+            },
+        ];
+        let mut com = issue(5450, "open");
+        if let SyncChange::IssueMirror(m) = &mut com {
+            m.issue.meta = meta.clone();
+        }
+        let mut v = serde_json::to_value(issue(5451, "open")).unwrap();
+        let antiga = v
+            .pointer_mut("/data/issue")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        assert!(antiga.remove("meta").is_some());
+        let sem: SyncChange = serde_json::from_value(v).unwrap();
+        let r = hub
+            .ingest("a", "a", &[entry(1, com), entry(2, sem)])
+            .unwrap();
+        assert_eq!(r.applied, 2);
+        let p = project(&hub);
+        assert_eq!(hub.get_issue(p.id, 5450).unwrap().unwrap().meta, meta);
+        assert!(hub.get_issue(p.id, 5451).unwrap().unwrap().meta.is_empty());
+        let tree = hub.tree(OWNER, REPO).unwrap().unwrap();
+        let all: Vec<&IssueRow> = tree
+            .roots
+            .iter()
+            .flat_map(|n| std::iter::once(&n.issue).chain(n.children.iter().map(|c| &c.issue)))
+            .collect();
+        let i = all.iter().find(|i| i.gh_number == 5450).unwrap();
+        assert_eq!(i.meta, meta);
     }
 
     /// `issue_mirror` com `removed` (fora do JQL): o hub apaga a issue, a

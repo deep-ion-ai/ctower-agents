@@ -723,7 +723,7 @@ mod tests {
                 has_sub_issues: false,
                 url: "u".into(),
                 updated_at: 0,
-                sprints: Vec::new(),
+                ..Default::default()
             }],
             prs: vec![],
             etags: vec![("/repos/deep-ion-ai/demo/issues?x".into(), "e".into())],
@@ -928,7 +928,7 @@ mod tests {
             has_sub_issues: parent.is_none(),
             url: "u".into(),
             updated_at: 0,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 

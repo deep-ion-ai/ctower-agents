@@ -265,7 +265,7 @@ mod tests {
             has_sub_issues: subs,
             url: String::new(),
             updated_at: 0,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 

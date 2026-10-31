@@ -40,7 +40,8 @@ pub fn list_entry(v: &Value, cfg: &JiraConfig) -> Option<ListEntry> {
 /// - o pai é o Epic Link; sem ele, `fields.parent` (Jira com épico por
 ///   `parent`);
 /// - fechada = categoria do status `done` (o nome do status vem traduzido);
-/// - as sprints vêm do `sprint_field` (vazio = detectado, ver [`crate::sprint`]).
+/// - as sprints vêm do `sprint_field` (vazio = detectado, ver [`crate::sprint`]);
+/// - os metadados são os campos padrão ([`crate::meta::STANDARD_FIELDS`]).
 pub fn issue_row(v: &Value, cfg: &JiraConfig) -> Option<IssueRow> {
     let key = v.get("key")?.as_str()?;
     let number = cfg.number_from_key(key)?;
@@ -134,6 +135,7 @@ pub fn issue_row(v: &Value, cfg: &JiraConfig) -> Option<IssueRow> {
             .and_then(parse_jira_time)
             .unwrap_or(0),
         sprints: crate::sprint::issue_sprints(f, &cfg.sprint_field),
+        meta: crate::meta::issue_meta(f),
     })
 }
 
@@ -211,6 +213,65 @@ mod tests {
         assert_eq!(r.url, "https://jira.example.com/browse/PROJ-5450");
         assert_eq!(r.updated_at, 1_793_193_330_000);
         assert!(r.sprints.is_empty());
+    }
+
+    /// Os 5 campos padrão, na ordem da tela, com o texto de cada um.
+    #[test]
+    fn metadados_dos_campos_padrao() {
+        let v = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "indeterminate",
+            json!({
+                "reporter": { "name": "beltrano", "displayName": "Beltrano Silva" },
+                "assignee": { "name": "fulano", "displayName": "Fulano de Tal" },
+                "priority": { "name": "Alta", "id": "2" },
+            }),
+        );
+        let meta: Vec<_> = issue_row(&v, &cfg())
+            .unwrap()
+            .meta
+            .into_iter()
+            .map(|m| (m.field, m.label, m.value))
+            .collect();
+        let m = |f: &str, l: &str, v: &str| (f.to_string(), l.to_string(), v.to_string());
+        assert_eq!(
+            meta,
+            vec![
+                m("status", "Situação", "Aberto"),
+                m("issuetype", "Tipo", "Tarefa"),
+                m("priority", "Prioridade", "Alta"),
+                m("assignee", "Responsável", "Fulano de Tal"),
+                m("reporter", "Criador", "Beltrano Silva"),
+            ]
+        );
+    }
+
+    /// Campo nulo ou ausente fica de fora; os demais mantêm a ordem.
+    #[test]
+    fn metadados_sem_os_vazios() {
+        let v = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "new",
+            json!({ "assignee": null, "reporter": { "name": "beltrano" } }),
+        );
+        let fields: Vec<_> = issue_row(&v, &cfg())
+            .unwrap()
+            .meta
+            .into_iter()
+            .map(|m| (m.field, m.value))
+            .collect();
+        assert_eq!(
+            fields,
+            vec![
+                ("status".to_string(), "Aberto".to_string()),
+                ("issuetype".to_string(), "Tarefa".to_string()),
+                ("reporter".to_string(), "beltrano".to_string()),
+            ]
+        );
     }
 
     #[test]

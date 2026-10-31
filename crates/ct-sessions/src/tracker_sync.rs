@@ -157,8 +157,9 @@ pub fn retry_key(owner: &str, repo: &str) -> String {
 
 /// Versão do que a leitura extrai de cada issue. Subir o número faz a
 /// marca da última reconciliação deixar de bater e o próximo ciclo reler o
-/// projeto uma vez (como mudar a configuração): 2 = com as sprints.
-pub const MIRROR_VERSION: i64 = 2;
+/// projeto uma vez (como mudar a configuração): 2 = com as sprints; 3 = com
+/// os metadados (`meta`).
+pub const MIRROR_VERSION: i64 = 3;
 
 /// Chave, no `gh_etag`, das issues fora do JQL que ficam no espelho por
 /// ter work item (separadas por espaço): cada ciclo as lê pela chave, como
@@ -2246,6 +2247,93 @@ mod tests {
             })
             .unwrap();
         assert_eq!(mirrored.sprints, i.sprints);
+    }
+
+    /// Depois do sync, os 5 campos padrão estão em `meta`, na ordem e sem
+    /// os vazios, no cache e no `issue_mirror` que sobe ao hub.
+    #[test]
+    fn metadados_vao_ao_cache_e_ao_espelho_do_hub() {
+        let j = setup(true);
+        let mut issues = arvore();
+        issues[3]["fields"]["assignee"] =
+            serde_json::json!({ "name": "fulano", "displayName": "Fulano de Tal" });
+        j.fake.set_issues(&issues);
+        j.env.sessions.ledger().outbox_ack(i64::MAX).unwrap();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        let l = j.env.sessions.ledger();
+        let i = l.get_issue(j.env.project_id, 4).unwrap().unwrap();
+        let meta: Vec<(&str, &str)> = i
+            .meta
+            .iter()
+            .map(|m| (m.label.as_str(), m.value.as_str()))
+            .collect();
+        assert_eq!(
+            meta,
+            [
+                ("Situação", "Aberto"),
+                ("Tipo", "Tarefa"),
+                ("Prioridade", "Média"),
+                ("Responsável", "Fulano de Tal"),
+                ("Criador", "Autor da Issue"),
+            ]
+        );
+        // Sem responsável: o campo fica de fora.
+        let sem = l.get_issue(j.env.project_id, 1).unwrap().unwrap();
+        assert!(sem.meta.iter().all(|m| m.field != "assignee"));
+        assert_eq!(sem.meta.len(), 4);
+        let mirrored = l
+            .outbox_pending(1000)
+            .unwrap()
+            .into_iter()
+            .find_map(|e| match e.change {
+                SyncChange::IssueMirror(m) if m.issue.gh_number == 4 => Some(m.issue),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(mirrored.meta, i.meta);
+    }
+
+    /// O espelho gravado com a versão 2 (sprints, sem metadados) é relido
+    /// uma vez por causa do `MIRROR_VERSION`, e só uma.
+    #[test]
+    fn espelho_sem_metadados_e_relido_uma_vez() {
+        let j = setup(true);
+        let mut issues = arvore();
+        j.fake.set_issues(&issues);
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        // Como ficaria a marca gravada pela versão 2.
+        let key = full_mark_key("deep-ion-ai", "demo");
+        {
+            let l = j.env.sessions.ledger();
+            let mark = l.etag(&key).unwrap().unwrap();
+            let atual = format!("\"mirror\":{MIRROR_VERSION}");
+            assert!(mark.contains(&atual), "{mark}");
+            let antiga = mark.replace(&atual, "\"mirror\":2");
+            l.apply_github(&GithubSnapshot {
+                project_id: j.env.project_id,
+                etags: vec![(key.clone(), antiga)],
+                synced_at: now_ms(),
+                ..GithubSnapshot::default()
+            })
+            .unwrap();
+            l.outbox_ack(i64::MAX).unwrap();
+        }
+        // O responsável mudou no Jira sem mudar o `updated`.
+        issues[1]["fields"]["assignee"] = serde_json::json!({ "name": "fulano" });
+        j.fake.set_issues(&issues);
+        j.fake.clear_calls();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert_eq!(j.fake.viewed().len(), 4, "relê tudo uma vez");
+        let l = j.env.sessions.ledger();
+        let i = l.get_issue(j.env.project_id, 2).unwrap().unwrap();
+        assert!(i
+            .meta
+            .iter()
+            .any(|m| m.field == "assignee" && m.value == "fulano"));
+        drop(l);
+        j.fake.clear_calls();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert!(j.fake.viewed().is_empty(), "{:?}", j.fake.viewed());
     }
 
     /// O espelho gravado antes das sprints (marca da reconciliação com a

@@ -23,8 +23,8 @@ pub use decisions::{Decision, NewDecision};
 pub use error::{LedgerError, Result};
 pub use events::{Event, NewEvent};
 pub use github::{
-    gh_epic_merged_uid, gh_issue_closed_uid, gh_pr_uid, GithubApplied, GithubSnapshot, IssueRow,
-    PrRow, SyncState,
+    gh_epic_merged_uid, gh_issue_closed_uid, gh_pr_uid, GithubApplied, GithubSnapshot, IssueMeta,
+    IssueRow, PrRow, SyncState,
 };
 pub use hub::{list_snapshots, rotate_snapshots, IssuedEnvToken, AGENT_TOKEN_PREFIX};
 pub use hub::{

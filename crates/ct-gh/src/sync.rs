@@ -224,7 +224,7 @@ pub fn issue_row(v: &Value) -> Option<IssueRow> {
             .and_then(Value::as_str)
             .and_then(time::parse_rfc3339)
             .unwrap_or(0),
-        sprints: Vec::new(),
+        ..Default::default()
     })
 }
 

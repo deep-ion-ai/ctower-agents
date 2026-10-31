@@ -322,7 +322,7 @@ impl TestEnv {
                 has_sub_issues: *subs,
                 url: String::new(),
                 updated_at: 0,
-                sprints: Vec::new(),
+                ..Default::default()
             })
             .collect();
         self.sessions
