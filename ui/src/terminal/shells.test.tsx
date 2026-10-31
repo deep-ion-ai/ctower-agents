@@ -178,3 +178,26 @@ test("busy e texto do fim", () => {
   expect(shellEndText(null)).toBe("shell encerrado (sinal)");
   expect(shellEndText()).toBe("shell encerrado");
 });
+
+test("cores das abas (#73): data-kind por tipo e o ícone de terminal só nas abas de sessão", async () => {
+  await openShell();
+  const etab = (name: string | RegExp) => within(tablist()).getByRole("tab", { name }).closest(".etab")!;
+  const sessao = etab(/ui: terminal embutido/);
+  const shell = etab("Shell · #32");
+  expect(sessao).toHaveAttribute("data-kind", "terminal");
+  expect(shell).toHaveAttribute("data-kind", "shell");
+  // Ícone entre o ponto de estado e o título, na cor do texto (currentColor).
+  const icone = sessao.querySelector('svg[data-icon="terminal"]')!;
+  expect(icone).toHaveAttribute("stroke", "currentColor");
+  expect(icone.previousElementSibling).toHaveClass("sp-dot");
+  expect(icone.nextElementSibling).toHaveClass("etab-title");
+  expect(shell.querySelector('svg[data-icon="prompt"]')).not.toBeNull();
+  expect(shell.querySelector('svg[data-icon="terminal"]')).toBeNull();
+  // As demais abas: tipo "screen" e nenhum ícone novo.
+  const telas = [...tablist().querySelectorAll(".etab")].filter((e) => e !== sessao && e !== shell);
+  expect(telas.length).toBeGreaterThan(0);
+  for (const t of telas) {
+    expect(t).toHaveAttribute("data-kind", "screen");
+    expect(t.querySelector("svg[data-icon]:not([data-icon=close]):not([data-icon=pin])")).toBeNull();
+  }
+});

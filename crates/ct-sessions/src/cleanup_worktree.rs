@@ -526,6 +526,7 @@ mod tests {
                 }],
                 etags: vec![],
                 synced_at: ct_core::now_ms(),
+                gone: Vec::new(),
             })
             .unwrap();
         let c = Cleaner::standard(cfg());

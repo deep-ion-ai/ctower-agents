@@ -52,22 +52,34 @@ impl Ledger {
                 if self.find_work_item(project_id, gh)?.is_some() {
                     continue;
                 }
-                self.conn.execute(
-                    "DELETE FROM issue_cache WHERE project_id = ?1 AND gh_number = ?2",
-                    rusqlite::params![project_id, gh],
-                )?;
-                if mirror {
-                    self.enqueue(&SyncChange::IssueMirror(IssueMirrorChange {
-                        owner: owner.clone(),
-                        repo: repo.clone(),
-                        issue,
-                        removed: true,
-                    }))?;
-                }
+                self.remove_issue_row(project_id, &owner, &repo, issue, mirror)?;
                 n += 1;
             }
             Ok(n)
         })
+    }
+
+    /// Apaga a issue do `issue_cache` e, no ambiente de sync (`mirror`),
+    /// põe no outbox o `issue_mirror` com `removed`, para o hub apagar
+    /// também. Quem chama abre a transação.
+    pub(crate) fn remove_issue_row(
+        &self,
+        project_id: i64,
+        owner: &str,
+        repo: &str,
+        issue: IssueRow,
+        mirror: bool,
+    ) -> Result<()> {
+        self.gh().delete_issue(project_id, issue.gh_number)?;
+        if mirror {
+            self.enqueue(&SyncChange::IssueMirror(IssueMirrorChange {
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+                issue,
+                removed: true,
+            }))?;
+        }
+        Ok(())
     }
 
     /// MR do espelho sem o `work_item_id` local: o hub acha o work item pelo
@@ -130,6 +142,8 @@ impl Ledger {
             repo,
             last_attempt_at: st.as_ref().map_or_else(now_ms, |s| s.last_attempt_at),
             last_ok_at: st.as_ref().and_then(|s| s.last_ok_at),
+            failures: st.as_ref().map_or(0, |s| s.failures),
+            failing_since: st.as_ref().and_then(|s| s.failing_since),
             last_error: st.and_then(|s| s.last_error),
             readiness: readiness.clone(),
         }))?;
@@ -153,7 +167,7 @@ mod tests {
             has_sub_issues: false,
             url: format!("https://jira.exemplo.test/browse/P-{n}"),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -164,6 +178,7 @@ mod tests {
             prs: vec![],
             etags: vec![],
             synced_at: 100,
+            gone: Vec::new(),
         }
     }
 

@@ -11,6 +11,7 @@ import { isJiraProject, itemShort, PROJECT_ITEM, trackerLabel } from "../util/it
 import { permissionText } from "../terminal/permission";
 import { rcOn, rcUrl } from "../terminal/remote";
 import { DOCS_HELP_URL } from "../project/docs";
+import { SYNC_FAIL_ALERT, syncFailures } from "../project/sync-health";
 
 /** Intervalo padrão do sync com o GitHub (`gh_sync_interval_secs` = 180). */
 export const SYNC_INTERVAL_MS = 180_000;
@@ -20,7 +21,16 @@ export const JIRA_SYNC_INTERVAL_MS = 300_000;
 export const SYNC_LATE_FACTOR = 3;
 export const FAILED_WINDOW_MS = 24 * 3_600_000;
 
-export type AttentionKind = "waiting" | "failed" | "interrupted" | "env_down" | "docs" | "hub" | "alert" | "sync_late";
+export type AttentionKind =
+  | "waiting"
+  | "failed"
+  | "interrupted"
+  | "env_down"
+  | "docs"
+  | "hub"
+  | "alert"
+  | "sync_failing"
+  | "sync_late";
 
 export type AttentionAction =
   | { to: "terminal"; env: string; session: string }
@@ -81,7 +91,17 @@ export interface AttentionInput {
 /** Texto padrão do pedido pendente, sem a mensagem do agente. */
 export const ASK_FALLBACK = "Permissão ou pergunta pendente no terminal";
 
-const ORDER: AttentionKind[] = ["waiting", "failed", "interrupted", "env_down", "docs", "hub", "alert", "sync_late"];
+const ORDER: AttentionKind[] = [
+  "waiting",
+  "failed",
+  "interrupted",
+  "env_down",
+  "docs",
+  "hub",
+  "alert",
+  "sync_failing",
+  "sync_late",
+];
 
 /** Título de cada aviso de `hub.status` (`kind` estável do `cthubd`). */
 const HUB_WARNING_TITLE: Record<string, string> = {
@@ -298,6 +318,26 @@ export function attention(input: AttentionInput): AttentionItem[] {
       const project = d.projects.find((p) => p.project.id === sync.project_id)?.project;
       // Projeto fora da lista (desatribuído ou excluído): ninguém o sincroniza mais.
       if (!project) continue;
+      // Falhas seguidas (#90): a partir de `SYNC_FAIL_ALERT` (uma queda de rede
+      // passageira não avisa); some na primeira rodada bem-sucedida, que zera a
+      // conta. Ambiente anterior ao campo cai no "Sync atrasado" abaixo.
+      const failures = syncFailures(sync);
+      if (failures >= SYNC_FAIL_ALERT) {
+        out.push({
+          key: `syncfail:${env.id}:${sync.project_id}`,
+          kind: "sync_failing",
+          env: env.id,
+          label: "Sync falhando",
+          title: `${project.name}: sync falhando há ${failures} ciclos`,
+          detail:
+            sync.last_error ??
+            `${trackerLabel(project)} sem sincronizar${ref === null ? "" : `; último sucesso há ${duration(now - ref)}`}`,
+          since: sync.failing_since ?? sync.last_attempt_at,
+          actionLabel: "Ver projeto",
+          action: { to: "project", env: env.id, projectId: sync.project_id },
+        });
+        continue;
+      }
       const interval = isJiraProject(project) ? JIRA_SYNC_INTERVAL_MS : SYNC_INTERVAL_MS;
       const late = ref === null ? sync.last_error !== null : now - ref > SYNC_LATE_FACTOR * interval;
       if (!late) continue;

@@ -885,3 +885,136 @@ test("Visão geral local (hub fora, #19): só o Buscar issues agora, no ambiente
   expect(screen.queryByRole("heading", { name: /^Saúde/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Gestor deste projeto" })).not.toBeInTheDocument();
 });
+
+// #90: "Sincronizar este projeto" de vários lugares e a falha de sync por projeto.
+
+/** O sync do ambiente falhando há `failures` rodadas (dashboard do wsl). */
+function setupFailing(failures: number, hubUp = true) {
+  const failing = sync({
+    project_id: 1,
+    last_ok_at: NOW - 3 * 3_600_000,
+    last_attempt_at: NOW - 60_000,
+    last_error: "GitHub: HTTP 410",
+    failures,
+    failing_since: NOW - 2 * 3_600_000,
+  });
+  return setupOverview(hubUp).on("dashboard.get", (_: unknown, env: string) =>
+    env === "wsl"
+      ? dashboard({ live_sessions: [LIVE59], sync: [failing] }, [WI59])
+      : dashboard({ projects: [] }),
+  );
+}
+
+test("cabeçalho (#90): Sincronizar este projeto roda sync.now só deste projeto e mostra o resultado", async () => {
+  const api = setupOverview();
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await screen.findByText("visão do hub");
+  const head = document.querySelector<HTMLElement>(".project-head")!;
+  // O hub conta o último sucesso.
+  expect(head).toHaveTextContent("Último sync: agora");
+  await user.click(within(head).getByRole("button", { name: "Sincronizar este projeto" }));
+  await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
+  expect(api.callsTo("sync.now")[0]).toMatchObject({ env: "wsl", params: { project_id: 1 } });
+  // Na aba Itens, o resultado fica no próprio cabeçalho (o mesmo texto do cartão).
+  expect(await within(head).findByRole("status")).toHaveTextContent("Sincronizado por WSL: 12 issues, 3 PRs, 1 mudança de status.");
+});
+
+test("falha repetida (#90): cartão e cabeçalho mostram desde quando e o erro, com o tentar de novo", async () => {
+  const api = setupFailing(4);
+  render(<App api={api} initial={overviewAt} />);
+  const user = userEvent.setup();
+  await screen.findByRole("list", { name: "Sinais de saúde do projeto" });
+  const sync = await card("Buscar issues");
+  // O pior estado entre hub (em dia) e ambiente (falhando).
+  await waitFor(() => expect(sync).toHaveTextContent(/Sync falhando desde .* \(4 rodadas\)/));
+  expect(sync).toHaveTextContent("GitHub: HTTP 410");
+  const head = document.querySelector<HTMLElement>(".project-head")!;
+  expect(head).toHaveTextContent(/Sync falhando desde/);
+  expect(head).toHaveTextContent("GitHub: HTTP 410");
+  await user.click(within(sync).getByRole("button", { name: "Tentar de novo este projeto" }));
+  await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
+  expect(api.callsTo("sync.now")[0]).toMatchObject({ env: "wsl", params: { project_id: 1 } });
+  // Na Visão geral o resultado aparece só no cartão (sem repetir no cabeçalho).
+  expect(await within(sync).findByRole("status")).toHaveTextContent("Sincronizado por WSL");
+  expect(within(head).queryByRole("status")).toBeNull();
+});
+
+test("compatibilidade (#90): ambiente sem o campo de falhas não mostra falha nem aviso", async () => {
+  const antigo = sync({ project_id: 1, last_ok_at: NOW - 60_000, last_error: "GitHub: HTTP 410" });
+  delete (antigo as Partial<typeof antigo>).failures;
+  const api = setupOverview(false).on("dashboard.get", (_: unknown, env: string) =>
+    env === "wsl" ? dashboard({ sync: [antigo] }, [WI59]) : dashboard({ projects: [] }),
+  );
+  render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1, view: "overview" }} />);
+  const sync1 = await card("Buscar issues");
+  await waitFor(() => expect(sync1).toHaveTextContent("Último sync: há 1 min"));
+  expect(screen.queryByText(/Sync falhando/)).toBeNull();
+});
+
+test("lista de Projetos (#90): menu com Sincronizar este projeto, progresso e resultado na linha; selo de sync falhando", async () => {
+  const api = setupFailing(3, false);
+  render(<App api={api} initial={{ name: "project" }} />);
+  const user = userEvent.setup();
+  const linha = (await screen.findByRole("button", { name: "ctower-agents" })).closest("li")!;
+  expect(within(linha).getByText("sync falhando")).toHaveAttribute("title", expect.stringContaining("GitHub: HTTP 410"));
+  await user.click(within(linha).getByRole("button", { name: "Mais ações de ctower-agents" }));
+  await user.click(screen.getByRole("menuitem", { name: "Sincronizar este projeto" }));
+  await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
+  expect(api.callsTo("sync.now")[0]).toMatchObject({ env: "wsl", params: { project_id: 1 } });
+  expect(await within(linha).findByRole("status")).toHaveTextContent("Sincronizado por WSL: 12 issues, 3 PRs, 1 mudança de status.");
+});
+
+test("lista de Projetos (#90): abaixo de 3 falhas seguidas, sem selo", async () => {
+  const api = setupFailing(2, false);
+  render(<App api={api} initial={{ name: "project" }} />);
+  const linha = (await screen.findByRole("button", { name: "ctower-agents" })).closest("li")!;
+  expect(within(linha).queryByText("sync falhando")).toBeNull();
+});
+
+test("faixa Precisa de você (#90): sync falhando há 3 ciclos, com o link para o projeto; some no sucesso", async () => {
+  const api = setupFailing(3, false);
+  render(<App api={api} initial={{ name: "control" }} />);
+  const faixa = await screen.findByRole("region", { name: /Precisa de você/ });
+  expect(faixa).toHaveTextContent("ctower-agents: sync falhando há 3 ciclos");
+  expect(faixa).toHaveTextContent("GitHub: HTTP 410");
+  // A rodada seguinte dá certo: o push do ambiente traz o dashboard novo e o aviso some.
+  api.on("dashboard.get", (_: unknown, env: string) =>
+    env === "wsl"
+      ? dashboard({ sync: [sync({ project_id: 1, last_ok_at: NOW, failures: 0 })] }, [WI59])
+      : dashboard({ projects: [] }),
+  );
+  act(() => api.push("wsl", "sync_status", { project_id: 1, ok: true, last_ok_at: NOW, error: null }));
+  await waitFor(() => expect(screen.queryByText(/sync falhando há/)).toBeNull());
+});
+
+test("paleta (#90): Sincronizar este projeto na aba do projeto e Sincronizar projeto… escolhendo o projeto", async () => {
+  const api = setupOverview(false);
+  render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1 }} />);
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Sincronizar este projeto" });
+  const paleta = async () => {
+    await user.click(screen.getByRole("button", { name: "Abrir paleta de comandos" }));
+    return within(screen.getByRole("dialog", { name: "Paleta de comandos" })).getByRole("combobox");
+  };
+  const busca = await paleta();
+  await user.type(busca, "Sincronizar este");
+  await user.click(await screen.findByRole("option", { name: /Sincronizar este projeto/ }));
+  await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
+  expect(api.callsTo("sync.now")[0]).toMatchObject({ env: "wsl", params: { project_id: 1 } });
+  // O resultado aparece no cabeçalho do projeto (aba Itens).
+  const head = document.querySelector<HTMLElement>(".project-head")!;
+  expect(await within(head).findByRole("status")).toHaveTextContent("Sincronizado por WSL");
+
+  // "Sincronizar projeto…" troca a busca e lista os projetos; o escolhido abre a Visão geral.
+  const busca2 = await paleta();
+  await user.type(busca2, "Sincronizar projeto");
+  // Pelo texto: o nome acessível separa os trechos destacados da busca.
+  const opt = (text: string) => screen.getAllByRole("option").find((o) => o.textContent?.startsWith(text))!;
+  await user.click(opt("Sincronizar projeto…"));
+  expect(busca2).toHaveValue("Sincronizar projeto: ");
+  await waitFor(() => expect(opt("Sincronizar projeto: ctower-agents")).toBeDefined());
+  await user.click(opt("Sincronizar projeto: ctower-agents"));
+  await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(2));
+  expect(await card("Buscar issues")).toBeInTheDocument();
+});

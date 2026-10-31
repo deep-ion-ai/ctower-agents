@@ -15,7 +15,15 @@
 .iv-progress { display: flex; align-items: center; gap: 10px; max-width: 520px; font-size: 12px; }
 .iv-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--idle-bg); overflow: hidden; }
 .iv-bar span { display: block; height: 100%; background: var(--done); }
-.iv-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.iv-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); grid-template-areas: "main side"; gap: 16px; align-items: start; }
+/* Com o cartão do tracker (#69): ele no topo da lateral, a coluna principal nas duas linhas. */
+.iv-grid.iv-has-meta { grid-template-areas: "main meta" "main side"; grid-template-rows: auto 1fr; }
+.iv-main { grid-area: main; }
+.iv-side { grid-area: side; }
+.iv-meta { grid-area: meta; min-width: 0; }
+.iv-meta-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13px; }
+.iv-meta-list dt { color: var(--muted); max-width: 140px; overflow-wrap: anywhere; }
+.iv-meta-list dd { margin: 0; min-width: 0; overflow-wrap: anywhere; user-select: text; }
 .iv-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .iv-card { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .iv-review { margin-left: auto; text-transform: none; letter-spacing: 0; }
@@ -27,7 +35,14 @@
 .iv-act { width: 32px; }
 .iv-play { color: var(--accent); }
 .iv-play:hover { background: var(--running-bg); }
-@media (max-width: 1100px) { .iv-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1100px) {
+  /* Uma coluna; as áreas só existem quando há conteúdo, para não sobrar linha vazia com gap. */
+  .iv-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main"; }
+  .iv-grid.iv-has-side { grid-template-areas: "main" "side"; }
+  /* No celular, o cartão do tracker logo abaixo do cabeçalho. */
+  .iv-grid.iv-has-meta { grid-template-areas: "meta" "main"; grid-template-rows: none; }
+  .iv-grid.iv-has-meta.iv-has-side { grid-template-areas: "meta" "main" "side"; }
+}
 .item-view .wrap { overflow-wrap: anywhere; font-size: 12px; }
 .status-menu { position: relative; }
 .status-pop { position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; width: 240px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-3); display: flex; flex-direction: column; gap: 6px; box-shadow: 0 8px 24px var(--shadow); }

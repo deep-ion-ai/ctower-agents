@@ -314,6 +314,19 @@ ALTER TABLE issue_cache ADD COLUMN sprints TEXT NOT NULL DEFAULT '[]';
     r#"
 ALTER TABLE project ADD COLUMN docs_config TEXT NOT NULL DEFAULT '{}';
 "#,
+    // 16: metadados do tracker de cada issue do espelho (JSON de
+    // `Vec<IssueMeta>`, na ordem de exibição). `[]` nas issues já gravadas;
+    // o sync relê o projeto uma vez (`MIRROR_VERSION`) para preencher.
+    r#"
+ALTER TABLE issue_cache ADD COLUMN meta TEXT NOT NULL DEFAULT '[]';
+"#,
+    // 17: falhas seguidas do sync do projeto e o início da sequência (issue
+    // #90): a UI só avisa a partir de algumas falhas, para não alarmar por
+    // uma queda de rede passageira. Zeram na primeira rodada bem-sucedida.
+    r#"
+ALTER TABLE sync_state ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo
@@ -600,6 +613,31 @@ mod tests {
             start_date: Some(1),
             end_date: None,
             complete_date: None,
+        }];
+        gh.upsert_issue(1, &i, 2).unwrap();
+        assert_eq!(gh.list_issues(1).unwrap(), vec![i]);
+    }
+
+    /// Migração 16: as issues já espelhadas ficam sem metadados (`[]`) e a
+    /// coluna nova vai e volta com o `Vec<IssueMeta>`.
+    #[test]
+    fn migracao_16_issues_existentes_ficam_sem_metadados() {
+        let conn = Connection::open_in_memory().unwrap();
+        super::migrate_with(&conn, &super::MIGRATIONS[..15]).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project (name, gh_owner, gh_repo, repo_path, created_at) VALUES ('p','o','r','/x',0);
+             INSERT INTO issue_cache (project_id, gh_number, title, state, url, updated_at, synced_at)
+               VALUES (1, 7, 't', 'open', 'u', 1, 1);",
+        )
+        .unwrap();
+        super::migrate(&conn).unwrap();
+        let gh = crate::github::GhMirror(&conn);
+        let mut i = gh.get_issue(1, 7).unwrap().unwrap();
+        assert!(i.meta.is_empty());
+        i.meta = vec![crate::IssueMeta {
+            field: "priority".into(),
+            label: "Prioridade".into(),
+            value: "Alta".into(),
         }];
         gh.upsert_issue(1, &i, 2).unwrap();
         assert_eq!(gh.list_issues(1).unwrap(), vec![i]);

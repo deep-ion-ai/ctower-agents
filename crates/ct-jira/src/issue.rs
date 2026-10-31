@@ -40,7 +40,9 @@ pub fn list_entry(v: &Value, cfg: &JiraConfig) -> Option<ListEntry> {
 /// - o pai é o Epic Link; sem ele, `fields.parent` (Jira com épico por
 ///   `parent`);
 /// - fechada = categoria do status `done` (o nome do status vem traduzido);
-/// - as sprints vêm do `sprint_field` (vazio = detectado, ver [`crate::sprint`]).
+/// - as sprints vêm do `sprint_field` (vazio = detectado, ver [`crate::sprint`]);
+/// - os metadados são os campos padrão ([`crate::meta::STANDARD_FIELDS`]) e
+///   depois os campos próprios do cadastro (`extra_fields`).
 pub fn issue_row(v: &Value, cfg: &JiraConfig) -> Option<IssueRow> {
     let key = v.get("key")?.as_str()?;
     let number = cfg.number_from_key(key)?;
@@ -134,6 +136,7 @@ pub fn issue_row(v: &Value, cfg: &JiraConfig) -> Option<IssueRow> {
             .and_then(parse_jira_time)
             .unwrap_or(0),
         sprints: crate::sprint::issue_sprints(f, &cfg.sprint_field),
+        meta: crate::meta::issue_meta(f, &cfg.extra_fields),
     })
 }
 
@@ -211,6 +214,152 @@ mod tests {
         assert_eq!(r.url, "https://jira.example.com/browse/PROJ-5450");
         assert_eq!(r.updated_at, 1_793_193_330_000);
         assert!(r.sprints.is_empty());
+    }
+
+    /// Os 5 campos padrão, na ordem da tela, com o texto de cada um.
+    #[test]
+    fn metadados_dos_campos_padrao() {
+        let v = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "indeterminate",
+            json!({
+                "reporter": { "name": "beltrano", "displayName": "Beltrano Silva" },
+                "assignee": { "name": "fulano", "displayName": "Fulano de Tal" },
+                "priority": { "name": "Alta", "id": "2" },
+            }),
+        );
+        let meta: Vec<_> = issue_row(&v, &cfg())
+            .unwrap()
+            .meta
+            .into_iter()
+            .map(|m| (m.field, m.label, m.value))
+            .collect();
+        let m = |f: &str, l: &str, v: &str| (f.to_string(), l.to_string(), v.to_string());
+        assert_eq!(
+            meta,
+            vec![
+                m("status", "Situação", "Aberto"),
+                m("issuetype", "Tipo", "Tarefa"),
+                m("priority", "Prioridade", "Alta"),
+                m("assignee", "Responsável", "Fulano de Tal"),
+                m("reporter", "Criador", "Beltrano Silva"),
+            ]
+        );
+    }
+
+    /// Campo nulo ou ausente fica de fora; os demais mantêm a ordem.
+    #[test]
+    fn metadados_sem_os_vazios() {
+        let v = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "new",
+            json!({ "assignee": null, "reporter": { "name": "beltrano" } }),
+        );
+        let fields: Vec<_> = issue_row(&v, &cfg())
+            .unwrap()
+            .meta
+            .into_iter()
+            .map(|m| (m.field, m.value))
+            .collect();
+        assert_eq!(
+            fields,
+            vec![
+                ("status".to_string(), "Aberto".to_string()),
+                ("issuetype".to_string(), "Tarefa".to_string()),
+                ("reporter".to_string(), "beltrano".to_string()),
+            ]
+        );
+    }
+
+    /// Campos do cadastro: customfield de usuário e de option, com o rótulo
+    /// cadastrado, depois dos padrão; o vazio fica de fora.
+    #[test]
+    fn metadados_com_campos_do_projeto() {
+        let v = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "indeterminate",
+            json!({
+                "assignee": { "name": "qa", "displayName": "Quem Testa" },
+                "customfield_10099": { "name": "dev", "displayName": "Quem Implementa", "active": true },
+                "customfield_11000": { "self": "x", "value": "Alta", "id": "10001" },
+                "customfield_11001": null,
+            }),
+        );
+        let cfg = JiraConfig {
+            extra_fields: vec![
+                ct_core::JiraExtraField {
+                    id: "customfield_10099".into(),
+                    label: "Responsável pela implementação".into(),
+                },
+                ct_core::JiraExtraField {
+                    id: "customfield_11001".into(),
+                    label: "Vazio".into(),
+                },
+                ct_core::JiraExtraField {
+                    id: "customfield_11000".into(),
+                    label: "Criticidade".into(),
+                },
+            ],
+            ..cfg()
+        };
+        let meta: Vec<_> = issue_row(&v, &cfg)
+            .unwrap()
+            .meta
+            .into_iter()
+            .map(|m| (m.field, m.label, m.value))
+            .collect();
+        let m = |f: &str, l: &str, v: &str| (f.to_string(), l.to_string(), v.to_string());
+        assert_eq!(
+            meta,
+            vec![
+                m("status", "Situação", "Aberto"),
+                m("issuetype", "Tipo", "Tarefa"),
+                m("assignee", "Responsável", "Quem Testa"),
+                m(
+                    "customfield_10099",
+                    "Responsável pela implementação",
+                    "Quem Implementa"
+                ),
+                m("customfield_11000", "Criticidade", "Alta"),
+            ]
+        );
+    }
+
+    /// Cadastro anterior, sem `extra_fields`: só os campos padrão.
+    #[test]
+    fn cadastro_anterior_sem_campos_do_projeto() {
+        let raw = json!({
+            "url": "https://jira.example.com",
+            "project_key": "PROJ",
+            "jql": "project = PROJ",
+            "credential_cmd": "",
+            "config_file": "",
+            "epic_link_field": "",
+            "epic_name_field": "",
+            "type_map": {},
+        });
+        let cfg: JiraConfig = serde_json::from_value(raw).unwrap();
+        assert!(cfg.extra_fields.is_empty());
+        let v = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "new",
+            json!({ "customfield_10099": { "displayName": "Quem Implementa" } }),
+        );
+        let fields: Vec<_> = issue_row(&v, &cfg)
+            .unwrap()
+            .meta
+            .into_iter()
+            .map(|m| m.field)
+            .collect();
+        assert_eq!(fields, vec!["status", "issuetype"]);
     }
 
     #[test]

@@ -574,6 +574,7 @@ mod tests {
                     }],
                     etags: vec![],
                     synced_at: ct_core::now_ms(),
+                    gone: Vec::new(),
                 })
                 .unwrap();
         }
@@ -874,7 +875,7 @@ mod tests {
             has_sub_issues: false,
             url: String::new(),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         };
         let snap = |prs: Vec<PrRow>, issues: Vec<IssueRow>| {
             e.env
@@ -886,6 +887,7 @@ mod tests {
                     prs,
                     etags: vec![],
                     synced_at: 1,
+                    gone: Vec::new(),
                 })
                 .unwrap();
         };
@@ -987,11 +989,12 @@ mod tests {
                     has_sub_issues: false,
                     url: String::new(),
                     updated_at: 1,
-                    sprints: Vec::new(),
+                    ..Default::default()
                 }],
                 prs: vec![],
                 etags: vec![],
                 synced_at: 1,
+                gone: Vec::new(),
             })
             .unwrap();
         let c = e.cleaner();

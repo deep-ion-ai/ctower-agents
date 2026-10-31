@@ -860,7 +860,7 @@ mod tests {
             has_sub_issues: subs,
             url: "u".into(),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -883,6 +883,7 @@ mod tests {
                     prs: vec![],
                     etags: vec![],
                     synced_at: 1,
+                    gone: Vec::new(),
                 },
                 "hub",
             )

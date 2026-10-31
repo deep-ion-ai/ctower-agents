@@ -138,7 +138,7 @@ mod tests {
             has_sub_issues: false,
             url: String::new(),
             updated_at: 0,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -161,6 +161,7 @@ mod tests {
             prs: vec![],
             etags: vec![],
             synced_at: 10,
+            gone: Vec::new(),
         })
         .unwrap();
 
@@ -223,6 +224,7 @@ mod tests {
             prs: vec![pr(7), pr(9)],
             etags: vec![],
             synced_at: 10,
+            gone: Vec::new(),
         })
         .unwrap();
 

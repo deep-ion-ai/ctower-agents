@@ -508,6 +508,17 @@
   font-weight: 600;
 }
 
+/* Cor do texto do tipo da aba (#73); o fundo não, para a seleção seguir legível. */
+.otabs-list li[data-kind="terminal"] { --otab-fg: var(--tab-terminal-fg); }
+.otabs-list li[data-kind="shell"] { --otab-fg: var(--tab-shell-fg); }
+.otabs-list li[data-kind="issue"] { --otab-fg: var(--tab-issue-fg); }
+.otabs-list li[data-kind="screen"] { --otab-fg: var(--tab-screen-fg); }
+
+.otabs-list li > svg,
+.otabs-title {
+  color: var(--otab-fg, currentColor);
+}
+
 .otabs-title {
   min-width: 0;
   overflow: hidden;
@@ -539,6 +550,15 @@
   background: var(--bg-side);
 }
 
+/*
+ * Cores por tipo de aba e por tema (#73): `--tab-<kind>-fg/bg` vêm da
+ * configuração do tema em uso (postas no <html>); sem elas, as do tema.
+ */
+.etab[data-kind="terminal"] { --etab-fg: var(--tab-terminal-fg); --etab-bg: var(--tab-terminal-bg); }
+.etab[data-kind="shell"] { --etab-fg: var(--tab-shell-fg); --etab-bg: var(--tab-shell-bg); }
+.etab[data-kind="issue"] { --etab-fg: var(--tab-issue-fg); --etab-bg: var(--tab-issue-bg); }
+.etab[data-kind="screen"] { --etab-fg: var(--tab-screen-fg); --etab-bg: var(--tab-screen-bg); }
+
 .etab {
   flex: none;
   display: flex;
@@ -546,11 +566,13 @@
   padding-right: 6px;
   border-right: 1px solid var(--border);
   color: var(--muted);
+  background: var(--etab-bg, transparent);
 }
 
 .etab[data-on="true"] {
-  background: var(--bg);
+  background: var(--etab-bg, var(--bg));
   color: var(--text);
+  /* A linha de realce no topo fica mesmo com fundo configurado. */
   box-shadow: inset 0 1px 0 var(--accent);
 }
 
@@ -562,7 +584,8 @@
   padding: 0 6px 0 12px;
   border: 0;
   background: none;
-  color: inherit;
+  /* Texto do tipo (#73): título e ícone (currentColor), na ativa e nas inativas. */
+  color: var(--etab-fg, currentColor);
   font: inherit;
   font-size: 12px;
   white-space: nowrap;
@@ -862,6 +885,12 @@ button.sb-item:hover {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* Item sem ação aqui (na web, o que fica no app desktop, #90). */
+.palette-opt[aria-disabled="true"] {
+  color: var(--muted);
+  cursor: default;
+}
+
 .palette-label {
   flex: none;
   max-width: 60%;
@@ -993,6 +1022,18 @@ button.sb-item:hover {
 .ctx-menu button:disabled {
   color: var(--muted);
   cursor: default;
+}
+
+/* Item com motivo visível sob o rótulo (ex.: só no app desktop, #90). */
+.ctx-menu button:has(.ctx-item-note) {
+  height: auto;
+  padding: 4px 10px;
+}
+
+.ctx-menu .ctx-item-note {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 /* Aviso no topo do menu (ex.: prompts com permissão pendente, #425). */

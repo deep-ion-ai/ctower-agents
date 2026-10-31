@@ -2,6 +2,8 @@
 
 O **hub** (`cthubd`) é o plano de controle: é a origem dos projetos, da configuração e das atribuições (qual ambiente executa qual projeto) e guarda a visão consolidada em `hub.db`. Ele não roda sessões, PTY, hooks nem MCP. Cada **ambiente** (`ctowerd`) só executa os projetos atribuídos a ele: puxa a configuração deles do hub, guarda em cache e funciona offline com a última versão. A execução sobe para o hub pelo outbox.
 
+Em resumo: o `cthubd` escuta na porta 7879, com config em `~/.config/cthub/` e dados em `~/.local/share/cthub/` (seção 1). Projetos são cadastrados e atribuídos aos ambientes só no hub; o ambiente não cria nem edita projetos (seção 2). Cada ambiente se liga ao hub com `hub_url` e um token de sync (`cthubd add-env <nome>` no hub, `ctower hub set-token` no ambiente; seção 3). O hub se atualiza pela UI ou com `cthubd update` ("Atualizar o hub", na seção 1), e o `ctowerd` com `hub = true` no config (o hub antigo) recusa subir até a migração (seção 5). A UI web (PWA) no celular, por `tailscale serve` ou Cloudflare Tunnel com Access, está em [`acesso-remoto.md`](acesso-remoto.md); a operação de cada ambiente, em [`ambiente.md`](ambiente.md).
+
 Desenho completo: `docs/superpowers/specs/2026-10-18-hub-plano-de-controle.md` (épico #183), que revisa `2026-10-16-ledger-centralizado.md` (épico #64).
 
 > Este documento descreve o desenho do épico #183, em implementação. A instalação em uso ainda é a do #64 (`ctowerd` com `hub = true`) até rodar o roteiro da seção 5, que faz a troca.
@@ -226,7 +228,7 @@ O hub sincroniza com o GitHub todos os projetos cadastrados, com o token dele (`
 
 ### Atualizar o hub: pela UI ou `cthubd update`
 
-O hub se atualiza como o ambiente (`ctower update`, no README): build local de um clone dedicado, no próprio binário `cthubd`, sem depender do `ctower`. **Atualize o hub antes dos ambientes**: quando o protocolo muda (ex.: hub 1.7 com ambiente 2.5), o ambiente novo espera um hub que já o entenda.
+O hub se atualiza como o ambiente (`ctower update`, em [`ambiente.md`](ambiente.md#atualizar)): build local de um clone dedicado, no próprio binário `cthubd`, sem depender do `ctower`. **Atualize o hub antes dos ambientes**: quando o protocolo muda (ex.: hub 1.7 com ambiente 2.5), o ambiente novo espera um hub que já o entenda.
 
 **Pela UI (#421):** em **Manutenção › Atualizações › Hub** do app desktop aparecem a versão, o commit e o protocolo no ar, a versão disponível no `update_ref` (com os commits novos) e os botões **Verificar agora**, **Atualizar o hub** e **Voltar à versão anterior**. O andamento aparece ao vivo (buscando, compilando, guardando, instalando, reiniciando, conferindo). Durante o restart a conexão com o hub cai; a UI reconecta sozinha e mostra o resultado (inclusive o rollback automático, com o fim do log). A tela também avisa se algum ambiente já está numa versão à frente do hub, e a confirmação de **Atualizar** em Ambientes alerta quando o hub tem atualização pendente. A faixa "Precisa de você" e a Visão geral da Manutenção mostram o hub atrás do `update_ref`. Na web (PWA) é só leitura: o estado aparece nos dados do hub, sem os botões.
 

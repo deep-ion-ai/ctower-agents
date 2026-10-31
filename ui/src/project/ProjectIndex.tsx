@@ -16,6 +16,8 @@ import { ProviderIcon } from "./ProviderIcon";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "./rows";
 import { projectAt } from "./sections";
 import { keyOf, plural, projectState, syncText, useSettingsRun, type Tone } from "./settings";
+import { SYNC_FAIL_ALERT, syncAlert, syncFailures } from "./overview";
+import { projectSyncInfo, syncAction, useSyncRun } from "./sync-now";
 import { DesktopOnly } from "../web/DesktopOnly";
 
 /**
@@ -36,7 +38,8 @@ import { DesktopOnly } from "../web/DesktopOnly";
  * snapshot anterior): fica na tela (a mensagem de uma ação seguinte o cobre), fora do endereço.
  */
 export function ProjectIndex({ register, notice: noticeReq }: { register?: RegisterIntent; notice?: string } = {}) {
-  const { hub, web, api } = useTower();
+  const tower = useTower();
+  const { hub, web, api } = tower;
   const nav = useNav();
   const now = useNow();
   const startSession = useStartSession();
@@ -217,6 +220,7 @@ export function ProjectIndex({ register, notice: noticeReq }: { register?: Regis
             startSession,
             openUrl: (url) => void api.openUrl(url).catch(() => {}),
             origin: menu.origin,
+            sync: syncAction(tower, menu.row.syncAddr),
           })}
           onClose={(restore) => {
             const o = menu.origin;
@@ -254,6 +258,12 @@ function IndexRow({
 }) {
   const key = keyOf(r.project.gh_owner, r.project.gh_repo);
   const id = `pidx-${r.key.replace(/[^a-z0-9-]/gi, "-")}`;
+  // Sync falhando há `SYNC_FAIL_ALERT` rodadas ou mais: selo de alerta (#90),
+  // e o andamento do "Sincronizar este projeto" pedido pelo menu.
+  const tower = useTower();
+  const sync = projectSyncInfo(tower, r.syncAddr);
+  const run = useSyncRun(sync.key);
+  const failing = syncAlert(sync.state);
   const state: { text: string; tone: Tone } = r.view
     ? projectState(r.view, now)
     : r.env
@@ -307,6 +317,17 @@ function IndexRow({
           <strong>{r.name}</strong>
           <span className="mono muted small">{key}</span>
           {pos !== null && <span className="badge pidx-pos">#{pos}</span>}
+          {failing && (
+            <span
+              className="badge"
+              data-tone="error"
+              title={`Sync falhando há ${syncFailures(sync.state)} rodadas seguidas (aviso a partir de ${SYNC_FAIL_ALERT})${
+                sync.state?.last_error ? `: ${sync.state.last_error}` : ""
+              }`}
+            >
+              sync falhando
+            </span>
+          )}
         </span>
         <span id={`${id}-d`} className="pidx-meta">
           <span>
@@ -314,6 +335,7 @@ function IndexRow({
           </span>
           <span>{sessions}</span>
           {where && <span>{r.view ? `atribuído a: ${where}` : `ambiente: ${where}`}</span>}
+          {run.busy && <span>Buscando issues…</span>}
           {counts && (
             <span>
               {counts.critico + counts.aviso === 0
@@ -345,6 +367,11 @@ function IndexRow({
           <Icon name="more" size={15} />
         </button>
       </div>
+      {run.msg && (
+        <p role={run.msg.error ? "alert" : "status"} className={`pidx-sync-msg ${run.msg.error ? "start-error" : "state-on"}`}>
+          {run.msg.text}
+        </p>
+      )}
     </li>
   );
 }

@@ -42,6 +42,7 @@ import { isHelpKey } from "./shortcuts";
 import { SidePanel, SideGroup, SideRow, SideSlotProvider, useSideSlot } from "./SidePanel";
 import { connectedEnvs, interruptedCount, lastSync, plural, syncTrackers, waitingCount, warnings } from "./summary";
 import { openScreen } from "./places";
+import { tabKind } from "./tabColors";
 import { SCREEN_LABEL, tabLook } from "./titles";
 import { StartSessionHost } from "../project/StartSessionModal";
 import { useMaintenancePending } from "../maintenance/pending";
@@ -548,6 +549,7 @@ function EditorTabs() {
               <div
                 key={t.id}
                 className="etab"
+                data-kind={tabKind(t)}
                 data-on={on ? "true" : undefined}
                 data-preview={preview ? "true" : undefined}
                 data-pinned={pinnable && !preview ? "true" : undefined}
@@ -621,7 +623,7 @@ function EditorTabs() {
         )}
         {list && (
           <OpenTabsList
-            items={nav.editors.map((t, i) => ({ id: t.id, ...looks[i] }))}
+            items={nav.editors.map((t, i) => ({ id: t.id, kind: tabKind(t), ...looks[i] }))}
             current={nav.current}
             onPick={(id) => {
               nav.activate(id);

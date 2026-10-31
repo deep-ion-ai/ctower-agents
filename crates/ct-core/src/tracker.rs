@@ -111,6 +111,24 @@ pub struct JiraConfig {
     pub sprint_field: String,
     /// Nome do tipo de issue → papel.
     pub type_map: BTreeMap<String, JiraTypeRole>,
+    /// Campos próprios do projeto na tela da issue, depois dos 5 padrão e
+    /// na ordem do cadastro. Ausente (cadastro anterior) = nenhum.
+    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<JiraExtraField>>", optional))]
+    pub extra_fields: Vec<JiraExtraField>,
+}
+
+/// Teto de campos próprios no cadastro do projeto Jira.
+pub const MAX_JIRA_EXTRA_FIELDS: usize = 20;
+
+/// Campo próprio do projeto Jira mostrado na tela da issue.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
+pub struct JiraExtraField {
+    /// ID do campo no Jira (`customfield_10099`).
+    pub id: String,
+    /// Rótulo na tela ("Responsável pela implementação").
+    pub label: String,
 }
 
 impl Default for JiraConfig {
@@ -127,6 +145,7 @@ impl Default for JiraConfig {
             epic_name_field: String::new(),
             sprint_field: String::new(),
             type_map: BTreeMap::new(),
+            extra_fields: Vec::new(),
         }
     }
 }
@@ -372,6 +391,21 @@ pub struct JiraReadiness {
     pub server_version: Option<String>,
     /// Motivo da primeira falha, sem a senha.
     pub error: Option<String>,
+    /// Catálogo de campos próprios do Jira (`issue.fields.custom` do
+    /// `.config.yml`), por nome. Vazio = sem a seção ou ambiente anterior.
+    pub custom_fields: Vec<JiraFieldInfo>,
+}
+
+/// Um campo próprio do Jira, como o `jira init` o grava no `.config.yml`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
+pub struct JiraFieldInfo {
+    /// `customfield_*`.
+    pub id: String,
+    pub name: String,
+    /// `schema.datatype` (`user`, `option`, `string`...); vazio = ausente.
+    pub datatype: String,
 }
 
 /// O que o ambiente conferiu do glab.
@@ -684,6 +718,39 @@ mod tests {
         assert_eq!(r.jira.cli.as_deref(), Some("1.7.0"));
         assert!(r.jira.me_ok && !r.jira.credential_ok);
         assert_eq!(r.gitlab, GitlabReadiness::default());
+        assert!(r.jira.custom_fields.is_empty(), "ambiente anterior");
+    }
+
+    #[test]
+    fn catalogo_de_campos_ida_e_volta_e_hub_anterior() {
+        let j = JiraReadiness {
+            custom_fields: vec![JiraFieldInfo {
+                id: "customfield_10099".into(),
+                name: "Responsável pela implementação".into(),
+                datatype: "user".into(),
+            }],
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&j).unwrap();
+        assert_eq!(
+            v["custom_fields"],
+            json!([{ "id": "customfield_10099", "name": "Responsável pela implementação", "datatype": "user" }])
+        );
+        assert_eq!(
+            serde_json::from_value::<JiraReadiness>(v.clone()).unwrap(),
+            j
+        );
+        // Hub anterior lê o JSON novo ignorando a chave (sem deny_unknown_fields);
+        // aqui, o JSON antigo (sem a chave) e um item sem `datatype`.
+        let mut old = v;
+        old.as_object_mut().unwrap().remove("custom_fields");
+        assert_eq!(
+            serde_json::from_value::<JiraReadiness>(old).unwrap(),
+            JiraReadiness::default()
+        );
+        let f: JiraFieldInfo =
+            serde_json::from_value(json!({ "id": "cf_1", "name": "X" })).unwrap();
+        assert_eq!(f.datatype, "");
     }
 
     #[test]

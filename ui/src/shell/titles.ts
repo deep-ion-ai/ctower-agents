@@ -77,7 +77,7 @@ export interface TabLook {
   title: string;
   /** Tom do ponto de estado (só abas de sessão). */
   tone?: string;
-  /** Ícone antes do título (o `>_` das abas de shell, #423). */
+  /** Ícone antes do título (o `>_` das abas de shell, #423; o terminal das sessões, #73). */
   icon?: IconName;
   /** Projeto da aba de sessão ou shell (lista de abas, "Fechar as do projeto"). */
   project?: string;
@@ -105,11 +105,13 @@ export function tabLook(t: EditorTab, dashboards: Record<string, Dashboard>, met
   }
   const d = dashboards[t.env];
   const s = dashboardSessions(d).find((x) => x.id === t.session);
-  if (!s) return { title: meta?.title ?? "Sessão", tone: "neutral", project, tip };
+  // Sessão sempre com o ícone de terminal (#73): a de uma issue tem o mesmo
+  // título que a aba do work item, e o ponto de estado não basta.
+  if (!s) return { title: meta?.title ?? "Sessão", tone: "neutral", icon: "terminal", project, tip };
   const { wi, project: p, gestor, scope } = lookup(d, s);
   const title = gestor ? gestorLabel(scope) : wi ? sessionTitle(wi, p) : (meta?.title ?? "Sessão");
   const live = d?.live_sessions.some((x) => x.id === s.id) && !meta?.ended;
-  return { title, tone: live ? tileState(s, wi?.status).tone : "neutral", project, tip };
+  return { title, tone: live ? tileState(s, wi?.status).tone : "neutral", icon: "terminal", project, tip };
 }
 
 /** Título da aba de uma sessão de item: "Sessão do projeto · <projeto>" no #0 (§6). */

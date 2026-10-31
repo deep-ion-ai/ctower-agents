@@ -239,7 +239,7 @@ describe("Projetos na lateral (#10)", () => {
     // Botão direito: o foco vai para a primeira ação; Esc devolve à linha.
     fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
     let menu = screen.getByRole("menu", { name: "Ações do projeto ctower-agents" });
-    expect(items(menu)).toEqual(["Abrir", "Sessão de planejamento", "Abrir no GitHub"]);
+    expect(items(menu)).toEqual(["Abrir", "Sessão de planejamento", "Sincronizar este projeto", "Abrir no GitHub"]);
     expect(within(menu).getByRole("menuitem", { name: "Abrir" })).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -285,7 +285,16 @@ describe("Projetos na lateral (#10)", () => {
     fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
     const menu = screen.getByRole("menu", { name: "Ações do projeto app" });
     // Sem ambiente conectado com o projeto: sem sessão de planejamento.
-    expect(items(menu)).toEqual(["Abrir", "Configurações", "Atribuir a ambiente", "Abrir no GitLab", "Abrir no Jira"]);
+    expect(items(menu)).toEqual([
+      "Abrir",
+      "Configurações",
+      "Atribuir a ambiente",
+      // Projeto Jira sem o ambiente de sync conectado (#90): desabilitado, com o motivo.
+      "Sincronizar este projetoO ambiente de sync daemon-wsl não está conectado com este projeto.",
+      "Abrir no GitLab",
+      "Abrir no Jira",
+    ]);
+    expect(within(menu).getByRole("menuitem", { name: "Sincronizar este projeto" })).toBeDisabled();
     await user.click(within(menu).getByRole("menuitem", { name: "Abrir no GitLab" }));
     fireEvent.contextMenu(linha.closest("li")!, { clientX: 10, clientY: 10 });
     await user.click(screen.getByRole("menuitem", { name: "Abrir no Jira" }));

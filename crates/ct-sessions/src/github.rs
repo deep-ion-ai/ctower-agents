@@ -141,6 +141,9 @@ impl GithubSync {
         let result = match fetch(&self.client, &input) {
             Ok(snap) => {
                 let applied = self.sessions.ledger().apply_github(&snap)?;
+                for g in &applied.removed {
+                    tracing::warn!("github: projeto {project_id}: {g}, removida do espelho");
+                }
                 for (wi, status) in &applied.status_changes {
                     self.sessions.notify(
                         "work_item_status",
@@ -287,6 +290,15 @@ mod tests {
         assert_eq!(status[0]["ok"], true);
         assert!(status[0]["last_ok_at"].is_i64());
         assert_eq!(status[1]["ok"], false);
+
+        // Falhas seguidas do projeto que falha (#90): contam a cada rodada,
+        // com o início da sequência; o que deu certo fica em zero.
+        assert_eq!((states[0].failures, states[0].failing_since), (0, None));
+        assert_eq!(states[1].failures, 1);
+        let desde = states[1].failing_since.unwrap();
+        sync.sync_all().unwrap();
+        let st = env.sessions.ledger().sync_state(outro.id).unwrap().unwrap();
+        assert_eq!((st.failures, st.failing_since), (2, Some(desde)));
     }
 
     /// O espelho do GitHub do ambiente só sincroniza projetos atribuídos.

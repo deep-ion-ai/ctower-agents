@@ -615,7 +615,7 @@ mod tests {
                     has_sub_issues: false,
                     url: "u".into(),
                     updated_at: 1,
-                    sprints: Vec::new(),
+                    ..Default::default()
                 };
                 h.apply_github(
                     &ct_ledger::GithubSnapshot {
@@ -624,6 +624,7 @@ mod tests {
                         prs: vec![],
                         etags: vec![],
                         synced_at: 1,
+                        gone: Vec::new(),
                     },
                     "hub",
                 )

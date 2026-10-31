@@ -76,8 +76,8 @@ use crate::github::{sub_issue_pr_trigger, GhMirror, PrRoute};
 use crate::schema::migrate_with;
 use crate::sync::project_key;
 use crate::{
-    gh_epic_merged_uid, gh_issue_closed_uid, gh_pr_uid, GithubApplied, GithubSnapshot, IssueRow,
-    PrRow, SyncState,
+    gh_epic_merged_uid, gh_issue_closed_uid, gh_issue_gone_uid, gh_pr_uid, GithubApplied,
+    GithubSnapshot, IssueRow, PrRow, SyncState, GH_ISSUE_GONE_CAUSE, GH_ISSUE_GONE_REASON,
 };
 use crate::{
     json_col, opt_parse_col, parse_col, DecisionChange, EventChange, LedgerError, OutboxEntry,
@@ -592,6 +592,18 @@ ALTER TABLE issue_cache ADD COLUMN sprints TEXT NOT NULL DEFAULT '[]';
     // desligado.
     r#"
 ALTER TABLE project ADD COLUMN docs_config TEXT NOT NULL DEFAULT '{}';
+"#,
+    // 26: metadados do tracker de cada issue do espelho, a mesma coluna da
+    // migração 16 do `ledger.db`. `[]` nas issues já gravadas; o
+    // `issue_mirror` do ambiente de sync preenche.
+    r#"
+ALTER TABLE issue_cache ADD COLUMN meta TEXT NOT NULL DEFAULT '[]';
+"#,
+    // 27: falhas seguidas do sync do projeto e o início da sequência, as
+    // mesmas colunas da migração 17 do `ledger.db` (issue #90).
+    r#"
+ALTER TABLE sync_state ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
 "#,
 ];
 
@@ -1758,6 +1770,40 @@ impl Hub {
                 }
             }
         }
+        // Como no ambiente (#89): a issue que sumiu do GitHub sai do espelho
+        // do hub, e o work item dela conclui com o motivo no evento.
+        for g in &s.gone {
+            if !self.gh().delete_issue(s.project_id, g.gh_number)? {
+                continue;
+            }
+            out.removed.push(*g);
+            let wi: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT id FROM work_item WHERE project_id = ?1 AND gh_number = ?2",
+                    params![s.project_id, g.gh_number],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(wi) = wi else {
+                continue;
+            };
+            let status = self.work_item_status(wi)?;
+            if status == WorkItemStatus::Concluido {
+                continue;
+            }
+            self.gh_event(
+                env_id,
+                s.project_id,
+                wi,
+                &gh_issue_gone_uid(&owner, &repo, g.gh_number),
+                "status_changed",
+                json!({ "from": status, "to": WorkItemStatus::Concluido,
+                        "cause": GH_ISSUE_GONE_CAUSE, "reason": GH_ISSUE_GONE_REASON }),
+            )?;
+            self.recompute_status(wi)?;
+            out.status_changes.push((wi, WorkItemStatus::Concluido));
+        }
         self.gh().finish_ok(s)?;
         tx.commit()?;
         Ok(out)
@@ -2746,7 +2792,7 @@ mod tests {
             has_sub_issues: has_sub,
             url: "u".into(),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -3395,6 +3441,7 @@ mod tests {
                 }],
                 etags: vec![("/repos/deep-ion-ai/demo/issues?x".into(), "e".into())],
                 synced_at: 5,
+                gone: Vec::new(),
             },
             "hub",
         )
@@ -3905,7 +3952,7 @@ mod tests {
             has_sub_issues: false,
             url: "u".into(),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         };
         let snap = |prs, issues| GithubSnapshot {
             project_id: p.id,
@@ -3913,6 +3960,7 @@ mod tests {
             prs,
             etags: vec![("k".into(), "e".into())],
             synced_at: 5,
+            gone: Vec::new(),
         };
         let r = hub
             .apply_github(&snap(vec![pr(PrState::Open)], vec![issue("open")]), "hub")
@@ -4592,7 +4640,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 25);
+        assert_eq!(v, 27);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
@@ -4644,6 +4692,34 @@ mod tests {
         assert!(tree.roots[0].issue.sprints.is_empty());
         let v = serde_json::to_value(&tree.roots[0].issue).unwrap();
         assert_eq!(v["sprints"], json!([]));
+    }
+
+    /// Migração 26 num `hub.db` da migração 25: as issues já espelhadas
+    /// ficam sem metadados e a árvore segue lendo o espelho.
+    #[test]
+    fn migracao_26_issues_existentes_ficam_sem_metadados() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("hub.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            for m in &HUB_MIGRATIONS[..25] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.execute_batch(
+                "PRAGMA user_version = 25;
+                 INSERT INTO project (key, gh_owner, gh_repo, name, created_at, rev)
+                   VALUES ('deep-ion-ai/demo', 'deep-ion-ai', 'demo', 'demo', 1, 1);
+                 INSERT INTO issue_cache (project_id, gh_number, title, state, url, updated_at, synced_at)
+                   SELECT id, 7, 't', 'open', 'u', 1, 1 FROM project WHERE key = 'deep-ion-ai/demo';",
+            )
+            .unwrap();
+        }
+        let hub = Hub::open(&db).unwrap();
+        let tree = hub.tree("deep-ion-ai", "demo").unwrap().unwrap();
+        assert_eq!(tree.roots.len(), 1);
+        assert!(tree.roots[0].issue.meta.is_empty());
+        let v = serde_json::to_value(&tree.roots[0].issue).unwrap();
+        assert_eq!(v["meta"], json!([]));
     }
 
     /// Migração 21 (#347) num `hub.db` da develop (até a migração 20, com

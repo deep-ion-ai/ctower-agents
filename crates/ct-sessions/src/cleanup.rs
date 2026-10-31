@@ -1003,6 +1003,7 @@ mod tests {
                 prs,
                 etags: vec![],
                 synced_at: ct_core::now_ms(),
+                gone: Vec::new(),
             })
             .unwrap();
     }
@@ -1017,7 +1018,7 @@ mod tests {
             has_sub_issues: false,
             url: String::new(),
             updated_at: 1_000,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 

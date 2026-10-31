@@ -1,5 +1,5 @@
 import "./detail-panel.css";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PushEvent } from "../api/types";
 import type {
   IssueRow,
@@ -177,6 +177,10 @@ export function WorkItemPanel({
     (hubUp ? hubItem?.status : undefined) ?? node.work_item?.status ?? (node.issue.state === "closed" ? "concluido" : "backlog");
   const st = STATUS[current];
   const isEpic = node.issue.has_sub_issues;
+  // Metadados do tracker (#69): ausentes no hub ou ambiente anteriores à #67.
+  const meta = node.issue.meta ?? [];
+  // 0 é o espelho sem data: sem subtítulo.
+  const updatedAt = node.issue.updated_at || null;
   const priority: Priority | null = (hubUp ? hubItem?.priority : undefined) ?? node.work_item?.priority ?? null;
 
   const [history, setHistory] = useState<HubHistory | null>(null);
@@ -425,6 +429,9 @@ export function WorkItemPanel({
       ? `${doneSubs} ${doneSubs === 1 ? "concluída" : "concluídas"}, ${waitingSubs} aguardando o épico de ${total}`
       : `${doneSubs} de ${total} sub-issues concluídas`;
 
+  // Coluna lateral (Decisões e Eventos): só com o histórico do hub.
+  const showSide = hasWi && hubUp && history !== null && !historyError;
+
   return (
     <section aria-label="Detalhe do item" className="item-view">
       {crumbs}
@@ -597,8 +604,24 @@ export function WorkItemPanel({
         </div>
       )}
 
-      <div className="iv-grid">
-        <div className="iv-col">
+      <div className={["iv-grid", meta.length > 0 && "iv-has-meta", showSide && "iv-has-side"].filter(Boolean).join(" ")}>
+        {meta.length > 0 && (
+          <section className="sec iv-card iv-meta" aria-label={`No ${tracker}`}>
+            <h3>
+              No {tracker}
+              {updatedAt ? <span className="n">atualizada {ago(updatedAt, now)}</span> : null}
+            </h3>
+            <dl className="iv-meta-list">
+              {meta.map((m, i) => (
+                <Fragment key={`${m.field}-${i}`}>
+                  <dt>{m.label}</dt>
+                  <dd>{m.value}</dd>
+                </Fragment>
+              ))}
+            </dl>
+          </section>
+        )}
+        <div className="iv-col iv-main">
           {subs && subs.length > 0 && (
             <section className="sec iv-card" aria-label="Sub-issues">
               <h3>
@@ -667,8 +690,8 @@ export function WorkItemPanel({
             </>
           )}
         </div>
-        {hasWi && hubUp && history && !historyError && (
-          <div className="iv-col">
+        {showSide && (
+          <div className="iv-col iv-side">
             <section className="sec iv-card" aria-label="Decisões">
               <h3>
                 Decisões{" "}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 export interface MenuItem {
   label: string;
@@ -6,6 +6,8 @@ export interface MenuItem {
   /** Visível, mas sem ação agora (ex.: sem worktree); `title` diz o motivo. */
   disabled?: boolean;
   title?: string;
+  /** Motivo visível sob o rótulo (ex.: "fica no app desktop", #26), ligado por `aria-describedby`. */
+  note?: string;
 }
 
 /**
@@ -30,6 +32,7 @@ export function ContextMenu({
   onClose: (restore: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const noteId = useId();
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
@@ -68,6 +71,9 @@ export function ContextMenu({
           role="menuitem"
           disabled={it.disabled}
           title={it.title}
+          // O motivo fica na descrição, fora do nome.
+          aria-label={it.note ? it.label : undefined}
+          aria-describedby={it.note ? `${noteId}-${i}` : undefined}
           onClick={() => {
             if (it.disabled) return;
             onClose(false);
@@ -75,6 +81,11 @@ export function ContextMenu({
           }}
         >
           {it.label}
+          {it.note && (
+            <span id={`${noteId}-${i}`} className="ctx-item-note">
+              {it.note}
+            </span>
+          )}
         </button>
       ))}
     </div>

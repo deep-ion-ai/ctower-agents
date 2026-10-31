@@ -63,3 +63,18 @@ test("sem resultado mostra o aviso; Esc fecha devolvendo o foco; clique escolhe"
   await user.click(within(screen.getByRole("listbox", { name: "Abas" })).getByRole("option", { name: /#44/ }));
   expect(picked).toEqual(["t2"]);
 });
+
+test("cores das abas (#73): cada linha leva o tipo (só a cor do texto) e a sessão, o ícone de terminal", () => {
+  const items: OpenTabItem[] = [
+    { id: "control", title: "Sala de controle", kind: "screen" },
+    { id: "t1", title: "#12 acme", tone: "ok", icon: "terminal", kind: "terminal" },
+    { id: "i1", title: "#12 acme", kind: "issue" },
+  ];
+  render(<OpenTabsList items={items} current="control" onPick={() => {}} onClose={() => {}} />);
+  const opt = (id: string) => document.getElementById(`otab-${id}`)!;
+  expect(opt("control")).toHaveAttribute("data-kind", "screen");
+  expect(opt("i1")).toHaveAttribute("data-kind", "issue");
+  expect(opt("t1")).toHaveAttribute("data-kind", "terminal");
+  expect(opt("t1").querySelector('svg[data-icon="terminal"]')).not.toBeNull();
+  expect(opt("i1").querySelector("svg")).toBeNull();
+});

@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct IssueRow {
     pub gh_number: i64,
@@ -30,6 +30,22 @@ pub struct IssueRow {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(as = "Option<Vec<Sprint>>", optional))]
     pub sprints: Vec<Sprint>,
+    /// Metadados do tracker prontos para exibir, na ordem da tela (Situação,
+    /// Tipo, Prioridade…). Vazio no GitHub e no espelho anterior à coluna;
+    /// ausente no protocolo = vazio, como `sprints`.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<IssueMeta>>", optional))]
+    pub meta: Vec<IssueMeta>,
+}
+
+/// Um metadado do tracker: `field` é o ID no tracker (`status`,
+/// `customfield_10099`…), `label` o rótulo e `value` o valor já em texto.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct IssueMeta {
+    pub field: String,
+    pub label: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,7 +75,40 @@ pub struct GithubSnapshot {
     /// `(chave, etag)` das consultas que mudaram.
     pub etags: Vec<(String, String)>,
     pub synced_at: i64,
+    /// Issues que não existem mais no GitHub (apagadas ou transferidas,
+    /// #89): saem do espelho, e o work item delas vai para concluído.
+    pub gone: Vec<GoneIssue>,
 }
+
+/// Issue que sumiu do GitHub (#89): um épico do espelho que respondeu
+/// `status` (`404` ou `410`) nas sub-issues, ou uma sub-issue dele (`epic`)
+/// que também não aparece mais nas listagens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoneIssue {
+    pub gh_number: i64,
+    pub status: u16,
+    /// Épico apagado de que esta era sub-issue; `None` = o próprio épico.
+    pub epic: Option<i64>,
+}
+
+impl std::fmt::Display for GoneIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let n = self.gh_number;
+        match self.epic {
+            None => write!(f, "issue #{n} não existe mais no GitHub ({})", self.status),
+            Some(e) => write!(
+                f,
+                "issue #{n} não aparece mais no GitHub (sub-issue do épico #{e}, que respondeu {})",
+                self.status
+            ),
+        }
+    }
+}
+
+/// `cause` do `status_changed` que conclui o work item de uma issue que
+/// sumiu do GitHub (#89), e o motivo que vai junto no evento.
+pub const GH_ISSUE_GONE_CAUSE: &str = "issue_gone";
+pub const GH_ISSUE_GONE_REASON: &str = "issue apagada ou transferida no GitHub";
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GithubApplied {
@@ -74,6 +123,8 @@ pub struct GithubApplied {
     pub mirrored: usize,
     /// MRs que mudaram e entraram no outbox como `pr_mirror` (idem).
     pub mirrored_prs: usize,
+    /// Issues que sumiram do GitHub e saíram do espelho nesta rodada (#89).
+    pub removed: Vec<GoneIssue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,10 +134,23 @@ pub struct SyncState {
     pub last_attempt_at: i64,
     pub last_ok_at: Option<i64>,
     pub last_error: Option<String>,
+    /// Rodadas seguidas com falha (issue #90); zera na primeira rodada
+    /// bem-sucedida. Opcional na UI: ambiente ou hub anterior não manda.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<i64>", optional))]
+    pub failures: i64,
+    /// Início da sequência de falhas; `None` = a última rodada deu certo.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub failing_since: Option<i64>,
 }
 
+/// Colunas de `row_to_sync`.
+const SYNC_COLS: &str =
+    "project_id, last_attempt_at, last_ok_at, last_error, failures, failing_since";
+
 const ISSUE_COLS: &str =
-    "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints";
+    "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints, meta";
 const PR_COLS: &str = "number, work_item_id, head, base, state, url, updated_at, head_sha";
 
 fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
@@ -100,6 +164,7 @@ fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
         url: r.get(6)?,
         updated_at: r.get(7)?,
         sprints: json_col(r, 8)?,
+        meta: json_col(r, 9)?,
     })
 }
 
@@ -122,6 +187,8 @@ fn row_to_sync(r: &Row) -> rusqlite::Result<SyncState> {
         last_attempt_at: r.get(1)?,
         last_ok_at: r.get(2)?,
         last_error: r.get(3)?,
+        failures: r.get(4)?,
+        failing_since: r.get(5)?,
     })
 }
 
@@ -141,6 +208,13 @@ pub fn gh_issue_closed_uid(owner: &str, repo: &str, number: i64) -> String {
         "gh:issue:{}#{number}:closed",
         crate::project_key(owner, repo)
     )
+}
+
+/// `uid` do `status_changed` que conclui o work item de uma issue que sumiu
+/// do GitHub (`gh:issue:<owner>/<repo>#<n>:gone`, #89): igual no ambiente e
+/// no hub.
+pub fn gh_issue_gone_uid(owner: &str, repo: &str, number: i64) -> String {
+    format!("gh:issue:{}#{number}:gone", crate::project_key(owner, repo))
 }
 
 /// `uid` do `status_changed` que conclui a sub-issue `sub` no merge do PR do
@@ -234,15 +308,16 @@ impl GhMirror<'_> {
             .optional()?;
         let labels = serde_json::to_string(&i.labels).expect("Vec<String> serializa");
         let sprints = serde_json::to_string(&i.sprints).expect("Vec<Sprint> serializa");
+        let meta = serde_json::to_string(&i.meta).expect("Vec<IssueMeta> serializa");
         self.0.execute(
             "INSERT INTO issue_cache (project_id, gh_number, title, state, labels, parent_number,
-                                      has_sub_issues, url, updated_at, synced_at, sprints)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                                      has_sub_issues, url, updated_at, synced_at, sprints, meta)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT (project_id, gh_number) DO UPDATE SET
                 title = excluded.title, state = excluded.state, labels = excluded.labels,
                 parent_number = excluded.parent_number, has_sub_issues = excluded.has_sub_issues,
                 url = excluded.url, updated_at = excluded.updated_at, synced_at = excluded.synced_at,
-                sprints = excluded.sprints",
+                sprints = excluded.sprints, meta = excluded.meta",
             params![
                 project_id,
                 i.gh_number,
@@ -254,10 +329,19 @@ impl GhMirror<'_> {
                 i.url,
                 i.updated_at,
                 synced_at,
-                sprints
+                sprints,
+                meta
             ],
         )?;
         Ok(prev)
+    }
+
+    /// Tira a issue do espelho; `true` = estava nele.
+    pub(crate) fn delete_issue(&self, project_id: i64, gh_number: i64) -> Result<bool> {
+        Ok(self.0.execute(
+            "DELETE FROM issue_cache WHERE project_id = ?1 AND gh_number = ?2",
+            params![project_id, gh_number],
+        )? == 1)
     }
 
     /// Caminho do PR: a base é a branch de um épico? Então só vale para uma
@@ -342,26 +426,40 @@ impl GhMirror<'_> {
              VALUES (?1, ?2, ?2, NULL)
              ON CONFLICT (project_id) DO UPDATE SET
                 last_attempt_at = excluded.last_attempt_at, last_ok_at = excluded.last_ok_at,
-                last_error = NULL",
+                last_error = NULL, failures = 0, failing_since = NULL",
             params![s.project_id, s.synced_at],
         )?;
         Ok(())
     }
 
+    /// Rodada com falha: conta mais uma na sequência e marca o início dela.
     pub(crate) fn record_sync_error(&self, project_id: i64, error: &str) -> Result<()> {
         self.0.execute(
-            "INSERT INTO sync_state (project_id, last_attempt_at, last_error) VALUES (?1, ?2, ?3)
+            "INSERT INTO sync_state (project_id, last_attempt_at, last_error, failures, failing_since)
+             VALUES (?1, ?2, ?3, 1, ?2)
              ON CONFLICT (project_id) DO UPDATE SET
-                last_attempt_at = excluded.last_attempt_at, last_error = excluded.last_error",
+                last_attempt_at = excluded.last_attempt_at, last_error = excluded.last_error,
+                failures = sync_state.failures + 1,
+                failing_since = coalesce(sync_state.failing_since, excluded.failing_since)",
             params![project_id, ct_core::now_ms(), error],
         )?;
         Ok(())
     }
 
-    pub(crate) fn sync_states(&self) -> Result<Vec<SyncState>> {
-        let mut stmt = self.0.prepare(
-            "SELECT project_id, last_attempt_at, last_ok_at, last_error FROM sync_state ORDER BY project_id",
+    /// Rodada concluída com aviso (issues não lidas no Jira): guarda a
+    /// mensagem sem contar como falha, já que o cursor avançou.
+    pub(crate) fn record_sync_warning(&self, project_id: i64, warning: &str) -> Result<()> {
+        self.0.execute(
+            "UPDATE sync_state SET last_error = ?2 WHERE project_id = ?1",
+            params![project_id, warning],
         )?;
+        Ok(())
+    }
+
+    pub(crate) fn sync_states(&self) -> Result<Vec<SyncState>> {
+        let mut stmt = self.0.prepare(&format!(
+            "SELECT {SYNC_COLS} FROM sync_state ORDER BY project_id"
+        ))?;
         let rows = stmt.query_map([], row_to_sync)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -370,7 +468,7 @@ impl GhMirror<'_> {
         Ok(self
             .0
             .query_row(
-                "SELECT project_id, last_attempt_at, last_ok_at, last_error FROM sync_state WHERE project_id = ?1",
+                &format!("SELECT {SYNC_COLS} FROM sync_state WHERE project_id = ?1"),
                 [project_id],
                 row_to_sync,
             )
@@ -452,7 +550,7 @@ impl GhMirror<'_> {
 }
 
 impl Ledger {
-    fn gh(&self) -> GhMirror<'_> {
+    pub(crate) fn gh(&self) -> GhMirror<'_> {
         GhMirror(&self.conn)
     }
 
@@ -575,6 +673,31 @@ impl Ledger {
             }
         }
 
+        // Issues que sumiram do GitHub (#89): saem do espelho, e o work item
+        // delas conclui, sem tocar em sessões nem worktree (a limpeza de
+        // sempre cuida delas depois).
+        for g in &s.gone {
+            let Some(issue) = self.gh().get_issue(s.project_id, g.gh_number)? else {
+                continue;
+            };
+            self.remove_issue_row(s.project_id, &owner, &repo, issue, mirror)?;
+            out.removed.push(*g);
+            let Some(wi) = self.find_work_item(s.project_id, g.gh_number)? else {
+                continue;
+            };
+            let uid = gh_issue_gone_uid(&owner, &repo, g.gh_number);
+            if self.set_status_full(
+                wi.id,
+                WorkItemStatus::Concluido,
+                GH_ISSUE_GONE_CAUSE,
+                Some(&uid),
+                None,
+                Some(GH_ISSUE_GONE_REASON),
+            )? {
+                out.status_changes.push((wi.id, WorkItemStatus::Concluido));
+            }
+        }
+
         if finish {
             self.gh().finish_ok(s)?;
         }
@@ -585,6 +708,11 @@ impl Ledger {
     /// Registra uma falha de sync, preservando `last_ok_at` e o cache.
     pub fn record_sync_error(&self, project_id: i64, error: &str) -> Result<()> {
         self.gh().record_sync_error(project_id, error)
+    }
+
+    /// Aviso de uma rodada concluída: fica no `last_error` sem contar falha.
+    pub fn record_sync_warning(&self, project_id: i64, warning: &str) -> Result<()> {
+        self.gh().record_sync_warning(project_id, warning)
     }
 
     pub fn sync_states(&self) -> Result<Vec<SyncState>> {
@@ -647,7 +775,7 @@ mod tests {
             has_sub_issues: false,
             url: format!("https://github.com/o/r/issues/{n}"),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -671,7 +799,29 @@ mod tests {
             prs,
             etags: vec![("k".into(), "e1".into())],
             synced_at: 100,
+            gone: Vec::new(),
         }
+    }
+
+    /// `IssueRow` de uma versão anterior (sem `sprints` nem `meta`)
+    /// desserializa com as listas vazias, e a vazia vai e volta como `[]`.
+    #[test]
+    fn issue_sem_meta_desserializa() {
+        let v = json!({
+            "gh_number": 7, "title": "t", "state": "open", "labels": [],
+            "parent_number": null, "has_sub_issues": false, "url": "u", "updated_at": 1,
+        });
+        let i: IssueRow = serde_json::from_value(v).unwrap();
+        assert!(i.meta.is_empty() && i.sprints.is_empty());
+        assert_eq!(serde_json::to_value(&i).unwrap()["meta"], json!([]));
+        let mut com = issue(8, "open");
+        com.meta = vec![IssueMeta {
+            field: "status".into(),
+            label: "Situação".into(),
+            value: "Aberto".into(),
+        }];
+        let back: IssueRow = serde_json::from_value(serde_json::to_value(&com).unwrap()).unwrap();
+        assert_eq!(back, com);
     }
 
     fn events(l: &Ledger, wi: i64, kind: &str) -> usize {
@@ -1075,6 +1225,7 @@ mod tests {
             prs: vec![pr(30, 999, PrState::Open)],
             etags: vec![("k".into(), "e1".into())],
             synced_at: 100,
+            gone: Vec::new(),
         };
         assert!(l.apply_github(&s).is_err());
         assert!(l.list_issues(p.id).unwrap().is_empty());
@@ -1093,5 +1244,34 @@ mod tests {
         assert!(st.last_attempt_at >= 100);
         l.apply_github(&snap(p.id, vec![], vec![])).unwrap();
         assert_eq!(l.sync_state(p.id).unwrap().unwrap().last_error, None);
+    }
+
+    #[test]
+    fn falhas_seguidas_contam_e_zeram_no_sucesso() {
+        let (l, p) = ledger_with_project();
+        // Primeira rodada já com falha: sem linha anterior.
+        l.record_sync_error(p.id, "HTTP 410").unwrap();
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!(st.failures, 1);
+        let desde = st.failing_since.unwrap();
+        assert_eq!(desde, st.last_attempt_at);
+        l.record_sync_error(p.id, "HTTP 410").unwrap();
+        l.record_sync_error(p.id, "rede").unwrap();
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!((st.failures, st.failing_since), (3, Some(desde)));
+        assert_eq!(st.last_error.as_deref(), Some("rede"));
+
+        l.apply_github(&snap(p.id, vec![], vec![])).unwrap();
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!(
+            (st.failures, st.failing_since, st.last_error),
+            (0, None, None)
+        );
+
+        // Aviso de rodada concluída não conta como falha.
+        l.record_sync_warning(p.id, "2 issues não lidas").unwrap();
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!((st.failures, st.failing_since), (0, None));
+        assert_eq!(st.last_error.as_deref(), Some("2 issues não lidas"));
     }
 }

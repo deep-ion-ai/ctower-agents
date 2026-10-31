@@ -42,6 +42,7 @@ function status(p: { credential_ok?: boolean } = {}): HubTrackerStatus {
         me_ok: p.credential_ok ?? true,
         server_version: "8.5.2",
         error: p.credential_ok === false ? "comando de credencial do Jira falhou (saída 2)" : null,
+        custom_fields: [],
       },
       gitlab: { cli: "1.124.0", credential_ok: true, api_ok: true, error: null },
     },
@@ -143,6 +144,7 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
       epic_name_field: "",
       sprint_field: "customfield_10600",
       type_map: { Epic: "epic", Épico: "epic", Bug: "bug", Erro: "bug" },
+      extra_fields: [],
     },
     forge: {
       kind: "gitlab",
@@ -222,6 +224,94 @@ test("editar projeto Jira mostra o modo, o JQL e o limite atuais", async () => {
   await user.click(within(form).getByLabelText("Sincronizar somente a sprint ativa"));
   expect(within(form).queryByLabelText("JQL do sync")).not.toBeInTheDocument();
   expect(within(form).queryByLabelText("Limite de issues sincronizadas")).not.toBeInTheDocument();
+});
+
+test("cadastro novo, sem catálogo: campo do projeto pelo ID digitado vai em extra_fields", async () => {
+  const { api, user, setProjects } = setup({ projects: [] });
+  api.onHub("hub.projects.add", () => {
+    setProjects([hubProjectView(JIRA)]);
+    return { project: JIRA, rev: 3, reapplied: 0, restored: false };
+  });
+  const form = await jiraForm(user);
+  const fs = within(form).getByRole("group", { name: "Campos do projeto na tela da issue" });
+  expect(fs).toHaveTextContent(/rodar jira init no ambiente atualiza/);
+  // Linha vazia: o formulário recusa antes do hub, com a linha.
+  await user.click(within(fs).getByRole("button", { name: "+ Adicionar campo" }));
+  await user.click(within(form).getByRole("button", { name: "Cadastrar" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(/informe o campo do Jira na linha 1/);
+  expect(api.hubCallsTo("hub.projects.add")).toHaveLength(0);
+  await user.type(within(fs).getByRole("combobox", { name: "Campo do Jira 1" }), "customfield_10099");
+  await user.type(within(fs).getByLabelText("Rótulo na tela 1"), "Responsável pela implementação");
+  await user.click(within(form).getByRole("button", { name: "Cadastrar" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.add")).toHaveLength(1));
+  const t = (api.hubCallsTo("hub.projects.add")[0].params as { tracker: Record<string, unknown> }).tracker;
+  expect(t.extra_fields).toEqual([{ id: "customfield_10099", label: "Responsável pela implementação" }]);
+}, 15_000);
+
+test("editar projeto Jira: combobox do catálogo, já na lista e o payload com extra_fields", async () => {
+  const st = status();
+  st.readiness.jira.custom_fields = [
+    { id: "customfield_10099", name: "Responsável pela implementação", datatype: "user" },
+    { id: "customfield_10098", name: "Responsável pela revisão", datatype: "user" },
+    { id: "customfield_10097", name: "Sistema", datatype: "option" },
+  ];
+  const withExtra = jiraHubProject();
+  if (withExtra.tracker?.kind === "jira") {
+    Object.assign(withExtra.tracker, {
+      active_sprint_only: true,
+      extra_fields: [{ id: "customfield_10097", label: "Sistema" }],
+    });
+  }
+  const { api, user } = setup({ projects: [{ ...hubProjectView(withExtra, ASSIGNMENTS), tracker_status: st }] });
+  api.onHub("hub.projects.update", withExtra);
+  const g = await screen.findByRole("group", { name: "Geral" });
+  expect(g).toHaveTextContent(/Campos na tela da issue\s*Sistema \(customfield_10097\)/);
+  await user.click(within(g).getByRole("button", { name: /^Editar/ }));
+  const form = within(g).getByRole("form", { name: "Editar app" });
+  const fs = within(form).getByRole("group", { name: "Campos do projeto na tela da issue" });
+  expect(fs).not.toHaveTextContent(/jira init/);
+  expect(within(fs).getByRole("combobox", { name: "Campo do Jira 1" })).toHaveValue("Sistema");
+  expect(within(fs).getByText("1 de 20")).toBeInTheDocument();
+  await user.click(within(fs).getByRole("button", { name: "+ Adicionar campo" }));
+  const combo = within(fs).getByRole("combobox", { name: "Campo do Jira 2" });
+  await user.type(combo, "implementacao");
+  await user.keyboard("{ArrowDown}{Enter}");
+  expect(within(fs).getByLabelText("Rótulo na tela 2")).toHaveValue("Responsável pela implementação");
+  // O Sistema, da linha 1, aparece desabilitado na busca da linha 2.
+  await user.clear(combo);
+  await user.type(combo, "sis");
+  expect(within(fs).getByRole("option", { name: /Sistema/ })).toHaveAttribute("aria-disabled", "true");
+  await user.keyboard("{Escape}");
+  // Volta ao campo escolhido e troca o rótulo.
+  await user.clear(combo);
+  await user.type(combo, "customfield_10099");
+  await user.keyboard("{Escape}");
+  const label = within(fs).getByLabelText("Rótulo na tela 2");
+  await user.clear(label);
+  await user.type(label, "Dev");
+  await user.click(within(fs).getByRole("button", { name: "Remover campo 1" }));
+  await user.click(within(form).getByRole("button", { name: "Salvar projeto" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(1));
+  const t = (api.hubCallsTo("hub.projects.update")[0].params as { tracker: Record<string, unknown> }).tracker;
+  expect(t.extra_fields).toEqual([{ id: "customfield_10099", label: "Dev" }]);
+}, 15_000);
+
+test("editar projeto Jira: o erro do hub nos campos do projeto aparece no alerta", async () => {
+  const { api, user } = setup();
+  api.onHub("hub.projects.update", () => {
+    throw new Error("campos do projeto: o campo customfield_1 aparece mais de uma vez (linha 2)");
+  });
+  const g = await screen.findByRole("group", { name: "Geral" });
+  await user.click(within(g).getByRole("button", { name: /^Editar/ }));
+  const form = within(g).getByRole("form", { name: "Editar app" });
+  await user.type(within(form).getByLabelText("JQL do sync"), "labels = web");
+  const fs = within(form).getByRole("group", { name: "Campos do projeto na tela da issue" });
+  await user.click(within(fs).getByRole("button", { name: "+ Adicionar campo" }));
+  await user.type(within(fs).getByRole("combobox", { name: "Campo do Jira 1" }), "customfield_1");
+  await user.type(within(fs).getByLabelText("Rótulo na tela 1"), "A");
+  await user.click(within(form).getByRole("button", { name: "Salvar projeto" }));
+  const msg = await screen.findByText(/o campo customfield_1 aparece mais de uma vez \(linha 2\)/);
+  expect(msg.closest('[role="alert"]')).not.toBeNull();
 });
 
 test("cadastro: combinação não suportada avisa e não deixa cadastrar", async () => {

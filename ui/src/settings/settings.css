@@ -523,3 +523,55 @@ input.set-input-num {
 .token-form .field {
   flex: 1 1 320px;
 }
+
+/* Cores das abas (#73): um bloco por tipo, com Texto, Fundo e o contraste. */
+.tabc-themes {
+  display: flex;
+  gap: 4px;
+}
+
+.tabc-themes .btn[data-on="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.tabc-kind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 6px 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.tabc-kind legend {
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.tabc-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.tabc-name {
+  min-width: 40px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tabc-field input[type="color"] {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: none;
+}
+
+.set-input.tabc-hex {
+  width: 9ch;
+}

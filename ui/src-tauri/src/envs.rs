@@ -154,10 +154,44 @@ impl ThemePref {
     }
 }
 
+/// Cores de um tipo de aba (#73), em HEX `#rrggbb`. Ausente ou `null` =
+/// cor do tema; quem valida e aplica é a UI.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TabColor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TabKindColors {
+    #[serde(default)]
+    pub terminal: TabColor,
+    #[serde(default)]
+    pub shell: TabColor,
+    #[serde(default)]
+    pub issue: TabColor,
+    #[serde(default)]
+    pub screen: TabColor,
+}
+
+/// Cores das abas por tema: cada tema com a sua configuração.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TabColors {
+    #[serde(default)]
+    pub dark: TabKindColors,
+    #[serde(default)]
+    pub light: TabKindColors,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Appearance {
     #[serde(default)]
     pub theme: ThemePref,
+    /// Ausente em ui.json antigos: tudo na cor do tema.
+    #[serde(default)]
+    pub tabs: TabColors,
 }
 
 /// Prompt pronto do console (#425): `id` estável (o dos padrões permite o
@@ -707,6 +741,35 @@ mod tests {
         assert!(JIRA_ISSUE_TEMPLATE
             .contains("{{glab}} mr create -R {{forge_path}} -s {{branch}} -b {{base}}"));
         assert!(JIRA_PROJECT_TEMPLATE.contains("-P <chave do épico> --no-input"));
+    }
+
+    #[test]
+    fn cores_das_abas_no_ui_json() {
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::new(d.path());
+        // ui.json antigo, sem `tabs`: tudo vazio.
+        assert_eq!(s.ui_config().appearance.tabs, TabColors::default());
+        let mut cfg = UiConfig::default();
+        cfg.appearance.tabs.dark.terminal = TabColor {
+            fg: Some("#7fd4bc".into()),
+            bg: Some("#13241f".into()),
+        };
+        cfg.appearance.tabs.light.issue.fg = Some("#1a7a5e".into());
+        s.save_ui_config(&cfg).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(d.path().join("ui.json")).unwrap()).unwrap();
+        assert_eq!(
+            raw["appearance"]["tabs"]["dark"]["terminal"]["fg"],
+            "#7fd4bc"
+        );
+        assert_eq!(raw["appearance"]["tabs"]["light"]["issue"]["fg"], "#1a7a5e");
+        assert!(raw["appearance"]["tabs"]["light"]["issue"]
+            .get("bg")
+            .is_none());
+        assert_eq!(s.ui_config().appearance.tabs, cfg.appearance.tabs);
+        // `null` vale como ausente.
+        let t: TabColor = serde_json::from_str(r#"{"fg":null}"#).unwrap();
+        assert_eq!(t, TabColor::default());
     }
 
     #[test]

@@ -44,8 +44,8 @@ export function connectedEnvs(envs: EnvView[], status: Record<string, EnvStatus>
   return envs.filter((e) => status[e.id]?.connected).length;
 }
 
-/** O que vai para a aba Avisos: hub, alertas de push, ambiente fora, docs inacessíveis, sync atrasado. */
-const WARNING_KINDS = new Set(["hub", "alert", "env_down", "docs", "sync_late"]);
+/** O que vai para a aba Avisos: hub, alertas de push, ambiente fora, docs inacessíveis, sync falhando ou atrasado. */
+const WARNING_KINDS = new Set(["hub", "alert", "env_down", "docs", "sync_failing", "sync_late"]);
 
 export function warnings(
   t: Pick<Tower, "envs" | "status" | "dashboards" | "alerts" | "hub"> & { web?: boolean; infos?: Tower["infos"] },
