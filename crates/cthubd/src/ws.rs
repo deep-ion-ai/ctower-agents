@@ -17,9 +17,10 @@
 //! `hub.env.call { env, method, params }` (método do ambiente pelo canal
 //! reverso, #343) e
 //! `github.status|set_token|clear_token` (token do GitHub do hub) e
-//! `hub.update.get|check|start|rollback` (atualizar o hub, #421). Push:
+//! `hub.update.get|check|start|rollback` (atualizar o hub, #421) e
+//! `hub.logs.tail|follow|unfollow` (log do hub, #65). Push:
 //! `hub_sync_status`, `hub.proposals.changed`, `hub.rules.changed`,
-//! `hub.update.status`,
+//! `hub.update.status`, `hub.logs.lines` (só na conexão que pediu),
 //! `env.online` e `env.push` (canal reverso, `crate::channel`).
 //! `HubEnv.online` em `hub.envs.list` e `hub.dashboard.get` vem do canal.
 //!
@@ -227,6 +228,7 @@ pub(crate) async fn serve(socket: WebSocket, st: HubState, channel: Channel) {
         ),
     };
     let web = channel.web_session().is_some();
+    let mut log_follow: Option<tokio::task::JoinHandle<()>> = None;
     let mut recheck = tokio::time::interval(WEB_RECHECK);
     recheck.reset();
     loop {
@@ -258,10 +260,16 @@ pub(crate) async fn serve(socket: WebSocket, st: HubState, channel: Channel) {
                             "método indisponível na web".into(),
                         )),
                     ),
-                    Ok(req) => ct_http::rpc::reply(
-                        req.id,
-                        call(&st, &req.method, req.params, channel.web_session()).await,
-                    ),
+                    Ok(req) => {
+                        let r = match req.method.as_str() {
+                            // Modo seguir do log (#65): por conexão.
+                            "hub.logs.follow" | "hub.logs.unfollow" => {
+                                logs_follow(&mut log_follow, &req.method, &req.params, &out)
+                            }
+                            _ => call(&st, &req.method, req.params, channel.web_session()).await,
+                        };
+                        ct_http::rpc::reply(req.id, r)
+                    }
                     Err(reply) => reply,
                 };
                 let _ = out.send(Message::Text(reply.to_string().into()));
@@ -270,9 +278,38 @@ pub(crate) async fn serve(socket: WebSocket, st: HubState, channel: Channel) {
             _ => {}
         }
     }
+    if let Some(f) = log_follow.take() {
+        f.abort();
+    }
     pusher.abort();
     drop(out);
     let _ = writer.await;
+}
+
+/// Push do modo seguir do log do hub (`hub.logs.follow`, #65).
+pub const LOGS_PUSH: &str = "hub.logs.lines";
+
+/// `hub.logs.follow { level?, q? }` e `hub.logs.unfollow`: liga ou desliga
+/// o push [`LOGS_PUSH`] nesta conexão.
+fn logs_follow(
+    follow: &mut Option<tokio::task::JoinHandle<()>>,
+    method: &str,
+    p: &Value,
+    out: &mpsc::UnboundedSender<Message>,
+) -> RpcResult {
+    let new = match method {
+        "hub.logs.follow" => Some(ct_http::logs::spawn_follow(
+            ct_http::logs::global(),
+            p,
+            out.clone(),
+            LOGS_PUSH,
+        )?),
+        _ => None,
+    };
+    if let Some(old) = std::mem::replace(follow, new) {
+        old.abort();
+    }
+    Ok(json!({}))
 }
 
 /// Parâmetros de `hub.env.call` (#343, spec da PWA §5.4).
@@ -581,6 +618,8 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         }
         "github.status" | "github.set_token" | "github.clear_token" => github(st, method, &p).await,
         "hub.env.call" => env_call(st, p).await,
+        // Log do hub (#65): as últimas linhas, mascaradas.
+        "hub.logs.tail" => ct_http::logs::rpc_tail(ct_http::logs::global(), &p).await,
         "hub.workitem.body" => workitem_body(st, p).await,
         m if m.starts_with("hub.update.") => update_call(st, method, &p).await,
         "hub.projects.add" | "hub.projects.update" => {
@@ -3748,6 +3787,50 @@ pub(crate) mod tests {
             [json!("hub_sync_status"), json!("hub.proposals.changed")],
             "{events:?}"
         );
+    }
+
+    /// Log do hub (#65) pela web: `hub.logs.tail` mascarado e o modo
+    /// seguir só na conexão que pediu, mesmo sendo a do `/web/ws`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn logs_do_hub_na_web() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = ct_http::logs::install(
+            ct_http::logs::Logs::open(dir.path(), "cthubd", 1 << 20, 2).unwrap(),
+        );
+        let tag = uuid::Uuid::new_v4().simple().to_string();
+        let line = |message: String| ct_http::logs::LogLine {
+            id: 0,
+            ts: ct_core::now_ms(),
+            level: "warn".into(),
+            target: "cthubd::teste".into(),
+            message,
+            fields: Default::default(),
+        };
+        logs.write(line(format!("{tag} Bearer abc123")));
+        let (st, cookie) = hub_web();
+        let url = spawn_server(&st).await;
+        let mut web = web_ui(&url, &cookie).await;
+        let mut ui = Ui::new(&url).await;
+        let v = web.call("hub.logs.tail", json!({ "q": tag })).await;
+        assert_eq!(
+            v["result"]["lines"][0]["message"],
+            format!("{tag} Bearer ***"),
+            "{v}"
+        );
+        let v = web.call("hub.logs.follow", json!({ "q": tag })).await;
+        assert_eq!(v["result"], json!({}), "{v}");
+        logs.write(line(format!("{tag} nova")));
+        let push = loop {
+            if let Some(p) = web.pushes.iter().find(|p| p["event"] == LOGS_PUSH) {
+                break p.clone();
+            }
+            web.call("hub.info", json!({})).await;
+        };
+        assert_eq!(push["data"]["lines"][0]["message"], format!("{tag} nova"));
+        ui.call("hub.info", json!({})).await;
+        assert!(ui.pushes.iter().all(|p| p["event"] != LOGS_PUSH));
+        let v = web.call("hub.logs.unfollow", json!({})).await;
+        assert_eq!(v["result"], json!({}));
     }
 
     // ---- hub.env.call e env.push (#343) ----

@@ -13,6 +13,7 @@ import type { EnvStatus, EnvView, HubConnView, PushEvent, UiConfig, UiUpdate } f
 import type { Dashboard, EnvInfo, PermissionRequest } from "../protocol/gen";
 import type { HubDashboard, HubEnv, HubInfo, HubProjectView, HubStatus, HubUpdateStatus } from "../protocol/hub-gen";
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
+import { HUB_LOGS_PUSH } from "../logs/types";
 import { useTheme } from "./theme";
 import { dashboardsFromHub, envStatusesFromHub, envViewsFromHub } from "../web/hubData";
 
@@ -303,6 +304,8 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
         setHubUpdate(e.data as HubUpdateStatus);
         return;
       }
+      // Modo seguir da tela Logs (#65): linhas do log, nada do hub mudou.
+      if (e.event === HUB_LOGS_PUSH) return;
       clearTimeout(t);
       t = setTimeout(() => void refreshHub(), HUB_PUSH_DEBOUNCE_MS);
     });

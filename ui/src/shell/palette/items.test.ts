@@ -43,6 +43,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Manutenção › Atualizações › Hub",
     "Manutenção › Limpeza",
     "Manutenção › Backup e snapshots",
+    "Manutenção › Logs",
     // Escopos e seções das Configurações (#315).
     "Configurações › Este app",
     "Configurações › Ambiente",
@@ -63,6 +64,8 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Retomar interrompidas",
     "Atalhos e gestos",
     "Projeto: Novo…",
+    // Tela Logs (#65): a UI na lista inicial; hub e ambientes só buscando.
+    "Logs: esta UI",
   ]);
   expect(items.some((i) => i.kind === "issue" || i.kind === "session" || i.kind === "project")).toBe(false);
 });
@@ -183,10 +186,16 @@ test("web: sem os lugares e comandos exclusivos do desktop (#201)", () => {
     "Hub › Ambientes",
     "Hub › Sessões web",
     "Hub › Dispositivos",
+    "Logs",
     "Configurações › Aparência",
     "Configurações › Acesso web",
   ]);
-  expect(byKind(items, "command").map((i) => i.label)).toEqual(["Ver interrompidas", "Atalhos e gestos"]);
+  expect(byKind(items, "command").map((i) => i.label)).toEqual([
+    "Ver interrompidas",
+    "Atalhos e gestos",
+    "Logs: esta UI",
+    "Logs: hub",
+  ]);
 });
 
 test("shell (#423): comando com a aba ativa no work item; sem ela ou na web, nada", () => {
@@ -228,4 +237,20 @@ test("atalhos (#27): o comando abre a folha, no desktop e na web", () => {
     const it = paletteItems(src({ web })).find((i) => i.id === "cmd:shortcuts");
     expect(it).toMatchObject({ kind: "command", label: "Atalhos e gestos", action: { type: "shortcuts" } });
   }
+});
+
+test("Logs (#65): a UI sempre; o hub com ele no ar; cada ambiente só buscando", () => {
+  const wsl = FakeDaemonApi.wslEnv("wsl");
+  const items = paletteItems(src({ envs: [wsl], hub: { ...HUB_OFF, connected: true } }));
+  const logs = items.filter((i) => i.id.startsWith("cmd:logs:"));
+  expect(logs.map((i) => [i.label, i.browse])).toEqual([
+    ["Logs: esta UI", undefined],
+    ["Logs: hub", false],
+    ["Logs: ctower-agents (WSL)", false],
+  ]);
+  expect(logs[2].action).toEqual({
+    type: "tab",
+    tab: { id: "maintenance:logs", screen: { name: "maintenance", section: "logs", source: "env", env: "wsl" } },
+  });
+  expect(paletteItems(src()).some((i) => i.id === "cmd:logs:hub")).toBe(false);
 });

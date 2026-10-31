@@ -39,6 +39,8 @@ export const hubSectionOnWeb = (s: HubSection) => !WEB_HIDDEN_HUB.has(s);
 export function placeOnWeb(p: Place): boolean {
   if ("screen" in p.open) return !WEB_HIDDEN_SCREENS.has(p.open.screen);
   const s = p.open.tab.screen;
+  // Da Manutenção, só os Logs (#65) existem na web.
+  if (s.name === "maintenance") return s.section === "logs";
   if (WEB_HIDDEN_SCREENS.has(s.name)) return false;
   if (s.name === "hub") return hubSectionOnWeb(s.section ?? "overview");
   if (s.name === "settings") {
@@ -48,8 +50,9 @@ export function placeOnWeb(p: Place): boolean {
   return true;
 }
 
-/** Rótulo do lugar na web: sem o escopo "Este app", que não existe lá. */
-export const webPlaceLabel = (label: string) => label.replace("Configurações › Este app › ", "Configurações › ");
+/** Rótulo do lugar na web: sem o escopo "Este app" nem a Manutenção (só os Logs, #65), que não existem lá. */
+export const webPlaceLabel = (label: string) =>
+  label.replace("Configurações › Este app › ", "Configurações › ").replace(/^Manutenção › Logs$/, "Logs");
 
 /**
  * Celular (spec do épico #205 §10.3): modo web abaixo de 768 px, o mesmo

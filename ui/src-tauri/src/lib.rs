@@ -7,6 +7,7 @@ pub mod envs;
 pub mod folder;
 pub mod hub;
 pub mod notify;
+pub mod uilog;
 pub mod updater;
 pub mod window;
 pub mod wsl;
@@ -29,6 +30,8 @@ struct AppState {
     store: Store,
     envs: Mutex<Vec<EnvEntry>>,
     hub: Mutex<Option<HubEntry>>,
+    /// Log da própria UI (#65), em `<app_log_dir>/ui.jsonl`.
+    ui_log: uilog::UiLog,
 }
 
 struct WindowSink(AppHandle);
@@ -299,6 +302,28 @@ fn ui_config_save(app: AppHandle, st: State<'_, AppState>, cfg: UiConfig) -> Res
     Ok(())
 }
 
+/// Acrescenta linhas (JSON, já mascaradas pela UI) ao log da UI (#65).
+#[tauri::command]
+fn ui_log_append(st: State<'_, AppState>, lines: Vec<String>) -> Result<(), String> {
+    st.ui_log.append(&lines).map_err(|e| e.to_string())
+}
+
+/// As últimas linhas do log da UI, inclusive as da execução anterior.
+#[tauri::command]
+fn ui_log_read(st: State<'_, AppState>) -> Vec<String> {
+    st.ui_log.read(uilog::READ_MAX)
+}
+
+/// Exportar da tela Logs (#65): grava na pasta Downloads do sistema, sem
+/// sobrescrever, e devolve o caminho.
+#[tauri::command]
+fn save_download(app: AppHandle, name: String, content: String) -> Result<String, String> {
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    uilog::save_into(&dir, &name, &content)
+        .map(|p| p.display().to_string())
+        .map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -334,12 +359,14 @@ pub fn run() {
             let hb = hub_bridge.clone();
             let initial: Vec<EnvEntry> = hub.iter().map(hub::bridge_entry).collect();
             tauri::async_runtime::spawn(async move { hb.start(initial) });
+            let ui_log = uilog::UiLog::new(&app.path().app_log_dir()?);
             app.manage(AppState {
                 bridge,
                 hub_bridge,
                 store,
                 envs: Mutex::new(envs),
                 hub: Mutex::new(hub),
+                ui_log,
             });
             Ok(())
         })
@@ -365,6 +392,9 @@ pub fn run() {
             ui_config_save,
             ui_update_check,
             ui_update_install,
+            ui_log_append,
+            ui_log_read,
+            save_download,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar o Control Tower");

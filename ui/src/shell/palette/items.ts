@@ -16,7 +16,7 @@ import { projectAt, projectsPlace, type ProjectPage, type ProjectSettingsSection
 import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../../util/item";
 import { liveGestorLabel } from "../../hub/HubGestor";
 import { PLACES, type Place } from "../places";
-import { maintenanceTab } from "../../maintenance/sections";
+import { logsTab, maintenanceTab } from "../../maintenance/sections";
 import {
   DESKTOP_ONLY_ENV_SECTIONS,
   ENV_SECTIONS,
@@ -390,6 +390,43 @@ function envItems(src: PaletteSources): PaletteItem[] {
   });
 }
 
+/**
+ * Tela Logs (#65) já numa fonte: "Logs: esta UI" na lista inicial (os erros
+ * da própria UI só têm este caminho) e, buscando, o hub e cada ambiente.
+ */
+function logItems(src: PaletteSources): PaletteItem[] {
+  const kw = "log logs erros avisos diagnóstico exportar";
+  const out: PaletteItem[] = [
+    {
+      id: "cmd:logs:ui",
+      kind: "command",
+      label: "Logs: esta UI",
+      detail: src.web ? "Erros desta aba desde que abriu" : "Erros do app desde que abriu e da execução anterior",
+      keywords: `${kw} ui app console interface`,
+      action: { type: "tab", tab: logsTab({ kind: "ui" }) },
+    },
+  ];
+  if (src.web || src.hub.connected)
+    out.push({
+      id: "cmd:logs:hub",
+      kind: "command",
+      label: "Logs: hub",
+      keywords: `${kw} hub cthubd`,
+      browse: false,
+      action: { type: "tab", tab: logsTab({ kind: "hub" }) },
+    });
+  for (const e of src.envs)
+    out.push({
+      id: `cmd:logs:env:${e.id}`,
+      kind: "command",
+      label: `Logs: ${e.name}`,
+      keywords: `${kw} ambiente daemon ctowerd`,
+      browse: false,
+      action: { type: "tab", tab: logsTab({ kind: "env", env: e.id }) },
+    });
+  return out;
+}
+
 /** A folha de atalhos (#27), também com `?` fora de campos de texto. */
 const SHORTCUTS: PaletteItem = {
   id: "cmd:shortcuts",
@@ -460,6 +497,7 @@ export function paletteItems(src: PaletteSources): PaletteItem[] {
     ...projectCommands(src, projects),
     // Depois dos de projeto: "configurar <projeto>" segue achando o projeto primeiro.
     ...envItems(src),
+    ...logItems(src),
     ...projectItems,
     ...issueItems,
     ...(src.web ? [] : starts),

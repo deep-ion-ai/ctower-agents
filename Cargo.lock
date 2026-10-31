@@ -581,12 +581,16 @@ name = "ct-http"
 version = "1.2.0"
 dependencies = [
  "axum",
+ "ct-core",
  "ct-ledger",
  "futures-util",
+ "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -753,7 +757,6 @@ dependencies = [
  "toml 0.8.23",
  "tower",
  "tracing",
- "tracing-subscriber",
  "ts-rs",
  "ureq",
  "uuid",
@@ -801,7 +804,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.27.0",
  "tracing",
- "tracing-subscriber",
  "ureq",
 ]
 

@@ -18,6 +18,7 @@ import { MaintenanceScreen } from "./maintenance/MaintenanceScreen";
 import { EnvScreen } from "./env/EnvScreen";
 import { maintenanceTab } from "./maintenance/sections";
 import { settingsTab } from "./settings/sections";
+import { WebLogsScreen } from "./logs/LogsScreen";
 import { SessionScreen } from "./web/SessionPanel";
 import { WebRecovery, WebReview } from "./web/WebScreens";
 import { usePwa } from "./web/pwa";
@@ -172,6 +173,8 @@ function Current({ screen }: { screen: Screen }) {
       case "review":
         return <WebReview />;
       case "maintenance":
+        // Os Logs (#65) existem também na web; o resto da Manutenção, não.
+        if (screen.section === "logs") return <WebLogsScreen screen={screen} />;
         return (
           <main className="page">
             <h1 className="sr-only">Manutenção</h1>

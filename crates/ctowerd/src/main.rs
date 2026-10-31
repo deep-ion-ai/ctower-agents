@@ -51,11 +51,13 @@ fn version() -> &'static str {
 #[tokio::main]
 async fn main() {
     Cli::parse();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    // O `[logs]` vem do config.toml; erro de leitura aparece no `run`.
+    let logs = Dirs::from_env()
+        .ok()
+        .and_then(|d| DaemonConfig::load(&d).ok())
+        .map(|c| c.logs)
+        .unwrap_or_default();
+    ct_http::logs::init("ctowerd", &logs, "CTOWER_DATA_DIR");
     if let Err(e) = run().await {
         tracing::error!("ctowerd encerrado com erro: {e}");
         std::process::exit(1);

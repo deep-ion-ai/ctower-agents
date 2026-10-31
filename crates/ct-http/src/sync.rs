@@ -107,6 +107,9 @@ pub const CHANNEL_METHODS: &[&str] = &[
     // "Ver issue" de projeto Jira (#434): o hub não alcança o Jira e lê a
     // descrição pelo ambiente de sync, sem gravar.
     "tracker.issue_body",
+    // Tela Logs na web (#65): só as últimas linhas, já mascaradas; o modo
+    // seguir é por conexão e fica no app desktop.
+    "logs.tail",
 ];
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:
@@ -173,9 +176,13 @@ mod tests {
             "github.clear_token",
             "github.pr.comment",
             "sync.now",
+            // Modo seguir do log (#65): por conexão, só no desktop.
+            "logs.follow",
+            "logs.unfollow",
         ] {
             assert!(!channel_method_allowed(m), "{m}");
         }
+        assert!(channel_method_allowed("logs.tail"));
         assert!(channel_method_allowed("session.start"));
         // Linha do tempo do work item (#422): só leitura, vai para a web.
         assert!(channel_method_allowed("events.list"));

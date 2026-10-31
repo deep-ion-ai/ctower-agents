@@ -49,6 +49,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "session.remote_control.enable",
   "hub.sync.now",
   "tracker.issue_body",
+  "logs.tail",
 ]);
 
 /** O método do ambiente existe na web? */
@@ -410,6 +411,19 @@ export class WebDaemonApi implements DaemonApi, WebAuth {
   }
   writeClipboard(text: string): Promise<void> {
     return navigator.clipboard.writeText(text);
+  }
+  /** Exportar (#65): o navegador baixa o arquivo. */
+  saveFile(name: string, content: string, mime: string): Promise<string | null> {
+    const url = URL.createObjectURL(new Blob([content], { type: mime }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    return Promise.resolve(null);
   }
 
   // Preferências da web no navegador (tema, telas), nada sensível.

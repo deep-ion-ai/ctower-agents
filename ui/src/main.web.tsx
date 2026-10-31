@@ -14,10 +14,13 @@ import "@fontsource/ibm-plex-mono/500.css";
 import "./theme.css";
 import { App } from "./App";
 import { WebDaemonApi } from "./api/web";
+import { installUiLog, logCalls } from "./logs/uiLog";
 import { WebGate } from "./web/WebGate";
 import { registerServiceWorker } from "./web/pwa";
 
-const api = new WebDaemonApi();
+// Log da própria UI (#65): na web, só em memória.
+const api = logCalls(new WebDaemonApi());
+installUiLog();
 // PWA instalável (#203): o service worker guarda só o shell e mostra a Web Push.
 registerServiceWorker();
 

@@ -8,7 +8,7 @@ import { useNow } from "../App";
 import type { EnvView } from "../api/types";
 import { HubSyncButton } from "../control-room/Sidebar";
 import { hubTab } from "../hub/sections";
-import { maintenanceTab } from "../maintenance/sections";
+import { logsTab, maintenanceTab } from "../maintenance/sections";
 import { EnvUpdates } from "../maintenance/Updates";
 import { projectAt } from "../project/sections";
 import type { HubAssignment, HubEnv } from "../protocol/hub-gen";
@@ -180,6 +180,10 @@ function EnvDetail({ env, section }: { env: string; section: EnvSection }) {
         <span className={st.on ? "state-on" : "state-off"} role="status">
           {st.text}
         </span>
+        {/* Tela Logs (#65) já na fonte deste ambiente. */}
+        <button type="button" className="btn btn-sm" onClick={() => nav.openTab(logsTab({ kind: "env", env }))}>
+          Logs do ambiente
+        </button>
       </div>
       {info && (
         <p className="muted hint">

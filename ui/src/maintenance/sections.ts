@@ -2,9 +2,10 @@
 // do painel lateral e os lugares da paleta. Funções puras, testadas em
 // sections.test.ts.
 import type { ProjectRef } from "../hub/sections";
+import type { LogSource } from "../logs/sources";
 import type { OpenTab, Screen } from "../state/nav";
 
-export type MaintenanceSection = "overview" | "app-updates" | "env-updates" | "hub-updates" | "cleanup" | "backup";
+export type MaintenanceSection = "overview" | "app-updates" | "env-updates" | "hub-updates" | "cleanup" | "backup" | "logs";
 
 /** Nome da seção no painel lateral (dentro do grupo, quando há grupo). */
 export const MAINTENANCE_SECTION_LABEL: Record<MaintenanceSection, string> = {
@@ -14,6 +15,7 @@ export const MAINTENANCE_SECTION_LABEL: Record<MaintenanceSection, string> = {
   "hub-updates": "Hub",
   cleanup: "Limpeza",
   backup: "Backup e snapshots",
+  logs: "Logs",
 };
 
 /** Outros nomes pelos quais a paleta acha a seção. */
@@ -24,6 +26,7 @@ const KEYWORDS: Record<MaintenanceSection, string> = {
   "hub-updates": "cthubd hub versão atualizar verificar protocolo commits log reverter rollback",
   cleanup: "limpeza limpar regras [cleanup] auto worktree target concluídos fora do hub clones projeto",
   backup: "snapshots restaurar remoto s3 drive hub",
+  logs: "log logs erros avisos diagnóstico journald journalctl tracing cthubd ctowerd daemon hub ambiente ui exportar",
 };
 
 export interface MaintenanceGroup {
@@ -36,7 +39,7 @@ export interface MaintenanceGroup {
 export const MAINTENANCE_GROUPS: MaintenanceGroup[] = [
   { sections: ["overview"] },
   { label: "Atualizações", sections: ["app-updates", "env-updates", "hub-updates"] },
-  { sections: ["cleanup", "backup"] },
+  { sections: ["cleanup", "backup", "logs"] },
 ];
 
 export const MAINTENANCE_SECTIONS: MaintenanceSection[] = MAINTENANCE_GROUPS.flatMap((g) => g.sections);
@@ -75,6 +78,23 @@ export function maintenanceTab(s: MaintenanceSection, env?: string, project?: Pr
   if (env !== undefined && isEnvSection(s)) screen.env = env;
   if (project && s === "cleanup") screen.project = { owner: project.owner, repo: project.repo };
   return { id: maintenanceTabId(s), screen };
+}
+
+/**
+ * Aba da tela Logs (#65) numa fonte: o hub, um ambiente ou esta UI. Uma aba
+ * só (`maintenance:logs`): trocar a fonte troca o endereço dela.
+ */
+export function logsTab(source: LogSource): OpenTab {
+  const screen: MaintenanceScreen = { name: "maintenance", section: "logs", source: source.kind };
+  if (source.kind === "env") screen.env = source.env;
+  return { id: maintenanceTabId("logs"), screen };
+}
+
+/** Fonte do endereço da tela Logs; sem `source`, `undefined` (a tela escolhe). */
+export function logsSource(s: MaintenanceScreen): LogSource | undefined {
+  if (s.source === "hub" || s.source === "ui") return { kind: s.source };
+  if (s.source === "env" && s.env) return { kind: "env", env: s.env };
+  return undefined;
 }
 
 /** `owner/repo` do filtro, sem caixa: a chave que casa item do plano e projeto. */

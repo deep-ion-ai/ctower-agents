@@ -26,11 +26,13 @@ import { CleanupRules } from "./CleanupRules";
 import { Leftovers } from "./Leftovers";
 import { MaintenanceOverview } from "./Overview";
 import { AppUpdate, EnvUpdates, HubUpdate } from "./Updates";
+import { LogsSection } from "../logs/LogsScreen";
 
 /**
  * Tela Manutenção (#335): estado e ações de manutenção do app, dos ambientes
  * e do hub, em seções. O painel lateral lista as seções (Visão geral,
- * Atualizações deste app, dos ambientes e do hub, Limpeza, Backup e snapshots); cada
+ * Atualizações deste app, dos ambientes e do hub, Limpeza, Backup e snapshots,
+ * Logs); cada
  * uma abre como aba de editor (`maintenanceTab`). As seções de ambiente
  * mostram o ambiente do endereço (sem ele, o mesmo critério das
  * Configurações) e o seletor quando há mais de um; Atualizações › Ambientes
@@ -80,7 +82,7 @@ export function MaintenanceScreen({ screen }: { screen: MaintenanceAddress }) {
         </ol>
       </nav>
       <div className="settings hub-content">
-        <div className="settings-main maint-main">
+        <div className="settings-main maint-main" data-wide={section === "logs" ? "" : undefined}>
           <div className="maint-head">
             <h1 id="maint-h1">{path.join(" · ")}</h1>
             {perEnv && envs.length > 1 && (
@@ -141,6 +143,8 @@ export function MaintenanceScreen({ screen }: { screen: MaintenanceAddress }) {
             </>
           ) : section === "backup" ? (
             <BackupSection />
+          ) : section === "logs" ? (
+            <LogsSection screen={screen} />
           ) : (
             <MaintenanceOverview />
           )}
