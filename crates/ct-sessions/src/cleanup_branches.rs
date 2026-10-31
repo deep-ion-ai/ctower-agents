@@ -874,7 +874,7 @@ mod tests {
             has_sub_issues: false,
             url: String::new(),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         };
         let snap = |prs: Vec<PrRow>, issues: Vec<IssueRow>| {
             e.env
@@ -987,7 +987,7 @@ mod tests {
                     has_sub_issues: false,
                     url: String::new(),
                     updated_at: 1,
-                    sprints: Vec::new(),
+                    ..Default::default()
                 }],
                 prs: vec![],
                 etags: vec![],

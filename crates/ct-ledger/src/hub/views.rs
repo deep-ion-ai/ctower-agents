@@ -524,7 +524,7 @@ mod tests {
             has_sub_issues: subs,
             url: "u".into(),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 

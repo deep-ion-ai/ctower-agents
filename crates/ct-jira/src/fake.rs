@@ -245,7 +245,8 @@ impl FakeJira {
 
 /// Issue da API v2 com os campos que o sync lê. `category` é a
 /// `statusCategory.key` (`new`, `indeterminate`, `done`); o status vem em
-/// português. Mude o resto com `v["fields"][...] = ...`.
+/// português; prioridade e criador preenchidos, sem responsável. Mude o
+/// resto com `v["fields"][...] = ...`.
 pub fn api_issue(key: &str, type_name: &str, category: &str) -> Value {
     let status = match category {
         "done" => "Concluído",
@@ -258,6 +259,9 @@ pub fn api_issue(key: &str, type_name: &str, category: &str) -> Value {
             "summary": format!("Resumo de {key}"),
             "issuetype": { "name": type_name, "subtask": false },
             "status": { "name": status, "statusCategory": { "key": category } },
+            "priority": { "name": "Média", "id": "3" },
+            "assignee": null,
+            "reporter": { "name": "autor", "displayName": "Autor da Issue" },
             "labels": [],
             "updated": "2026-10-28T10:15:30.000-0300",
             "customfield_10601": null,

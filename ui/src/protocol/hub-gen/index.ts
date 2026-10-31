@@ -58,6 +58,7 @@ export type { HubUpdateStatus } from "./HubUpdateStatus";
 export type { HubWebSession } from "./HubWebSession";
 export type { HubWorkItem } from "./HubWorkItem";
 export type { HubWorkItemBody } from "./HubWorkItemBody";
+export type { IssueMeta } from "./IssueMeta";
 export type { IssueRow } from "./IssueRow";
 export type { JiraConfig } from "./JiraConfig";
 export type { JiraFieldInfo } from "./JiraFieldInfo";

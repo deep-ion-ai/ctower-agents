@@ -2788,7 +2788,7 @@ mod tests {
                 has_sub_issues: parent.is_none(),
                 url: String::new(),
                 updated_at: 0,
-                sprints: Vec::new(),
+                ..Default::default()
             };
             l.apply_github(&GithubSnapshot {
                 project_id: pid,
