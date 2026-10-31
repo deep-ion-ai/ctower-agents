@@ -157,8 +157,9 @@ pub fn retry_key(owner: &str, repo: &str) -> String {
 
 /// Versão do que a leitura extrai de cada issue. Subir o número faz a
 /// marca da última reconciliação deixar de bater e o próximo ciclo reler o
-/// projeto uma vez (como mudar a configuração): 2 = com as sprints.
-pub const MIRROR_VERSION: i64 = 2;
+/// projeto uma vez (como mudar a configuração): 2 = com as sprints; 3 = com
+/// os metadados (`meta`).
+pub const MIRROR_VERSION: i64 = 3;
 
 /// Chave, no `gh_etag`, das issues fora do JQL que ficam no espelho por
 /// ter work item (separadas por espaço): cada ciclo as lê pela chave, como
@@ -174,8 +175,11 @@ const PRUNE_MAX_SHARE: f64 = 0.5;
 /// O que muda o resultado da leitura de cada issue: com outro valor, a
 /// reconciliação relê todas as issues listadas. O JQL fica de fora: ele
 /// muda o conjunto espelhado, não o que se lê de cada issue.
+///
+/// Os campos do projeto (`extra_fields`, ID e rótulo) só entram quando há
+/// algum: a marca do projeto sem eles fica igual à de antes.
 fn read_fingerprint(c: &JiraConfig) -> serde_json::Value {
-    json!({
+    let mut v = json!({
         "mirror": MIRROR_VERSION,
         "project_key": c.project_key,
         "type_map": c.type_map,
@@ -183,7 +187,15 @@ fn read_fingerprint(c: &JiraConfig) -> serde_json::Value {
         "epic_name_field": c.epic_name_field,
         "sprint_field": c.sprint_field.trim(),
         "url": c.url,
-    })
+    });
+    if !c.extra_fields.is_empty() {
+        v["extra_fields"] = c
+            .extra_fields
+            .iter()
+            .map(|f| json!([f.id.trim(), f.label.trim()]))
+            .collect();
+    }
+    v
 }
 
 /// Chaves da marca que dizem o conjunto espelhado (o filtro), não o que se
@@ -731,6 +743,8 @@ impl JiraGitlabSync {
                 jira.url
             ));
         }
+        // Catálogo do mesmo servidor do cadastro; sem a seção, lista vazia.
+        j.custom_fields = cli.config_custom_fields();
         let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
             .map_err(|e| e.to_string())?;
         j.credential_ok = true;
@@ -1192,6 +1206,7 @@ mod tests {
             epic_name_field: "customfield_10604".into(),
             sprint_field: String::new(),
             type_map: default_type_map(),
+            extra_fields: Vec::new(),
         }
     }
 
@@ -1485,7 +1500,35 @@ mod tests {
         assert!(jr.config_present && jr.server_matches && jr.credential_ok && jr.me_ok);
         assert_eq!(jr.server_version.as_deref(), Some("8.5.2"));
         assert_eq!(jr.error, None);
+        assert!(
+            jr.custom_fields.is_empty(),
+            "configuração sem issue.fields.custom"
+        );
         assert!(rd[0].checked_at > 0);
+
+        // Com o catálogo do `jira init`, a prontidão o publica.
+        let cfg = j.fake.config_file();
+        let mut text = std::fs::read_to_string(&cfg).unwrap();
+        text.push_str(concat!(
+            "issue:\n",
+            "    fields:\n",
+            "        custom:\n",
+            "            - name: Responsável pela implementação\n",
+            "              key: customfield_10099\n",
+            "              schema:\n",
+            "                datatype: user\n",
+        ));
+        std::fs::write(&cfg, text).unwrap();
+        j.sync.sync_all().unwrap();
+        let jr = &j.sync.readiness()[0].jira;
+        assert_eq!(jr.custom_fields.len(), 1);
+        assert_eq!(
+            (
+                jr.custom_fields[0].id.as_str(),
+                jr.custom_fields[0].datatype.as_str()
+            ),
+            ("customfield_10099", "user")
+        );
 
         // `jira me` falhando fica anotado, sem parar o ciclo.
         j.fake.fail_me(true);
@@ -1547,6 +1590,51 @@ mod tests {
             l.get_issue(j.env.project_id, 4).unwrap().unwrap().labels,
             vec!["chore"]
         );
+    }
+
+    /// Incluir um campo do projeto relê todas as issues (o `updated` não
+    /// mudou) e o campo aparece no `meta` com o rótulo cadastrado.
+    #[test]
+    fn mudar_os_campos_do_projeto_rele_todas_as_issues() {
+        let j = setup(false);
+        let mut issues = arvore();
+        issues[3]["fields"]["customfield_10099"] =
+            serde_json::json!({ "name": "dev", "displayName": "Quem Implementa" });
+        j.fake.set_issues(&issues);
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        {
+            let l = j.env.sessions.ledger();
+            let i = l.get_issue(j.env.project_id, 4).unwrap().unwrap();
+            assert!(i.meta.iter().all(|m| m.field != "customfield_10099"));
+        }
+        let mut cfg = jira_config(&j.fake);
+        cfg.extra_fields = vec![ct_core::JiraExtraField {
+            id: "customfield_10099".into(),
+            label: "Responsável pela implementação".into(),
+        }];
+        assign(&j.env, cfg, false, 2);
+        j.fake.clear_calls();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert_eq!(j.fake.viewed().len(), 4, "relê tudo com os campos novos");
+        let l = j.env.sessions.ledger();
+        let i = l.get_issue(j.env.project_id, 4).unwrap().unwrap();
+        let last = i.meta.last().unwrap();
+        assert_eq!(
+            (
+                last.field.as_str(),
+                last.label.as_str(),
+                last.value.as_str()
+            ),
+            (
+                "customfield_10099",
+                "Responsável pela implementação",
+                "Quem Implementa"
+            )
+        );
+        drop(l);
+        j.fake.clear_calls();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert!(j.fake.viewed().is_empty(), "{:?}", j.fake.viewed());
     }
 
     #[test]
@@ -2218,6 +2306,93 @@ mod tests {
         assert_eq!(mirrored.sprints, i.sprints);
     }
 
+    /// Depois do sync, os 5 campos padrão estão em `meta`, na ordem e sem
+    /// os vazios, no cache e no `issue_mirror` que sobe ao hub.
+    #[test]
+    fn metadados_vao_ao_cache_e_ao_espelho_do_hub() {
+        let j = setup(true);
+        let mut issues = arvore();
+        issues[3]["fields"]["assignee"] =
+            serde_json::json!({ "name": "fulano", "displayName": "Fulano de Tal" });
+        j.fake.set_issues(&issues);
+        j.env.sessions.ledger().outbox_ack(i64::MAX).unwrap();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        let l = j.env.sessions.ledger();
+        let i = l.get_issue(j.env.project_id, 4).unwrap().unwrap();
+        let meta: Vec<(&str, &str)> = i
+            .meta
+            .iter()
+            .map(|m| (m.label.as_str(), m.value.as_str()))
+            .collect();
+        assert_eq!(
+            meta,
+            [
+                ("Situação", "Aberto"),
+                ("Tipo", "Tarefa"),
+                ("Prioridade", "Média"),
+                ("Responsável", "Fulano de Tal"),
+                ("Criador", "Autor da Issue"),
+            ]
+        );
+        // Sem responsável: o campo fica de fora.
+        let sem = l.get_issue(j.env.project_id, 1).unwrap().unwrap();
+        assert!(sem.meta.iter().all(|m| m.field != "assignee"));
+        assert_eq!(sem.meta.len(), 4);
+        let mirrored = l
+            .outbox_pending(1000)
+            .unwrap()
+            .into_iter()
+            .find_map(|e| match e.change {
+                SyncChange::IssueMirror(m) if m.issue.gh_number == 4 => Some(m.issue),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(mirrored.meta, i.meta);
+    }
+
+    /// O espelho gravado com a versão 2 (sprints, sem metadados) é relido
+    /// uma vez por causa do `MIRROR_VERSION`, e só uma.
+    #[test]
+    fn espelho_sem_metadados_e_relido_uma_vez() {
+        let j = setup(true);
+        let mut issues = arvore();
+        j.fake.set_issues(&issues);
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        // Como ficaria a marca gravada pela versão 2.
+        let key = full_mark_key("deep-ion-ai", "demo");
+        {
+            let l = j.env.sessions.ledger();
+            let mark = l.etag(&key).unwrap().unwrap();
+            let atual = format!("\"mirror\":{MIRROR_VERSION}");
+            assert!(mark.contains(&atual), "{mark}");
+            let antiga = mark.replace(&atual, "\"mirror\":2");
+            l.apply_github(&GithubSnapshot {
+                project_id: j.env.project_id,
+                etags: vec![(key.clone(), antiga)],
+                synced_at: now_ms(),
+                ..GithubSnapshot::default()
+            })
+            .unwrap();
+            l.outbox_ack(i64::MAX).unwrap();
+        }
+        // O responsável mudou no Jira sem mudar o `updated`.
+        issues[1]["fields"]["assignee"] = serde_json::json!({ "name": "fulano" });
+        j.fake.set_issues(&issues);
+        j.fake.clear_calls();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert_eq!(j.fake.viewed().len(), 4, "relê tudo uma vez");
+        let l = j.env.sessions.ledger();
+        let i = l.get_issue(j.env.project_id, 2).unwrap().unwrap();
+        assert!(i
+            .meta
+            .iter()
+            .any(|m| m.field == "assignee" && m.value == "fulano"));
+        drop(l);
+        j.fake.clear_calls();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert!(j.fake.viewed().is_empty(), "{:?}", j.fake.viewed());
+    }
+
     /// O espelho gravado antes das sprints (marca da reconciliação com a
     /// configuração de antes, sem `mirror`) é relido uma vez, e só uma.
     #[test]
@@ -2393,6 +2568,60 @@ mod tests {
             now,
         );
         assert!(p.filter_changed && !p.reread_all && p.mark.is_some());
+    }
+
+    /// Mudar os campos do projeto (incluir, trocar o rótulo, reordenar ou
+    /// remover) relê todas as issues; o projeto sem eles mantém a marca.
+    #[test]
+    fn campos_do_projeto_releem_tudo() {
+        let extra = |id: &str, label: &str| ct_core::JiraExtraField {
+            id: id.into(),
+            label: label.into(),
+        };
+        let cfg = JiraConfig {
+            project_key: "P".into(),
+            ..JiraConfig::default()
+        };
+        assert!(read_fingerprint(&cfg).get("extra_fields").is_none());
+        let now = 10 * FULL_EVERY_MS;
+        let input = |fp: String| TrackerInput {
+            cached: HashMap::new(),
+            mark: Some((now - 60_000, fp)),
+            last_ok_at: Some(now - 60_000),
+            retry: Vec::new(),
+            pinned: Vec::new(),
+            work_items: HashSet::new(),
+            watched: Vec::new(),
+        };
+        let com = |fields: Vec<ct_core::JiraExtraField>| JiraConfig {
+            extra_fields: fields,
+            ..cfg.clone()
+        };
+        let um = com(vec![extra("customfield_1", "A")]);
+        let p = plan(&um, &input(fingerprint(&cfg)), now);
+        assert!(
+            p.reread_all && p.mark.is_some() && !p.filter_changed,
+            "{p:?}"
+        );
+        // Mesma lista (espaços à parte): incremental, sem reler.
+        let igual = com(vec![extra(" customfield_1 ", "A ")]);
+        let p = plan(&igual, &input(fingerprint(&um)), now);
+        assert!(!p.reread_all && p.mark.is_none(), "{p:?}");
+        for outro in [
+            com(vec![extra("customfield_1", "B")]),
+            com(vec![
+                extra("customfield_1", "A"),
+                extra("customfield_2", "C"),
+            ]),
+            com(vec![
+                extra("customfield_2", "C"),
+                extra("customfield_1", "A"),
+            ]),
+            cfg.clone(),
+        ] {
+            let p = plan(&outro, &input(fingerprint(&um)), now);
+            assert!(p.reread_all, "{:?}", outro.extra_fields);
+        }
     }
 
     #[test]

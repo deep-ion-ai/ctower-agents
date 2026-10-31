@@ -2,6 +2,7 @@
 
 use crate::process::{cite as clean, describe_status, run, RunError};
 use crate::Secret;
+use ct_core::JiraFieldInfo;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
@@ -156,6 +157,14 @@ impl JiraCli {
             let v = v.trim_matches(|c| c == '"' || c == '\'');
             (!v.is_empty()).then(|| v.to_string())
         })
+    }
+
+    /// Catálogo de campos próprios do `.config.yml` (`issue.fields.custom`).
+    /// Arquivo ausente ou sem a seção = lista vazia.
+    pub fn config_custom_fields(&self) -> Vec<JiraFieldInfo> {
+        std::fs::read_to_string(self.config_path())
+            .map(|t| parse_custom_fields(&t))
+            .unwrap_or_default()
     }
 
     fn run(&self, token: Option<&Secret>, args: &[&str]) -> Result<String, JiraError> {
@@ -387,6 +396,100 @@ fn expand_home(p: &str) -> PathBuf {
     }
 }
 
+/// Teto do catálogo de campos: um Jira com milhares de campos não incha o
+/// status do rastreador.
+pub const MAX_CUSTOM_FIELDS: usize = 2000;
+
+/// Campos padrão do Jira: aparecem sempre, não entram no catálogo.
+const STANDARD_FIELDS: [&str; 5] = ["status", "issuetype", "priority", "assignee", "reporter"];
+
+/// Lê `issue.fields.custom` do `.config.yml` do jira-cli, ordenado por nome
+/// (sem caixa nem acento).
+/// Lido à mão como o `server` (sem crate de YAML): só o subconjunto que o
+/// `jira init` grava, em blocos indentados. O que não se entende é ignorado;
+/// item sem `key` fica de fora.
+pub fn parse_custom_fields(text: &str) -> Vec<JiraFieldInfo> {
+    const PATH: [&str; 3] = ["issue", "fields", "custom"];
+    // Chaves abertas (sem valor na linha), com a indentação de cada uma.
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    let mut out: Vec<JiraFieldInfo> = Vec::new();
+    let mut cur: Option<JiraFieldInfo> = None;
+    for line in text.lines() {
+        let body = line.trim_start_matches(' ');
+        if body.trim().is_empty() || body.starts_with('#') {
+            continue;
+        }
+        let mut indent = line.len() - body.len();
+        let mut body = body.trim_end();
+        let item = body == "-" || body.starts_with("- ");
+        if item {
+            // O item fecha o anterior; a chave dona da lista fica.
+            stack.retain(|(i, _)| *i <= indent);
+            body = body[1..].trim_start();
+            indent += 2;
+        } else {
+            stack.retain(|(i, _)| *i < indent);
+        }
+        let in_list = stack.len() == 3 && stack.iter().map(|(_, k)| k.as_str()).eq(PATH);
+        let in_schema = stack.len() == 4
+            && stack[..3].iter().map(|(_, k)| k.as_str()).eq(PATH)
+            && stack[3].1 == "schema";
+        if item && in_list {
+            out.extend(cur.take());
+            cur = Some(JiraFieldInfo::default());
+        } else if !in_list && !in_schema && stack.len() < 3 {
+            // Fora da lista: o item em curso terminou.
+            out.extend(cur.take());
+        }
+        let Some((key, value)) = body.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+        if value.is_empty() {
+            stack.push((indent, key.to_string()));
+            continue;
+        }
+        let Some(f) = cur.as_mut() else { continue };
+        match (in_list, in_schema, key) {
+            (true, _, "key") => f.id = value.to_string(),
+            (true, _, "name") => f.name = value.to_string(),
+            (_, true, "datatype") => f.datatype = value.to_string(),
+            _ => {}
+        }
+    }
+    out.extend(cur);
+    let mut out: Vec<JiraFieldInfo> = out
+        .into_iter()
+        .filter(|f| !f.id.is_empty() && !STANDARD_FIELDS.contains(&f.id.as_str()))
+        .map(|mut f| {
+            if f.name.is_empty() {
+                f.name = f.id.clone();
+            }
+            f
+        })
+        .collect();
+    out.sort_by_cached_key(|f| (sort_key(&f.name), f.name.clone(), f.id.clone()));
+    out.truncate(MAX_CUSTOM_FIELDS);
+    out
+}
+
+/// Chave de ordenação sem caixa nem acento ("Área" vem antes de "Sem").
+fn sort_key(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            c => c,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,6 +507,121 @@ mod tests {
         assert_eq!(parse_cli_version("nada"), None);
         let info = "SERVER INFO\n-----------\n\nVersion: \t 8.5.2\nBuild Number: \t 805002\n";
         assert_eq!(server_version(info).as_deref(), Some("8.5.2"));
+    }
+
+    fn campo(id: &str, name: &str, datatype: &str) -> JiraFieldInfo {
+        JiraFieldInfo {
+            id: id.into(),
+            name: name.into(),
+            datatype: datatype.into(),
+        }
+    }
+
+    #[test]
+    fn catalogo_de_campos_do_config_yml() {
+        // Como o `jira init` grava, com campos padrão e tipos variados.
+        let yml = "\
+installation: Local
+server: https://jira.x
+issue:
+    types:
+        - id: \"1\"
+          name: Bug
+    fields:
+        custom:
+            - name: Responsável pela implementação
+              key: customfield_10099
+              schema:
+                datatype: user
+            - name: \"Área: Negócio\"
+              key: customfield_10010
+              schema:
+                datatype: array
+                items: option
+            - name: Sem tipo
+              key: customfield_10500
+            - name: Situação
+              key: status
+              schema:
+                datatype: status
+epic:
+    name: customfield_10001
+";
+        assert_eq!(
+            parse_custom_fields(yml),
+            vec![
+                campo("customfield_10010", "Área: Negócio", "array"),
+                campo(
+                    "customfield_10099",
+                    "Responsável pela implementação",
+                    "user"
+                ),
+                campo("customfield_10500", "Sem tipo", ""),
+            ]
+        );
+        // Lista no mesmo nível da chave também é YAML válido.
+        let compacto = "issue:\n  fields:\n    custom:\n    - name: B\n      key: cf_2\n    - name: A\n      key: cf_1\n";
+        assert_eq!(
+            parse_custom_fields(compacto),
+            vec![campo("cf_1", "A", ""), campo("cf_2", "B", "")]
+        );
+    }
+
+    #[test]
+    fn catalogo_sem_a_secao_ou_parcial() {
+        assert!(parse_custom_fields("server: https://jira.x\nlogin: u\n").is_empty());
+        assert!(parse_custom_fields("").is_empty());
+        assert!(parse_custom_fields("issue:\n    fields:\n        custom: []\n").is_empty());
+        assert!(parse_custom_fields("{nao: [e, yaml de bloco").is_empty());
+        // `custom` fora de `issue.fields` não conta.
+        assert!(parse_custom_fields("custom:\n  - name: X\n    key: cf_1\n").is_empty());
+        // Arquivo cortado no meio: fica o que deu para ler; item sem `key` sai.
+        let cortado = "\
+issue:
+    fields:
+        custom:
+            - name: Inteiro
+              key: customfield_1
+              schema:
+                datatype: string
+            - name: Sem chave
+              schema:
+            - key: customfield_3
+              sch";
+        assert_eq!(
+            parse_custom_fields(cortado),
+            vec![
+                campo("customfield_3", "customfield_3", ""),
+                campo("customfield_1", "Inteiro", "string"),
+            ]
+        );
+    }
+
+    #[test]
+    fn catalogo_tem_teto() {
+        let mut yml = String::from("issue:\n  fields:\n    custom:\n");
+        for i in 0..MAX_CUSTOM_FIELDS + 10 {
+            yml.push_str(&format!(
+                "      - name: Campo {i:05}\n        key: cf_{i}\n"
+            ));
+        }
+        let got = parse_custom_fields(&yml);
+        assert_eq!(got.len(), MAX_CUSTOM_FIELDS);
+        assert_eq!(got[0].name, "Campo 00000");
+    }
+
+    #[test]
+    fn catalogo_lido_do_arquivo_do_cadastro() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("c.yml");
+        let cli = JiraCli::new("jira", f.to_str().unwrap());
+        assert!(cli.config_custom_fields().is_empty(), "arquivo ausente");
+        std::fs::write(
+            &f,
+            "server: https://jira.x\nissue:\n  fields:\n    custom:\n      - name: R\n        key: cf_9\n",
+        )
+        .unwrap();
+        assert_eq!(cli.config_custom_fields(), vec![campo("cf_9", "R", "")]);
     }
 
     #[test]

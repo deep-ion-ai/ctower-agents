@@ -4,7 +4,7 @@ import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { EnvInfo, IssueRow, PrRow, ProjectTree } from "../protocol/gen";
 import type { HubDashboard, HubDecision, HubEvent, HubHistory, HubProject, HubSession, HubTree, HubTreeNode, HubWorkItem } from "../protocol/hub-gen";
-import { HUB_CONFIG_UNLINKED, dashboard, hubInfo, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
+import { HUB_CONFIG_UNLINKED, JIRA_META, dashboard, hubInfo, jiraHubProject, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
 
 const NOW = Date.now();
 const H = 3600_000;
@@ -712,4 +712,82 @@ test("Ver issue: tela local com o hub fora fica desabilitado", async () => {
   const ver = within(panel).getByRole("button", { name: "Ver issue" });
   expect(ver).toBeDisabled();
   expect(ver).toHaveAttribute("title", expect.stringContaining("fora do ar"));
+});
+
+// Cartão "No <tracker>" (#69): metadados do tracker no topo da lateral.
+function metaTree(meta: IssueRow["meta"], p: Partial<IssueRow> = {}): HubTree {
+  return {
+    ...TREE,
+    project: { ...HUB_PROJECT, tracker: jiraHubProject().tracker },
+    roots: [node(issue(50, "ui: painel de detalhe", { meta, ...p }), hubItem(50), PR50)],
+  };
+}
+
+async function openMeta(tree: HubTree) {
+  const api = build(true).onHub("hub.tree.get", tree);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await screen.findByText("ui: painel de detalhe");
+  const side = screen.getByRole("complementary", { name: "Árvore do projeto" });
+  await user.click(within(side).getByRole("button", { name: /ui: painel de detalhe/ }));
+  const panel = await screen.findByRole("region", { name: "Detalhe do item" });
+  // O histórico carregado: a lateral (Decisões) já está na tela.
+  await within(panel).findByRole("region", { name: "Decisões" });
+  return panel;
+}
+
+test("metadados do tracker: cartão 'No Jira' com rótulos e valores na ordem e a data de atualização", async () => {
+  const panel = await openMeta(metaTree(JIRA_META, { updated_at: NOW - 3 * H }));
+  const card = within(panel).getByRole("region", { name: "No Jira" });
+  expect(within(card).getByRole("heading", { name: /No Jira/ })).toHaveTextContent(/atualizada há 3 h/);
+  const terms = card.querySelectorAll("dt");
+  const values = card.querySelectorAll("dd");
+  expect([...terms].map((t) => t.textContent)).toEqual(JIRA_META.map((m) => m.label));
+  expect([...values].map((d) => d.textContent)).toEqual(JIRA_META.map((m) => m.value));
+  // No topo da coluna lateral: antes de Decisões no documento, fora das colunas.
+  const decisoes = within(panel).getByRole("region", { name: "Decisões" });
+  expect(card.compareDocumentPosition(decisoes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(card.parentElement).toHaveClass("iv-grid", "iv-has-meta", "iv-has-side");
+});
+
+test("metadados do tracker: sem data de atualização, o cartão não tem subtítulo", async () => {
+  const panel = await openMeta(metaTree(JIRA_META.slice(0, 1), { updated_at: 0 }));
+  const card = within(panel).getByRole("region", { name: "No Jira" });
+  expect(within(card).getByRole("heading")).toHaveTextContent(/^No Jira$/);
+});
+
+test("metadados do tracker: sem meta (hub anterior à #67) o cartão não aparece", async () => {
+  const panel = await openMeta(metaTree(undefined));
+  expect(within(panel).queryByRole("region", { name: /^No / })).not.toBeInTheDocument();
+  expect(panel.querySelector(".iv-grid")).not.toHaveClass("iv-has-meta");
+});
+
+test("metadados do tracker: com meta vazio o cartão não aparece", async () => {
+  const panel = await openMeta(metaTree([]));
+  expect(within(panel).queryByRole("region", { name: /^No / })).not.toBeInTheDocument();
+  expect(within(panel).queryByText("Situação")).not.toBeInTheDocument();
+});
+
+test("metadados do tracker na tela local (tree.get): 'No GitHub', mesmo com o hub fora", async () => {
+  const api = build(false);
+  api.on("tree.get", {
+    project: project(),
+    sync: sync(),
+    roots: [
+      {
+        issue: issue(50, "ui: painel de detalhe", { meta: [{ field: "assignee", label: "Responsável", value: "octocat" }] }),
+        work_item: { ...WI50, worktree_path: null } as never,
+        summary: { pr: PR50, decisions: { total: 0, pending_autonomous: 0 }, last_activity_at: NOW, live_envs: [] },
+        children: [],
+      },
+    ],
+    untracked: [],
+  } satisfies ProjectTree);
+  render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1 }} />);
+  const panel = await openPanel(userEvent.setup(), "ui: painel de detalhe");
+  const card = within(panel).getByRole("region", { name: "No GitHub" });
+  expect(card.querySelector("dt")).toHaveTextContent("Responsável");
+  expect(card.querySelector("dd")).toHaveTextContent("octocat");
+  // Sem o histórico do hub não há lateral: o cartão fica sozinho na área dele.
+  expect(card.parentElement).not.toHaveClass("iv-has-side");
 });

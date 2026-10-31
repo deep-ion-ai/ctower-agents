@@ -593,6 +593,12 @@ ALTER TABLE issue_cache ADD COLUMN sprints TEXT NOT NULL DEFAULT '[]';
     r#"
 ALTER TABLE project ADD COLUMN docs_config TEXT NOT NULL DEFAULT '{}';
 "#,
+    // 26: metadados do tracker de cada issue do espelho, a mesma coluna da
+    // migração 16 do `ledger.db`. `[]` nas issues já gravadas; o
+    // `issue_mirror` do ambiente de sync preenche.
+    r#"
+ALTER TABLE issue_cache ADD COLUMN meta TEXT NOT NULL DEFAULT '[]';
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -2746,7 +2752,7 @@ mod tests {
             has_sub_issues: has_sub,
             url: "u".into(),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -3905,7 +3911,7 @@ mod tests {
             has_sub_issues: false,
             url: "u".into(),
             updated_at: 1,
-            sprints: Vec::new(),
+            ..Default::default()
         };
         let snap = |prs, issues| GithubSnapshot {
             project_id: p.id,
@@ -4592,7 +4598,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 25);
+        assert_eq!(v, 26);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
@@ -4644,6 +4650,34 @@ mod tests {
         assert!(tree.roots[0].issue.sprints.is_empty());
         let v = serde_json::to_value(&tree.roots[0].issue).unwrap();
         assert_eq!(v["sprints"], json!([]));
+    }
+
+    /// Migração 26 num `hub.db` da migração 25: as issues já espelhadas
+    /// ficam sem metadados e a árvore segue lendo o espelho.
+    #[test]
+    fn migracao_26_issues_existentes_ficam_sem_metadados() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("hub.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            for m in &HUB_MIGRATIONS[..25] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.execute_batch(
+                "PRAGMA user_version = 25;
+                 INSERT INTO project (key, gh_owner, gh_repo, name, created_at, rev)
+                   VALUES ('deep-ion-ai/demo', 'deep-ion-ai', 'demo', 'demo', 1, 1);
+                 INSERT INTO issue_cache (project_id, gh_number, title, state, url, updated_at, synced_at)
+                   SELECT id, 7, 't', 'open', 'u', 1, 1 FROM project WHERE key = 'deep-ion-ai/demo';",
+            )
+            .unwrap();
+        }
+        let hub = Hub::open(&db).unwrap();
+        let tree = hub.tree("deep-ion-ai", "demo").unwrap().unwrap();
+        assert_eq!(tree.roots.len(), 1);
+        assert!(tree.roots[0].issue.meta.is_empty());
+        let v = serde_json::to_value(&tree.roots[0].issue).unwrap();
+        assert_eq!(v["meta"], json!([]));
     }
 
     /// Migração 21 (#347) num `hub.db` da develop (até a migração 20, com

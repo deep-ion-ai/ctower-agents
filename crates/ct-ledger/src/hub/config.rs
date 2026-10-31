@@ -95,6 +95,7 @@ impl ProjectProvider {
                             jira | head -1)"
                     .into());
             }
+            validate_jira_extra_fields(&j.extra_fields)?;
         }
         if let Some(g) = self.forge.gitlab() {
             if g.host.is_empty() || !g.path.contains('/') {
@@ -114,6 +115,42 @@ impl ProjectProvider {
         }
         self.docs.validate()
     }
+}
+
+/// Campos do projeto na tela da issue: ID e rótulo preenchidos, sem ID
+/// repetido e no máximo [`ct_core::MAX_JIRA_EXTRA_FIELDS`]. O ID não
+/// precisa estar no catálogo do jira-cli: pode ser digitado à mão.
+fn validate_jira_extra_fields(
+    fields: &[ct_core::JiraExtraField],
+) -> std::result::Result<(), String> {
+    let max = ct_core::MAX_JIRA_EXTRA_FIELDS;
+    if fields.len() > max {
+        return Err(format!(
+            "campos do projeto: no máximo {max} campos na tela da issue ({} informados)",
+            fields.len()
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (i, f) in fields.iter().enumerate() {
+        let (id, label) = (f.id.trim(), f.label.trim());
+        let n = i + 1;
+        if id.is_empty() {
+            return Err(format!(
+                "campos do projeto: informe o campo do Jira na linha {n} (ex.: customfield_10099)"
+            ));
+        }
+        if label.is_empty() {
+            return Err(format!(
+                "campos do projeto: informe o rótulo na tela do campo {id} (linha {n})"
+            ));
+        }
+        if !seen.insert(id.to_ascii_lowercase()) {
+            return Err(format!(
+                "campos do projeto: o campo {id} aparece mais de uma vez (linha {n})"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// O filtro do sync do Jira: no modo sprint ativa, nada a conferir; fora

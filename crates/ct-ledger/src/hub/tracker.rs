@@ -211,8 +211,8 @@ mod tests {
         TrackerStatusChange,
     };
     use ct_core::{
-        ForgeConfig, GitlabConfig, JiraConfig, JiraReadiness, PrState, TrackerConfig,
-        TrackerReadiness,
+        ForgeConfig, GitlabConfig, JiraConfig, JiraFieldInfo, JiraReadiness, PrState,
+        TrackerConfig, TrackerReadiness,
     };
 
     const OWNER: &str = "grupo/projeto";
@@ -283,7 +283,7 @@ mod tests {
                 has_sub_issues: false,
                 url: format!("https://jira.example.com/browse/PROJ-{n}"),
                 updated_at: 10,
-                sprints: Vec::new(),
+                ..Default::default()
             },
             removed: false,
         })
@@ -321,6 +321,11 @@ mod tests {
                     cli: Some("1.7.0".into()),
                     config_present: true,
                     credential_ok: error.is_none(),
+                    custom_fields: vec![JiraFieldInfo {
+                        id: "customfield_10099".into(),
+                        name: "Responsável pela implementação".into(),
+                        datatype: "user".into(),
+                    }],
                     ..Default::default()
                 },
                 ..Default::default()
@@ -416,6 +421,46 @@ mod tests {
         // Cadastro anterior (sem JQL nem modo): a edição que não manda o
         // rastreador não confere o filtro.
         assert!(filtro("", 100).validate_base().is_ok());
+        // Campos do projeto: ID e rótulo preenchidos, sem ID repetido, até 20.
+        let extras = |fields: &[(&str, &str)]| {
+            let mut pv = jira();
+            if let TrackerConfig::Jira(j) = &mut pv.tracker {
+                j.extra_fields = fields
+                    .iter()
+                    .map(|(id, label)| ct_core::JiraExtraField {
+                        id: (*id).into(),
+                        label: (*label).into(),
+                    })
+                    .collect();
+            }
+            pv
+        };
+        let err = hub
+            .add_project_with(&novo(), &extras(&[("customfield_1", "A"), (" ", "B")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("informe o campo do Jira na linha 2"), "{err}");
+        let err = extras(&[("customfield_1", "  ")]).validate().unwrap_err();
+        assert!(
+            err.contains("informe o rótulo na tela do campo customfield_1"),
+            "{err}"
+        );
+        let err = extras(&[("customfield_1", "A"), (" customfield_1 ", "B")])
+            .validate()
+            .unwrap_err();
+        assert!(
+            err.contains("o campo customfield_1 aparece mais de uma vez (linha 2)"),
+            "{err}"
+        );
+        let ids: Vec<String> = (0..21).map(|i| format!("customfield_{i}")).collect();
+        let muitos: Vec<(&str, &str)> = ids.iter().map(|id| (id.as_str(), "X")).collect();
+        let err = extras(&muitos).validate().unwrap_err();
+        assert!(err.contains("no máximo 20 campos"), "{err}");
+        assert!(extras(&muitos[..20]).validate().is_ok());
+        // ID digitado à mão, fora do catálogo, é aceito.
+        assert!(extras(&[("customfield_99999", "Manual")])
+            .validate()
+            .is_ok());
         // Nada foi gravado.
         assert!(hub.find_project(OWNER, REPO).unwrap().is_none());
     }
@@ -594,6 +639,7 @@ mod tests {
         let ts = hub.tracker_status(p.id).unwrap().unwrap();
         assert_eq!((ts.env_id.as_str(), ts.env_name.as_str()), ("a", "a"));
         assert_eq!(ts.readiness.jira.cli.as_deref(), Some("1.7.0"));
+        assert_eq!(ts.readiness.jira.custom_fields[0].id, "customfield_10099");
         let v = hub.project_views().unwrap();
         assert_eq!(v[0].tracker_status.as_ref().unwrap().env_id, "a");
 
@@ -683,6 +729,53 @@ mod tests {
             .collect();
         let i = all.iter().find(|i| i.gh_number == 5450).unwrap();
         assert_eq!(i.sprints, vec![sprint]);
+    }
+
+    /// Os metadados vêm no `issue_mirror` e saem na árvore do hub; a linha
+    /// de um ambiente anterior (sem `meta`) entra com a lista vazia.
+    #[test]
+    fn espelho_com_metadados_e_de_ambiente_anterior() {
+        let hub = hub_jira();
+        hub.add_assignment(OWNER, REPO, "a", None).unwrap();
+        let meta = vec![
+            crate::IssueMeta {
+                field: "status".into(),
+                label: "Situação".into(),
+                value: "Em andamento".into(),
+            },
+            crate::IssueMeta {
+                field: "assignee".into(),
+                label: "Responsável".into(),
+                value: "Fulano".into(),
+            },
+        ];
+        let mut com = issue(5450, "open");
+        if let SyncChange::IssueMirror(m) = &mut com {
+            m.issue.meta = meta.clone();
+        }
+        let mut v = serde_json::to_value(issue(5451, "open")).unwrap();
+        let antiga = v
+            .pointer_mut("/data/issue")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        assert!(antiga.remove("meta").is_some());
+        let sem: SyncChange = serde_json::from_value(v).unwrap();
+        let r = hub
+            .ingest("a", "a", &[entry(1, com), entry(2, sem)])
+            .unwrap();
+        assert_eq!(r.applied, 2);
+        let p = project(&hub);
+        assert_eq!(hub.get_issue(p.id, 5450).unwrap().unwrap().meta, meta);
+        assert!(hub.get_issue(p.id, 5451).unwrap().unwrap().meta.is_empty());
+        let tree = hub.tree(OWNER, REPO).unwrap().unwrap();
+        let all: Vec<&IssueRow> = tree
+            .roots
+            .iter()
+            .flat_map(|n| std::iter::once(&n.issue).chain(n.children.iter().map(|c| &c.issue)))
+            .collect();
+        let i = all.iter().find(|i| i.gh_number == 5450).unwrap();
+        assert_eq!(i.meta, meta);
     }
 
     /// `issue_mirror` com `removed` (fora do JQL): o hub apaga a issue, a
