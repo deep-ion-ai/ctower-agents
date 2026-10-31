@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { rawConsole, uiLog } from "./logs/uiLog";
 
 /**
  * Uma exceção ao renderizar uma tela não pode deixar a janela em branco: mostra o erro
@@ -12,7 +13,12 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("Erro ao renderizar a tela:", error, info.componentStack);
+    // No log da UI (#65) com a pilha; o console recebe sem passar de novo pelo log.
+    rawConsole.error("Erro ao renderizar a tela:", error, info.componentStack);
+    uiLog.add("error", "ui.react", `Erro ao renderizar a tela: ${error.message}`, {
+      ...(error.stack ? { stack: error.stack } : {}),
+      ...(info.componentStack ? { component_stack: info.componentStack.trim() } : {}),
+    });
   }
 
   render() {

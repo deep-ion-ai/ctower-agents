@@ -14,6 +14,7 @@ import { syncText } from "../project/settings";
 import { projectAt } from "../project/sections";
 import { isJira } from "./tracker";
 import { DocsBackupReadOnly } from "../maintenance/DocsBackup";
+import { logsTab } from "../maintenance/sections";
 
 /** Quantas propostas e sinais a Visão geral lista; o resto fica na seção. */
 export const OVERVIEW_LIMIT = 6;
@@ -38,12 +39,17 @@ export function HubOverview({
   open(s: HubSection): void;
 }) {
   const { web } = useTower();
+  const nav = useNav();
   return (
     <>
       <div className="hub-page-head">
         <h1 id="hub-h1">Visão geral</h1>
         <span className="muted">O que pede a sua ação no hub agora</span>
         <GestorLauncher />
+        {/* Tela Logs (#65) já na fonte do hub. */}
+        <button type="button" className="btn btn-sm" onClick={() => nav.openTab(logsTab({ kind: "hub" }))}>
+          Logs do hub
+        </button>
       </div>
       <div className="hub-cards">
         <Warnings />

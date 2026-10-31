@@ -7,10 +7,17 @@ license.workspace = true
 # Base HTTP/WS comum ao ctowerd (ct-server) e ao cthubd. Sem sessões, PTY
 # nem git: o cthubd depende só disto, do ct-ledger e do ct-gh.
 [dependencies]
+ct-core.workspace = true
 ct-ledger.workspace = true
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+# Log em arquivo e a tela Logs (#65).
+tracing-subscriber.workspace = true
+regex.workspace = true
 futures-util.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -415,11 +415,9 @@ fn secrets(dirs: &Dirs, cmd: SecretsCmd) {
 }
 
 fn serve(dirs: Dirs) {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    // O `[logs]` vem do config.toml; erro de leitura aparece no `serve`.
+    let logs = HubConfig::load(&dirs).map(|c| c.logs).unwrap_or_default();
+    ct_http::logs::init("cthubd", &logs, "CTHUB_DATA_DIR");
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

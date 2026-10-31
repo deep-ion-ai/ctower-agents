@@ -2,6 +2,7 @@
 //! token, escuta no loopback e no `bind` explícito, JSON-RPC do `/ws` e o
 //! contrato do sync ambiente → hub (spec do hub como plano de controle §2).
 
+pub mod logs;
 pub mod rpc;
 pub mod sync;
 

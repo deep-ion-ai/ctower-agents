@@ -10,11 +10,14 @@ import {
   maintenancePath,
   maintenanceTab,
   maintenanceTitle,
+  logsSource,
+  logsTab,
+  type MaintenanceScreen,
 } from "./sections";
 
 test("grupos e seções: todas aparecem uma vez, na ordem do painel", () => {
   expect(MAINTENANCE_GROUPS.map((g) => g.label)).toEqual([undefined, "Atualizações", undefined]);
-  expect(MAINTENANCE_SECTIONS).toEqual(["overview", "app-updates", "env-updates", "hub-updates", "cleanup", "backup"]);
+  expect(MAINTENANCE_SECTIONS).toEqual(["overview", "app-updates", "env-updates", "hub-updates", "cleanup", "backup", "logs"]);
   expect(maintenancePath("env-updates")).toEqual(["Atualizações", "Ambientes"]);
   expect(maintenancePath("hub-updates")).toEqual(["Atualizações", "Hub"]);
   expect(maintenancePath("cleanup")).toEqual(["Limpeza"]);
@@ -35,6 +38,21 @@ test("aba por seção: a Visão geral é a aba da tela; o ambiente só nas seç�
   expect(maintenanceTitle("app-updates")).toBe("Manutenção · Atualizações · Este app");
 });
 
+test("Logs (#65): uma aba só, com a fonte no endereço", () => {
+  expect(logsTab({ kind: "hub" })).toEqual({
+    id: "maintenance:logs",
+    screen: { name: "maintenance", section: "logs", source: "hub" },
+  });
+  const env = logsTab({ kind: "env", env: "wsl" });
+  expect(env).toEqual({ id: "maintenance:logs", screen: { name: "maintenance", section: "logs", source: "env", env: "wsl" } });
+  expect(logsSource(env.screen as MaintenanceScreen)).toEqual({ kind: "env", env: "wsl" });
+  expect(logsSource(logsTab({ kind: "ui" }).screen as MaintenanceScreen)).toEqual({ kind: "ui" });
+  // Sem fonte (lugar da paleta) ou ambiente sem `env`: a tela escolhe.
+  expect(logsSource({ name: "maintenance", section: "logs" })).toBeUndefined();
+  expect(logsSource({ name: "maintenance", section: "logs", source: "env" })).toBeUndefined();
+  expect(maintenanceTitle("logs")).toBe("Manutenção · Logs");
+});
+
 test("paleta: seções com ids estáveis, dentro de PLACES", () => {
   expect(MAINTENANCE_PLACES.map((p) => p.label)).toEqual([
     "Manutenção › Visão geral",
@@ -43,6 +61,7 @@ test("paleta: seções com ids estáveis, dentro de PLACES", () => {
     "Manutenção › Atualizações › Hub",
     "Manutenção › Limpeza",
     "Manutenção › Backup e snapshots",
+    "Manutenção › Logs",
   ]);
   expect(MAINTENANCE_PLACES.find((p) => p.id === "maintenance:cleanup")?.open).toEqual({ tab: maintenanceTab("cleanup") });
   const ids = PLACES.map((p) => p.id);

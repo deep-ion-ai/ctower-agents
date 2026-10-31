@@ -6,6 +6,7 @@ mod clock;
 pub mod docs;
 pub mod files;
 pub mod guard;
+mod logs;
 #[macro_use]
 mod model;
 mod repo_url;
@@ -13,6 +14,7 @@ pub mod tracker;
 
 pub use clock::{civil_from_days, hlc, now_ms, parse_iso8601, utc_stamp};
 pub use docs::DocsConfig;
+pub use logs::LogsConfig;
 pub use model::*;
 pub use repo_url::{github_repo_from_url, repo_from_url, RepoRef};
 pub use tracker::{

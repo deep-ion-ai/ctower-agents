@@ -93,6 +93,11 @@ export type Screen =
        * o que ficou fora do hub só desse projeto. Monte com `maintenanceTab`.
        */
       project?: ProjectRef;
+      /**
+       * Fonte da tela Logs (#65): `env` usa o `env` acima. Monte com
+       * `logsTab`; sem ela, a tela escolhe (hub, ambiente ou UI).
+       */
+      source?: "hub" | "env" | "ui";
     }
   | { name: "review"; env?: string; workItemId?: number }
   /**

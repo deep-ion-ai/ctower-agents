@@ -44,6 +44,9 @@ const ARCHIVED_MAX: u32 = 100;
 const EVENTS_LIMIT: u32 = 20;
 const EVENTS_MAX: u32 = 100;
 
+/// Push do modo seguir do log (`logs.follow`, #65).
+pub const LOGS_PUSH: &str = "logs.lines";
+
 /// Falas devolvidas por `transcript.tail` sem `entries`.
 const TAIL_DEFAULT: usize = 30;
 
@@ -83,6 +86,8 @@ struct Conn {
     attached: HashMap<String, Arc<AtomicBool>>,
     /// A conexão acompanha os pedidos de permissão (`session.permission.watch`).
     watch: Option<crate::permissions::Watch>,
+    /// Modo seguir do log do daemon (`logs.follow`, #65).
+    log_follow: Option<tokio::task::JoinHandle<()>>,
 }
 
 async fn serve(socket: WebSocket, st: AppState) {
@@ -103,6 +108,7 @@ async fn serve(socket: WebSocket, st: AppState) {
         out,
         attached: HashMap::new(),
         watch: None,
+        log_follow: None,
     };
     while let Some(Ok(msg)) = stream.next().await {
         match msg {
@@ -117,6 +123,9 @@ async fn serve(socket: WebSocket, st: AppState) {
     }
     for cancel in conn.attached.values() {
         cancel.store(true, Ordering::Relaxed);
+    }
+    if let Some(f) = conn.log_follow.take() {
+        f.abort();
     }
     pusher.abort();
     drop(conn);
@@ -141,6 +150,7 @@ pub(crate) async fn channel_call(st: AppState, method: &str, p: &Value) -> RpcRe
         out,
         attached: HashMap::new(),
         watch: None,
+        log_follow: None,
     };
     conn.call(method, p).await
 }
@@ -824,6 +834,27 @@ impl Conn {
             // Limpeza após a conclusão do work item (issue #287).
             "cleanup.status" | "cleanup.plan" | "cleanup.run" => {
                 crate::cleanup::rpc(self.st.cleanup.clone(), method, p).await
+            }
+            // Log do daemon (#65): as últimas linhas e o modo seguir, por
+            // conexão, com o push `logs.lines`.
+            "logs.tail" => ct_http::logs::rpc_tail(ct_http::logs::global(), p).await,
+            "logs.follow" => {
+                let h = ct_http::logs::spawn_follow(
+                    ct_http::logs::global(),
+                    p,
+                    self.out.clone(),
+                    LOGS_PUSH,
+                )?;
+                if let Some(old) = self.log_follow.replace(h) {
+                    old.abort();
+                }
+                Ok(json!({}))
+            }
+            "logs.unfollow" => {
+                if let Some(f) = self.log_follow.take() {
+                    f.abort();
+                }
+                Ok(json!({}))
             }
             // Envio deste ambiente ao hub: vale em qualquer daemon que envie.
             "hub.sync.now" => crate::hub_sync::run_sync_now(self.st.hub_sender.clone())
@@ -1526,6 +1557,63 @@ mod tests {
         let f = frame(CHANNEL_INPUT, &id, b"abc");
         assert_eq!(parse_frame(&f), Some((CHANNEL_INPUT, id, &b"abc"[..])));
         assert_eq!(parse_frame(&f[..10]), None);
+    }
+
+    /// Log do daemon (#65): `logs.tail` com filtro e paginação, e o modo
+    /// seguir empurrando `logs.lines` só nesta conexão, mascarado.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn logs_tail_e_follow() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = ct_http::logs::install(
+            ct_http::logs::Logs::open(dir.path(), "ctowerd", 1 << 20, 2).unwrap(),
+        );
+        let line = |level: &str, message: String| ct_http::logs::LogLine {
+            id: 0,
+            ts: ct_core::now_ms(),
+            level: level.into(),
+            target: "ct_server::teste".into(),
+            message,
+            fields: Default::default(),
+        };
+        let tag = uuid::Uuid::new_v4().simple().to_string();
+        for i in 0..3 {
+            logs.write(line("warn", format!("{tag} aviso {i}")));
+        }
+        let srv = Srv::new(FakeClaude::exit(0));
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let mut other = Ui::new(&url).await;
+
+        let v = ui
+            .call(
+                "logs.tail",
+                json!({ "q": tag, "level": "warn", "limit": 2 }),
+            )
+            .await;
+        let r = &v["result"];
+        assert_eq!(r["lines"].as_array().unwrap().len(), 2, "{v}");
+        assert_eq!(r["lines"][1]["message"], format!("{tag} aviso 2"));
+        assert_eq!(r["more"], true);
+        let before = r["lines"][0]["id"].clone();
+        let v = ui
+            .call("logs.tail", json!({ "q": tag, "before": before }))
+            .await;
+        assert_eq!(v["result"]["lines"][0]["message"], format!("{tag} aviso 0"));
+        assert_eq!(v["result"]["more"], false);
+        let v = ui.call("logs.tail", json!({ "level": "nada" })).await;
+        assert_eq!(v["error"]["code"], -32602);
+
+        let v = ui.call("logs.follow", json!({ "q": tag })).await;
+        assert_eq!(v["result"], json!({}), "{v}");
+        logs.write(line("error", format!("{tag} token={}", "f".repeat(64))));
+        let p = ui.wait_push(LOGS_PUSH).await;
+        assert_eq!(p["data"]["lines"][0]["message"], format!("{tag} token=***"));
+        assert_eq!(p["data"]["lines"][0]["level"], "error");
+        // A outra conexão não pediu: nada chega a ela.
+        other.call("env.info", json!({})).await;
+        assert!(other.pushes.iter().all(|p| p["event"] != LOGS_PUSH));
+        let v = ui.call("logs.unfollow", json!({})).await;
+        assert_eq!(v["result"], json!({}));
     }
 
     #[tokio::test(flavor = "multi_thread")]
