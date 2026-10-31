@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.4.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.3.0...v1.4.0) (2026-10-31)
+
+
+### Features
+
+* **ui:** cores de texto e fundo da aba por tipo e por tema e ícone na aba de sessão ([6a28396](https://github.com/deep-ion-ai/ctower-agents/commit/6a283963d56f34dc813784ef9f8cffe19f681b16))
+* **ui:** cores de texto e fundo da aba por tipo e por tema e ícone na aba de sessão ([40746d4](https://github.com/deep-ion-ai/ctower-agents/commit/40746d4dcdbb6979e7f55a74c256a2469e69310f)), closes [#73](https://github.com/deep-ion-ai/ctower-agents/issues/73)
+* **ui:** sincronizar um projeto de vários lugares e mostrar o erro de sync por projeto ([e937410](https://github.com/deep-ion-ai/ctower-agents/commit/e9374108d2f699670bbebf2ab82390ba43eb27e5))
+* **ui:** sincronizar um projeto de vários lugares e mostrar o erro de sync por projeto ([#90](https://github.com/deep-ion-ai/ctower-agents/issues/90)) ([539b703](https://github.com/deep-ion-ai/ctower-agents/commit/539b703c26b47c4dcec387dbdf27637f78657e33))
+
+
+### Bug Fixes
+
+* **ct-gh:** issue apagada ou transferida não trava mais o sync ([#89](https://github.com/deep-ion-ai/ctower-agents/issues/89)) ([84a27c0](https://github.com/deep-ion-ai/ctower-agents/commit/84a27c01ca7a2dba877b9f1a4200105f2616eee4))
+* **ct-gh:** issue apagada ou transferida não trava mais o sync ([#89](https://github.com/deep-ion-ai/ctower-agents/issues/89)) ([ed57903](https://github.com/deep-ion-ai/ctower-agents/commit/ed57903ece94275da75a619542a2d8a946a7c303))
+
 ## [1.3.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.2.0...v1.3.0) (2026-10-31)
 
 
