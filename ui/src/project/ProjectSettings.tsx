@@ -8,6 +8,7 @@ import { AgentRules } from "../hub/AgentRules";
 import { isJira } from "../hub/tracker";
 import {
   AssignmentsCard,
+  CleanupCard,
   DangerZone,
   DocsCard,
   ProjectSecretsCard,
@@ -80,7 +81,7 @@ export function ProjectSettings({
   }
 
   const pr = p.project;
-  /** Na web, Secrets e Zona de perigo ficam no índice, desabilitadas com o motivo (#26). */
+  /** Na web, Secrets, Limpeza e Zona de perigo ficam no índice, desabilitadas com o motivo (#26). */
   const desktopOnly = (s: ProjectSettingsSection) => web && DESKTOP_ONLY_SECTIONS.has(s);
   /** Sessões vivas relatadas no hub para o projeto (o impacto de remover e de excluir). */
   const live: HubSession[] = (() => {
@@ -159,6 +160,9 @@ export function ProjectSettings({
     case "docs":
       body = <DocsCard project={p} settings={settings} readOnly={web} />;
       break;
+    case "cleanup":
+      body = <CleanupCard project={p} />;
+      break;
     case "danger":
       body = (
         <DangerZone
@@ -197,7 +201,7 @@ export function ProjectSettings({
         </ul>
         {web && (
           <p id={noteId} className="muted desktop-only-note pj-settings-note">
-            Secrets e exclusão do projeto no app desktop
+            Secrets, limpeza e exclusão do projeto no app desktop
           </p>
         )}
       </nav>

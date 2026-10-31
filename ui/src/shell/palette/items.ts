@@ -17,6 +17,13 @@ import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../
 import { liveGestorLabel } from "../../hub/HubGestor";
 import { PLACES, type Place } from "../places";
 import { maintenanceTab } from "../../maintenance/sections";
+import {
+  DESKTOP_ONLY_ENV_SECTIONS,
+  ENV_SECTIONS,
+  ENV_SECTION_KEYWORDS,
+  ENV_SECTION_LABEL,
+  envTab,
+} from "../../env/sections";
 import type { StartTarget } from "../start";
 import type { SessionAction, SessionActionId } from "../../terminal/actions";
 import { placeOnWeb, webPlaceLabel } from "../../web/mode";
@@ -215,9 +222,9 @@ function commands(src: PaletteSources, interrupted: number, projects: ProjectRef
     {
       id: "cmd:sync",
       kind: "command",
-      label: "Sincronizar agora",
+      label: "Buscar issues agora",
       detail: `${trackersText(projects.map((p) => p.provider))}, nos ambientes conectados`,
-      keywords: "sync github jira",
+      keywords: "sync sincronizar github jira",
       action: { type: "sync" },
     },
   ];
@@ -341,11 +348,46 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
           screen: projectsPlace({ project, assign: true }),
         }),
         at("secrets", "Secrets", "secrets variáveis env tokens chaves", "settings", "secrets"),
+        at("cleanup", "Limpeza", "limpeza limpar worktree target concluídos manutenção", "settings", "cleanup"),
         at("danger", "Excluir", "excluir apagar remover zona de perigo", "settings", "danger"),
       );
     }
   }
   return out;
+}
+
+/**
+ * Detalhe de cada ambiente (#23): "Ambiente: wsl" na lista inicial e, só
+ * buscando, cada seção dele ("Ambiente: Atualização — wsl"), com o
+ * endereço próprio (`envTab`). Na web, sem as seções do desktop.
+ */
+function envItems(src: PaletteSources): PaletteItem[] {
+  return src.envs.flatMap((e) => {
+    const st = src.status[e.id];
+    const head: PaletteItem = {
+      id: `env:${e.id}`,
+      kind: "place",
+      label: `Ambiente: ${e.name}`,
+      detail: !st ? "conectando…" : st.connected ? "conectado" : "desconectado",
+      keywords: "ambiente daemon ctowerd detalhe conexão hub atualização limpeza",
+      action: { type: "tab", tab: envTab(e.id, e.name) },
+    };
+    const sections = ENV_SECTIONS.filter((s) => s !== "connection" && (!src.web || !DESKTOP_ONLY_ENV_SECTIONS.has(s)));
+    return [
+      head,
+      ...sections.map(
+        (s): PaletteItem => ({
+          id: `env:${e.id}:${s}`,
+          // Como as seções do projeto ("Projeto: Rastreador — x"), comandos.
+          kind: "command",
+          label: `Ambiente: ${ENV_SECTION_LABEL[s]} — ${e.name}`,
+          keywords: `ambiente ${ENV_SECTION_KEYWORDS[s]}`,
+          browse: false,
+          action: { type: "tab", tab: envTab(e.id, e.name, s) },
+        }),
+      ),
+    ];
+  });
 }
 
 /** A folha de atalhos (#27), também com `?` fora de campos de texto. */
@@ -416,6 +458,8 @@ export function paletteItems(src: PaletteSources): PaletteItem[] {
     ...commands(src, interrupted, projects),
     SHORTCUTS,
     ...projectCommands(src, projects),
+    // Depois dos de projeto: "configurar <projeto>" segue achando o projeto primeiro.
+    ...envItems(src),
     ...projectItems,
     ...issueItems,
     ...(src.web ? [] : starts),

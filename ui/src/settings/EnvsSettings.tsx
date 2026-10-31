@@ -1,5 +1,7 @@
 import { useState } from "react";
 import type { EnvInput, EnvView } from "../api/types";
+import { envTab } from "../env/sections";
+import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 
 const toInput = (e: EnvView): EnvInput => ({ id: e.id, name: e.name, url: e.url, kind: e.kind, distro: e.distro });
@@ -17,9 +19,15 @@ function slugId(name: string, taken: string[]): string {
   return id;
 }
 
-/** Ambientes (daemons `ctowerd`) que este app acompanha: lista, editar, adicionar e remover. */
-export function EnvsSettings() {
+/**
+ * Ambientes (daemons `ctowerd`) que este app acompanha: lista, editar,
+ * adicionar e remover. Cada um leva ao detalhe dele (#23); com `only`, só
+ * esse ambiente (a seção Conexão do detalhe), sem adicionar.
+ */
+export function EnvsSettings({ only }: { only?: string } = {}) {
   const { envs, status, api, reloadEnvs } = useTower();
+  const nav = useNav();
+  const shown = only === undefined ? envs : envs.filter((e) => e.id === only);
   const [editing, setEditing] = useState<EnvInput | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,19 +57,21 @@ export function EnvsSettings() {
 
   return (
     <div className="set-stack">
-      <div className="settings-head">
-        <button
-          type="button"
-          className="btn"
-          onClick={() => {
-            setIsNew(true);
-            setEditing({ id: "", name: "", url: "ws://", kind: "remote", distro: null, token: "" });
-          }}
-        >
-          + Adicionar ambiente
-        </button>
-      </div>
-      {envs.map((e) => {
+      {only === undefined && (
+        <div className="settings-head">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setIsNew(true);
+              setEditing({ id: "", name: "", url: "ws://", kind: "remote", distro: null, token: "" });
+            }}
+          >
+            + Adicionar ambiente
+          </button>
+        </div>
+      )}
+      {shown.map((e) => {
         const st = status[e.id];
         return (
           <div key={e.id} className="env-row">
@@ -79,6 +89,11 @@ export function EnvsSettings() {
               </span>
             </div>
             <div className="env-actions">
+              {only === undefined && (
+                <button type="button" className="btn" onClick={() => nav.openTab(envTab(e.id, e.name))}>
+                  Detalhes <span className="sr-only">de {e.name}</span>
+                </button>
+              )}
               <button
                 type="button"
                 className="btn"

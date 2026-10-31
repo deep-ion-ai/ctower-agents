@@ -7,6 +7,7 @@ import type { HubSection, ProjectRef, RegisterIntent } from "../hub/sections";
 import type { MaintenanceSection } from "../maintenance/sections";
 import type { SettingsScope, SettingsSection, TemplateKey } from "../settings/sections";
 import { projectsPlace, type ProjectPage, type ProjectSettingsSection } from "../project/sections";
+import type { EnvSection } from "../env/sections";
 
 /**
  * Item do projeto mostrado na aba (detalhe no editor, linha selecionada na
@@ -83,8 +84,24 @@ export type Screen =
    * tem aba própria (`maintenanceTab`); `env` = o ambiente das seções por
    * ambiente (sem ele, o mesmo critério das Configurações).
    */
-  | { name: "maintenance"; section?: MaintenanceSection; env?: string }
+  | {
+      name: "maintenance";
+      section?: MaintenanceSection;
+      env?: string;
+      /**
+       * Filtro por projeto da Limpeza (#22): o plano, as sessões abertas e
+       * o que ficou fora do hub só desse projeto. Monte com `maintenanceTab`.
+       */
+      project?: ProjectRef;
+    }
   | { name: "review"; env?: string; workItemId?: number }
+  /**
+   * Detalhe do ambiente (#23): conexão, hub, projetos atribuídos,
+   * atualização, configuração do daemon e limpeza. Sem `env`, o índice dos
+   * ambientes; com ele, aba própria (`env:<id>`, `mainTabId`). Sem
+   * `section`, Conexão. Monte com `envAt`/`envTab` (env/sections.ts).
+   */
+  | { name: "env"; env?: string; section?: EnvSection }
   /**
    * Configurações (#315): escopo (Este app ou o ambiente `env`), a seção a
    * mostrar (cada pedido, objeto novo, rola até ela) e, com `template`, o
@@ -291,6 +308,8 @@ export const hasProjectKey = (s: Extract<Screen, { name: "project" }>): boolean 
  */
 export function mainTabId(s: Screen): string {
   if (s.name === "project" && hasProjectKey(s)) return `project:${projectKey(s)}`;
+  // Cada ambiente na sua aba (#23), como o projeto: a "env" fica com o índice.
+  if (s.name === "env" && s.env) return `env:${s.env}`;
   return s.name;
 }
 

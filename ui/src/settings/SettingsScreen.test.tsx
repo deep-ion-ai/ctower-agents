@@ -109,42 +109,24 @@ test("projetos do ambiente: revisão e idade da configuração; o que ficou fora
   expect(api.callsTo("projects.list")).toHaveLength(0);
 });
 
-test("Limpeza nas Configurações: só as regras e a ponte para a Manutenção", async () => {
-  const { api, user } = setup({ name: "settings", section: "cleanup" });
-  api.on("cleanup.status", {
-    config: {
-      check_interval_hours: 6,
-      auto: false,
-      min_age_hours: 24,
-      min_idle_hours: 24,
-      end_idle_sessions_hours: 0,
-      remove_agent_transcripts: true,
-      target_idle_days: 14,
-    },
-    plan: null,
-    check_error: null,
-    last_run: null,
-    busy: false,
-  });
-  act(() => api.push("wsl", "session_started"));
-  const regras = await screen.findByRole("table", { name: "Regras de limpeza" });
-  const linha = (k: string) => within(regras).getByText(k).closest("tr")!;
-  expect(await within(linha("check_interval_hours")).findByText("6 h")).toBeInTheDocument();
-  expect(within(linha("auto")).getByText("desligado")).toBeInTheDocument();
-  expect(within(linha("end_idle_sessions_hours")).getByText("desligado")).toBeInTheDocument();
-  expect(within(linha("target_idle_days")).getByText("14 dia(s)")).toBeInTheDocument();
+test("Limpeza nas Configurações (#22): só o atalho para Manutenção › Limpeza, sem seção nem regras", async () => {
+  const { user } = setup(ENV);
+  await screen.findByRole("region", { name: "Limpeza: Regras, plano e limpeza" });
+  expect(screen.queryByRole("heading", { level: 2, name: "Limpeza" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("table", { name: "Regras de limpeza" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Verificar agora/ })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /^Limpar/ })).not.toBeInTheDocument();
-  await user.click(within(item("Limpeza: Plano e limpeza")).getByRole("button", { name: "Ver e limpar em Manutenção ›" }));
+  await user.click(
+    within(item("Limpeza: Regras, plano e limpeza")).getByRole("button", { name: "Abrir em Manutenção › Limpeza ›" }),
+  );
   expect(screen.getByRole("tab", { name: "Manutenção · Limpeza" })).toHaveAttribute("aria-selected", "true");
 });
 
-test("busca por limpeza, limpar ou fora do hub cai na ponte para a Manutenção", async () => {
+test("busca por limpeza, limpar, uma regra ou fora do hub cai no atalho para a Manutenção", async () => {
   const { user } = setup({ name: "settings", scope: "env" });
-  for (const q of ["limpeza", "limpar", "fora do hub"]) {
+  for (const q of ["limpeza", "limpar", "target_idle_days", "auto", "fora do hub"]) {
     await user.clear(screen.getByRole("searchbox", { name: "Buscar configurações" }));
     await user.type(screen.getByRole("searchbox", { name: "Buscar configurações" }), q);
-    expect(await screen.findByRole("region", { name: "Limpeza: Plano e limpeza" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Limpeza: Regras, plano e limpeza" })).toBeInTheDocument();
   }
 });
 

@@ -264,8 +264,8 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
                   <button
                     type="button"
                     className="ibtn"
-                    aria-label={syncing ? "Sincronizando…" : "Sincronizar agora"}
-                    title={`Sincronizar com o ${syncTrackers(dashboards)} agora`}
+                    aria-label={syncing ? "Buscando issues…" : "Buscar issues agora"}
+                    title={`Buscar agora as issues do ${syncTrackers(dashboards)} em todos os ambientes conectados`}
                     aria-busy={syncing}
                     disabled={syncing}
                     onClick={() => void syncNow()}
@@ -793,7 +793,12 @@ function StatusBar({
       <span className="sb-item">
         Ambientes {connected}/{envs.length}
       </span>
-      <button type="button" className="sb-item" onClick={onSync}>
+      <button
+        type="button"
+        className="sb-item"
+        title={`Última busca de issues no ${syncTrackers(dashboards)}; abre o painel Sincronização`}
+        onClick={onSync}
+      >
         {sync ? `${syncTrackers(dashboards)} sincronizado ${ago(sync, now)}` : `${syncTrackers(dashboards)} ainda não sincronizado`}
       </button>
       {warnings > 0 && (

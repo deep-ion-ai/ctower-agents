@@ -15,6 +15,7 @@ import { ReviewScreen } from "./review/ReviewScreen";
 import { SettingsScreen } from "./settings/SettingsScreen";
 import { HubScreen } from "./hub/HubScreen";
 import { MaintenanceScreen } from "./maintenance/MaintenanceScreen";
+import { EnvScreen } from "./env/EnvScreen";
 import { maintenanceTab } from "./maintenance/sections";
 import { settingsTab } from "./settings/sections";
 import { SessionScreen } from "./web/SessionPanel";
@@ -196,6 +197,8 @@ function Current({ screen }: { screen: Screen }) {
       return <HubScreen screen={screen} />;
     case "maintenance":
       return <MaintenanceScreen screen={screen} />;
+    case "env":
+      return <EnvScreen screen={screen} />;
   }
 }
 

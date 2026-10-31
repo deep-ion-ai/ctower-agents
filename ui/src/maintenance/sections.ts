@@ -1,6 +1,7 @@
 // Seções da tela Manutenção (#335): endereço (aba própria por seção), grupos
 // do painel lateral e os lugares da paleta. Funções puras, testadas em
 // sections.test.ts.
+import type { ProjectRef } from "../hub/sections";
 import type { OpenTab, Screen } from "../state/nav";
 
 export type MaintenanceSection = "overview" | "app-updates" | "env-updates" | "hub-updates" | "cleanup" | "backup";
@@ -21,7 +22,7 @@ const KEYWORDS: Record<MaintenanceSection, string> = {
   "app-updates": "versão atualizar app reiniciar notas updater",
   "env-updates": "daemon ctowerd versão atualizar verificar commits log reverter rollback",
   "hub-updates": "cthubd hub versão atualizar verificar protocolo commits log reverter rollback",
-  cleanup: "limpeza worktree target concluídos fora do hub clones",
+  cleanup: "limpeza limpar regras [cleanup] auto worktree target concluídos fora do hub clones projeto",
   backup: "snapshots restaurar remoto s3 drive hub",
 };
 
@@ -64,13 +65,20 @@ export type MaintenanceScreen = Extract<Screen, { name: "maintenance" }>;
 export const maintenanceTabId = (s: MaintenanceSection): string =>
   s === "overview" ? "maintenance" : `maintenance:${s}`;
 
-/** Aba da seção, para `useNav().openTab` (`env` só vale nas seções de ambiente). */
-export function maintenanceTab(s: MaintenanceSection, env?: string): OpenTab {
+/**
+ * Aba da seção, para `useNav().openTab` (`env` só vale nas seções de
+ * ambiente; `project`, o filtro por projeto, só na Limpeza, #22).
+ */
+export function maintenanceTab(s: MaintenanceSection, env?: string, project?: ProjectRef): OpenTab {
   const screen: MaintenanceScreen = { name: "maintenance" };
   if (s !== "overview") screen.section = s;
   if (env !== undefined && isEnvSection(s)) screen.env = env;
+  if (project && s === "cleanup") screen.project = { owner: project.owner, repo: project.repo };
   return { id: maintenanceTabId(s), screen };
 }
+
+/** `owner/repo` do filtro, sem caixa: a chave que casa item do plano e projeto. */
+export const projectFilterKey = (p: ProjectRef): string => `${p.owner}/${p.repo}`.toLowerCase();
 
 /** Título da aba: "Manutenção · Atualizações · Este app". */
 export const maintenanceTitle = (s: MaintenanceSection | undefined): string =>

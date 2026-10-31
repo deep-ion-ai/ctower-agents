@@ -24,7 +24,7 @@ describe("modo web: seções exclusivas do desktop ocultas ou desabilitadas", ()
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label"));
     expect(names).toEqual(["Sala de controle", "Projetos", "Revisão", "Recuperação", "Hub", "Configurações"]);
-    expect(screen.queryByRole("button", { name: /Sincronizar agora/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Buscar issues agora/ })).toBeNull();
     const status = screen.getByRole("contentinfo", { name: "Barra de status" });
     expect(within(status).queryByText(/^v/)).toBeNull();
     // Sem conexão com os ambientes: nada de `session.peek`, `dashboard.get` nem `env.info`.
@@ -143,10 +143,10 @@ describe("modo web: seções exclusivas do desktop ocultas ou desabilitadas", ()
     expect(editar).toBeDisabled();
     expect(editar).toHaveAccessibleDescription("Cadastro e edição no app desktop");
     const secoes = screen.getByRole("navigation", { name: "Seções das configurações do projeto" });
-    for (const s of ["Secrets e variáveis", "Zona de perigo"]) {
+    for (const s of ["Secrets e variáveis", "Limpeza", "Zona de perigo"]) {
       const b = within(secoes).getByRole("button", { name: s });
       expect(b).toBeDisabled();
-      expect(b).toHaveAccessibleDescription("Secrets e exclusão do projeto no app desktop");
+      expect(b).toHaveAccessibleDescription("Secrets, limpeza e exclusão do projeto no app desktop");
     }
     // A seção do desktop pedida pelo endereço cai em Geral; Ambientes, sem atribuir nem remover.
     await user.click(within(secoes).getByRole("button", { name: "Ambientes e atribuições" }));

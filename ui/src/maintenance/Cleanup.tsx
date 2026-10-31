@@ -6,6 +6,8 @@ import { ago } from "../util/time";
 import { humanBytes } from "../util/bytes";
 import { changeLabel, itemFullRef, type ProviderProject } from "../util/item";
 import type { Project } from "../protocol/gen";
+import type { ProjectRef } from "../hub/sections";
+import { projectFilterKey } from "./sections";
 
 export const STEP_LABEL: Record<StepKind, string> = {
   sessoes: "sessões",
@@ -55,6 +57,24 @@ export function pendingText(items: number, bytes: number): string {
   return `${items} ${items === 1 ? "limpeza pendente" : "limpezas pendentes"} · ${humanBytes(bytes)}`;
 }
 
+/**
+ * Junta as execuções por item da limpeza filtrada (#22): o daemon só
+ * conhece o plano inteiro ou um work item (`CleanupScope`), então "Limpar
+ * tudo" de um projeto é um `cleanup.run` por item, somados aqui.
+ */
+export function mergeRuns(runs: CleanupRun[]): CleanupRun | null {
+  if (runs.length === 0) return null;
+  return runs.slice(1).reduce(
+    (all, r) => ({
+      ...all,
+      finished_at: r.finished_at,
+      items: [...all.items, ...r.items],
+      freed_bytes: all.freed_bytes + r.freed_bytes,
+    }),
+    runs[0],
+  );
+}
+
 function runText(r: CleanupRun): string {
   const steps = r.items.flatMap((i) => i.steps);
   const n = (k: string) => steps.filter((s) => s.result === k).length;
@@ -92,10 +112,12 @@ interface Confirm {
  * confirmação), e a etapa "sessões" fica bloqueada até lá.
  *
  * Em Manutenção › Limpeza (#337, antes nas Configurações) mostra o
- * ambiente escolhido (`env`); as regras (`[cleanup]`) ficam nas
- * Configurações (`onSettings`).
+ * ambiente escolhido (`env`). Com `project` (#22), só os work items desse
+ * projeto: o filtro é na UI, pelo `owner/repo` de cada item do plano (o
+ * daemon monta o plano do ambiente inteiro), e "Limpar tudo" limpa item a
+ * item (`mergeRuns`). As regras (`CleanupRules`) ficam logo abaixo.
  */
-export function Cleanup({ env, onSettings }: { env: string; onSettings: () => void }) {
+export function Cleanup({ env, project }: { env: string; project?: ProjectRef }) {
   const { envs, status, api, dashboards } = useTower();
   const now = useNow();
   const [state, setState] = useState<Record<string, EnvCleanup>>({});
@@ -152,11 +174,22 @@ export function Cleanup({ env, onSettings }: { env: string; onSettings: () => vo
       setResults((all) => ({ ...all, [env]: "" }));
     });
 
-  const clean = (c: Confirm) => {
+  const filterKey = project ? projectFilterKey(project) : null;
+  const inFilter = (i: CleanupItem) => filterKey === null || projectFilterKey(i) === filterKey;
+
+  const clean = (c: Confirm, pending: CleanupItem[]) => {
     setConfirm(null);
     return act(c.env, "run", async () => {
-      const r = await api.call<CleanupRun>(c.env, "cleanup.run", c.item ? { work_item_id: c.item.work_item_id } : {});
-      setResults((all) => ({ ...all, [c.env]: runText(r) }));
+      let r: CleanupRun | null;
+      if (c.item) r = await api.call<CleanupRun>(c.env, "cleanup.run", { work_item_id: c.item.work_item_id });
+      else if (filterKey === null) r = await api.call<CleanupRun>(c.env, "cleanup.run", {});
+      else {
+        // Um por vez: o daemon serializa as execuções do ambiente.
+        const runs: CleanupRun[] = [];
+        for (const i of pending) runs.push(await api.call<CleanupRun>(c.env, "cleanup.run", { work_item_id: i.work_item_id }));
+        r = mergeRuns(runs);
+      }
+      setResults((all) => ({ ...all, [c.env]: r ? runText(r) : "" }));
     });
   };
 
@@ -176,9 +209,14 @@ export function Cleanup({ env, onSettings }: { env: string; onSettings: () => vo
         const on = !!status[e.id]?.connected;
         const st = state[e.id];
         const plan = st ? st.plan : null;
-        const pending = plan?.items.filter(hasPending) ?? [];
-        const blocked = plan?.items.filter((i) => !hasPending(i)) ?? [];
-        const open = (plan?.items ?? []).flatMap((i) => liveSessions(i).map((session) => ({ item: i, session })));
+        const shown = plan?.items.filter(inFilter) ?? [];
+        const pending = shown.filter(hasPending);
+        const blocked = shown.filter((i) => !hasPending(i));
+        const open = shown.flatMap((i) => liveSessions(i).map((session) => ({ item: i, session })));
+        const pendingCount = filterKey === null ? Number(plan?.pending_items ?? 0) : pending.length;
+        const pendingSize =
+          filterKey === null ? Number(plan?.pending_bytes ?? 0) : pending.reduce((n, i) => n + pendingBytes(i), 0);
+        const where = project ? `${project.owner}/${project.repo} em ${e.name}` : e.name;
         const working = !!busy[e.id];
         const proj = (i: CleanupItem) => dashboards[e.id]?.projects.find((p) => p.project.id === i.project_id)?.project;
         return (
@@ -196,8 +234,8 @@ export function Cleanup({ env, onSettings }: { env: string; onSettings: () => vo
               ) : !plan ? (
                 <span className="muted">{st?.check_error ? "verificação falhou" : "ainda não verificado"}</span>
               ) : (
-                <span className={plan.pending_items > 0 ? "strong" : "muted"} role="status">
-                  {pendingText(Number(plan.pending_items), Number(plan.pending_bytes))}
+                <span className={pendingCount > 0 ? "strong" : "muted"} role="status">
+                  {pendingText(pendingCount, pendingSize)}
                 </span>
               )}
             </div>
@@ -221,7 +259,7 @@ export function Cleanup({ env, onSettings }: { env: string; onSettings: () => vo
                 onClick={() => setConfirm({ env: e.id, item: null })}
               >
                 {busy[e.id] === "run" ? "Limpando…" : "Limpar"}
-                <span className="sr-only"> tudo em {e.name}</span>
+                <span className="sr-only"> tudo {project ? "de " : "em "}{where}</span>
               </button>
             </div>
             {st && st.check_error && on && <div className="update-state wide state-off">erro na verificação: {st.check_error}</div>}
@@ -305,14 +343,14 @@ export function Cleanup({ env, onSettings }: { env: string; onSettings: () => vo
                 <p>
                   {confirm.item
                     ? `Limpar ${itemName(confirm.item, proj(confirm.item))}? Saem as etapas pendentes (${humanBytes(pendingBytes(confirm.item))}).`
-                    : `Limpar ${pending.length} work item(s) em ${e.name}? Saem as etapas pendentes (${humanBytes(Number(plan?.pending_bytes ?? 0))}).`}{" "}
+                    : `Limpar ${pending.length} work item(s) ${project ? "de " : "em "}${where}? Saem as etapas pendentes (${humanBytes(pendingSize)}).`}{" "}
                   As bloqueadas ficam, e nada com mudança não commitada ou não enviada é apagado.
                 </p>
                 <div className="form-actions">
                   <button type="button" className="btn" onClick={() => setConfirm(null)}>
                     Cancelar
                   </button>
-                  <button type="button" className="btn btn-danger" onClick={() => clean(confirm)}>
+                  <button type="button" className="btn btn-danger" onClick={() => clean(confirm, pending)}>
                     Limpar
                   </button>
                 </div>
@@ -330,11 +368,6 @@ export function Cleanup({ env, onSettings }: { env: string; onSettings: () => vo
         atividade. No terminal: <span className="mono">ctower clean --dry-run</span> e{" "}
         <span className="mono">ctower clean [--item n]</span>.
       </p>
-      <div>
-        <button type="button" className="link-btn" onClick={onSettings}>
-          Ajustes de limpeza ›
-        </button>
-      </div>
     </section>
   );
 }

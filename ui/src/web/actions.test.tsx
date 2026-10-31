@@ -324,15 +324,15 @@ describe("no celular", () => {
   });
 });
 
-it("Visão geral do projeto na web (#19, #26): saúde e gestor só leitura, Sincronizar agora desabilitado", async () => {
+it("Visão geral do projeto na web (#19, #26): saúde e gestor só leitura, Buscar issues agora desabilitado", async () => {
   renderApp(webApi(), { name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "overview" });
   expect(await screen.findByRole("heading", { name: "Saúde · 0 sinais" })).toBeInTheDocument();
   const gestor = (await screen.findByRole("heading", { name: "Gestor deste projeto" })).closest("section")!;
   expect(gestor).toHaveTextContent("Iniciar o gestor fica no app desktop");
   expect(within(gestor).getByRole("button", { name: "Gestor deste projeto" })).toBeDisabled();
   // `sync.now` fica fora do canal reverso: o botão aparece desabilitado com o motivo.
-  expect(screen.getByRole("heading", { name: "Sincronizar" })).toBeInTheDocument();
-  const sync = screen.getByRole("button", { name: "Sincronizar agora este projeto" });
+  expect(screen.getByRole("heading", { name: "Buscar issues" })).toBeInTheDocument();
+  const sync = screen.getByRole("button", { name: "Buscar issues agora este projeto" });
   expect(sync).toBeDisabled();
-  expect(sync).toHaveAccessibleDescription("Sincronizar fica no app desktop");
+  expect(sync).toHaveAccessibleDescription("Buscar issues fica no app desktop");
 });
