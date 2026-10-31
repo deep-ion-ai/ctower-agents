@@ -63,10 +63,10 @@ test("daemon defasado: o aviso atualiza o ambiente, com force se recusado", asyn
   expect(api.callsTo("env.update").map((c) => c.params)).toEqual([{ force: false }, { force: true }]);
 });
 
-test("Sincronizar agora chama sync.now nos ambientes conectados", async () => {
+test("Buscar issues agora chama sync.now nos ambientes conectados", async () => {
   const api = setup();
   await waitFor(() => expect(api.callsTo("dashboard.get").length).toBeGreaterThan(0));
-  await userEvent.setup().click(screen.getByRole("button", { name: "Sincronizar agora" }));
+  await userEvent.setup().click(screen.getByRole("button", { name: "Buscar issues agora" }));
   await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(1));
 });
 

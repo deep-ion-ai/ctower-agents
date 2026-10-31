@@ -172,6 +172,8 @@ pub struct HubConfig {
     pub recovery_reverify_days: u64,
     /// Rotas da PWA (`[web]`, spec da PWA §3.4, épico #205).
     pub web: WebConfig,
+    /// Log em arquivo, que a tela Logs da UI lê (`[logs]`, #65).
+    pub logs: ct_core::LogsConfig,
 }
 
 /// `[web]`: a UI web servida pelo hub (#199) e a sessão web (#200, spec da
@@ -306,6 +308,7 @@ impl Default for HubConfig {
             health: ct_ledger::HealthThresholds::default(),
             recovery_reverify_days: crate::secrets::DEFAULT_REVERIFY_DAYS,
             web: WebConfig::default(),
+            logs: Default::default(),
         }
     }
 }

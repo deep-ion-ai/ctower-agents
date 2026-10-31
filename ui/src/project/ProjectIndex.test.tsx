@@ -105,6 +105,9 @@ test("reordenar: arrastar e Alt+↑/↓ mudam a prioridade no índice", async ()
   api.onHub("hub.projects.move", { ...CT, rank: 2 });
   await waitFor(() => expect(rows()).toHaveLength(2));
   expect(screen.getByText(/A ordem da lista é a prioridade entre projetos/)).toBeInTheDocument();
+  // Dica do gesto na própria linha (#27).
+  expect(screen.getByRole("button", { name: "demo" })).toHaveAttribute("title", "Abrir · arraste ou Alt+↑/↓ para mudar a prioridade");
+  expect(screen.getByRole("button", { name: "demo" })).toHaveAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
   const [ct, demo] = rows();
   fireEvent.dragStart(ct);
   fireEvent.dragOver(demo, { clientY: 10 });

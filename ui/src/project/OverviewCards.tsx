@@ -1,5 +1,5 @@
 // Cartões de ação da Visão geral do projeto (#19), que entram pela prop
-// `extra` de `ProjectOverview`: saúde do projeto, "Sincronizar agora" e o
+// `extra` de `ProjectOverview`: saúde do projeto, "Buscar issues agora" e o
 // gestor com o escopo do projeto. As regras ficam em overview.ts.
 import { useState } from "react";
 import type { ProjectSync } from "../protocol/gen";
@@ -12,6 +12,7 @@ import { hubTab } from "../hub/sections";
 import { plural } from "../shell/summary";
 import { itemShort } from "../util/item";
 import { projectSignals, syncFeedback, type SyncOutcome, type SyncPlan } from "./overview";
+import { DesktopOnly } from "../web/DesktopOnly";
 
 /**
  * Saúde do projeto: os sinais de aviso e críticos do hub com este
@@ -74,10 +75,10 @@ export function ProjectHealthCard({ owner, repo, project }: { owner: string; rep
 }
 
 /**
- * "Sincronizar agora" só deste projeto: `sync.now` com o `project_id` em
+ * "Buscar issues agora" só deste projeto: `sync.now` com o `project_id` em
  * cada ambiente do plano (`syncPlan`), com o resultado ou o erro de cada
- * um. Fica fora da web: o canal reverso recusa `sync.now` (spec do épico
- * #205 §5.2), como o botão da barra de título.
+ * um. Na web, o botão fica desabilitado com o motivo (#26): o canal reverso
+ * recusa `sync.now` (spec do épico #205 §5.2).
  *
  * Na visão do hub de um projeto GitHub, o que muda na hora é o espelho do
  * ambiente (issues, PRs e os gatilhos de status, que chegam ao hub no envio
@@ -88,7 +89,24 @@ export function ProjectSyncCard({ plan, change }: { plan: SyncPlan; change: stri
   const { api, web } = useTower();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
-  if (web) return null;
+  if (web) {
+    return (
+      <section className="hub-card" aria-labelledby="pj-ov-sync">
+        <div className="hub-card-head">
+          <h2 id="pj-ov-sync">Buscar issues</h2>
+          <DesktopOnly
+            className="btn btn-sm btn-primary"
+            labels={
+              <>
+                Buscar issues agora<span className="sr-only"> este projeto</span>
+              </>
+            }
+            note="Buscar issues fica no app desktop"
+          />
+        </div>
+      </section>
+    );
+  }
 
   const run = async () => {
     setBusy(true);
@@ -109,15 +127,16 @@ export function ProjectSyncCard({ plan, change }: { plan: SyncPlan; change: stri
   return (
     <section className="hub-card" aria-labelledby="pj-ov-sync">
       <div className="hub-card-head">
-        <h2 id="pj-ov-sync">Sincronizar</h2>
+        <h2 id="pj-ov-sync">Buscar issues</h2>
         <button
           type="button"
           className="btn btn-sm btn-primary"
           disabled={busy || plan.targets.length === 0}
+          title="Buscar agora no rastreador as issues só deste projeto"
           onClick={() => void run()}
         >
-          {/* O nome acessível difere do "Sincronizar agora" da barra de título (todos os ambientes). */}
-          {busy ? "Sincronizando…" : "Sincronizar agora"}
+          {/* O nome acessível difere do "Buscar issues agora" da barra de título (todos os ambientes). */}
+          {busy ? "Buscando issues…" : "Buscar issues agora"}
           <span className="sr-only"> este projeto</span>
         </button>
       </div>
@@ -150,7 +169,7 @@ export function ProjectGestorCard({ owner, repo }: { owner: string; repo: string
       </div>
       <p className="muted hub-card-empty">
         {web
-          ? "Iniciar o gestor fica no app desktop; as sessões vivas dele com o foco neste projeto aparecem aqui."
+          ? "As sessões vivas do gestor com o foco neste projeto aparecem aqui."
           : `Uma sessão do Claude Code com o foco em ${owner}/${repo}, que propõe prioridades e status; você aprova no Hub.`}
       </p>
       <div className="hub-card-msg">

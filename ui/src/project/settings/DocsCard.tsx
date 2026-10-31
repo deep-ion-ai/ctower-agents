@@ -5,6 +5,7 @@ import { docsDirName, docsFormOf, docsPatch, docsText } from "../../hub/docs";
 import { DocsForm } from "./DocsForm";
 import { projectEditForm } from "./RepositoryCard";
 import type { SettingsRun } from "./run";
+import { DesktopOnly } from "../../web/DesktopOnly";
 
 /**
  * Docs do projeto (#444) como seção própria das Configurações do projeto
@@ -48,6 +49,8 @@ export function DocsCard({
             Editar docs
           </button>
         )}
+        {/* Só leitura (web): desabilitado com o motivo (#26). */}
+        {readOnly && docsFormOf(pr) && <DesktopOnly className="btn btn-sm" labels="Editar docs" />}
       </div>
       {form ? (
         <form

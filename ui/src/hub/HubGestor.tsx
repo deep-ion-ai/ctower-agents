@@ -5,6 +5,7 @@ import { useTower } from "../state/tower";
 import { renderGestorTemplate, scopeText, type GestorScopeChoice } from "../project/templates";
 import { lastTermSize } from "../terminal/size";
 import { CLAUDE_MODELS, DEFAULT_MODEL_VALUE, SESSION_MODES } from "../settings/session-options";
+import { DesktopOnly } from "../web/DesktopOnly";
 
 /** Sessão viva do gestor num ambiente conectado (para "Abrir gestor"). */
 export interface LiveGestor {
@@ -145,7 +146,15 @@ export function GestorLauncher({ project }: { project?: { owner: string; repo: s
           ))}
         </ul>
       )}
-      {/* Web: iniciar o gestor fica no app desktop (a escolha do ambiente depende do token de agente do `env.info`). */}
+      {/* Web: iniciar o gestor fica no app desktop (a escolha do ambiente depende do token de agente do `env.info`);
+          o botão aparece desabilitado com o motivo (#26). */}
+      {web && (
+        <DesktopOnly
+          className="btn btn-primary"
+          labels={project ? "Gestor deste projeto" : "Abrir sessão do gestor"}
+          note="Iniciar o gestor fica no app desktop"
+        />
+      )}
       {!web && (
         <button type="button" className="btn btn-primary" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
           {project ? "Gestor deste projeto" : "Abrir sessão do gestor"}

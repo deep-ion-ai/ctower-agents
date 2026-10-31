@@ -253,6 +253,12 @@ export class FakeDaemonApi implements DaemonApi {
     this.progressSubs.add(cb);
     return () => this.progressSubs.delete(cb);
   }
+  /** Arquivos exportados (`saveFile`). */
+  saved: { name: string; content: string; mime: string }[] = [];
+  async saveFile(name: string, content: string, mime: string) {
+    this.saved.push({ name, content, mime });
+    return this.web ? null : `/home/u/Downloads/${name}`;
+  }
 }
 
 /** Login web em memória para os testes do modo web (`WebGate`). */

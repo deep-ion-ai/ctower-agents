@@ -73,6 +73,11 @@ docs_backup_keep = 7                 # pacotes dos docs mantidos (local e remoto
 docs_backup_max_mb = 1024            # acima disso (soma dos arquivos) o backup dos docs não roda e avisa
 recovery_reverify_days = 90          # lembrete para verificar a chave de recuperação; 0 desliga
 
+[logs]                               # log em arquivo para a tela Logs da UI (#65); o stderr segue no journald/launchd
+dir = ""                             # vazio = ~/.local/state/ctower/logs/cthubd.jsonl (~/Library/Logs/ctower no macOS; <CTHUB_DATA_DIR>/logs se definido)
+max_file_mb = 10                     # tamanho de cada arquivo antes de rotacionar; 0 desliga o arquivo
+max_files = 5                        # arquivos guardados, contando o atual
+
 [web]                                # UI web (PWA), #199 e #200; veja "UI web" abaixo
 enabled = false                      # `/`, `/assets/*` e `/web/*` desligados (404) por padrão
 origins = []                         # Origin aceitos no /web/ws e nos POST /web/*; vazio = http://127.0.0.1:<port> e http://localhost:<port>

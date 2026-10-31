@@ -16,7 +16,14 @@ import { projectAt, projectsPlace, type ProjectPage, type ProjectSettingsSection
 import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../../util/item";
 import { liveGestorLabel } from "../../hub/HubGestor";
 import { PLACES, type Place } from "../places";
-import { maintenanceTab } from "../../maintenance/sections";
+import { logsTab, maintenanceTab } from "../../maintenance/sections";
+import {
+  DESKTOP_ONLY_ENV_SECTIONS,
+  ENV_SECTIONS,
+  ENV_SECTION_KEYWORDS,
+  ENV_SECTION_LABEL,
+  envTab,
+} from "../../env/sections";
 import type { StartTarget } from "../start";
 import type { SessionAction, SessionActionId } from "../../terminal/actions";
 import { placeOnWeb, webPlaceLabel } from "../../web/mode";
@@ -34,7 +41,9 @@ export type PaletteAction =
   | { type: "shell"; env: string; workItemId: number }
   /** Ação da sessão ativa do Terminal (#424), executada pelo cabeçalho dela. */
   | { type: "session-action"; id: SessionActionId }
-  | { type: "sync" };
+  | { type: "sync" }
+  /** Folha de atalhos e gestos (#27). */
+  | { type: "shortcuts" };
 
 export interface PaletteItem {
   /** Estável entre aberturas: vai para os recentes. */
@@ -213,9 +222,9 @@ function commands(src: PaletteSources, interrupted: number, projects: ProjectRef
     {
       id: "cmd:sync",
       kind: "command",
-      label: "Sincronizar agora",
+      label: "Buscar issues agora",
       detail: `${trackersText(projects.map((p) => p.provider))}, nos ambientes conectados`,
-      keywords: "sync github jira",
+      keywords: "sync sincronizar github jira",
       action: { type: "sync" },
     },
   ];
@@ -339,12 +348,94 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
           screen: projectsPlace({ project, assign: true }),
         }),
         at("secrets", "Secrets", "secrets variáveis env tokens chaves", "settings", "secrets"),
+        at("cleanup", "Limpeza", "limpeza limpar worktree target concluídos manutenção", "settings", "cleanup"),
         at("danger", "Excluir", "excluir apagar remover zona de perigo", "settings", "danger"),
       );
     }
   }
   return out;
 }
+
+/**
+ * Detalhe de cada ambiente (#23): "Ambiente: wsl" na lista inicial e, só
+ * buscando, cada seção dele ("Ambiente: Atualização — wsl"), com o
+ * endereço próprio (`envTab`). Na web, sem as seções do desktop.
+ */
+function envItems(src: PaletteSources): PaletteItem[] {
+  return src.envs.flatMap((e) => {
+    const st = src.status[e.id];
+    const head: PaletteItem = {
+      id: `env:${e.id}`,
+      kind: "place",
+      label: `Ambiente: ${e.name}`,
+      detail: !st ? "conectando…" : st.connected ? "conectado" : "desconectado",
+      keywords: "ambiente daemon ctowerd detalhe conexão hub atualização limpeza",
+      action: { type: "tab", tab: envTab(e.id, e.name) },
+    };
+    const sections = ENV_SECTIONS.filter((s) => s !== "connection" && (!src.web || !DESKTOP_ONLY_ENV_SECTIONS.has(s)));
+    return [
+      head,
+      ...sections.map(
+        (s): PaletteItem => ({
+          id: `env:${e.id}:${s}`,
+          // Como as seções do projeto ("Projeto: Rastreador — x"), comandos.
+          kind: "command",
+          label: `Ambiente: ${ENV_SECTION_LABEL[s]} — ${e.name}`,
+          keywords: `ambiente ${ENV_SECTION_KEYWORDS[s]}`,
+          browse: false,
+          action: { type: "tab", tab: envTab(e.id, e.name, s) },
+        }),
+      ),
+    ];
+  });
+}
+
+/**
+ * Tela Logs (#65) já numa fonte: "Logs: esta UI" na lista inicial (os erros
+ * da própria UI só têm este caminho) e, buscando, o hub e cada ambiente.
+ */
+function logItems(src: PaletteSources): PaletteItem[] {
+  const kw = "log logs erros avisos diagnóstico exportar";
+  const out: PaletteItem[] = [
+    {
+      id: "cmd:logs:ui",
+      kind: "command",
+      label: "Logs: esta UI",
+      detail: src.web ? "Erros desta aba desde que abriu" : "Erros do app desde que abriu e da execução anterior",
+      keywords: `${kw} ui app console interface`,
+      action: { type: "tab", tab: logsTab({ kind: "ui" }) },
+    },
+  ];
+  if (src.web || src.hub.connected)
+    out.push({
+      id: "cmd:logs:hub",
+      kind: "command",
+      label: "Logs: hub",
+      keywords: `${kw} hub cthubd`,
+      browse: false,
+      action: { type: "tab", tab: logsTab({ kind: "hub" }) },
+    });
+  for (const e of src.envs)
+    out.push({
+      id: `cmd:logs:env:${e.id}`,
+      kind: "command",
+      label: `Logs: ${e.name}`,
+      keywords: `${kw} ambiente daemon ctowerd`,
+      browse: false,
+      action: { type: "tab", tab: logsTab({ kind: "env", env: e.id }) },
+    });
+  return out;
+}
+
+/** A folha de atalhos (#27), também com `?` fora de campos de texto. */
+const SHORTCUTS: PaletteItem = {
+  id: "cmd:shortcuts",
+  kind: "command",
+  label: "Atalhos e gestos",
+  detail: "Teclas e gestos de cada tela (?)",
+  keywords: "atalhos teclado teclas gestos ajuda",
+  action: { type: "shortcuts" },
+};
 
 export function paletteItems(src: PaletteSources): PaletteItem[] {
   const { projects, issues } = catalog(src);
@@ -402,7 +493,11 @@ export function paletteItems(src: PaletteSources): PaletteItem[] {
     ...sessions(src),
     ...places,
     ...commands(src, interrupted, projects),
+    SHORTCUTS,
     ...projectCommands(src, projects),
+    // Depois dos de projeto: "configurar <projeto>" segue achando o projeto primeiro.
+    ...envItems(src),
+    ...logItems(src),
     ...projectItems,
     ...issueItems,
     ...(src.web ? [] : starts),

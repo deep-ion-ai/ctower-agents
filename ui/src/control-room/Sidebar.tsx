@@ -1,5 +1,6 @@
 // Painel lateral da Sala de controle (#316): visões, hub, ambientes e projetos.
 import { useState } from "react";
+import { envTab } from "../env/sections";
 import { projectsPlace } from "../project/sections";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "../project/rows";
 import { ContextMenu, type MenuItem } from "../shell/ContextMenu";
@@ -14,6 +15,7 @@ import { ago } from "../util/time";
 import { configLine } from "../util/hub";
 import type { ControlView } from "./grid";
 import type { EnvInfo, HubSyncResult } from "../protocol/gen";
+import { DesktopOnlyIcon } from "../web/DesktopOnly";
 
 /** Envio ao hub: pendências e erro (spec do ledger centralizado §5). */
 function hubLine(info: EnvInfo | undefined, now: number): string | null {
@@ -33,8 +35,8 @@ export function syncResultText(r: HubSyncResult): string {
   return `${r.sent} ${r.sent === 1 ? "mudança enviada" : "mudanças enviadas"} ao hub`;
 }
 
-/** Envio ao hub sob demanda (`hub.sync.now`), com progresso e resultado. */
-function HubSyncButton({ env, name }: { env: string; name: string }) {
+/** Envio ao hub sob demanda (`hub.sync.now`), com progresso e resultado (também no detalhe do ambiente, #23). */
+export function HubSyncButton({ env, name }: { env: string; name: string }) {
   const { api, refresh } = useTower();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; warn: boolean } | null>(null);
@@ -62,9 +64,10 @@ function HubSyncButton({ env, name }: { env: string; name: string }) {
         onClick={run}
         disabled={busy}
         aria-busy={busy}
-        aria-label={`Sincronizar ${name} com o hub`}
+        aria-label={`Enviar ao hub o estado de ${name}`}
+        title={`Enviar agora ao hub as mudanças pendentes de ${name} (sessões, work items e eventos)`}
       >
-        {busy ? "Sincronizando…" : "Sincronizar com o hub"}
+        {busy ? "Enviando…" : "Enviar ao hub"}
       </button>
       <span className="cr-sub" role="status" data-warn={msg?.warn ? "true" : undefined}>
         {msg?.text}
@@ -113,9 +116,13 @@ function HubEntry({ now }: { now: number }) {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** Estado de um ambiente: conexão, configuração do hub, envio ao hub e o botão de envio. */
+/**
+ * Estado de um ambiente: conexão, configuração do hub, envio ao hub e o
+ * botão de envio. A linha abre o detalhe do ambiente (#23).
+ */
 function EnvRow({ id, name, now }: { id: string; name: string; now: number }) {
   const { status, dashboards, infos, web } = useTower();
+  const nav = useNav();
   const st = status[id];
   const live = dashboards[id]?.live_sessions.length ?? 0;
   // Web (fase 1): o estado é o do último envio ao hub, não uma conexão.
@@ -134,8 +141,13 @@ function EnvRow({ id, name, now }: { id: string; name: string; now: number }) {
   const docs = infos[id]?.docs;
   const docsDown = st?.connected && docs?.warning === "docs_unreachable";
   return (
-    <li className="sp-row cr-item">
-      <span className="cr-item-main">
+    <li className="sp-row cr-item cr-env">
+      <button
+        type="button"
+        className="cr-item-main"
+        title={`Tudo sobre ${name}: conexão, hub, projetos, atualização e limpeza`}
+        onClick={() => nav.openTab(envTab(id, name))}
+      >
         <span className="sp-dot" data-tone={!st ? "neutral" : st.connected ? "done" : "error"} aria-hidden="true" />
         <span className="cr-item-text">
           <span className="cr-item-name">
@@ -164,9 +176,14 @@ function EnvRow({ id, name, now }: { id: string; name: string; now: number }) {
               {sending}
             </span>
           )}
-          {infos[id]?.hub_sync && st?.connected && <HubSyncButton env={id} name={name} />}
         </span>
-      </span>
+      </button>
+      {/* Fora do botão da linha (botão não vai dentro de botão). */}
+      {infos[id]?.hub_sync && st?.connected && (
+        <span className="cr-env-sync">
+          <HubSyncButton env={id} name={name} />
+        </span>
+      )}
     </li>
   );
 }
@@ -271,17 +288,22 @@ export function Sidebar({
           title="Projetos"
           count={projects.length}
           actions={
-            editable && (
-              <button
-                type="button"
-                className="ibtn"
-                aria-label="Novo projeto"
-                title="Novo projeto"
-                // O cadastro abre no índice de Projetos (#18).
-                onClick={() => nav.go(projectsPlace({ register: { url: "" } }))}
-              >
-                <Icon name="plus" size={15} />
-              </button>
+            // Web: o "+" fica desabilitado com o motivo (#26).
+            web && hub.connected ? (
+              <DesktopOnlyIcon label="Novo projeto" icon="plus" />
+            ) : (
+              editable && (
+                <button
+                  type="button"
+                  className="ibtn"
+                  aria-label="Novo projeto"
+                  title="Novo projeto"
+                  // O cadastro abre no índice de Projetos (#18).
+                  onClick={() => nav.go(projectsPlace({ register: { url: "" } }))}
+                >
+                  <Icon name="plus" size={15} />
+                </button>
+              )
             )
           }
         >

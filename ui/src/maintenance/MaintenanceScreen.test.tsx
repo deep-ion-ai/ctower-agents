@@ -63,13 +63,13 @@ test("seções de ambiente: o primeiro conectado, seletor com mais de um e o amb
   expect(screen.queryByLabelText("Ambiente da manutenção")).not.toBeInTheDocument();
 });
 
-test("um ambiente só: sem seletor; o link leva aos ajustes nas Configurações", async () => {
-  const { user } = setup({ name: "maintenance", section: "cleanup" }, [WSL]);
+test("um ambiente só: sem seletor de ambiente; as regras ficam na própria Limpeza (#22)", async () => {
+  setup({ name: "maintenance", section: "cleanup" }, [WSL]);
   expect(await screen.findByRole("heading", { level: 1, name: "Limpeza" })).toBeInTheDocument();
   expect(screen.queryByLabelText("Ambiente da manutenção")).not.toBeInTheDocument();
-  // O link leva aos ajustes, nas Configurações do mesmo ambiente.
-  await user.click(await screen.findByRole("button", { name: "Ajustes de limpeza ›" }));
-  expect(screen.getByRole("tab", { name: "Configurações" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("heading", { level: 2, name: "Regras" })).toBeInTheDocument();
+  expect(screen.getByRole("table", { name: "Regras de limpeza" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Ajustes de limpeza ›" })).not.toBeInTheDocument();
 });
 
 test("sem ambiente configurado: a seção de ambiente explica e leva às Configurações", async () => {

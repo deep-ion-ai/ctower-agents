@@ -54,9 +54,10 @@ const RULES: Record<Key, { value: (c: CleanupConfig) => string; what: string }> 
 type Rules = CleanupConfig | false | null;
 
 /**
- * Ajustes da limpeza do ambiente (#337): as chaves de `[cleanup]` com o
- * valor que o daemon aplica (`cleanup.status`). Ver o plano, verificar e
- * limpar ficam em Manutenção › Limpeza.
+ * Regras da limpeza do ambiente: as chaves de `[cleanup]` com o valor que o
+ * daemon aplica (`cleanup.status`), só leitura. Ficam em Manutenção ›
+ * Limpeza, junto do plano (#22; antes nas Configurações, #337). Valem para
+ * o ambiente inteiro, com ou sem o filtro por projeto.
  */
 export function CleanupRules({ env }: { env: string }) {
   const { status, api } = useTower();
@@ -88,25 +89,32 @@ export function CleanupRules({ env }: { env: string }) {
     !on ? "sem conexão" : rules === false ? "daemon sem suporte a limpeza" : rules ? RULES[k].value(rules) : "—";
 
   return (
-    <div className="table-wrap">
-      <table aria-label="Regras de limpeza">
-        <thead>
-          <tr>
-            <th>Chave</th>
-            <th>Valor</th>
-            <th>Para quê</th>
-          </tr>
-        </thead>
-        <tbody>
-          {CLEANUP_KEYS.map((k) => (
-            <tr key={k}>
-              <td className="mono">{k}</td>
-              <td>{value(k)}</td>
-              <td className="muted">{RULES[k].what}</td>
+    <section className="panel settings-section set-stack" aria-labelledby="maint-cleanup-rules">
+      <h2 id="maint-cleanup-rules">Regras</h2>
+      <div className="table-wrap">
+        <table aria-label="Regras de limpeza">
+          <thead>
+            <tr>
+              <th>Chave</th>
+              <th>Valor</th>
+              <th>Para quê</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {CLEANUP_KEYS.map((k) => (
+              <tr key={k}>
+                <td className="mono">{k}</td>
+                <td>{value(k)}</td>
+                <td className="muted">{RULES[k].what}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted hint">
+        Valem para o ambiente inteiro, não por projeto. Edite <span className="mono">[cleanup]</span> no{" "}
+        <span className="mono">config.toml</span> do ambiente e reinicie o daemon.
+      </p>
+    </section>
   );
 }

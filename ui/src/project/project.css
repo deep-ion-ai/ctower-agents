@@ -437,3 +437,63 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Celular (#25): as abas do projeto como controle segmentado, e a árvore
+   (ou o quadro) no corpo, com Árvore | Quadro e o filtro numa barra. */
+.pj-tabs[data-segmented="true"] {
+  flex-wrap: nowrap;
+  gap: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.pj-tabs[data-segmented="true"] button {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 4px;
+  border-bottom: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pj-tabs[data-segmented="true"] button + button {
+  border-left: 1px solid var(--border-strong);
+}
+
+.pj-tabs[data-segmented="true"] button[aria-current="page"] {
+  background: var(--selected);
+}
+
+.pj-mitems {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pj-mitems-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pj-mitems-bar .views {
+  flex: 1;
+  margin: 0;
+}
+
+.pj-mitems .tree-controls {
+  margin: 0;
+}
+
+.pj-settings-nav button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pj-settings-note {
+  margin: 6px 10px 0;
+}

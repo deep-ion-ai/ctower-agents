@@ -180,7 +180,7 @@ export function ProjectScreen(props: {
       liveText={(n) => (liveOf(n.issue.gh_number).length > 0 ? (clone?.name ?? env) : null)}
       canStart={clone !== null}
       startBase={{ env, projectId }}
-      emptyText={`Nenhuma issue aberta no espelho do ${trackerLabel(p)}. Use "Sincronizar agora".`}
+      emptyText={`Nenhuma issue aberta no espelho do ${trackerLabel(p)}. Use "Buscar issues agora".`}
       reviewOf={(gh) => {
         const wi = clone?.items.find((w) => w.gh_number === gh);
         return wi ? { name: "review", env, workItemId: wi.id } : null;

@@ -6,6 +6,11 @@
   max-width: 880px;
 }
 
+/* Logs (#65): a lista de linhas usa a largura toda. */
+.maint-main[data-wide] {
+  max-width: none;
+}
+
 .maint-head {
   display: flex;
   flex-wrap: wrap;

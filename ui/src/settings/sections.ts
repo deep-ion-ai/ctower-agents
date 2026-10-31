@@ -21,7 +21,6 @@ export type SettingsSection =
   | "github"
   | "daemon-update"
   | "local-projects"
-  | "cleanup"
   | "env-notifications";
 
 export type TemplateKey = keyof Templates;
@@ -36,7 +35,6 @@ export const SECTION_LABEL: Record<SettingsSection, string> = {
   github: "GitHub",
   "daemon-update": "Atualização do daemon",
   "local-projects": "Projetos locais",
-  cleanup: "Limpeza",
   "env-notifications": "Notificações",
 };
 
@@ -44,7 +42,8 @@ export const SECTION_LABEL: Record<SettingsSection, string> = {
 export const SCOPE_SECTIONS: Record<SettingsScope, SettingsSection[]> = {
   // As atualizações do app ficam em Manutenção › Atualizações › Este app (#336).
   app: ["connections", "sessions", "appearance", "terminal", "notifications", "web-access"],
-  env: ["github", "daemon-update", "local-projects", "cleanup", "env-notifications"],
+  // A Limpeza fica só em Manutenção › Limpeza (#22): aqui, um atalho em Projetos locais.
+  env: ["github", "daemon-update", "local-projects", "env-notifications"],
 };
 
 export const scopeOf = (s: SettingsSection): SettingsScope => (SCOPE_SECTIONS.app.includes(s) ? "app" : "env");
@@ -85,7 +84,6 @@ const KEYWORDS: Record<SettingsSection, string> = {
   github: "token gh sync sincronização intervalo",
   "daemon-update": "update_ref canal intervalo update_check_interval_hours versão atualizar rollback",
   "local-projects": "clones worktrees repos_root",
-  cleanup: "limpeza limpar regras [cleanup] auto worktree target concluídos fora do hub",
   "env-notifications": "silenciar avisos ambiente",
 };
 

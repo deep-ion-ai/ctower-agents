@@ -57,6 +57,15 @@ export interface DaemonApi {
   /** Baixa, instala e reinicia o app. */
   uiUpdateInstall(): Promise<void>;
   onUiUpdateProgress(cb: (p: UiUpdateProgress) => void): Unsubscribe;
+  /**
+   * Exportar (tela Logs, #65): no desktop grava na pasta Downloads e devolve
+   * o caminho; na web, o navegador baixa o arquivo (`null`).
+   */
+  saveFile(name: string, content: string, mime: string): Promise<string | null>;
+  /** Log da UI em arquivo (só no desktop, #65): acrescenta linhas JSON já mascaradas. */
+  uiLogAppend?(lines: string[]): Promise<void>;
+  /** Últimas linhas do log da UI em arquivo, inclusive da execução anterior. */
+  uiLogRead?(): Promise<string[]>;
 }
 
 /** Converte `listen` (assíncrono) num cancelamento síncrono. */
@@ -158,5 +167,14 @@ export class TauriDaemonApi implements DaemonApi {
   }
   onUiUpdateProgress(cb: (p: UiUpdateProgress) => void) {
     return subscribe<UiUpdateProgress>("ui://update-progress", cb);
+  }
+  saveFile(name: string, content: string) {
+    return invoke<string>("save_download", { name, content });
+  }
+  uiLogAppend(lines: string[]) {
+    return invoke<void>("ui_log_append", { lines });
+  }
+  uiLogRead() {
+    return invoke<string[]>("ui_log_read");
   }
 }

@@ -30,6 +30,7 @@ import { IssueBodyModal } from "./IssueBodyModal";
 import { STATUS } from "./status";
 import { StatusMenu } from "./StatusMenu";
 import { mergedOpen, mergedOpenText } from "./TreeRow";
+import { DesktopOnly } from "../web/DesktopOnly";
 
 export const PR_TEXT: Record<PrState, string> = { open: "aberto", merged: "mesclado", closed: "fechado" };
 export const ORIGIN_TEXT = { autonoma: "autônoma", orientada: "orientada", manual: "manual" } as const;
@@ -547,6 +548,14 @@ export function WorkItemPanel({
                       Descer na ordem de {priority}
                     </button>
                   </>
+                )}
+                {/* Na web, desabilitados com o motivo (#26). */}
+                {priority !== null && web && (
+                  <DesktopOnly
+                    className="opt"
+                    labels={[`Subir na ordem de ${priority}`, `Descer na ordem de ${priority}`]}
+                    note="Reordenar fica no app desktop"
+                  />
                 )}
               </div>
             )}

@@ -15,7 +15,6 @@ ct-sessions.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
 ct-gh = { workspace = true, features = ["test-support"] }

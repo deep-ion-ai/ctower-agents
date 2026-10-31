@@ -1,0 +1,136 @@
+/* Tela Logs (#65): barra de controles e a lista de linhas, em mono. */
+.logs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.logs-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.logs-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.logs-search {
+  flex: 1 1 180px;
+  min-width: 140px;
+  min-height: 30px;
+}
+
+.logs-bar .btn[aria-pressed="true"] {
+  background: var(--selected);
+  border-color: var(--accent);
+}
+
+.logs-status {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.logs-problem {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--error-border);
+  border-radius: 6px;
+  background: var(--error-bg);
+  color: var(--error-soft);
+}
+
+.logs-problem[data-kind="offline"],
+.logs-problem[data-kind="hub-down"],
+.logs-problem[data-kind="hub-unconfigured"] {
+  border-color: var(--attention-border);
+  background: var(--attention-card);
+  color: var(--attention);
+}
+
+.logs-list {
+  height: min(64vh, 720px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--term-bg);
+  color: var(--term-fg);
+  padding: 6px 0;
+}
+
+.logs-older {
+  margin: 4px 10px 8px;
+}
+
+.logs-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.log-line {
+  padding: 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.logs-list[data-wrap="off"] .log-line {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.log-line:hover {
+  background: var(--term-surface);
+}
+
+.log-line time,
+.log-target,
+.log-fields {
+  color: var(--term-muted);
+}
+
+.log-lvl {
+  display: inline-block;
+  min-width: 5ch;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.log-line[data-level="error"] .log-lvl,
+.log-line[data-level="error"] .log-msg {
+  color: var(--error);
+}
+
+.log-line[data-level="warn"] .log-lvl {
+  color: var(--attention);
+}
+
+.log-line[data-level="info"] .log-lvl {
+  color: var(--running);
+}
+
+.log-line[data-level="debug"] .log-lvl,
+.log-line[data-level="trace"] .log-lvl {
+  color: var(--faint);
+}
+
+.logs-sep {
+  margin: 6px 10px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--term-border);
+  color: var(--term-muted);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .logs-list {
+    height: 60vh;
+  }
+}

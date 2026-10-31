@@ -10,9 +10,15 @@ import "@xterm/xterm/css/xterm.css";
 import "./theme.css";
 import { App } from "./App";
 import { TauriDaemonApi } from "./api/daemon";
+import { installUiLog, logCalls } from "./logs/uiLog";
+
+// Log da própria UI (#65): erros do console, da janela e do protocolo, em
+// memória e no arquivo do app (com a execução anterior).
+const api = logCalls(new TauriDaemonApi());
+installUiLog({ persist: api });
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App api={new TauriDaemonApi()} />
+    <App api={api} />
   </React.StrictMode>,
 );

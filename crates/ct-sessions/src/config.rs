@@ -96,6 +96,8 @@ pub struct DaemonConfig {
     /// Limpeza do ambiente após a conclusão do work item (`[cleanup]`,
     /// issue #287).
     pub cleanup: CleanupConfig,
+    /// Log em arquivo, que a tela Logs da UI lê (`[logs]`, #65).
+    pub logs: ct_core::LogsConfig,
 }
 
 /// `[cleanup]` do `config.toml` (épico #284): o job de verificação das
@@ -175,6 +177,7 @@ impl Default for DaemonConfig {
             update_ref: "main".into(),
             update_check_interval_hours: 6,
             cleanup: CleanupConfig::default(),
+            logs: Default::default(),
         }
     }
 }

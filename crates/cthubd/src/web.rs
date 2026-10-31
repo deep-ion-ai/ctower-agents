@@ -73,6 +73,11 @@ pub const WEB_METHODS: &[&str] = &[
     // Atualização do hub (#421): só o estado; verificar, disparar e voltar
     // ficam no app desktop, como as demais ações de manutenção.
     "hub.update.get",
+    // Tela Logs (#65): só leitura do log do hub, já mascarado; o modo seguir
+    // vale só para a própria conexão.
+    "hub.logs.tail",
+    "hub.logs.follow",
+    "hub.logs.unfollow",
 ];
 
 /// Sensíveis da decisão do épico #205: nunca na web, mesmo com sessão válida.
