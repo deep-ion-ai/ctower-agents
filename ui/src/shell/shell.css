@@ -885,6 +885,12 @@ button.sb-item:hover {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* Item sem ação aqui (na web, o que fica no app desktop, #90). */
+.palette-opt[aria-disabled="true"] {
+  color: var(--muted);
+  cursor: default;
+}
+
 .palette-label {
   flex: none;
   max-width: 60%;
@@ -1016,6 +1022,18 @@ button.sb-item:hover {
 .ctx-menu button:disabled {
   color: var(--muted);
   cursor: default;
+}
+
+/* Item com motivo visível sob o rótulo (ex.: só no app desktop, #90). */
+.ctx-menu button:has(.ctx-item-note) {
+  height: auto;
+  padding: 4px 10px;
+}
+
+.ctx-menu .ctx-item-note {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 /* Aviso no topo do menu (ex.: prompts com permissão pendente, #425). */

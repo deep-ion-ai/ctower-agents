@@ -10,6 +10,7 @@ const TONE: Record<AttentionItem["kind"], string> = {
   docs: "attention",
   hub: "attention",
   alert: "attention",
+  sync_failing: "error",
   sync_late: "neutral",
 };
 

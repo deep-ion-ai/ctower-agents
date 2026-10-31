@@ -1,8 +1,6 @@
 // Cartões de ação da Visão geral do projeto (#19), que entram pela prop
 // `extra` de `ProjectOverview`: saúde do projeto, "Buscar issues agora" e o
 // gestor com o escopo do projeto. As regras ficam em overview.ts.
-import { useState } from "react";
-import type { ProjectSync } from "../protocol/gen";
 import type { HubProject } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -11,7 +9,9 @@ import { kindText, SEVERITY_TEXT, SEVERITY_TONE, useHubHealth } from "../hub/Hub
 import { hubTab } from "../hub/sections";
 import { plural } from "../shell/summary";
 import { itemShort } from "../util/item";
-import { projectSignals, syncFeedback, type SyncOutcome, type SyncPlan } from "./overview";
+import { projectSignals } from "./overview";
+import { runProjectSync, useSyncRun, type ProjectSyncInfo } from "./sync-now";
+import { SYNC_DESKTOP_NOTE, SyncStatus } from "./SyncNow";
 import { DesktopOnly } from "../web/DesktopOnly";
 
 /**
@@ -77,18 +77,21 @@ export function ProjectHealthCard({ owner, repo, project }: { owner: string; rep
 /**
  * "Buscar issues agora" só deste projeto: `sync.now` com o `project_id` em
  * cada ambiente do plano (`syncPlan`), com o resultado ou o erro de cada
- * um. Na web, o botão fica desabilitado com o motivo (#26): o canal reverso
- * recusa `sync.now` (spec do épico #205 §5.2).
+ * um, e o estado da última rodada ("Último sync" ou "Sync falhando desde",
+ * #90). O andamento é o mesmo do cabeçalho, da lista de Projetos e da
+ * paleta (`runProjectSync`). Na web, o botão fica desabilitado com o motivo
+ * (#26): o canal reverso recusa `sync.now` (spec do épico #205 §5.2).
  *
  * Na visão do hub de um projeto GitHub, o que muda na hora é o espelho do
  * ambiente (issues, PRs e os gatilhos de status, que chegam ao hub no envio
  * seguinte, em segundos); o espelho do próprio hub segue o ciclo periódico
  * dele. Num projeto Jira, o ambiente de sync é a fonte do espelho do hub.
  */
-export function ProjectSyncCard({ plan, change }: { plan: SyncPlan; change: string }) {
+export function ProjectSyncCard({ info }: { info: ProjectSyncInfo }) {
   const { api, web } = useTower();
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const run = useSyncRun(info.key);
+  const { plan } = info;
+  const failing = (info.state?.failures ?? 0) > 0;
   if (web) {
     return (
       <section className="hub-card" aria-labelledby="pj-ov-sync">
@@ -101,28 +104,13 @@ export function ProjectSyncCard({ plan, change }: { plan: SyncPlan; change: stri
                 Buscar issues agora<span className="sr-only"> este projeto</span>
               </>
             }
-            note="Buscar issues fica no app desktop"
+            note={SYNC_DESKTOP_NOTE}
           />
         </div>
+        <SyncStatus info={info} className="hub-card-empty" />
       </section>
     );
   }
-
-  const run = async () => {
-    setBusy(true);
-    setMsg(null);
-    const outcomes = await Promise.all(
-      plan.targets.map(
-        (t): Promise<SyncOutcome> =>
-          api.call<ProjectSync[]>(t.env, "sync.now", { project_id: t.projectId }).then(
-            (result) => ({ name: t.name, result }),
-            (e) => ({ name: t.name, error: e instanceof Error ? e.message : String(e) }),
-          ),
-      ),
-    );
-    setMsg(syncFeedback(outcomes, change));
-    setBusy(false);
-  };
 
   return (
     <section className="hub-card" aria-labelledby="pj-ov-sync">
@@ -131,24 +119,25 @@ export function ProjectSyncCard({ plan, change }: { plan: SyncPlan; change: stri
         <button
           type="button"
           className="btn btn-sm btn-primary"
-          disabled={busy || plan.targets.length === 0}
+          disabled={run.busy || plan.targets.length === 0}
           title="Buscar agora no rastreador as issues só deste projeto"
-          onClick={() => void run()}
+          onClick={() => void runProjectSync(api, info)}
         >
           {/* O nome acessível difere do "Buscar issues agora" da barra de título (todos os ambientes). */}
-          {busy ? "Buscando issues…" : "Buscar issues agora"}
+          {run.busy ? "Buscando issues…" : failing ? "Tentar de novo" : "Buscar issues agora"}
           <span className="sr-only"> este projeto</span>
         </button>
       </div>
+      <SyncStatus info={info} className="hub-card-empty" />
       <p className="muted hub-card-empty">
         {plan.reason ??
           `Só este projeto, pelo ${plan.targets.length === 1 ? "ambiente" : "ambientes"} ${plan.targets
             .map((t) => t.name)
             .join(", ")}.`}
       </p>
-      {msg && (
-        <p role={msg.error ? "alert" : "status"} className={`hub-card-msg ${msg.error ? "start-error" : "state-on"}`}>
-          {msg.text}
+      {run.msg && (
+        <p role={run.msg.error ? "alert" : "status"} className={`hub-card-msg ${run.msg.error ? "start-error" : "state-on"}`}>
+          {run.msg.text}
         </p>
       )}
     </section>

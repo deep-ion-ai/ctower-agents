@@ -2,9 +2,11 @@
 // são do projeto, em que ambiente o "Buscar issues agora" roda e como o
 // resultado vira uma linha. Funções puras, testadas em overview.test.ts;
 // os cartões ficam em OverviewCards.tsx.
-import type { ProjectSync } from "../protocol/gen";
+import type { ProjectSync, SyncState } from "../protocol/gen";
 import type { HealthSignal, HubHealth } from "../protocol/hub-gen";
 import { plural } from "../shell/summary";
+import { ago } from "../util/time";
+import { syncFailures } from "./sync-health";
 import type { Clone } from "./clones";
 
 const same = (a: string | null | undefined, b: string) => !!a && a.toLowerCase() === b.toLowerCase();
@@ -111,4 +113,52 @@ export function syncFeedback(outcomes: SyncOutcome[], change: string): { text: s
   }
   if (errors.length > 0) parts.push(`Falhou em ${errors.join(" · ")}`);
   return { text: parts.join(" "), error: errors.length > 0 };
+}
+
+export { SYNC_FAIL_ALERT, syncAlert, syncFailures } from "./sync-health";
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** "14:03" se for hoje; senão "28/10 14:03" (fuso local). */
+export function clockText(ts: number, now: number): string {
+  const d = new Date(ts);
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === new Date(now).toDateString() ? hm : `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${hm}`;
+}
+
+/**
+ * O estado de sync que vale para o projeto entre os que a UI conhece (o do
+ * hub e o de cada ambiente com o projeto): o que falha há mais rodadas; sem
+ * falha, o de sucesso mais recente. `null` = nenhum dado.
+ */
+export function pickSync(states: (SyncState | null | undefined)[]): SyncState | null {
+  const all = states.filter((s): s is SyncState => !!s);
+  if (all.length === 0) return null;
+  return all.reduce((best, s) => {
+    const fb = syncFailures(best);
+    const fs = syncFailures(s);
+    if (fs !== fb) return fs > fb ? s : best;
+    return (s.last_ok_at ?? 0) > (best.last_ok_at ?? 0) ? s : best;
+  });
+}
+
+/**
+ * O sync do projeto em uma linha, para o cartão "Buscar issues" e o
+ * cabeçalho (#90): "Sync falhando desde 14:03: <erro>" quando a última
+ * rodada falhou (`failures` > 0), senão "Último sync: há 5 min". `null` =
+ * sem dado (nada a mostrar).
+ */
+export function syncStatusLine(
+  s: SyncState | null | undefined,
+  now: number,
+): { text: string; failing: boolean; error: string | null } | null {
+  if (!s) return null;
+  const n = syncFailures(s);
+  if (n > 0) {
+    const since = clockText(s.failing_since ?? s.last_attempt_at, now);
+    const runs = n > 1 ? ` (${plural(n, "rodada", "rodadas")})` : "";
+    return { text: `Sync falhando desde ${since}${runs}`, failing: true, error: s.last_error };
+  }
+  if (s.last_ok_at === null) return null;
+  return { text: `Último sync: ${ago(s.last_ok_at, now)}`, failing: false, error: null };
 }

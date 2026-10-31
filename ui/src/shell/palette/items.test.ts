@@ -1,7 +1,7 @@
 import { FakeDaemonApi } from "../../api/fake";
 import type { HubDashboard } from "../../protocol/hub-gen";
 import { dashboard, hubProject, project, session, workItem } from "../../test/fixtures";
-import { paletteItems, type PaletteSources } from "./items";
+import { paletteItems, SYNC_PROJECT_PREFIX, SYNC_WEB_NOTE, type PaletteItem, type PaletteSources } from "./items";
 
 const HUB_OFF: PaletteSources["hub"] = { up: false, dashboard: null, connected: false };
 
@@ -253,4 +253,42 @@ test("Logs (#65): a UI sempre; o hub com ele no ar; cada ambiente só buscando",
     tab: { id: "maintenance:logs", screen: { name: "maintenance", section: "logs", source: "env", env: "wsl" } },
   });
   expect(paletteItems(src()).some((i) => i.id === "cmd:logs:hub")).toBe(false);
+});
+
+test("sync por projeto (#90): este projeto, 'Sincronizar projeto…' e um por projeto; na web, desabilitados", () => {
+  const sources = (web: boolean) =>
+    src({
+      web,
+      envs: [FakeDaemonApi.wslEnv()],
+      dashboards: { wsl: dashboard() },
+      activeProject: { screen: { name: "project", env: "wsl", projectId: 1 }, name: "ctower-agents" },
+    });
+  const sync = (items: PaletteItem[]) =>
+    items.filter((i) => i.action.type === "sync-project" || i.id === "cmd:sync-project");
+  const desk = sync(paletteItems(sources(false)));
+  expect(desk.map((i) => [i.label, i.browse ?? true, i.disabled ?? false])).toEqual([
+    ["Sincronizar este projeto", true, false],
+    ["Sincronizar projeto…", true, false],
+    // Por projeto, só buscando (a lista inicial não cresce com os projetos).
+    [`${SYNC_PROJECT_PREFIX} ctower-agents`, false, false],
+  ]);
+  expect(desk[0].action).toEqual({
+    type: "sync-project",
+    screen: { name: "project", env: "wsl", projectId: 1 },
+    open: false,
+  });
+  // "Sincronizar projeto…" troca a busca para a lista dos projetos.
+  expect(desk[1].action).toEqual({ type: "query", query: `${SYNC_PROJECT_PREFIX} ` });
+  expect(desk[2].action).toMatchObject({ type: "sync-project", open: true });
+
+  const web = sync(paletteItems(sources(true)));
+  expect(web.map((i) => [i.label, i.disabled, i.detail])).toEqual([
+    ["Sincronizar este projeto", true, SYNC_WEB_NOTE],
+    ["Sincronizar projeto…", true, SYNC_WEB_NOTE],
+    [`${SYNC_PROJECT_PREFIX} ctower-agents`, true, SYNC_WEB_NOTE],
+  ]);
+
+  // Sem aba de projeto ativa: sem "Sincronizar este projeto".
+  const sem = paletteItems(src({ envs: [FakeDaemonApi.wslEnv()], dashboards: { wsl: dashboard() } }));
+  expect(sem.find((i) => i.id === "cmd:sync-this")).toBeUndefined();
 });

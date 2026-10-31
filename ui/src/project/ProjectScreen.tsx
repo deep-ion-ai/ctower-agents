@@ -3,7 +3,7 @@ import type { ProjectTree, TreeNode } from "../protocol/gen";
 import { settingsTab } from "../settings/sections";
 import { useNav, type ItemIntent } from "../state/nav";
 import { useTower } from "../state/tower";
-import { changeLabel, trackerLabel } from "../util/item";
+import { trackerLabel } from "../util/item";
 import { useNow } from "../App";
 import { itemTitle } from "../util/item";
 import { localClone, liveSessions } from "./clones";
@@ -11,7 +11,7 @@ import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
 import { ProjectSyncCard } from "./OverviewCards";
-import { syncPlan } from "./overview";
+import { projectSyncInfo } from "./sync-now";
 import { ProjectSessions } from "./ProjectSessions";
 import type { ProjectPage } from "./sections";
 import { projectSessions, sessionCounts } from "./sessions";
@@ -105,6 +105,8 @@ export function ProjectScreen(props: {
   const name = p?.name ?? "Projeto";
   const sessions = () => projectSessions(clones, dashboards);
   const sync = mine?.sync ?? dash?.sync.find((x) => x.project_id === projectId) ?? null;
+  // "Sincronizar este projeto" no cabeçalho e no cartão (#90), no próprio ambiente.
+  const syncInfo = projectSyncInfo(tower, { env, projectId });
 
   return (
     <ProjectView<TreeNode>
@@ -132,7 +134,7 @@ export function ProjectScreen(props: {
               onPage={goPage}
               // Hub fora (#19): só o sync, no próprio ambiente. Saúde e gestor
               // dependem do hub (os sinais são calculados lá; o gestor lê o hub).
-              extra={<ProjectSyncCard plan={syncPlan(clones, null)} change={changeLabel(p)} />}
+              extra={<ProjectSyncCard info={syncInfo} />}
             />
           );
         },
@@ -174,6 +176,7 @@ export function ProjectScreen(props: {
       project={p}
       roots={mine?.roots ?? null}
       syncedAt={mine?.sync?.last_ok_at ?? null}
+      sync={syncInfo}
       error={error}
       item={props.item}
       liveOf={liveOf}

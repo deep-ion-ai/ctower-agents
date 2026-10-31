@@ -36,6 +36,8 @@ import {
 } from "./sprints";
 import { EMPTY_ACTIVE_SPRINT, EMPTY_FILTERED, EMPTY_OPEN, SPRINTS_UNREAD, buildView, isExpanded, narrowing, priorityOf, statusKey } from "./tree-view";
 import { useProjectUi } from "./ui-store";
+import { SyncHead } from "./SyncNow";
+import type { ProjectSyncInfo } from "./sync-now";
 import { docsFolderState, type DocsCandidate } from "./docs";
 import type { DocsDir } from "../protocol/gen";
 import { useViewChoice } from "./view-choice";
@@ -79,6 +81,11 @@ export interface ProjectViewProps<T extends ProjectNode> {
   /** Árvore do projeto atual (`null` enquanto carrega ou na troca de projeto). */
   roots: T[] | null;
   syncedAt: number | null;
+  /**
+   * "Sincronizar este projeto" no cabeçalho, com o estado do sync (#90).
+   * Sem ele, só "sincronizado há…" pelo `syncedAt`.
+   */
+  sync?: ProjectSyncInfo;
   error: string | null;
   item?: ItemIntent;
   /** Sessões vivas do item que a UI conhece (0 = sessão do projeto). */
@@ -554,9 +561,14 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
             </span>
           )}
           {p.headExtra}
-          <span className="muted project-sync">
-            {p.syncedAt ? `sincronizado ${ago(p.syncedAt, now)}` : "ainda não sincronizado"}
-          </span>
+          {p.sync ? (
+            // Na Visão geral o resultado já aparece no cartão "Buscar issues".
+            <SyncHead info={p.sync} feedback={page !== "overview"} />
+          ) : (
+            <span className="muted project-sync">
+              {p.syncedAt ? `sincronizado ${ago(p.syncedAt, now)}` : "ainda não sincronizado"}
+            </span>
+          )}
           {docs && (
             <button
               type="button"

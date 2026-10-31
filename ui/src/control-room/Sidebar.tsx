@@ -3,6 +3,7 @@ import { useState } from "react";
 import { envTab } from "../env/sections";
 import { projectsPlace } from "../project/sections";
 import { projectMenuItems, useProjectRows, type ProjectRow } from "../project/rows";
+import { syncAction, useSyncRun } from "../project/sync-now";
 import { ContextMenu, type MenuItem } from "../shell/ContextMenu";
 import { Icon } from "../shell/icons";
 import { shortcutLabel } from "../shell/layout";
@@ -230,12 +231,15 @@ export function Sidebar({
   onView(v: ControlView | null): void;
   counts: Record<ControlView, number>;
 }) {
-  const { envs, hub, web, api } = useTower();
+  const tower = useTower();
+  const { envs, hub, web, api } = tower;
   const shell = useShell();
   const nav = useNav();
   const startSession = useStartSession();
   const projects = useProjectRows();
   const [menu, setMenu] = useState<{ x: number; y: number; p: ProjectRow; origin: HTMLElement } | null>(null);
+  /** Último "Sincronizar este projeto" pedido por aqui, para o resultado sob a lista (#90). */
+  const [synced, setSynced] = useState<{ name: string; key: string } | null>(null);
   // Cadastro e atribuição são no hub e só no desktop (na web, só leitura).
   const editable = hub.connected && !web;
 
@@ -247,6 +251,16 @@ export function Sidebar({
       startSession,
       openUrl: (url) => void api.openUrl(url).catch(() => {}),
       origin,
+      sync: (() => {
+        const s = syncAction(tower, p.syncAddr);
+        return {
+          ...s,
+          run: () => {
+            setSynced({ name: p.name, key: s.info.key });
+            s.run();
+          },
+        };
+      })(),
     });
 
   return (
@@ -318,6 +332,7 @@ export function Sidebar({
               onMenu={(x, y, origin) => setMenu({ x, y, p, origin })}
             />
           ))}
+          {synced && <SyncNote name={synced.name} syncKey={synced.key} />}
         </SideGroup>
       </SidePanel>
       {menu && (
@@ -334,5 +349,17 @@ export function Sidebar({
         />
       )}
     </SideContent>
+  );
+}
+
+/** Andamento e resultado do "Sincronizar este projeto" pedido pelo menu de um projeto (#90). */
+function SyncNote({ name, syncKey }: { name: string; syncKey: string }) {
+  const run = useSyncRun(syncKey);
+  if (run.busy) return <p className="cr-sub cr-sync-note" role="status">{name}: buscando issues…</p>;
+  if (!run.msg) return null;
+  return (
+    <p className={`cr-sub cr-sync-note ${run.msg.error ? "start-error" : "state-on"}`} role={run.msg.error ? "alert" : "status"}>
+      {name}: {run.msg.text}
+    </p>
   );
 }

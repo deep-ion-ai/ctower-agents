@@ -1,7 +1,15 @@
-import { expect, test } from "vitest";
-import { healthSignal, project } from "../test/fixtures";
+import { describe, expect, test } from "vitest";
+import { healthSignal, project, sync } from "../test/fixtures";
 import type { Clone } from "./clones";
-import { projectSignals, syncFeedback, syncPlan } from "./overview";
+import {
+  pickSync,
+  projectSignals,
+  SYNC_FAIL_ALERT,
+  syncAlert,
+  syncFeedback,
+  syncPlan,
+  syncStatusLine,
+} from "./overview";
 
 const clone = (env: string, name: string, id = 1): Clone => ({
   env,
@@ -72,5 +80,54 @@ test("syncFeedback: soma os que deram certo e lista os erros (da chamada ou do r
   ).toEqual({
     text: "Sincronizado por WSL: 2 issues, 1 PR, 2 mudanças de status. Falhou em Mac: ambiente offline · Pi: jira-cli ausente",
     error: true,
+  });
+});
+
+// #90: estado do sync do projeto no cartão, no cabeçalho e no aviso.
+describe("sync do projeto (#90)", () => {
+  const H = 3_600_000;
+  const now = new Date(2026, 9, 31, 15, 0).getTime();
+  const at = (h: number, m = 0) => new Date(2026, 9, 31, h, m).getTime();
+
+  test("syncStatusLine: sem dado, nada; em dia, 'Último sync'", () => {
+    expect(syncStatusLine(null, now)).toBeNull();
+    // Nunca rodou com sucesso nem falhou: nada a dizer.
+    expect(syncStatusLine(sync({ last_ok_at: null }), now)).toBeNull();
+    expect(syncStatusLine(sync({ last_ok_at: now - 5 * 60_000, failures: 0 }), now)).toEqual({
+      text: "Último sync: há 5 min",
+      failing: false,
+      error: null,
+    });
+  });
+
+  test("syncStatusLine: falhando desde a hora do início, com as rodadas e o erro", () => {
+    const s = sync({ last_error: "HTTP 410", failures: 4, failing_since: at(14, 3), last_attempt_at: at(14, 50) });
+    expect(syncStatusLine(s, now)).toEqual({ text: "Sync falhando desde 14:03 (4 rodadas)", failing: true, error: "HTTP 410" });
+    // Uma falha só: sem a contagem; outro dia: com a data.
+    const ontem = sync({ last_error: "rede", failures: 1, failing_since: at(14, 3) - 24 * H });
+    expect(syncStatusLine(ontem, now)?.text).toBe("Sync falhando desde 30/10 14:03");
+  });
+
+  test("syncStatusLine: ambiente anterior (sem failures) não mostra falha; aviso do Jira também não", () => {
+    const antigo = sync({ last_ok_at: now - 60 * 60_000, last_error: "401" });
+    delete (antigo as Partial<typeof antigo>).failures;
+    expect(syncStatusLine(antigo, now)).toEqual({ text: "Último sync: há 1 h", failing: false, error: null });
+    expect(syncStatusLine(sync({ last_ok_at: now, last_error: "2 issues não lidas", failures: 0 }), now)?.failing).toBe(false);
+  });
+
+  test("syncAlert: só a partir de SYNC_FAIL_ALERT falhas seguidas", () => {
+    expect(SYNC_FAIL_ALERT).toBe(3);
+    expect(syncAlert(sync({ failures: 2 }))).toBe(false);
+    expect(syncAlert(sync({ failures: 3 }))).toBe(true);
+    expect(syncAlert(null)).toBe(false);
+  });
+
+  test("pickSync: o que falha há mais rodadas; sem falha, o sucesso mais recente", () => {
+    const hub = sync({ last_ok_at: now - H, failures: 0 });
+    const env = sync({ last_ok_at: now - 2 * H, failures: 5, last_error: "410" });
+    expect(pickSync([hub, env])).toBe(env);
+    const recente = sync({ last_ok_at: now, failures: 0 });
+    expect(pickSync([hub, null, recente])).toBe(recente);
+    expect(pickSync([null, undefined])).toBeNull();
   });
 });

@@ -4,6 +4,7 @@ import { afterEach, vi } from "vitest";
 import { resetTermPrefs } from "../terminal/prefs";
 import { forgetTermSize } from "../terminal/size";
 import { resetProjectUi } from "../project/ui-store";
+import { resetSyncRuns } from "../project/sync-now";
 import { resetReviewUi } from "../review/ui-store";
 import { THEME_KEY } from "../state/theme";
 
@@ -14,6 +15,7 @@ afterEach(() => {
   forgetTermSize();
   resetTermPrefs();
   resetProjectUi();
+  resetSyncRuns();
   resetReviewUi();
   delete document.documentElement.dataset.theme;
   localStorage.removeItem(THEME_KEY);

@@ -142,6 +142,8 @@ impl Ledger {
             repo,
             last_attempt_at: st.as_ref().map_or_else(now_ms, |s| s.last_attempt_at),
             last_ok_at: st.as_ref().and_then(|s| s.last_ok_at),
+            failures: st.as_ref().map_or(0, |s| s.failures),
+            failing_since: st.as_ref().and_then(|s| s.failing_since),
             last_error: st.and_then(|s| s.last_error),
             readiness: readiness.clone(),
         }))?;

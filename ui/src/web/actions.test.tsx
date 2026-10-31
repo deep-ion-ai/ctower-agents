@@ -336,3 +336,33 @@ it("Visão geral do projeto na web (#19, #26): saúde e gestor só leitura, Busc
   expect(sync).toBeDisabled();
   expect(sync).toHaveAccessibleDescription("Buscar issues fica no app desktop");
 });
+
+it("Sincronizar este projeto na web (#90): cabeçalho, menu da lista e paleta desabilitados com a nota do desktop", async () => {
+  const user = renderApp(webApi(), { name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "overview" });
+  await screen.findByRole("heading", { name: "Buscar issues" });
+  // Cabeçalho.
+  const head = document.querySelector<HTMLElement>(".project-head")!;
+  const btn = within(head).getByRole("button", { name: "Sincronizar este projeto" });
+  expect(btn).toBeDisabled();
+  expect(btn).toHaveAccessibleDescription("Buscar issues fica no app desktop");
+
+  // Paleta: na aba do projeto, desabilitado com o motivo; escolher não fecha nem chama nada.
+  await user.click(screen.getByRole("button", { name: "Abrir paleta de comandos" }));
+  const dialog = screen.getByRole("dialog", { name: "Paleta de comandos" });
+  await user.type(within(dialog).getByRole("combobox"), "Sincronizar este");
+  const opt = within(dialog)
+    .getAllByRole("option")
+    .find((o) => o.textContent?.startsWith("Sincronizar este projeto"))!;
+  expect(opt).toHaveAttribute("aria-disabled", "true");
+  expect(opt).toHaveTextContent("Fica no app desktop");
+  await user.click(opt);
+  expect(screen.getByRole("dialog", { name: "Paleta de comandos" })).toBeInTheDocument();
+  await user.keyboard("{Escape}");
+
+  // Menu da lista de Projetos.
+  await user.click(within(screen.getByRole("navigation", { name: "Trilha do projeto" })).getByRole("button", { name: "Projetos" }));
+  await user.click(await screen.findByRole("button", { name: /^Mais ações de / }));
+  const item = screen.getByRole("menuitem", { name: "Sincronizar este projeto" });
+  expect(item).toBeDisabled();
+  expect(item).toHaveAccessibleDescription("Fica no app desktop");
+});

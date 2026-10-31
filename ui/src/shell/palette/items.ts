@@ -42,6 +42,14 @@ export type PaletteAction =
   /** Ação da sessão ativa do Terminal (#424), executada pelo cabeçalho dela. */
   | { type: "session-action"; id: SessionActionId }
   | { type: "sync" }
+  /**
+   * "Sincronizar este projeto" (#90): `sync.now { project_id }` do projeto do
+   * endereço, com o plano e o feedback do cartão "Buscar issues". `open` =
+   * abre antes a Visão geral do projeto, onde o cartão mostra o resultado.
+   */
+  | { type: "sync-project"; screen: Extract<Screen, { name: "project" }>; open: boolean }
+  /** Troca a busca da paleta (ex.: "Sincronizar projeto…" lista os projetos). */
+  | { type: "query"; query: string }
   /** Folha de atalhos e gestos (#27). */
   | { type: "shortcuts" };
 
@@ -59,6 +67,8 @@ export interface PaletteItem {
   closed?: boolean;
   /** `false` = só aparece buscando (listas longas fora da lista inicial). */
   browse?: boolean;
+  /** Visível, mas sem ação (na web, o que fica no app desktop, #26); `detail` diz o motivo. */
+  disabled?: boolean;
   action: PaletteAction;
 }
 
@@ -75,6 +85,8 @@ export interface PaletteSources {
   shellTarget?: { env: string; workItemId: number } | null;
   /** Ações da sessão ativa do Terminal (#424): "Sessão: Retomar", "Sessão: Reiniciar"… */
   sessionActions?: { title: string; actions: SessionAction[] } | null;
+  /** Projeto da aba ativa, para "Sincronizar este projeto" (#90). */
+  activeProject?: { screen: Extract<Screen, { name: "project" }>; name: string } | null;
 }
 
 export const KIND_LABEL: Record<PaletteKind, string> = {
@@ -356,6 +368,60 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
   return out;
 }
 
+/** Prefixo dos itens de sync por projeto: "Sincronizar projeto…" põe isto na busca. */
+export const SYNC_PROJECT_PREFIX = "Sincronizar projeto:";
+
+/** Motivo dos itens de sync desabilitados na web (#26): o canal reverso recusa `sync.now`. */
+export const SYNC_WEB_NOTE = "Fica no app desktop";
+
+/**
+ * "Sincronizar este projeto" (#90): o da aba ativa, se for de projeto;
+ * "Sincronizar projeto…", que troca a busca para listar os projetos; e,
+ * só buscando, um por projeto. Na web aparecem desabilitados com a nota do
+ * app desktop.
+ */
+function syncCommands(src: PaletteSources, projects: ProjectRef[]): PaletteItem[] {
+  const off = src.web ? { disabled: true, detail: SYNC_WEB_NOTE } : {};
+  const kw = "sync sincronizar buscar issues rastreador github jira atualizar";
+  const out: PaletteItem[] = [];
+  const a = src.activeProject;
+  if (a) {
+    out.push({
+      id: "cmd:sync-this",
+      kind: "command",
+      label: "Sincronizar este projeto",
+      detail: `Buscar agora as issues de ${a.name}`,
+      keywords: kw,
+      action: { type: "sync-project", screen: a.screen, open: false },
+      ...off,
+    });
+  }
+  if (projects.length > 0) {
+    out.push({
+      id: "cmd:sync-project",
+      kind: "command",
+      label: "Sincronizar projeto…",
+      detail: "Escolher o projeto",
+      keywords: kw,
+      action: { type: "query", query: `${SYNC_PROJECT_PREFIX} ` },
+      ...off,
+    });
+  }
+  for (const p of projects) {
+    out.push({
+      id: `cmd:sync-project:${key(p.owner, p.repo)}`,
+      kind: "command",
+      label: `${SYNC_PROJECT_PREFIX} ${p.name}`,
+      detail: `${p.owner}/${p.repo}`,
+      keywords: kw,
+      browse: false,
+      action: { type: "sync-project", screen: projectScreen(p), open: true },
+      ...off,
+    });
+  }
+  return out;
+}
+
 /**
  * Detalhe de cada ambiente (#23): "Ambiente: wsl" na lista inicial e, só
  * buscando, cada seção dele ("Ambiente: Atualização — wsl"), com o
@@ -493,6 +559,7 @@ export function paletteItems(src: PaletteSources): PaletteItem[] {
     ...sessions(src),
     ...places,
     ...commands(src, interrupted, projects),
+    ...syncCommands(src, projects),
     SHORTCUTS,
     ...projectCommands(src, projects),
     // Depois dos de projeto: "configurar <projeto>" segue achando o projeto primeiro.

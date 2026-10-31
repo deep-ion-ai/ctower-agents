@@ -59,7 +59,9 @@ use tokio::sync::broadcast;
 /// `docs_*` no `hub.backup.set`, `what` no `hub.backup.run` e os avisos
 /// `docs_backup_failed|stale|too_large` em `hub.status`. 1.10 (#434):
 /// `hub.workitem.body` (descrição da issue lida no rastreador, sem gravar).
-pub const PROTOCOL_VERSION: &str = "1.10";
+/// 1.11 (#90): `failures` e `failing_since` no `SyncState` (falhas seguidas
+/// do sync do projeto).
+pub const PROTOCOL_VERSION: &str = "1.11";
 
 #[derive(Clone)]
 pub struct HubState {
