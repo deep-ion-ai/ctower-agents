@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Icon, type IconName } from "./icons";
+import type { TabKind } from "./tabColors";
 
 /** Uma aba na lista de abas abertas. */
 export interface OpenTabItem {
@@ -9,6 +10,8 @@ export interface OpenTabItem {
   project?: string;
   tone?: string;
   icon?: IconName;
+  /** Tipo da aba (#73): a lista usa só a cor do texto dele. */
+  kind?: TabKind;
 }
 
 /** Filtro da lista: título ou projeto, sem diferenciar maiúsculas. */
@@ -98,6 +101,7 @@ export function OpenTabsList({
             role="option"
             aria-selected={i === at}
             data-current={t.id === current ? "true" : undefined}
+            data-kind={t.kind}
             onMouseDown={(e) => e.preventDefault()}
             onMouseEnter={() => setSel(i)}
             onClick={() => pick(t.id)}

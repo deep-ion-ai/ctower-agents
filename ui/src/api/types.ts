@@ -88,8 +88,29 @@ export interface SessionDefaults {
 /** Tema da UI (#290); `system` segue o `prefers-color-scheme`. O terminal é sempre escuro. */
 export type ThemePref = "system" | "light" | "dark";
 
+/** Cores de um tipo de aba (#73): HEX `#rrggbb`; ausente ou `null` = cor do tema. */
+export interface TabColor {
+  fg?: string | null;
+  bg?: string | null;
+}
+
+export interface TabKindColors {
+  terminal: TabColor;
+  shell: TabColor;
+  issue: TabColor;
+  screen: TabColor;
+}
+
+/** Cores das abas por tema: cada tema com a sua configuração. */
+export interface TabColors {
+  dark: TabKindColors;
+  light: TabKindColors;
+}
+
 export interface Appearance {
   theme: ThemePref;
+  /** Ausente em configurações antigas: tudo na cor do tema. */
+  tabs?: TabColors;
 }
 
 /** Preferências da UI (ui.json no diretório de dados do app). */

@@ -14,6 +14,7 @@ import { useWebSession } from "../web/WebGate";
 import { CLEANUP_KEYS } from "../maintenance/CleanupRules";
 import { DEFAULT_PROMPTS, DEFAULT_UI_CONFIG } from "./defaults";
 import { promptsChanged, ReadyPromptsControl } from "./ReadyPrompts";
+import { tabColorsChanged, TabColorsControl } from "./TabColorsSettings";
 import {
   RollbackControl,
   SyncIntervalControl,
@@ -555,14 +556,14 @@ function useAppItems(): Item[] {
       keywords: "claro escuro sistema dark light modo noturno",
       shownKey: "appearance.theme",
       modified: config.appearance.theme !== DEFAULT_UI_CONFIG.appearance.theme,
-      restore: () => save({ appearance: DEFAULT_UI_CONFIG.appearance }),
+      restore: () => save({ appearance: { ...config.appearance, theme: DEFAULT_UI_CONFIG.appearance.theme } }),
       control: (
         <select
           id="tema"
           aria-label="Tema"
           className="set-input set-select"
           value={config.appearance.theme}
-          onChange={(e) => save({ appearance: { theme: e.target.value as ThemePref } })}
+          onChange={(e) => save({ appearance: { ...config.appearance, theme: e.target.value as ThemePref } })}
         >
           {THEMES.map((t) => (
             <option key={t.value} value={t.value}>
@@ -571,6 +572,19 @@ function useAppItems(): Item[] {
           ))}
         </select>
       ),
+    },
+    {
+      id: "tab-colors",
+      section: "appearance",
+      category: "Aparência",
+      name: "Cores das abas",
+      description:
+        "Cor do texto e do fundo das abas por tipo (sessão, shell, issue ou épico e demais telas), em cada tema. Campo vazio usa a cor do tema; o contraste abaixo de 4.5:1 ganha um aviso.",
+      keys: ["appearance.tabs"],
+      keywords: "cor cores aba abas texto fundo hex sessão terminal shell issue épico contraste",
+      shownKey: "appearance.tabs",
+      modified: tabColorsChanged(config.appearance.tabs),
+      control: <TabColorsControl />,
     },
     {
       id: "term-font",

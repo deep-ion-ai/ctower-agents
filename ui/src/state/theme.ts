@@ -3,7 +3,8 @@
 // ficou gravado aqui ou o que o app nativo leu do ui.json); daqui em diante
 // vale a preferência do ui.json, seguindo o sistema quando for `system`.
 import { useEffect } from "react";
-import type { ThemePref } from "../api/types";
+import type { TabColors, ThemePref } from "../api/types";
+import { applyTabColors } from "../shell/tabColors";
 
 export type Theme = "light" | "dark";
 
@@ -28,15 +29,21 @@ export function applyTheme(pref: ThemePref): Theme {
   return theme;
 }
 
-/** Aplica `pref` (`null` = ui.json ainda não carregou: fica o tema do boot) e acompanha o sistema. */
-export function useTheme(pref: ThemePref | null) {
+/**
+ * Aplica `pref` (`null` = ui.json ainda não carregou: fica o tema do boot) e
+ * as cores das abas do tema em uso (#73), e acompanha o sistema.
+ */
+export function useTheme(pref: ThemePref | null, tabs?: TabColors) {
+  // A configuração chega como objeto novo a cada gravação: compara pelo conteúdo.
+  const tabsKey = JSON.stringify(tabs ?? null);
   useEffect(() => {
     if (!pref) return;
-    applyTheme(pref);
+    const cfg = JSON.parse(tabsKey) as TabColors | null;
+    const apply = () => applyTabColors(cfg ?? undefined, applyTheme(pref));
+    apply();
     if (pref !== "system" || typeof matchMedia !== "function") return;
     const mq = matchMedia(DARK_QUERY);
-    const onChange = () => applyTheme(pref);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, [pref]);
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [pref, tabsKey]);
 }

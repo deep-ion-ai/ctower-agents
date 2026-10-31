@@ -127,5 +127,11 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   prompts: DEFAULT_PROMPTS,
   notify: { needs_human: true, session_error: true, env_down: true },
   session: { model: null, mode: "native", remote_control: false },
-  appearance: { theme: "dark" },
+  appearance: {
+    theme: "dark",
+    tabs: {
+      dark: { terminal: {}, shell: {}, issue: {}, screen: {} },
+      light: { terminal: {}, shell: {}, issue: {}, screen: {} },
+    },
+  },
 };

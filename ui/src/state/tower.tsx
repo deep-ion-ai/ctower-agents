@@ -443,7 +443,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
   const status = webView?.status ?? localStatus;
   const dashboards = webView?.dashboards ?? localDashboards;
 
-  useTheme(configLoaded ? config.appearance.theme : null);
+  useTheme(configLoaded ? config.appearance.theme : null, config.appearance.tabs);
 
   const setConfig = useCallback(
     async (cfg: UiConfig) => {
