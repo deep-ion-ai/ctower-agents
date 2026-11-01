@@ -8,7 +8,7 @@ import { HUB_CONFIG_UNLINKED, dashboard, healthSignal, hubAssignment, project, s
 // Cartão Propostas do gestor (#100).
 import * as fx from "../test/fixtures";
 import type { HubProposal, HubRanking } from "../protocol/hub-gen";
-import { webApi } from "../test/web";
+import { hubItem as webItem, webApi } from "../test/web";
 import { DESKTOP_ONLY_NOTE } from "../web/mode";
 
 const NOW = Date.now();
@@ -1221,5 +1221,165 @@ describe("Visão geral (#100): Propostas do gestor", () => {
       expect(b).toHaveAccessibleDescription(DESKTOP_ONLY_NOTE);
     }
     expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(0);
+  });
+});
+
+// Cartão Revisões na Visão geral do projeto (#101): os itens deste projeto
+// em revisão ou com decisões pendentes, com "Marcar como revisada".
+describe("Visão geral (#101): Revisões", () => {
+  const ACME = fx.hubProject({ id: 30, gh_owner: "acme", gh_repo: "acme-web", name: "acme-web" });
+  const ACME_LOCAL = project({ id: 3, gh_owner: "acme", gh_repo: "acme-web", name: "acme-web" });
+  const OUTRO = project({ id: 4, gh_owner: "acme", gh_repo: "acme-api", name: "acme-api" });
+  const acmeAt = { name: "project" as const, owner: "acme", repo: "acme-web", view: "overview" as const };
+  // #12 em revisão com 2 pendentes; #15 em execução com 1; #20 sem nada (fica de fora).
+  const W12 = workItem({ id: 312, project_id: 3, gh_number: 12, status: "em_revisao", title: "Login no Safari" });
+  const W15 = workItem({ id: 315, project_id: 3, gh_number: 15, title: "Cadastro trava" });
+  const W20 = workItem({ id: 320, project_id: 3, gh_number: 20, title: "Sem decisões" });
+  // De outro projeto: não aparece.
+  const W7 = workItem({ id: 407, project_id: 4, gh_number: 7, status: "em_revisao", title: "de outro projeto", pending_decisions: 3 });
+
+  const dec = (id: number, wi: number) => ({
+    id,
+    uid: `acme-${id}`,
+    work_item_id: wi,
+    session_id: null,
+    origin: "autonoma" as const,
+    title: `Decisão ${id} de Fulano`,
+    context: "c",
+    decision: "d",
+    consequences: null,
+    reviewed_at: null,
+    reviewed_in_pr: null,
+    created_at: NOW,
+  });
+  const pr = (number: number, wi: number) => ({
+    number,
+    work_item_id: wi,
+    head: `feat/${wi}`,
+    base: "develop",
+    state: "open" as const,
+    url: `https://github.com/acme/acme-web/pull/${number}`,
+    updated_at: 0,
+    head_sha: null,
+  });
+
+  function hubSide(api: FakeDaemonApi) {
+    return api
+      .onHub("hub.tree.get", { project: ACME, sync: sync({ project_id: 30, last_ok_at: NOW }), roots: [], untracked: [] })
+      .onHub("hub.dashboard.get", { ...HUB_DASH, projects: [{ project: ACME, work_items: [] }] })
+      .onHub("hub.projects.list", [fx.hubProjectView(ACME)])
+      .onHub("hub.health.get", fx.NO_HEALTH)
+      .onHub("hub.proposals.list", fx.NO_PROPOSALS);
+  }
+
+  /** Ambiente com o acme-web: `pending` são as decisões pendentes por work item (marcar esvazia). */
+  function envSide(api: FakeDaemonApi, items = [W12, W15, W20]) {
+    const pending: Record<number, ReturnType<typeof dec>[]> = { 312: [dec(1, 312), dec(2, 312)], 315: [dec(3, 315)] };
+    const prs: Record<number, ReturnType<typeof pr>[]> = { 312: [pr(40, 312)] };
+    const byId = (id: number) => [...items, W7].find((w) => w.id === id)!;
+    return api
+      .on("dashboard.get", (_: unknown, env: string) =>
+        env === "mac"
+          ? dashboard({ projects: [] })
+          : dashboard({
+              projects: [
+                { project: ACME_LOCAL, work_items: items.map((w) => ({ ...w, pending_decisions: pending[w.id]?.length ?? 0 })) },
+                { project: OUTRO, work_items: [W7] },
+              ],
+            }),
+      )
+      .on("review.get", (p: { work_item_id: number }) => ({
+        work_item: byId(p.work_item_id),
+        prs: prs[p.work_item_id] ?? [],
+        decisions: pending[p.work_item_id] ?? [],
+      }))
+      .on("review.mark_reviewed", (p: { work_item_id: number }) => {
+        const n = pending[p.work_item_id]?.length ?? 0;
+        pending[p.work_item_id] = [];
+        return { marked: n };
+      });
+  }
+
+  const rows = (c: HTMLElement) => within(c).queryAllByRole("listitem").map((li) => li.getAttribute("aria-label"));
+
+  it("lista só os itens em revisão deste projeto, com as pendentes e o link para a tela de Revisão", async () => {
+    const api = envSide(hubSide(setup(true)));
+    render(<App api={api} initial={acmeAt} />);
+    const c = await card("Revisões · 2");
+    expect(rows(c)).toEqual(["Revisão de #12 Login no Safari", "Revisão de #15 Cadastro trava"]);
+    expect(c).not.toHaveTextContent("de outro projeto");
+    expect(c).not.toHaveTextContent("Sem decisões");
+    const r12 = within(c).getByRole("listitem", { name: "Revisão de #12 Login no Safari" });
+    await waitFor(() => expect(r12).toHaveTextContent("2 decisões pendentes · PR #40 aberto"));
+    await waitFor(() =>
+      expect(within(c).getByRole("listitem", { name: "Revisão de #15 Cadastro trava" })).toHaveTextContent(
+        "1 decisão pendente · sem PR aberto",
+      ),
+    );
+    // O título abre a tela completa de Revisão do item.
+    const user = userEvent.setup();
+    await user.click(within(r12).getByRole("button", { name: "#12 Login no Safari" }));
+    expect(await screen.findByRole("button", { name: "Marcar as 2 como revisadas" })).toBeInTheDocument();
+  });
+
+  it("Marcar como revisada grava as pendentes no PR e o item sai do cartão, sem trocar de tela", async () => {
+    const api = envSide(hubSide(setup(true)));
+    render(<App api={api} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const c = await card("Revisões · 2");
+    await user.click(await within(c).findByRole("button", { name: "Marcar #12 Login no Safari como revisada" }));
+    await waitFor(() => expect(api.callsTo("review.mark_reviewed")).toHaveLength(1));
+    expect(api.callsTo("review.mark_reviewed")[0]).toMatchObject({ env: "wsl", params: { work_item_id: 312, pr: 40 } });
+    expect(await within(c).findByRole("status")).toHaveTextContent(
+      "#12 Login no Safari revisado: 2 decisões marcadas como revisadas.",
+    );
+    // Segue em_revisao no dashboard, mas já foi revisado: sai do cartão.
+    await waitFor(() => expect(rows(c)).toEqual(["Revisão de #15 Cadastro trava"]));
+    expect(screen.getByRole("heading", { name: "Revisões · 1" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "acme-web · Visão geral" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("vazio e erros: sem itens, o aviso; sem PR ou falha na leitura, o erro no cartão", async () => {
+    render(<App api={envSide(hubSide(setup(true)), [W20])} initial={acmeAt} />);
+    const c = await card("Revisões · 0");
+    expect(await within(c).findByText("Nada em revisão neste projeto.")).toBeInTheDocument();
+    cleanup();
+
+    // #15 sem PR no espelho: o erro, e o item fica.
+    const noPr = envSide(hubSide(setup(true)));
+    render(<App api={noPr} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const n = await card("Revisões · 2");
+    await user.click(await within(n).findByRole("button", { name: "Marcar #15 Cadastro trava como revisada" }));
+    expect(await within(n).findByRole("alert")).toHaveTextContent("#15 Cadastro trava: sem PR no espelho do GitHub");
+    expect(noPr.callsTo("review.mark_reviewed")).toHaveLength(0);
+    expect(rows(n)).toContain("Revisão de #15 Cadastro trava");
+    cleanup();
+
+    const failing = envSide(hubSide(setup(true))).on("review.get", () => Promise.reject(new Error("ledger indisponível")));
+    render(<App api={failing} initial={acmeAt} />);
+    const f = await card("Revisões · 2");
+    expect(await within(f).findByRole("alert")).toHaveTextContent("ledger indisponível");
+  });
+
+  it("na web (somente leitura), Marcar como revisada fica desabilitado com a explicação padrão", async () => {
+    // Na web os itens vêm do dashboard do hub (sem `review.get` no ambiente).
+    const items = [
+      webItem({ id: 12, project_id: 30, gh_number: 12, status: "em_revisao", title: "Login no Safari", pending_decisions: 2 }),
+      webItem({ id: 15, project_id: 30, gh_number: 15, title: "Cadastro trava", pending_decisions: 1 }),
+      webItem({ id: 20, project_id: 30, gh_number: 20, title: "Sem decisões" }),
+    ];
+    const api = webApi({ projects: [{ project: ACME, work_items: items }] })
+      .onHub("hub.projects.list", [fx.hubProjectView(ACME, [fx.hubAssignment({ project_id: 30, gh_owner: "acme", gh_repo: "acme-web" })])])
+      .onHub("hub.tree.get", { project: ACME, sync: null, roots: [], untracked: [] });
+    render(<App api={api} initial={acmeAt} />);
+    const c = await card("Revisões · 2");
+    for (const name of ["Marcar #12 Login no Safari como revisada", "Marcar #15 Cadastro trava como revisada"]) {
+      const b = within(c).getByRole("button", { name });
+      expect(b).toBeDisabled();
+      expect(b).toHaveAccessibleDescription(DESKTOP_ONLY_NOTE);
+    }
+    expect(api.callsTo("review.mark_reviewed")).toHaveLength(0);
+    expect(api.callsTo("review.get")).toHaveLength(0);
   });
 });
