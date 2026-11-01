@@ -17,6 +17,7 @@ import { configLine } from "../util/hub";
 import type { ControlView } from "./grid";
 import type { EnvInfo, HubSyncResult } from "../protocol/gen";
 import { DesktopOnlyIcon } from "../web/DesktopOnly";
+import { PlanAccounts } from "../plan/PlanAccounts";
 
 /** Envio ao hub: pendências e erro (spec do ledger centralizado §5). */
 function hubLine(info: EnvInfo | undefined, now: number): string | null {
@@ -298,6 +299,7 @@ export function Sidebar({
             <EnvRow key={e.id} id={e.id} name={e.name} now={now} />
           ))}
         </SideGroup>
+        <PlanAccounts now={now} />
         <SideGroup
           title="Projetos"
           count={projects.length}

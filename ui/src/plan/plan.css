@@ -1,0 +1,98 @@
+/* Selo do plano da conta (#107). Tom: normal, aviso (warn), crítico; `none` sem percentual. */
+.plan-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.plan-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.plan-badge[data-tone="none"] .plan-dot {
+  background: var(--faint);
+}
+
+.plan-badge[data-tone="warn"],
+.plan-line[data-tone="warn"] {
+  color: var(--attention);
+}
+
+.plan-badge[data-tone="warn"] .plan-dot {
+  background: var(--attention);
+}
+
+.plan-badge[data-tone="critical"],
+.plan-line[data-tone="critical"] {
+  color: var(--error);
+}
+
+.plan-badge[data-tone="critical"] .plan-dot {
+  background: var(--error);
+}
+
+.plan-age {
+  color: var(--muted);
+}
+
+.plan-lines {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}
+
+.plan-line {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.plan-line[data-tone="none"] {
+  color: var(--muted);
+}
+
+.plan-lines .plan-age {
+  font-size: 11px;
+}
+
+/* Lista de contas na Sala de controle. */
+.plan-account {
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.plan-account:hover {
+  background: none;
+}
+
+.plan-account-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.plan-envs {
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-env {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+}
+
+.plan-install {
+  align-self: flex-start;
+}
