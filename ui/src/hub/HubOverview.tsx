@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { HealthSignal, HubHealth } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -8,7 +8,7 @@ import { GestorLauncher } from "./HubGestor";
 import { kindText, SEVERITY_TEXT, SEVERITY_TONE, where } from "./HubHealth";
 import { itemShort } from "../util/item";
 import { hubProjectOf } from "../util/hub";
-import { WHY_SHORT, valueText, type DecideResult, type ProposalsData } from "./HubProposals";
+import { ProposalItem, ProposalNote, useProposalDecision, type ProposalsData } from "./HubProposals";
 import { actionableSignals, warningAction, type HubSection } from "./sections";
 import { syncText } from "../project/settings";
 import { projectAt } from "../project/sections";
@@ -122,20 +122,9 @@ function Warnings() {
 }
 
 function PendingProposals({ data, open }: { data: ProposalsData; open(s: HubSection): void }) {
-  const nav = useNav();
-  const { hub } = useTower();
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<DecideResult | null>(null);
+  const { busy, note, decide } = useProposalDecision(data);
   const { pending } = data;
   const shown = pending.slice(0, OVERVIEW_LIMIT);
-  const note = msg ?? (data.error ? { text: data.error, error: true } : null);
-
-  const decide = async (id: number, approve: boolean) => {
-    setBusy(true);
-    setMsg(null);
-    setMsg(await data.decide([id], approve));
-    setBusy(false);
-  };
 
   return (
     <Card
@@ -148,55 +137,14 @@ function PendingProposals({ data, open }: { data: ProposalsData; open(s: HubSect
       ) : (
         <ul className="hub-card-list">
           {shown.map((p) => (
-            <li key={p.id} aria-label={`Proposta #${p.id}`}>
-              <span className="badge">{p.kind === "priority" ? "prioridade" : "status"}</span>
-              <span className="hub-card-text">
-                <button
-                  type="button"
-                  className="linklike mono"
-                  title={p.ref ?? `${p.owner}/${p.repo}#${p.number}`}
-                  onClick={() => nav.go({ name: "project", owner: p.owner, repo: p.repo, item: { ghNumber: p.number } })}
-                >
-                  {itemShort(hubProjectOf(hub.projects, p.owner, p.repo), p.number)}
-                </button>
-                {p.title && <> {p.title}</>} <span className="muted">→</span>{" "}
-                <strong>{valueText(p.kind, p.proposed, hubProjectOf(hub.projects, p.owner, p.repo))}</strong>
-                <span className="hub-card-sub">
-                  {p.justification.length > WHY_SHORT
-                    ? `${p.justification.slice(0, WHY_SHORT).trimEnd()}…`
-                    : p.justification}
-                </span>
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={busy}
-                aria-label={`Recusar a proposta #${p.id}`}
-                onClick={() => decide(p.id, false)}
-              >
-                Recusar
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={busy}
-                aria-label={`Aprovar a proposta #${p.id}`}
-                onClick={() => decide(p.id, true)}
-              >
-                Aprovar
-              </button>
-            </li>
+            <ProposalItem key={p.id} p={p} busy={busy} onDecide={decide} />
           ))}
           {pending.length > shown.length && (
             <li className="muted">e mais {pending.length - shown.length} em Propostas do gestor</li>
           )}
         </ul>
       )}
-      {note && (
-        <p role={note.error ? "alert" : "status"} className={`hub-card-msg ${note.error ? "start-error" : "state-on"}`}>
-          {note.text}
-        </p>
-      )}
+      <ProposalNote note={note} />
     </Card>
   );
 }

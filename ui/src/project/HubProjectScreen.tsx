@@ -8,7 +8,7 @@ import { hubClones, liveSessions } from "./clones";
 import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
-import { ProjectGestorCard, ProjectHealthCard, ProjectSyncCard } from "./OverviewCards";
+import { ProjectGestorCard, ProjectHealthCard, ProjectProposalsCard, ProjectSyncCard } from "./OverviewCards";
 import { projectSyncInfo } from "./sync-now";
 import { ProjectSessions } from "./ProjectSessions";
 import { ProjectSettings } from "./ProjectSettings";
@@ -146,6 +146,8 @@ export function HubProjectScreen({
                   <ProjectHealthCard owner={ref.owner} repo={ref.repo} project={hp ?? p} />
                   <ProjectSyncCard info={syncInfo} />
                   <ProjectGestorCard owner={ref.owner} repo={ref.repo} />
+                  {/* Por projeto (`key`): trocar de projeto não mostra as propostas do anterior. */}
+                  <ProjectProposalsCard key={key} owner={ref.owner} repo={ref.repo} />
                 </>
               }
             />
