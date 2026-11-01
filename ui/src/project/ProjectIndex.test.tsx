@@ -97,7 +97,7 @@ test("abrir um projeto abre a aba dele; 'Projetos' (trilha ou atividade) volta a
   // A atividade Projetos é sempre o índice, mesmo com a aba do projeto ativa.
   await user.click(within(telas()).getByRole("button", { name: "Projetos" }));
   expect(await screen.findByRole("heading", { name: "Projetos" })).toBeInTheDocument();
-  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Projetos", "demo"]);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Projetos", "demo · Visão geral"]);
 });
 
 test("reordenar: arrastar e Alt+↑/↓ mudam a prioridade no índice", async () => {

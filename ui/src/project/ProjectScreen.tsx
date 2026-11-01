@@ -28,7 +28,7 @@ export function ProjectScreen(props: {
   env?: string;
   projectId?: number;
   item?: ItemIntent;
-  /** Aba do projeto (#17); sem ela, Itens. A seção das Configurações não serve aqui (sem o hub). */
+  /** Aba do projeto (#17); sem ela, a Visão geral (#99). A seção das Configurações não serve aqui (sem o hub). */
   view?: ProjectPage;
 }) {
   const tower = useTower();

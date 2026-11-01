@@ -40,7 +40,7 @@ export function HubProjectScreen({
   owner: string;
   repo: string;
   item?: ItemIntent;
-  /** Aba do projeto (#17); sem ela, Itens. */
+  /** Aba do projeto (#17); sem ela, a Visão geral (#99). */
   view?: ProjectPage;
   /** Seção das Configurações. */
   section?: ProjectSettingsSection;
