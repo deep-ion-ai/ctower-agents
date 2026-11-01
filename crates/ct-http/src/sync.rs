@@ -48,6 +48,11 @@ pub struct PushRequest {
     /// o que tinha.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleanup: Option<CleanupSummary>,
+    /// Conta, statusline e leitura mais recente do plano do ambiente (issue
+    /// #106). Ausente = ambiente antigo, ou nada mudou desde o último envio;
+    /// o hub mantém o que tinha.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<ct_core::plan::EnvPlanReport>,
 }
 
 /// Resposta de `POST /sync/push`.
@@ -95,6 +100,9 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "recovery.archived",
     "transcript.tail",
     "session.context",
+    // Uso da sessão pelo statusline (#106), só leitura. O plano da conta
+    // vem de `hub.plan.accounts` (o `account.get` traz o e-mail).
+    "session.usage",
     "session.get",
     "session.start",
     "session.start_project",

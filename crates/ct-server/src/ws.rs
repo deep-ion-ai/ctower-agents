@@ -310,8 +310,9 @@ impl Conn {
         match method {
             "env.info" => {
                 let sender = self.st.hub_sender.clone();
-                let (env_id, hub_sync, hub_config, remote_control, docs) =
+                let (env_id, hub_sync, hub_config, remote_control, docs, statusline) =
                     blocking(&sessions, move |s| {
+                        let statusline = crate::plan::statusline(s);
                         let remote = s.remote_control_status();
                         // Antes do lock do ledger: a montagem caída pode
                         // demorar a responder.
@@ -325,7 +326,14 @@ impl Conn {
                         );
                         config.agent_token =
                             crate::hub_sync::agent_token(&s.config().dirs).is_some();
-                        Ok((l.env_id().to_string(), sync, config, remote, docs))
+                        Ok((
+                            l.env_id().to_string(),
+                            sync,
+                            config,
+                            remote,
+                            docs,
+                            statusline,
+                        ))
                     })
                     .await?;
                 Ok(json!(EnvInfo {
@@ -342,6 +350,7 @@ impl Conn {
                     trackers: self.st.tracker.as_ref().map(|t| t.readiness()),
                     remote_control,
                     docs,
+                    statusline: Some(statusline),
                 }))
             }
             // `env.rollback` (#328): volta à versão anterior, com a mesma
@@ -450,6 +459,39 @@ impl Conn {
                 };
                 let v = blocking(&sessions, move |s| s.transcript_tail(&id, n)).await?;
                 Ok(json!(v))
+            }
+            // Uso da sessão pelo statusline (#106); `null` sem leitura.
+            "session.usage" => {
+                let id = str_param(p, "session_id")?.to_string();
+                let v = blocking(&sessions, move |s| s.session_usage(&id)).await?;
+                Ok(json!(v))
+            }
+            // Conta do ambiente e plano dela pelas sessões daqui (#106).
+            "account.get" => {
+                let v = blocking(&sessions, |s| {
+                    Ok(crate::plan::env_account(s, ct_core::now_ms()))
+                })
+                .await?;
+                Ok(json!(v))
+            }
+            // Instala ou atualiza o statusline no ambiente (#106).
+            "env.statusline.install" => {
+                let v = blocking(&sessions, |s| {
+                    let dir = ct_sessions::usage::claude_config_dir().ok_or_else(|| {
+                        ct_sessions::SessionsError::Invalid(
+                            "pasta de configuração do Claude Code desconhecida".into(),
+                        )
+                    })?;
+                    let r = ct_sessions::usage::install_statusline(
+                        &dir,
+                        &s.config().dirs,
+                        &s.config().ctower_bin,
+                    )?;
+                    crate::plan::forget_account();
+                    Ok(json!({ "outcome": r, "statusline": crate::plan::statusline(s) }))
+                })
+                .await?;
+                Ok(v)
             }
             "session.context" => {
                 let id = str_param(p, "session_id")?.to_string();
@@ -2597,6 +2639,36 @@ mod tests {
             .call("session.context", json!({ "session_id": s.id }))
             .await;
         assert_eq!(v["result"]["tokens"], Value::Null, "{v}");
+        // Sem arquivo de uso (statusline ausente): `null` (#106).
+        let v = ui
+            .call("session.usage", json!({ "session_id": s.id }))
+            .await;
+        assert_eq!(v["result"], Value::Null, "{v}");
+        // Com o arquivo do statusline, a última leitura e o carimbo.
+        let tool_id = s.tool_session_id.clone().unwrap();
+        ct_sessions::usage::write_usage(
+            &ct_sessions::usage::usage_dir(&srv.env.sessions.config().dirs),
+            &json!({ "session_id": tool_id, "cwd": "/x/acme-web",
+                     "context_window": { "context_window_size": 1_000_000, "used_percentage": 12 },
+                     "cost": { "total_cost_usd": 0.5 } }),
+            42,
+        )
+        .unwrap();
+        let v = ui
+            .call("session.usage", json!({ "session_id": s.id }))
+            .await;
+        assert_eq!(v["result"]["written_at"], 42, "{v}");
+        assert_eq!(
+            v["result"]["context_window"]["context_window_size"], 1_000_000,
+            "{v}"
+        );
+        assert_eq!(v["result"]["cost"]["total_cost_usd"], 0.5, "{v}");
+        let v = ui.call("env.info", json!({})).await;
+        assert_eq!(
+            v["result"]["statusline"]["current"],
+            ct_core::plan::STATUSLINE_VERSION,
+            "{v}"
+        );
         let v = ui.call("env.info", json!({})).await;
         assert_eq!(v["result"]["hub_config"]["linked"], false, "{v}");
         let v = ui.call("projects.list", json!({})).await;
