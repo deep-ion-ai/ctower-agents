@@ -544,6 +544,24 @@ test("barra de status mostra o uso de contexto e relê no session_state (#365)",
   expect(await within(statusBar()).findByText("Contexto 75% · 150k/200k")).toBeInTheDocument();
 });
 
+test("com leitura de uso, a barra de status usa a janela real: 1M sem [1m] no alias (#110)", async () => {
+  const api = new FakeDaemonApi()
+    .on("session.context", { tokens: 250_000, model: "claude-opus-5-5", ts: null })
+    .on("session.usage", {
+      tool_session_id: "s-1",
+      written_at: NOW - MIN,
+      model: { id: "claude-opus-5-5", display_name: "Opus 5.5" },
+      effort: null,
+      cost: null,
+      context_window: { context_window_size: 1_000_000, used_percentage: 25, used_tokens: 250_000 },
+      prompt_cache: null,
+      plan: null,
+    });
+  await openTab(api);
+  expect(await within(statusBar()).findByText("Contexto 25% · 250k/1M")).toBeInTheDocument();
+  expect(api.callsTo("session.usage")[0].params).toEqual({ session_id: S.id });
+});
+
 test("sem session.context no daemon, a barra de status segue sem o uso de contexto", async () => {
   await openTab();
   expect(within(statusBar()).getByText(WI.worktree_path!)).toBeInTheDocument();
