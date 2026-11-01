@@ -7,12 +7,18 @@
 // hub: `account.get` de cada ambiente conectado, agrupado aqui pela conta.
 // Relê nos pushes de sessão e a cada `PLAN_POLL_MS`; a regra do reset é
 // reaplicada com o relógio da UI em `usePlan(now)`.
+//
+// Alertas (#108): os limiares e o prazo de leitura velha vêm das
+// preferências do app (`config.plan`); a cada leitura nova, uma notificação
+// por conta que cruzou um limiar (`crossings`).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EnvAccount } from "../protocol/gen";
 import type { HubPlanAccounts } from "../protocol/hub-gen";
 import { ENV_SYNC_LAG_MS, useTower } from "../state/tower";
+import { crossings, loadAlertMemory, saveAlertMemory } from "./alert";
 import { EMPTY_PLAN, accountOfEnv, fromEnvs, fromHub, planAt, type AccountPlanView, type EnvAccountEntry, type PlanData } from "./data";
+import { DEFAULT_PLAN_PREFS, planPrefs, type PlanPrefs } from "./thresholds";
 
 /** Releitura periódica (a leitura chega a cada resposta das sessões). */
 export const PLAN_POLL_MS = 60_000;
@@ -36,14 +42,17 @@ export interface PlanState {
   loaded: boolean;
   /** Relê agora (ex.: depois de instalar o statusline). */
   reload(): Promise<void>;
+  /** Limiares e prazo de leitura velha (preferências do app). */
+  prefs: PlanPrefs;
 }
 
 const Ctx = createContext<PlanState | null>(null);
 
-const NO_PROVIDER: PlanState = { data: EMPTY_PLAN, loaded: false, reload: async () => {} };
+const NO_PROVIDER: PlanState = { data: EMPTY_PLAN, loaded: false, reload: async () => {}, prefs: DEFAULT_PLAN_PREFS };
 
 export function PlanProvider({ children }: { children: ReactNode }) {
-  const { api, web, hub, envs, status } = useTower();
+  const { api, web, hub, envs, status, config, configLoaded } = useTower();
+  const prefs = useMemo(() => planPrefs(config.plan), [config.plan]);
   const [raw, setRaw] = useState<Raw>(null);
   const useHub = web || hub.connected;
   const connected = envs
@@ -119,7 +128,19 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     return fromEnvs(raw.list, raw.at);
   }, [raw, envByDaemon, names]);
 
-  const value = useMemo<PlanState>(() => ({ data, loaded: raw !== null, reload: load }), [data, raw, load]);
+  // Notificação ao cruzar um limiar: uma por conta, lembrada no navegador
+  // (reabrir o app, ou outra aba da web, com a mesma leitura não notifica de novo).
+  useEffect(() => {
+    // Antes das preferências, o `notify` desligado ainda não é conhecido.
+    if (!raw || configLoaded === false) return;
+    const now = Date.now();
+    const r = crossings(loadAlertMemory(), planAt(data, now).accounts, prefs, now);
+    saveAlertMemory(r.memory);
+    if (!prefs.notify) return;
+    for (const n of r.notices) void api.notify?.(n.title, n.body).catch(() => {});
+  }, [api, raw, data, prefs, configLoaded]);
+
+  const value = useMemo<PlanState>(() => ({ data, loaded: raw !== null, reload: load, prefs }), [data, raw, load, prefs]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
@@ -131,6 +152,11 @@ export function usePlan(now: number): PlanState {
   const s = useContext(Ctx) ?? NO_PROVIDER;
   const data = useMemo(() => planAt(s.data, now), [s.data, now]);
   return useMemo(() => ({ ...s, data }), [s, data]);
+}
+
+/** Preferências do alerta do plano (padrão fora do `PlanProvider`). */
+export function usePlanPrefs(): PlanPrefs {
+  return (useContext(Ctx) ?? NO_PROVIDER).prefs;
 }
 
 /** Conta de um ambiente em `now`: a conta, `"unknown"` ou `null` (sem dado). */

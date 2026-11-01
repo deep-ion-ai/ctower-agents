@@ -35,6 +35,7 @@ import { itemTab, projectKey } from "./tabs";
 import { renderGestorTemplate, renderTemplate, scopeText, templateKeyFor } from "./templates";
 import { cachedTree } from "./ui-store";
 import { rcRequested } from "../web/envActions";
+import { PlanConfirm, PlanEnvChoices, PlanStartNote, usePlanGate } from "../plan/PlanStart";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -231,6 +232,8 @@ function ItemStartModal({
   const [openTerm, setOpenTerm] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Plano da conta (#108): no crítico, iniciar passa por um passo de confirmação.
+  const [confirming, setConfirming] = useState(false);
   const dialog = useRef<HTMLElement>(null);
 
   const all = useMemo(() => (roots ?? []).flatMap((r) => [r, ...r.children]), [roots]);
@@ -281,6 +284,10 @@ function ItemStartModal({
       : project.base_branch
     : "";
   const cloneEnv = clone?.env;
+  // O ambiente define a conta: o alerta é o da conta dele.
+  const now = Date.now();
+  const plan = usePlanGate(cloneEnv, now);
+  useEffect(() => setConfirming(false), [cloneEnv]);
   useEffect(() => {
     if (!web || !cloneEnv || webInfos[cloneEnv]) return;
     let alive = true;
@@ -381,6 +388,10 @@ function ItemStartModal({
 
   const start = async () => {
     if (!clone || !project || busy || blocked || loading || !prompt.trim()) return;
+    if (plan.alert?.level === "critical" && !confirming) {
+      setConfirming(true);
+      return;
+    }
     setBusy(true);
     setError(null);
     const tgt = byKey ? { owner: project.gh_owner, repo: project.gh_repo } : { project_id: project.id };
@@ -592,6 +603,13 @@ function ItemStartModal({
             )}
           </div>
 
+          <PlanEnvChoices
+            envs={clones.map((c) => ({ env: c.env, name: c.name }))}
+            chosen={cloneEnv}
+            onChoose={setEnvChoice}
+            now={now}
+          />
+
           {(rcStatus || (web && clone)) && (
             <div className="sm-rc">
               <label className="sm-check">
@@ -688,6 +706,8 @@ function ItemStartModal({
             </div>
           )}
 
+          {plan.account && plan.alert && <PlanStartNote account={plan.account} alert={plan.alert} now={now} />}
+
           {error && (
             <p role="alert" className="start-error">
               {error}
@@ -696,29 +716,35 @@ function ItemStartModal({
         </div>
 
         <div className="sm-foot">
-          {/* No Reiniciar a sessão nova sempre ocupa a aba da antiga. */}
-          {!replaced && (
-            <label className="sm-check">
-              <input type="checkbox" checked={openTerm} onChange={(e) => setOpenTerm(e.target.checked)} />
-              {web ? "Abrir a sessão ao iniciar" : "Abrir o terminal ao iniciar"}
-            </label>
+          {confirming ? (
+            <PlanConfirm onBack={() => setConfirming(false)} onConfirm={() => void start()} busy={busy} />
+          ) : (
+            <>
+              {/* No Reiniciar a sessão nova sempre ocupa a aba da antiga. */}
+              {!replaced && (
+                <label className="sm-check">
+                  <input type="checkbox" checked={openTerm} onChange={(e) => setOpenTerm(e.target.checked)} />
+                  {web ? "Abrir a sessão ao iniciar" : "Abrir o terminal ao iniciar"}
+                </label>
+              )}
+              <span className="sm-spacer" />
+              <button type="button" className="btn" onClick={onClose}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                aria-keyshortcuts="Meta+Enter Control+Enter"
+                disabled={busy || !!blocked || loading || !prompt.trim()}
+                onClick={() => void start()}
+              >
+                {busy ? "Iniciando…" : "Iniciar sessão"}
+                <kbd className="kbd sm-kbd" aria-hidden="true">
+                  {shortcutLabel("↵")}
+                </kbd>
+              </button>
+            </>
           )}
-          <span className="sm-spacer" />
-          <button type="button" className="btn" onClick={onClose}>
-            Cancelar
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            aria-keyshortcuts="Meta+Enter Control+Enter"
-            disabled={busy || !!blocked || loading || !prompt.trim()}
-            onClick={() => void start()}
-          >
-            {busy ? "Iniciando…" : "Iniciar sessão"}
-            <kbd className="kbd sm-kbd" aria-hidden="true">
-              {shortcutLabel("↵")}
-            </kbd>
-          </button>
         </div>
       </section>
     </div>
@@ -764,6 +790,9 @@ function GestorStartModal({
   const [prompt, setPrompt] = useState(() => renderGestorTemplate(config.templates.gestor, envName, scope));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const now = Date.now();
+  const plan = usePlanGate(env, now);
   const dialog = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -774,6 +803,10 @@ function GestorStartModal({
 
   const start = async () => {
     if (!env || busy || !prompt.trim()) return;
+    if (plan.alert?.level === "critical" && !confirming) {
+      setConfirming(true);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -842,6 +875,7 @@ function GestorStartModal({
             <label htmlFor="sm-prompt">Prompt inicial · template do gestor</label>
             <textarea id="sm-prompt" rows={8} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
           </div>
+          {plan.account && plan.alert && <PlanStartNote account={plan.account} alert={plan.alert} now={now} />}
           {error && (
             <p role="alert" className="start-error">
               {error}
@@ -850,22 +884,28 @@ function GestorStartModal({
         </div>
 
         <div className="sm-foot">
-          <span className="sm-spacer" />
-          <button type="button" className="btn" onClick={onClose}>
-            Cancelar
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            aria-keyshortcuts="Meta+Enter Control+Enter"
-            disabled={busy || !env || !prompt.trim()}
-            onClick={() => void start()}
-          >
-            {busy ? "Iniciando…" : "Iniciar sessão"}
-            <kbd className="kbd sm-kbd" aria-hidden="true">
-              {shortcutLabel("↵")}
-            </kbd>
-          </button>
+          {confirming ? (
+            <PlanConfirm onBack={() => setConfirming(false)} onConfirm={() => void start()} busy={busy} />
+          ) : (
+            <>
+              <span className="sm-spacer" />
+              <button type="button" className="btn" onClick={onClose}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                aria-keyshortcuts="Meta+Enter Control+Enter"
+                disabled={busy || !env || !prompt.trim()}
+                onClick={() => void start()}
+              >
+                {busy ? "Iniciando…" : "Iniciar sessão"}
+                <kbd className="kbd sm-kbd" aria-hidden="true">
+                  {shortcutLabel("↵")}
+                </kbd>
+              </button>
+            </>
+          )}
         </div>
       </section>
     </div>

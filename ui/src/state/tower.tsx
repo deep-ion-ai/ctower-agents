@@ -136,6 +136,8 @@ export interface Tower {
   /** `session.permission.respond`; o pedido sai da lista mesmo se já não estava pendente. */
   respondPermission(env: string, requestId: string, decision: PermissionDecision): Promise<void>;
   config: UiConfig;
+  /** As preferências já vieram do arquivo (antes disso, `config` tem os padrões). */
+  configLoaded?: boolean;
   /** Última verificação de versão nova do app (`null` = ainda não verificou). */
   uiUpdate: UiUpdate | null;
   checkUiUpdate(): Promise<UiUpdate>;
@@ -511,6 +513,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
       permissions,
       respondPermission,
       config,
+      configLoaded,
       uiUpdate,
       checkUiUpdate,
       refresh,
@@ -535,6 +538,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
       permissions,
       respondPermission,
       config,
+      configLoaded,
       uiUpdate,
       checkUiUpdate,
       refresh,

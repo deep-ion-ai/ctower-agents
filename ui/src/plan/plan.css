@@ -96,3 +96,81 @@
 .plan-install {
   align-self: flex-start;
 }
+
+/* Modal de início (#108): uso da conta de cada ambiente e o aviso antes do botão. */
+.plan-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-choice > button,
+.plan-choice-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+}
+
+.plan-choice > button {
+  cursor: pointer;
+}
+
+.plan-choice > button:hover {
+  background: var(--hover);
+}
+
+.plan-choice[data-chosen="true"] > button {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.plan-choice-env {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.plan-choice-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-choice[data-tone="none"] .plan-dot {
+  background: var(--faint);
+}
+
+.plan-choice[data-tone="warn"] .plan-dot {
+  background: var(--attention);
+}
+
+.plan-choice[data-tone="critical"] .plan-dot {
+  background: var(--error);
+}
+
+.plan-choice[data-tone="warn"] .plan-choice-text {
+  color: var(--attention);
+}
+
+.plan-choice[data-tone="critical"] .plan-choice-text {
+  color: var(--error);
+}
+
+.plan-start-note[data-tone="critical"] {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.plan-confirm-text {
+  color: var(--error);
+  font-weight: 600;
+}

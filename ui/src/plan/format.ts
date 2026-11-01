@@ -5,7 +5,13 @@ import type { PlanView, StatuslineHealth, WindowView } from "../protocol/gen";
 import { ago } from "../util/time";
 import type { AccountPlanView } from "./data";
 import { usedPercentage } from "./rule";
-import { DEFAULT_PLAN_THRESHOLDS, type PlanThresholds } from "./thresholds";
+import {
+  DEFAULT_PLAN_THRESHOLDS,
+  PLAN_WINDOWS,
+  windowThresholds,
+  type PlanThresholds,
+  type PlanWindowThresholds,
+} from "./thresholds";
 
 /** `none` = sem percentual válido (sem leitura ou janelas renovadas). */
 export type PlanTone = "normal" | "warn" | "critical" | "none";
@@ -34,15 +40,39 @@ export function toneOf(pct: number | null, t: PlanThresholds = DEFAULT_PLAN_THRE
   return "normal";
 }
 
-/** Tom de uma janela (renovada ou sem leitura: `none`). */
-export function windowTone(w: WindowView, t: PlanThresholds = DEFAULT_PLAN_THRESHOLDS): PlanTone {
+/** Relógio e prazo para descartar leitura velha demais (#108). */
+export interface StaleCheck {
+  now: number;
+  /** Leitura mais velha que isto (ms) não vale para alerta. */
+  staleMs: number;
+}
+
+/** Janela com percentual de uma leitura mais velha que o prazo. */
+export function isStale(w: WindowView, s: StaleCheck | undefined): boolean {
+  return !!s && w.state === "ok" && s.now - w.read_at > s.staleMs;
+}
+
+/**
+ * Tom de uma janela (renovada ou sem leitura: `none`). Com `stale`, a
+ * leitura velha demais também fica `none`: o número aparece, sem alerta.
+ */
+export function windowTone(w: WindowView, t: PlanThresholds = DEFAULT_PLAN_THRESHOLDS, stale?: StaleCheck): PlanTone {
+  if (isStale(w, stale)) return "none";
   return toneOf(usedPercentage(w), t);
 }
 
-/** Tom do selo: o da janela mais usada. */
-export function planTone(v: PlanView, t: PlanThresholds = DEFAULT_PLAN_THRESHOLDS): PlanTone {
-  const pcts = [usedPercentage(v.five_hour), usedPercentage(v.seven_day)].filter((x): x is number => x !== null);
-  return toneOf(pcts.length ? Math.max(...pcts) : null, t);
+const RANK: Record<PlanTone, number> = { none: 0, normal: 1, warn: 2, critical: 3 };
+
+/** O tom mais alto. */
+export const maxTone = (tones: PlanTone[]): PlanTone => tones.reduce<PlanTone>((m, t) => (RANK[t] > RANK[m] ? t : m), "none");
+
+/** Tom do selo: o da janela em pior situação, cada uma com o seu limiar. */
+export function planTone(
+  v: PlanView,
+  t: PlanThresholds | PlanWindowThresholds = DEFAULT_PLAN_THRESHOLDS,
+  stale?: StaleCheck,
+): PlanTone {
+  return maxTone(PLAN_WINDOWS.map((k) => windowTone(v[k], windowThresholds(t, k), stale)));
 }
 
 /** Percentual inteiro, como o Claude Code mostra. */

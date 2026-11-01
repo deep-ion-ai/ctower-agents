@@ -52,6 +52,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Configurações › Este app › Aparência",
     "Configurações › Este app › Terminal",
     "Configurações › Este app › Notificações",
+    "Configurações › Este app › Plano da conta",
     "Configurações › Ambiente › GitHub",
     "Configurações › Ambiente › Atualização do daemon",
     "Configurações › Ambiente › Projetos locais",
@@ -188,6 +189,7 @@ test("web: sem os lugares e comandos exclusivos do desktop (#201)", () => {
     "Hub › Dispositivos",
     "Logs",
     "Configurações › Aparência",
+    "Configurações › Plano da conta",
     "Configurações › Acesso web",
   ]);
   expect(byKind(items, "command").map((i) => i.label)).toEqual([

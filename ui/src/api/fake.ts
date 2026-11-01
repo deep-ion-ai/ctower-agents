@@ -225,6 +225,11 @@ export class FakeDaemonApi implements DaemonApi {
   async writeClipboard(text: string) {
     this.clipboard = text;
   }
+  /** Notificações do sistema pedidas pela UI (`notify`). */
+  notices: { title: string; body: string }[] = [];
+  async notify(title: string, body: string) {
+    this.notices.push({ title, body });
+  }
   async getUiConfig() {
     return structuredClone(this.uiConfig);
   }

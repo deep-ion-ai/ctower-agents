@@ -25,6 +25,14 @@ import {
 import { EnvsSettings } from "./EnvsSettings";
 import { ENV_TOKEN_HINT, GithubSettings } from "./GithubSettings";
 import { HubSettings } from "./HubSettings";
+import {
+  PlanAccountsControl,
+  PlanDefaultControl,
+  PlanNotifyControl,
+  PlanStaleControl,
+} from "./PlanSettings";
+import { usePlanPrefs } from "../plan/usePlan";
+import { DEFAULT_PLAN_PREFS, DEFAULT_STALE_MINUTES, sameThresholds } from "../plan/thresholds";
 import { ProjectsSettings } from "./ProjectsSettings";
 import {
   SCOPE_SECTIONS,
@@ -399,6 +407,8 @@ function useAppItems(): Item[] {
   const save = (patch: Partial<UiConfig>) => void setConfig({ ...config, ...patch });
   const session = (patch: Partial<UiConfig["session"]>) => save({ session: { ...config.session, ...patch } });
   const notifyOff = NOTIFS.some((n) => !config.notify[n.key]);
+  const plan = usePlanPrefs();
+  const savePlan = (patch: Partial<typeof plan>) => save({ plan: { ...plan, ...patch } });
 
   return [
     {
@@ -650,6 +660,62 @@ function useAppItems(): Item[] {
           ))}
         </div>
       ),
+    },
+    {
+      id: "plan-notify",
+      section: "notifications",
+      category: "Notificações",
+      name: "Plano da conta",
+      description:
+        "Notificação do sistema quando o uso de uma janela do plano (5h ou semanal) cruza o aviso ou o crítico: uma vez por cruzamento e por conta, mesmo com vários ambientes nela. Os limiares ficam em Plano da conta.",
+      keys: ["plan.notify"],
+      keywords: "plano limite uso janela 5h semanal",
+      shownKey: "plan.notify",
+      modified: !plan.notify,
+      restore: () => savePlan({ notify: true }),
+      control: <PlanNotifyControl />,
+    },
+    {
+      id: "plan-default",
+      section: "plan",
+      category: "Plano da conta",
+      name: "Limiares padrão",
+      description:
+        "Uso da janela (%) a partir do qual o selo do plano fica em aviso e em crítico, nas contas sem limiar próprio. Inteiros de 1 a 100, com o aviso menor que o crítico. No crítico, iniciar sessão pede confirmação.",
+      keys: ["plan.default"],
+      keywords: "limiar aviso crítico 80 95 5h semanal",
+      shownKey: "plan.default",
+      modified: !sameThresholds(plan.default, DEFAULT_PLAN_PREFS.default),
+      restore: () => savePlan({ default: DEFAULT_PLAN_PREFS.default }),
+      control: <PlanDefaultControl />,
+    },
+    {
+      id: "plan-accounts",
+      section: "plan",
+      category: "Plano da conta",
+      name: "Limiares por conta",
+      description:
+        "Limiares próprios de uma conta do Claude Code (todos os ambientes dela). Desmarcada, a conta usa o padrão.",
+      keys: ["plan.accounts"],
+      keywords: "conta e-mail organização ambiente limiar próprio",
+      shownKey: "plan.accounts",
+      modified: Object.keys(plan.accounts).length > 0,
+      restore: () => savePlan({ accounts: {} }),
+      control: <PlanAccountsControl />,
+    },
+    {
+      id: "plan-stale",
+      section: "plan",
+      category: "Plano da conta",
+      name: "Leitura velha demais",
+      description:
+        "Leitura do plano mais antiga que este prazo não alerta: o selo mostra o número sem o tom de aviso, a modal de início não pede confirmação e nada é notificado.",
+      keys: ["plan.stale_minutes"],
+      keywords: "prazo minutos antiga velha leitura statusline",
+      shownKey: "plan.stale_minutes",
+      modified: plan.stale_minutes !== DEFAULT_STALE_MINUTES,
+      restore: () => savePlan({ stale_minutes: DEFAULT_STALE_MINUTES }),
+      control: <PlanStaleControl />,
     },
     ...(webSession
       ? [
