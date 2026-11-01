@@ -5,6 +5,11 @@ import { FakeDaemonApi } from "../api/fake";
 import type { EnvInfo, IssueRow } from "../protocol/gen";
 import type { HubDashboard, HubInfo, HubProject, HubTree, HubTreeNode, HubWorkItem } from "../protocol/hub-gen";
 import { HUB_CONFIG_UNLINKED, dashboard, healthSignal, hubAssignment, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
+// Cartão Propostas do gestor (#100).
+import * as fx from "../test/fixtures";
+import type { HubProposal, HubRanking } from "../protocol/hub-gen";
+import { webApi } from "../test/web";
+import { DESKTOP_ONLY_NOTE } from "../web/mode";
 
 const NOW = Date.now();
 
@@ -1043,4 +1048,178 @@ test("paleta (#90): Sincronizar este projeto na aba do projeto e Sincronizar pro
   await user.click(opt("Sincronizar projeto: ctower-agents"));
   await waitFor(() => expect(api.callsTo("sync.now")).toHaveLength(2));
   expect(await card("Buscar issues")).toBeInTheDocument();
+});
+
+// Cartão Propostas do gestor na Visão geral do projeto (#100): só as
+// pendentes do projeto aberto, na ordem do ranking, com aprovar e rejeitar.
+describe("Visão geral (#100): Propostas do gestor", () => {
+  const ACME = fx.hubProject({ id: 30, gh_owner: "acme", gh_repo: "acme-web", name: "acme-web" });
+  const acmeAt = { name: "project" as const, owner: "acme", repo: "acme-web", view: "overview" as const };
+  const LONG =
+    "O #15 trava o cadastro de clientes novos desde a última versão; sem ele, o time de vendas não fecha contrato " +
+    "e o suporte recebe chamados repetidos. Detalhe: só acontece com o SSO ligado.";
+  const acmeProposal = (p: Partial<HubProposal>) =>
+    fx.hubProposal({ owner: "acme", repo: "acme-web", ref: `acme/acme-web#${p.number}`, ...p });
+  // #15 é a mais velha, mas vai para P1; #12 vai para P0 (antes do #15) e vem
+  // primeiro na ordem do ranking. A de status vem depois das de prioridade.
+  const P15 = acmeProposal({
+    id: 1,
+    number: 15,
+    title: "Cadastro trava",
+    created_at: NOW - 3000,
+    current: { priority: null },
+    proposed: { priority: "P1" },
+    justification: LONG,
+  });
+  const P12 = acmeProposal({
+    id: 2,
+    number: 12,
+    title: "Login no Safari",
+    created_at: NOW - 2000,
+    current: { priority: "P2" },
+    proposed: { priority: "P0", before: 15 },
+    justification: "quebra o login de Fulano",
+  });
+  const S12 = acmeProposal({
+    id: 3,
+    kind: "status",
+    number: 12,
+    title: "Login no Safari",
+    created_at: NOW - 1000,
+    current: { status: "backlog" },
+    proposed: { status: "pausado" },
+    justification: "aguarda o fornecedor",
+  });
+  // De outro projeto: o hub filtra por owner/repo e ela não aparece.
+  const OTHER = fx.hubProposal({ id: 9, owner: "acme", repo: "acme-api", number: 7, ref: "acme/acme-api#7", title: "de outro projeto" });
+  const RANK: HubRanking = {
+    truncated: false,
+    items: [12, 15].map((number, i) => ({
+      position: i + 1,
+      owner: "acme",
+      repo: "acme-web",
+      number,
+      ref: `acme/acme-web#${number}`,
+      title: `Issue ${number}`,
+      kind: "issue",
+      status: "backlog",
+      priority: number === 12 ? "P2" : null,
+      rank: number === 12 ? 1 : null,
+    })),
+  };
+
+  function withProposals(api: FakeDaemonApi, all: () => HubProposal[]): FakeDaemonApi {
+    return api
+      .onHub("hub.tree.get", { project: ACME, sync: sync({ project_id: 30, last_ok_at: NOW }), roots: [], untracked: [] })
+      .onHub("hub.dashboard.get", { ...HUB_DASH, projects: [{ project: ACME, work_items: [] }] })
+      .onHub("hub.projects.list", [fx.hubProjectView(ACME)])
+      .onHub("hub.health.get", fx.NO_HEALTH)
+      .onHub("hub.ranking.get", RANK)
+      .onHub("hub.proposals.list", (p: { owner?: string; repo?: string }) => ({
+        proposals: all().filter((x) => x.state === "pendente" && (!p.owner || (x.owner === p.owner && x.repo === p.repo))),
+        truncated: false,
+      }));
+  }
+
+  /** Desktop com o hub; `pending` é a lista viva do hub fictício (decidir tira dela). */
+  function setupProposals(initial: HubProposal[]) {
+    let pending = [...initial];
+    const api = withProposals(setup(true), () => pending).onHub(
+      "hub.proposals.decide",
+      (p: { id: number; approve: boolean }) => {
+        const x = pending.find((y) => y.id === p.id)!;
+        pending = pending.filter((y) => y.id !== p.id);
+        return { ...x, state: p.approve ? "aprovada" : "rejeitada" };
+      },
+    );
+    return { api, drop: (id: number) => (pending = pending.filter((y) => y.id !== id)) };
+  }
+
+  const rows = (c: HTMLElement) => within(c).queryAllByRole("listitem").map((li) => li.getAttribute("aria-label"));
+
+  it("lista só as pendentes do projeto, na ordem do ranking, com o atual → proposto e a justificativa resumida", async () => {
+    const { api } = setupProposals([P15, P12, S12, OTHER]);
+    render(<App api={api} initial={acmeAt} />);
+    const c = await card("Propostas do gestor · 3");
+    expect(rows(c)).toEqual(["Proposta #2", "Proposta #1", "Proposta #3"]);
+    expect(c).not.toHaveTextContent("de outro projeto");
+    expect(api.hubCallsTo("hub.proposals.list")[0].params).toMatchObject({ state: "pendente", owner: "acme", repo: "acme-web" });
+    // Só as pendentes: o cartão não lê o histórico.
+    expect(api.hubCallsTo("hub.proposals.list").every((x) => (x.params as { state: string }).state === "pendente")).toBe(true);
+    const p12 = within(c).getByRole("listitem", { name: "Proposta #2" });
+    expect(p12).toHaveTextContent("#12 Login no Safari P2 → P0 · antes de #15");
+    expect(p12).toHaveTextContent("quebra o login de Fulano");
+    expect(within(c).getByRole("listitem", { name: "Proposta #3" })).toHaveTextContent("backlog → pausado");
+    // Justificativa longa: resumida, com o resto sob demanda.
+    const p15 = within(c).getByRole("listitem", { name: "Proposta #1" });
+    expect(p15).toHaveTextContent("#15 Cadastro trava não triado → P1");
+    expect(p15.querySelector("summary")!.textContent!.endsWith("…")).toBe(true);
+    expect(p15.querySelector("details")).toHaveTextContent("só acontece com o SSO ligado");
+  });
+
+  it("Aprovar e Rejeitar chamam hub.proposals.decide e a proposta sai do cartão, sem trocar de tela", async () => {
+    const { api } = setupProposals([P15, P12]);
+    render(<App api={api} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const c = await card("Propostas do gestor · 2");
+    await user.click(within(c).getByRole("button", { name: "Aprovar a proposta #2" }));
+    await waitFor(() => expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(1));
+    expect(api.hubCallsTo("hub.proposals.decide")[0].params).toEqual({ id: 2, approve: true });
+    expect(await within(c).findByRole("status")).toHaveTextContent("Proposta #2 aprovada.");
+    await waitFor(() => expect(rows(c)).toEqual(["Proposta #1"]));
+
+    await user.click(within(c).getByRole("button", { name: "Rejeitar a proposta #1" }));
+    await waitFor(() => expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(2));
+    expect(api.hubCallsTo("hub.proposals.decide")[1].params).toEqual({ id: 1, approve: false });
+    expect(await within(c).findByText("Nenhuma proposta pendente neste projeto.")).toBeInTheDocument();
+    // Continua na Visão geral do projeto.
+    expect(screen.getByRole("tab", { name: "acme-web · Visão geral" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("proposta decidida em outro lugar some do cartão pelo push hub.proposals.changed", async () => {
+    const { api, drop } = setupProposals([P15, P12]);
+    render(<App api={api} initial={acmeAt} />);
+    const c = await card("Propostas do gestor · 2");
+    drop(2);
+    act(() => api.hubPush("hub.proposals.changed"));
+    await waitFor(() => expect(rows(c)).toEqual(["Proposta #1"]));
+  });
+
+  it("vazio e erros: sem pendentes, o aviso; falha na leitura ou na decisão, o erro no cartão", async () => {
+    render(<App api={setupProposals([]).api} initial={acmeAt} />);
+    const c = await card("Propostas do gestor · 0");
+    expect(await within(c).findByText("Nenhuma proposta pendente neste projeto.")).toBeInTheDocument();
+    cleanup();
+
+    const failing = setupProposals([P12]).api.onHub("hub.proposals.list", () =>
+      Promise.reject(new Error("hub sem o ledger de propostas")),
+    );
+    render(<App api={failing} initial={acmeAt} />);
+    const f = await card("Propostas do gestor · 0");
+    expect(await within(f).findByRole("alert")).toHaveTextContent("hub sem o ledger de propostas");
+    expect(within(f).queryByText("Nenhuma proposta pendente neste projeto.")).not.toBeInTheDocument();
+    cleanup();
+
+    const refused = setupProposals([P12]).api.onHub("hub.proposals.decide", () =>
+      Promise.reject(new Error("proposta já decidida")),
+    );
+    render(<App api={refused} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const r = await card("Propostas do gestor · 1");
+    await user.click(within(r).getByRole("button", { name: "Aprovar a proposta #2" }));
+    expect(await within(r).findByRole("alert")).toHaveTextContent("proposta já decidida");
+    expect(rows(r)).toEqual(["Proposta #2"]);
+  });
+
+  it("na web (somente leitura), Aprovar e Rejeitar ficam desabilitados com a explicação padrão", async () => {
+    const api = withProposals(webApi(), () => [P12]);
+    render(<App api={api} initial={acmeAt} />);
+    const c = await card("Propostas do gestor · 1");
+    for (const name of ["Aprovar a proposta #2", "Rejeitar a proposta #2"]) {
+      const b = within(c).getByRole("button", { name });
+      expect(b).toBeDisabled();
+      expect(b).toHaveAccessibleDescription(DESKTOP_ONLY_NOTE);
+    }
+    expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(0);
+  });
 });

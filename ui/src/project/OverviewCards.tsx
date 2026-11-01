@@ -1,6 +1,8 @@
 // Cartões de ação da Visão geral do projeto (#19), que entram pela prop
-// `extra` de `ProjectOverview`: saúde do projeto, "Buscar issues agora" e o
-// gestor com o escopo do projeto. As regras ficam em overview.ts.
+// `extra` de `ProjectOverview`: saúde do projeto, "Buscar issues agora", o
+// gestor com o escopo do projeto e as propostas dele (#100). As regras ficam
+// em overview.ts.
+import { useId, useMemo } from "react";
 import type { HubProject } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -13,6 +15,9 @@ import { projectSignals } from "./overview";
 import { runProjectSync, useSyncRun, type ProjectSyncInfo } from "./sync-now";
 import { SYNC_DESKTOP_NOTE, SyncStatus } from "./SyncNow";
 import { DesktopOnly } from "../web/DesktopOnly";
+import { DESKTOP_ONLY_NOTE } from "../web/mode";
+import { ProposalItem, ProposalNote, useHubProposals, useProposalDecision } from "../hub/HubProposals";
+import { pendingInOrder } from "../hub/proposalOrder";
 
 /**
  * Saúde do projeto: os sinais de aviso e críticos do hub com este
@@ -164,6 +169,67 @@ export function ProjectGestorCard({ owner, repo }: { owner: string; repo: string
       <div className="hub-card-msg">
         <GestorLauncher project={{ owner, repo }} />
       </div>
+    </section>
+  );
+}
+
+/**
+ * Propostas do gestor deste projeto (#100): só as pendentes deste
+ * `owner/repo`, na ordem do ranking (`pendingInOrder`), cada uma com o item,
+ * o valor atual → o proposto e a justificativa resumida. Aprovar e Rejeitar
+ * na própria linha (`hub.proposals.decide`): a decidida sai do cartão na
+ * releitura, e a decidida em outro lugar sai pelo push
+ * `hub.proposals.changed`. Na web, os botões ficam desabilitados com o aviso
+ * padrão das ações só do desktop. A lista completa, com nota e decisão em
+ * lote, segue no Hub.
+ */
+export function ProjectProposalsCard({ owner, repo }: { owner: string; repo: string }) {
+  const { hub, web } = useTower();
+  const nav = useNav();
+  const data = useHubProposals({ owner, repo });
+  const { busy, note, decide } = useProposalDecision(data);
+  const noteId = useId();
+  const list = useMemo(
+    () => pendingInOrder(data.pending, data.ranking?.items ?? [], hub.projects),
+    [data.pending, data.ranking, hub.projects],
+  );
+  return (
+    <section className="hub-card" aria-labelledby="pj-ov-propostas">
+      <div className="hub-card-head">
+        <h2 id="pj-ov-propostas">Propostas do gestor · {list.length}</h2>
+        <button type="button" className="btn btn-sm" onClick={() => nav.openTab(hubTab("proposals"))}>
+          Ver no Hub
+        </button>
+      </div>
+      {list.length === 0 ? (
+        // Sem leitura e com erro, só o erro (abaixo).
+        (data.loaded || !data.error) && (
+          <p className="muted hub-card-empty">
+            {data.loaded ? "Nenhuma proposta pendente neste projeto." : "Lendo as propostas…"}
+          </p>
+        )
+      ) : (
+        <ul className="hub-card-list" aria-label="Propostas pendentes do projeto">
+          {list.map((x) => (
+            <ProposalItem
+              key={x.proposal.id}
+              p={x.proposal}
+              title={x.title}
+              withCurrent
+              rejectLabel="Rejeitar"
+              busy={busy}
+              onDecide={decide}
+              readOnly={web ? { noteId } : undefined}
+            />
+          ))}
+        </ul>
+      )}
+      {web && list.length > 0 && (
+        <p id={noteId} className="muted hub-card-msg desktop-only-note">
+          {DESKTOP_ONLY_NOTE}
+        </p>
+      )}
+      <ProposalNote note={note} />
     </section>
   );
 }
