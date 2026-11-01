@@ -66,6 +66,12 @@ export interface DaemonApi {
   uiLogAppend?(lines: string[]): Promise<void>;
   /** Últimas linhas do log da UI em arquivo, inclusive da execução anterior. */
   uiLogRead?(): Promise<string[]>;
+  /**
+   * Notificação do sistema pedida pela própria UI (alerta do plano, #108).
+   * Desktop: plugin de notificação do Tauri; web: a do navegador, se
+   * permitida. Sem suporte, não faz nada.
+   */
+  notify?(title: string, body: string): Promise<void>;
 }
 
 /** Converte `listen` (assíncrono) num cancelamento síncrono. */
@@ -173,6 +179,9 @@ export class TauriDaemonApi implements DaemonApi {
   }
   uiLogAppend(lines: string[]) {
     return invoke<void>("ui_log_append", { lines });
+  }
+  notify(title: string, body: string) {
+    return invoke<void>("notify_send", { title, body });
   }
   uiLogRead() {
     return invoke<string[]>("ui_log_read");

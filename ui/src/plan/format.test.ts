@@ -91,6 +91,20 @@ describe("tom", () => {
     expect(planTone(view({ seven_day: ok(96, at(5, 9)) }))).toBe("critical");
     expect(planTone(view({ five_hour: renewed(at(1, 11)), seven_day: ok(40, at(5, 9)) }))).toBe("normal");
   });
+
+  it("limiares por janela (#108): cada janela com o seu", () => {
+    const t = { five_hour: { warn: 70, critical: 90 }, seven_day: { warn: 50, critical: 60 } };
+    // 5h 72% (aviso no limiar dela), semanal 64% (crítico no dela).
+    expect(planTone(view(), t)).toBe("critical");
+    expect(planTone(view({ seven_day: ok(10, at(5, 9)) }), t)).toBe("warn");
+  });
+
+  it("leitura velha demais (#108): o número fica, sem tom de alerta", () => {
+    const v = view({ five_hour: ok(97, at(1, 14, 30), NOW - 90 * MIN), seven_day: NONE });
+    expect(planTone(v)).toBe("critical");
+    expect(planTone(v, undefined, { now: NOW, staleMs: 60 * MIN })).toBe("none");
+    expect(planTone(v, undefined, { now: NOW, staleMs: 120 * MIN })).toBe("critical");
+  });
 });
 
 describe("conta", () => {

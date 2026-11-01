@@ -302,6 +302,18 @@ fn ui_config_save(app: AppHandle, st: State<'_, AppState>, cfg: UiConfig) -> Res
     Ok(())
 }
 
+/// Notificação do sistema pedida pela UI (alerta do plano da conta, #108):
+/// a UI decide quando (uma por cruzamento de limiar e por conta).
+#[tauri::command]
+fn notify_send(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 /// Acrescenta linhas (JSON, já mascaradas pela UI) ao log da UI (#65).
 #[tauri::command]
 fn ui_log_append(st: State<'_, AppState>, lines: Vec<String>) -> Result<(), String> {
@@ -394,6 +406,7 @@ pub fn run() {
             ui_update_install,
             ui_log_append,
             ui_log_read,
+            notify_send,
             save_download,
         ])
         .run(tauri::generate_context!())

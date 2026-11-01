@@ -217,6 +217,11 @@ pub struct UiConfig {
     /// Ausente em ui.json antigos: tema escuro.
     #[serde(default)]
     pub appearance: Appearance,
+    /// Alerta do plano da conta (#108): limiares por janela e por conta,
+    /// prazo de leitura velha e a notificação. Quem lê e valida é a UI
+    /// (`planPrefs` em ui/src/plan/thresholds.ts); aqui só é guardado.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<serde_json::Value>,
 }
 
 // Espelham ui/src/settings/defaults.ts (spec §7.1).
@@ -355,6 +360,7 @@ impl Default for UiConfig {
             },
             session: SessionDefaults::default(),
             appearance: Appearance::default(),
+            plan: None,
         }
     }
 }
@@ -691,6 +697,24 @@ mod tests {
         let cfg = Store::new(d.path()).ui_config();
         assert_eq!(cfg.session.model.as_deref(), Some("opus"));
         assert!(!cfg.session.remote_control);
+    }
+
+    /// O alerta do plano (#108) vai e volta como a UI gravou; ausente, `None`.
+    #[test]
+    fn ui_json_guarda_o_plano_como_veio() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        assert!(store.ui_config().plan.is_none());
+        let mut cfg = UiConfig::default();
+        let plan = serde_json::json!({
+            "notify": true,
+            "stale_minutes": 30,
+            "default": {"five_hour": {"warn": 70, "critical": 90}, "seven_day": {"warn": 80, "critical": 95}},
+            "accounts": {"conta-a": {"five_hour": {"warn": 60, "critical": 85}, "seven_day": {"warn": 80, "critical": 95}}}
+        });
+        cfg.plan = Some(plan.clone());
+        store.save_ui_config(&cfg).unwrap();
+        assert_eq!(Store::new(d.path()).ui_config().plan, Some(plan));
     }
 
     #[test]

@@ -25,7 +25,7 @@ export const WEB_HIDDEN_HUB: ReadonlySet<HubSection> = new Set(["secrets", "reco
  * "Este app" do desktop (conexões, sessões, terminal, notificações) e o
  * escopo Ambiente (só leitura do daemon).
  */
-export const WEB_SETTINGS: ReadonlySet<SettingsSection> = new Set(["appearance", "web-access"]);
+export const WEB_SETTINGS: ReadonlySet<SettingsSection> = new Set(["appearance", "plan", "web-access"]);
 
 /**
  * Explicação padrão das ações só do desktop (#26): na web elas aparecem
