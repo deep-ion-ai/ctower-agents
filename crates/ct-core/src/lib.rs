@@ -7,6 +7,7 @@ pub mod docs;
 pub mod files;
 pub mod guard;
 mod logs;
+pub mod plan;
 #[macro_use]
 mod model;
 mod repo_url;

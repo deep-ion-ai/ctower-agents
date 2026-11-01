@@ -39,6 +39,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "recovery.archived",
   "transcript.tail",
   "session.context",
+  "session.usage",
   "session.get",
   "session.start",
   "session.start_project",
