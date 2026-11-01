@@ -42,7 +42,7 @@ Anote o resultado de cada passo (ok / falhou + o que apareceu) e cole no PR.
 4. Peça outro comando e clique **Sempre nesta sessão**. Peça o mesmo comando de novo. **Esperado:** na segunda vez não há pedido.
 5. Peça outro comando e clique **Responder no terminal**. **Esperado:** a faixa some, o foco vai para o console e o menu do Claude Code aparece no xterm; responda nele.
 6. Peça outro comando e não responda. **Esperado:** depois de 2 min a faixa some sozinha e o menu aparece no xterm. Com o app fechado, o menu aparece na hora.
-7. Barra de status: com a sessão ativa, **Esperado:** "Contexto N% · Xk/200k", atualizado ao fim de cada resposta.
+7. Barra de status: com a sessão ativa, **Esperado:** "Contexto N% · Xk/200k", atualizado ao fim de cada resposta. Com o statusline do Control Tower no ambiente (#110), a janela é a real da sessão (ex.: "Xk/1M" num modelo de 1M sem `[1m]` no alias).
 8. Redimensione a janela. **Esperado:** o terminal acompanha o tamanho, sem quebrar o desenho do Claude Code.
 
 ## 5. Queda do daemon e reconexão
@@ -171,6 +171,7 @@ Rode no Windows (WSL) e no macOS com o Mac mini remoto.
 10. **Janela estreita:** diminua a janela (ou abra o painel lateral largo) até o console ficar com menos de ~480 px (dois consoles abaixo de ~400 px cada no split). **Esperado:** o painel passa a ficar por cima do console, com sombra, e o PTY não muda de largura.
 11. **Sessão do projeto (#0):** sem a seção PR; a pasta é o clone principal (com o aviso), e as decisões e eventos são os do #0. No gestor, só Decisões e Eventos.
 12. Abra um shell no worktree (aba de shell) com o painel aberto. **Esperado:** o painel some na aba do shell e volta ao voltar para a sessão.
+13. **Sessão (#110):** com o statusline instalado no ambiente, o topo do painel mostra **Sessão**: modelo e esforço, contexto (% e tokens na janela real), custo "(estimativa)" e duração, cache de prompt (acerto e validade) e **Plano da conta <e-mail>** com 5h e Semanal ("N% · renova HH:MM"). Janela que já passou do reset mostra "renovada … aguardando nova leitura", sem percentual. Na web, "Plano da conta" sem o nome. Sem o statusline, só modelo e contexto do transcript. Numa sessão parada ou encerrada, "Última leitura há …".
 
 ### 10.5 Muitas abas e sessão do projeto (#427)
 

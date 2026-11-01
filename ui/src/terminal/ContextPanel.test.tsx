@@ -2,12 +2,13 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
-import type { Decision, EnvInfo, Event, Review, Shell } from "../protocol/gen";
+import type { Decision, EnvInfo, Event, Review, SessionUsage, Shell } from "../protocol/gen";
 import type { HubHistory, HubSession } from "../protocol/hub-gen";
 import { terms } from "../test/fakeXterm";
 import { dashboard, HUB_CONFIG_UNLINKED, HUB_DASHBOARD, MIN, project, session, sync, workItem } from "../test/fixtures";
 import { CONTEXT_RELOAD_MS, EVENTS_OLD, isUnknownMethod, pushConcerns } from "./ContextPanel";
 import { resetShellStore } from "./shells";
+import { clock } from "./usage";
 
 // Painel de contexto ao lado do console (#426; spec da #87, §3). O xterm é o
 // fake de ../test/fakeXterm.
@@ -389,4 +390,90 @@ test("com o ambiente falando com o hub: o seletor de status da tela Projeto e as
   // A sessão do outro ambiente vem do hub; a interrompida, do dashboard.
   await waitFor(() => expect(within(wi).getAllByRole("listitem")).toHaveLength(2));
   expect(within(wi).getByText(/encerrada/)).toBeInTheDocument();
+});
+
+/** Leitura de uso fictícia da sessão (`session.usage`, #110). */
+function usageOf(p: Partial<SessionUsage> = {}): SessionUsage {
+  return {
+    tool_session_id: "s-1",
+    written_at: NOW - 3 * MIN,
+    model: { id: "claude-opus-5-5", display_name: "Opus 5.5" },
+    effort: "high",
+    cost: { total_cost_usd: 0.52, total_duration_ms: 42 * MIN, total_api_duration_ms: 10 * MIN },
+    context_window: { context_window_size: 1_000_000, used_percentage: 25, used_tokens: 250_000 },
+    prompt_cache: { warm: true, ttl: "5m", expires_at: NOW + 4 * MIN, hit_ratio: 0.87 },
+    plan: {
+      read_at: NOW - 3 * MIN,
+      five_hour: { used_percentage: 42, resets_at: NOW + 90 * MIN },
+      // Já renovou: o percentual antigo não aparece.
+      seven_day: { used_percentage: 97, resets_at: NOW - MIN },
+    },
+    ...p,
+  };
+}
+
+const usageSection = () => within(panel()).getByRole("region", { name: "Uso da sessão" });
+
+test("seção Sessão: modelo, contexto na janela real, custo estimado, cache e o plano da conta (#110)", async () => {
+  const api = base()
+    .on("session.context", { tokens: 250_000, model: "claude-opus-5-5", ts: null })
+    .on("session.usage", usageOf())
+    .on("account.get", {
+      account: { key: "org-1:fulano@example.com", email: "fulano@example.com", org_name: "conta-a", subscription_type: "max" },
+      statusline: { state: "installed", current: 1 },
+      plan: { five_hour: { state: "none" }, seven_day: { state: "none" }, read_at: null },
+      latest: null,
+      now: NOW,
+    });
+  const { user } = await openTab(api);
+  await user.click(within(bar()).getByRole("button", { name: "Contexto" }));
+  const sec = await within(panel()).findByRole("region", { name: "Uso da sessão" });
+  // Seção no topo do card.
+  expect(within(panel()).getAllByRole("region")[0]).toBe(sec);
+  expect(api.callsTo("session.usage")[0].params).toEqual({ session_id: S.id });
+  expect(await within(sec).findByText("Opus 5.5")).toBeInTheDocument();
+  expect(within(sec).getByText(/esforço high/)).toBeInTheDocument();
+  // 1M sem `[1m]` no modelo: a janela vem da leitura.
+  expect(within(sec).getByText("25% · 250k/1M")).toBeInTheDocument();
+  expect(within(sec).getByText("US$ 0,52 (estimativa)")).toBeInTheDocument();
+  expect(within(sec).getByText("42 min · API 10 min")).toBeInTheDocument();
+  expect(within(sec).getByText(`acerto 87% · válido até ${clock(NOW + 4 * MIN, Date.now())} · TTL 5m`)).toBeInTheDocument();
+  expect(await within(sec).findByText("Plano da conta fulano@example.com")).toBeInTheDocument();
+  expect(within(sec).getByText(`42% · renova ${clock(NOW + 90 * MIN, Date.now())}`)).toBeInTheDocument();
+  expect(within(sec).queryByText(/97%/)).not.toBeInTheDocument();
+  expect(within(sec).getByText(/^renovada .* aguardando nova leitura$/)).toBeInTheDocument();
+  expect(within(sec).getByText("Leitura há 3 min")).toBeInTheDocument();
+});
+
+test("seção Sessão sem leitura de uso: só o transcript; sem nada, a seção some", async () => {
+  const api = base()
+    .on("session.context", { tokens: 90_000, model: "claude-haiku-5-5", ts: null })
+    .on("session.usage", null);
+  const { user } = await openTab(api);
+  await user.click(within(bar()).getByRole("button", { name: "Contexto" }));
+  const sec = await within(panel()).findByRole("region", { name: "Uso da sessão" });
+  expect(within(sec).getByText("claude-haiku-5-5")).toBeInTheDocument();
+  expect(within(sec).getByText("45% · 90k/200k")).toBeInTheDocument();
+  expect(within(sec).queryByText(/estimativa/)).not.toBeInTheDocument();
+  expect(within(sec).queryByText(/Plano da conta/)).not.toBeInTheDocument();
+  expect(within(sec).queryByText(/Leitura/)).not.toBeInTheDocument();
+});
+
+test("seção Sessão some sem transcript nem leitura (ambiente anterior aos métodos)", async () => {
+  const { user } = await openTab();
+  await user.click(within(bar()).getByRole("button", { name: "Contexto" }));
+  await within(panel()).findByRole("region", { name: "Work item" });
+  expect(within(panel()).queryByRole("region", { name: "Uso da sessão" })).not.toBeInTheDocument();
+});
+
+test("seção Sessão: sem a conta do ambiente, o plano fica sem nome; relê no push da sessão", async () => {
+  let usage = usageOf({ cost: null, prompt_cache: null });
+  const api = base().on("session.usage", () => usage);
+  const { user } = await openTab(api);
+  await user.click(within(bar()).getByRole("button", { name: "Contexto" }));
+  expect(await within(panel()).findByText("Plano da conta")).toBeInTheDocument();
+  expect(within(usageSection()).queryByText(/estimativa/)).not.toBeInTheDocument();
+  usage = usageOf({ effort: "low" });
+  act(() => api.push("wsl", "session_state", { session_id: S.id, work_item_id: 32, state: "idle" }));
+  expect(await within(usageSection()).findByText(/esforço low/)).toBeInTheDocument();
 });
