@@ -8,6 +8,7 @@ import { attention } from "./attention";
 import { AttentionStrip } from "./AttentionStrip";
 import { dayItems, Footer } from "./Footer";
 import { DENSITIES, useGridPrefs, type ControlView } from "./grid";
+import { SessionUsageList } from "./SessionUsageList";
 import { Sidebar } from "./Sidebar";
 import { TileGrid } from "./TileGrid";
 import { WaitingNow } from "./WaitingNow";
@@ -16,6 +17,7 @@ const VIEW_TITLE: Record<ControlView, string> = {
   attention: "Precisa de você",
   running: "Rodando",
   done: "Concluídas hoje",
+  usage: "Uso por sessão",
 };
 
 /**
@@ -49,8 +51,9 @@ export function ControlRoom() {
     attention: items.length,
     running: live.length - waiting,
     done: dayItems(t.envs, t.dashboards, now).done.length,
+    usage: live.length,
   };
-  const showTiles = view !== "done";
+  const showTiles = view === null || view === "attention" || view === "running";
   const showAttention = view === null || view === "attention";
   // Web: "Aguardando você" sai da faixa e vai em destaque no topo (§10.3).
   const highlight = t.web ? items.filter((i) => i.kind === "waiting") : [];
@@ -105,6 +108,7 @@ export function ControlRoom() {
           density={grid.density}
         />
       )}
+      {view === "usage" && <SessionUsageList now={now} />}
       {(view === null || view === "done") && <Footer now={now} />}
     </main>
   );
