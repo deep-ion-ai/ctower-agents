@@ -422,3 +422,104 @@ button.cr-item-main {
   font-weight: 600;
   color: var(--attention);
 }
+
+/* Uso por sessão (issue 109): grupos por conta, uma tabela por grupo. */
+.su-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.su-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.su-group-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.su-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.su-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-2);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.su-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.su-table .su-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.su-open {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.su-open:hover .su-title {
+  text-decoration: underline;
+}
+
+.su-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .su-table thead {
+    display: none;
+  }
+
+  .su-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-bottom: 1px solid var(--border);
+    padding: 6px 0;
+  }
+
+  .su-table td {
+    border: 0;
+    padding: 2px 8px;
+  }
+
+  .su-table td:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .su-table .su-num {
+    text-align: left;
+  }
+
+  .su-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--text-2);
+  }
+}

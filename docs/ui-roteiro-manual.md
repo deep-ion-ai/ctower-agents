@@ -304,3 +304,14 @@ Pré-requisito: um ambiente com o statusline instalado (`ctower statusline insta
 6. Ambiente sem login no Claude Code. **Esperado:** em **Plano das contas**, "Conta desconhecida" com a explicação e o ambiente, sem selo; na barra, "Plano: conta desconhecida". Ambiente sem o statusline (ou desatualizado): "statusline não instalado: sem leitura do plano" e o botão **Instalar statusline** (só no desktop, com o ambiente conectado).
 7. Nenhuma sessão gravou uso ainda. **Esperado:** "sem leitura do plano", sem número.
 8. Web (PWA). **Esperado:** o mesmo selo e a mesma lista, com o que o hub tem; sem e-mail, cada conta aparece como "Conta de <ambientes>"; sem o botão de instalar.
+
+## 20. Uso por sessão (#109)
+
+Pré-requisito: o mesmo da seção 19, com algumas sessões vivas (de preferência em dois ambientes, um deles numa conta diferente ou sem login).
+
+1. Sala de controle, painel lateral, **Visões** → **Uso por sessão**. **Esperado:** o título "Uso por sessão" e um grupo por conta, com o selo da conta no cabeçalho ("5h N% · libera às HH:MM · sem. N%") e "Ambientes: …". Em cada linha: o estado ("aguardando você", "rodando" ou "parada no turno"), o projeto e o item, o **custo estimado** ("US$ 1,50 (estimativa)"; a dica da coluna diz que não é a cobrança), o **contexto** em % da janela real ("42% de 200k"), **Parada há** (desde o último evento; "rodando" para a que está em andamento) e o modelo com o esforço. Clicar na sessão abre o terminal dela. Com mais de um ambiente, a linha diz o ambiente.
+2. **Ordenar por**: **Custo estimado** (padrão) põe a mais cara no topo de cada grupo; **Tempo parada**, a parada há mais tempo. Sessões sem número (sem leitura, ou rodando) ficam no fim.
+3. Sessão de ambiente sem o statusline (ou que ainda não respondeu). **Esperado:** "sem leitura" no custo e no contexto, sem número.
+4. Ambiente sem login no Claude Code. **Esperado:** as sessões dele no grupo **Conta desconhecida**, no fim, com a explicação e sem selo.
+5. Responda numa sessão. **Esperado:** o custo e o contexto dela se atualizam sozinhos em até uns 2 s (sem reler as outras); as demais se atualizam a cada 30 s.
+6. Web (PWA). **Esperado:** a mesma visão, com a leitura pelo canal do hub; a conta aparece como "Conta de <ambientes>".

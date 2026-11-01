@@ -214,6 +214,12 @@ const VIEWS: {
     tone: "done",
     desc: (n) => plural(n, "concluída", "concluídas"),
   },
+  {
+    id: "usage",
+    label: "Uso por sessão",
+    tone: "neutral",
+    desc: (n) => `${plural(n, "sessão", "sessões")} com custo estimado, contexto e tempo parada`,
+  },
 ];
 
 /**
