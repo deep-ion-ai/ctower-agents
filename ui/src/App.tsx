@@ -22,13 +22,16 @@ import { WebLogsScreen } from "./logs/LogsScreen";
 import { SessionScreen } from "./web/SessionPanel";
 import { WebRecovery, WebReview } from "./web/WebScreens";
 import { usePwa } from "./web/pwa";
+import { PlanProvider } from "./plan/usePlan";
 
 export function App({ api, initial }: { api: DaemonApi; initial?: Screen }) {
   return (
     <TowerProvider api={api}>
-      <NavProvider initial={initial}>
-        <Main />
-      </NavProvider>
+      <PlanProvider>
+        <NavProvider initial={initial}>
+          <Main />
+        </NavProvider>
+      </PlanProvider>
     </TowerProvider>
   );
 }

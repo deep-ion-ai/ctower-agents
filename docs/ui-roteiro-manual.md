@@ -291,3 +291,16 @@ Pré-requisito: um ambiente conectado com um projeto do GitHub (com ou sem o hub
 5. Corrija a causa e sincronize. **Esperado:** na primeira rodada bem-sucedida o aviso, o selo e o "falhando" somem, e volta o "Último sync".
 6. Web (PWA). **Esperado:** **Sincronizar este projeto** no cabeçalho, no menu da lista de **Projetos** e na paleta aparecem desabilitados, com "Buscar issues fica no app desktop" (ou "Fica no app desktop" no menu e na paleta); o estado do sync e os avisos aparecem igual.
 7. Compatibilidade: com um ambiente ainda na versão anterior, **Esperado:** só "Último sync", sem "falhando", selo nem aviso de ciclos (o "Sync atrasado" de antes continua).
+
+## 19. Selo do plano da conta (#107)
+
+Pré-requisito: um ambiente com o statusline instalado (`ctower statusline install`, docs/ambiente.md, "Uso do plano") e logado no Claude Code; uma sessão interativa que já respondeu ao menos uma vez.
+
+1. Barra de status, com uma sessão ativa no Terminal (ou numa tela de um ambiente). **Esperado:** o selo da conta do ambiente, "5h 72% · libera às 14:30 · sem. 64% · atualizado há X min", com o ponto verde. A dica mostra a conta, as duas janelas com o reset e diz que o percentual é da conta toda, não do projeto. Sem ambiente ativo (Sala de controle, Hub), o selo aparece se houver só uma conta. Clicar no selo abre a Sala de controle.
+2. Tom. **Esperado:** a partir de 80% numa janela, o selo fica em aviso (laranja); a partir de 95%, crítico (vermelho).
+3. Sala de controle, painel lateral, grupo **Plano das contas**. **Esperado:** cada conta uma vez (pelo e-mail ou organização), com "5h: N% · libera às HH:MM", "Semanal: N% · libera em DD/MM às HH:MM", "atualizado há X min" e os ambientes que a usam. Dois ambientes na mesma conta aparecem sob a mesma conta, com o mesmo selo.
+4. Responda na sessão. **Esperado:** o selo e a lista se atualizam sozinhos, sem recarregar (com hub, em até uns 6 s, depois do envio do ambiente).
+5. Espere passar o reset da janela de 5h sem usar a conta. **Esperado:** "5h renovada às HH:MM · sem leitura nova", sem o percentual antigo, até a próxima resposta.
+6. Ambiente sem login no Claude Code. **Esperado:** em **Plano das contas**, "Conta desconhecida" com a explicação e o ambiente, sem selo; na barra, "Plano: conta desconhecida". Ambiente sem o statusline (ou desatualizado): "statusline não instalado: sem leitura do plano" e o botão **Instalar statusline** (só no desktop, com o ambiente conectado).
+7. Nenhuma sessão gravou uso ainda. **Esperado:** "sem leitura do plano", sem número.
+8. Web (PWA). **Esperado:** o mesmo selo e a mesma lista, com o que o hub tem; sem e-mail, cada conta aparece como "Conta de <ambientes>"; sem o botão de instalar.
