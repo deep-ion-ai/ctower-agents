@@ -8,7 +8,7 @@ import type { RegisterIntent } from "./NewProjectDialog";
 
 export type ProjectAddr = Extract<Screen, { name: "project" }>;
 
-/** Aba do projeto. Sem `view` no endereço, Itens (os endereços de antes da #17). */
+/** Aba do projeto. Sem `view` no endereço, Visão geral (#99); com item, Itens. */
 export type ProjectPage = "overview" | "items" | "sessions" | "settings";
 
 /**
@@ -66,8 +66,11 @@ export const isPage = (v: unknown): v is ProjectPage => typeof v === "string" &&
 export const isSection = (v: unknown): v is ProjectSettingsSection =>
   typeof v === "string" && (PROJECT_SECTIONS as string[]).includes(v);
 
-/** Aba mostrada pelo endereço: com item (aba do item), sempre Itens. */
-export const pageOf = (s: ProjectAddr): ProjectPage => (s.item ? "items" : (s.view ?? "items"));
+/** Aba que o projeto abre sem `view` no endereço (#99). */
+export const DEFAULT_PAGE: ProjectPage = "overview";
+
+/** Aba mostrada pelo endereço: com item (aba do item), sempre Itens; sem `view`, a Visão geral. */
+export const pageOf = (s: ProjectAddr): ProjectPage => (s.item ? "items" : (s.view ?? DEFAULT_PAGE));
 
 /**
  * Seção das Configurações mostrada: a pedida, se existe nesta visão (na web
@@ -81,10 +84,11 @@ export function sectionOf(s: ProjectAddr, web = false): ProjectSettingsSection {
 
 /**
  * Endereço do projeto `base` na aba `page` (e na `section`, nas
- * Configurações). Sem item; Itens sai sem `view`, para o endereço seguir
- * igual ao de antes da #17 (abas, recentes e testes comparam o objeto).
+ * Configurações). Sem item; a aba padrão (Visão geral, #99) sai sem `view`,
+ * para abrir o projeto e voltar à Visão geral darem o mesmo endereço (abas,
+ * recentes e testes comparam o objeto). Itens leva `view: "items"`.
  */
-export function projectAt(base: ProjectAddr, page: ProjectPage = "items", section?: ProjectSettingsSection): ProjectAddr {
+export function projectAt(base: ProjectAddr, page: ProjectPage = DEFAULT_PAGE, section?: ProjectSettingsSection): ProjectAddr {
   // Os pedidos (`assign`, `register`) também saem: valem uma vez, no endereço que os fez.
   const {
     item: _item,
@@ -97,7 +101,7 @@ export function projectAt(base: ProjectAddr, page: ProjectPage = "items", sectio
   } = base;
   return {
     ...addr,
-    ...(page !== "items" ? { view: page } : {}),
+    ...(page !== DEFAULT_PAGE ? { view: page } : {}),
     ...(page === "settings" && section ? { section } : {}),
   };
 }

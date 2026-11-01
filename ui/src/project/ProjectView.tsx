@@ -20,7 +20,7 @@ import { useMobile } from "../web/mode";
 import { Board, type BoardNode } from "./Board";
 import { STATUS } from "./status";
 import { itemTab } from "./tabs";
-import { PROJECT_PAGES, PROJECT_PAGE_LABEL, projectAt, type ProjectPage, type ProjectSettingsSection } from "./sections";
+import { DEFAULT_PAGE, PROJECT_PAGES, PROJECT_PAGE_LABEL, projectAt, type ProjectPage, type ProjectSettingsSection } from "./sections";
 import { TreeControls } from "./TreeControls";
 import { ProviderIcon } from "./ProviderIcon";
 import { decisionsTitle, mergedOpen, mergedOpenText, rowLabel } from "./TreeRow";
@@ -69,7 +69,7 @@ export function useGoPage(addr: ProjectAddr): (page: ProjectPage, section?: Proj
 export interface ProjectViewProps<T extends ProjectNode> {
   /** Endereço do projeto (sem item nem aba): base das abas dos itens e das do projeto. */
   addr: ProjectAddr;
-  /** Aba do projeto mostrada sem item (#17); sem ela, Itens. */
+  /** Aba do projeto mostrada sem item (#17); sem ela, a Visão geral (#99). */
   page?: ProjectPage;
   /** Conteúdo das outras abas (Itens é a árvore e o quadro desta visão). */
   pages: ProjectPages;
@@ -129,7 +129,7 @@ const isClosed = (n: ProjectNode) => n.issue.state === "closed" || n.work_item?.
 export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   const nav = useNav();
   const goPage = useGoPage(p.addr);
-  const page = p.page ?? "items";
+  const page = p.page ?? DEFAULT_PAGE;
   const { api, envs, infos, web } = useTower();
   const mobile = useMobile();
   const now = useNow();
@@ -342,7 +342,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
         onClick={() => {
           setViewMode("board");
           // O Quadro fica na aba do projeto, em Itens (#17).
-          if (focus !== null) nav.go(p.addr);
+          if (focus !== null) nav.go(projectAt(p.addr, "items"));
           else if (page !== "items") goPage("items");
         }}
       >

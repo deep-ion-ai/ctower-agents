@@ -349,7 +349,7 @@ describe("Quadro (Kanban) somente leitura", () => {
     expect(within(panel).getByText(/sync ambiente→hub/)).toBeInTheDocument();
     expect(rowBtn(/^#59 sync ambiente→hub/)).toHaveAttribute("aria-current", "true");
     cleanup();
-    render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+    render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "items" }} />);
     await waitFor(() => expect(screen.getByRole("region", { name: /^Coluna backlog/ })).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Quadro" })).toHaveAttribute("aria-pressed", "true");
   });
@@ -670,14 +670,20 @@ function setupTabs(hubUp = true) {
 const tabsNav = () => screen.getByRole("navigation", { name: "Abas do projeto" });
 const pageBtn = (name: string) => within(tabsNav()).getByRole("button", { name });
 
-test("abas do projeto (#17): sem `view`, Itens; cada aba troca o endereço na mesma aba de editor", async () => {
+test("abas do projeto (#17): sem `view`, Visão geral (#99); cada aba troca o endereço na mesma aba de editor", async () => {
   const api = setupTabs();
   render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
   const user = userEvent.setup();
   await screen.findByText("visão do hub");
-  // Endereço antigo (sem `view`): Itens, com a árvore e o resumo de sempre.
+  // Sem `view` no endereço: a Visão geral (#99).
+  expect(pageBtn("Visão geral")).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("tab", { name: "ctower-agents · Visão geral" })).toHaveAttribute("aria-selected", "true");
+
+  // Itens: a árvore e o resumo de sempre, na mesma aba de editor.
+  await user.click(pageBtn("Itens"));
   expect(pageBtn("Itens")).toHaveAttribute("aria-current", "page");
   expect(screen.getByRole("tab", { name: "ctower-agents" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByRole("tab").filter((t) => /ctower-agents/.test(t.textContent ?? ""))).toHaveLength(1);
 
   // Visão geral: estado, atribuições e a sessão viva, que abre o terminal.
   await user.click(pageBtn("Visão geral"));
@@ -707,6 +713,26 @@ test("abas do projeto (#17): sem `view`, Itens; cada aba troca o endereço na me
   await user.click(within(side()).getByRole("button", { name: "Árvore" }));
   expect(pageBtn("Itens")).toHaveAttribute("aria-current", "page");
   expect(screen.getByRole("tab", { name: "ctower-agents" })).toBeInTheDocument();
+});
+
+test("Visão geral como aba padrão (#99): Árvore e Quadro levam a Itens; abrir o item não muda a aba dele", async () => {
+  const api = setupTabs();
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await screen.findByText("visão do hub");
+  expect(pageBtn("Visão geral")).toHaveAttribute("aria-current", "page");
+  // Quadro, da Visão geral: a aba Itens, com o Kanban.
+  await user.click(within(side()).getByRole("button", { name: "Quadro" }));
+  expect(pageBtn("Itens")).toHaveAttribute("aria-current", "page");
+  expect(await screen.findByRole("region", { name: /^Coluna backlog/ })).toBeInTheDocument();
+  // De uma aba de item, Quadro volta à aba do projeto em Itens (não à Visão geral).
+  await user.click(within(side()).getByRole("button", { name: "Árvore" }));
+  await user.click(rowBtn(/^#59 /));
+  expect(await screen.findByRole("region", { name: "Detalhe do item" })).toBeInTheDocument();
+  await user.click(within(side()).getByRole("button", { name: "Quadro" }));
+  expect(pageBtn("Itens")).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("region", { name: /^Coluna backlog/ })).toBeInTheDocument();
+  window.sessionStorage.clear();
 });
 
 test("Configurações do projeto (#17): a seção pelo endereço e cada seção com o cartão dela", async () => {
@@ -907,7 +933,7 @@ function setupFailing(failures: number, hubUp = true) {
 
 test("cabeçalho (#90): Sincronizar este projeto roda sync.now só deste projeto e mostra o resultado", async () => {
   const api = setupOverview();
-  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "items" }} />);
   const user = userEvent.setup();
   await screen.findByText("visão do hub");
   const head = document.querySelector<HTMLElement>(".project-head")!;
@@ -990,7 +1016,7 @@ test("faixa Precisa de você (#90): sync falhando há 3 ciclos, com o link para 
 
 test("paleta (#90): Sincronizar este projeto na aba do projeto e Sincronizar projeto… escolhendo o projeto", async () => {
   const api = setupOverview(false);
-  render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1 }} />);
+  render(<App api={api} initial={{ name: "project", env: "wsl", projectId: 1, view: "items" }} />);
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "Sincronizar este projeto" });
   const paleta = async () => {

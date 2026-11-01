@@ -3,10 +3,11 @@ import { itemTab } from "./tabs";
 
 const BASE: ProjectAddr = { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" };
 
-test("projectAt: Itens sem `view` (endereço de antes da #17); seção só nas Configurações; sem item", () => {
+test("projectAt: Visão geral sem `view` (padrão, #99); seção só nas Configurações; sem item", () => {
   expect(projectAt(BASE)).toEqual(BASE);
-  expect(projectAt({ ...BASE, view: "sessions", item: { ghNumber: 3 } }, "items")).toEqual(BASE);
-  expect(projectAt(BASE, "overview")).toEqual({ ...BASE, view: "overview" });
+  expect(projectAt(BASE, "overview")).toEqual(BASE);
+  expect(projectAt({ ...BASE, view: "sessions", item: { ghNumber: 3 } }, "overview")).toEqual(BASE);
+  expect(projectAt({ ...BASE, view: "sessions", item: { ghNumber: 3 } }, "items")).toEqual({ ...BASE, view: "items" });
   expect(projectAt(BASE, "settings", "secrets")).toEqual({ ...BASE, view: "settings", section: "secrets" });
   expect(projectAt({ ...BASE, view: "settings", section: "docs" }, "sessions", "docs")).toEqual({ ...BASE, view: "sessions" });
   // A forma local (ambiente e id) vai junto.
@@ -19,7 +20,12 @@ test("projectAt: Itens sem `view` (endereço de antes da #17); seção só nas C
 });
 
 test("pageOf e sectionOf: padrões, item força Itens e a web não abre seção do desktop", () => {
-  expect(pageOf(BASE)).toBe("items");
+  // Sem `view`, a Visão geral (#99); `view` explícito vale; com item, sempre Itens.
+  expect(pageOf(BASE)).toBe("overview");
+  expect(pageOf({ ...BASE, item: { ghNumber: 1 } })).toBe("items");
+  expect(pageOf({ ...BASE, view: "items" })).toBe("items");
+  expect(pageOf({ ...BASE, view: "sessions" })).toBe("sessions");
+  expect(pageOf({ ...BASE, view: "settings" })).toBe("settings");
   expect(pageOf({ ...BASE, view: "overview" })).toBe("overview");
   expect(pageOf({ ...BASE, view: "overview", item: { ghNumber: 1 } })).toBe("items");
   expect(sectionOf({ ...BASE, view: "settings" })).toBe("general");
@@ -30,7 +36,10 @@ test("pageOf e sectionOf: padrões, item força Itens e a web não abre seção 
 });
 
 test("pageSuffix: título da aba fora de Itens", () => {
-  expect(pageSuffix(BASE)).toBe("");
+  // Sem `view`, a Visão geral (#99), com o sufixo como o Hub › Visão geral.
+  expect(pageSuffix(BASE)).toBe(" · Visão geral");
+  expect(pageSuffix({ ...BASE, view: "items" })).toBe("");
+  expect(pageSuffix({ ...BASE, item: { ghNumber: 5 } })).toBe("");
   expect(pageSuffix({ ...BASE, view: "sessions" })).toBe(" · Sessões");
   expect(pageSuffix({ ...BASE, view: "settings" })).toBe(" · Configurações");
   expect(pageSuffix({ ...BASE, view: "settings", section: "envs" })).toBe(" · Configurações › Ambientes e atribuições");
