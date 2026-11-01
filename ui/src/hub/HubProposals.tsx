@@ -84,7 +84,7 @@ function Position({ x }: { x: PlacedProposal }) {
 }
 
 /** Justificativa curta inteira; a longa resumida, expansível. */
-function Why({ text }: { text: string }) {
+export function Why({ text }: { text: string }) {
   if (text.length <= WHY_SHORT) return <>{text}</>;
   return (
     <details>
@@ -109,35 +109,51 @@ export interface ProposalsData {
   ranking: HubRanking | null | undefined;
   /** Falha ao ler as propostas. */
   error: string | null;
+  /** Já houve uma leitura com sucesso (antes, "vazio" ainda não quer dizer nada). */
+  loaded: boolean;
   load(): Promise<void>;
   /** Aprova ou rejeita (uma ou várias) e relê; devolve a mensagem para a tela. */
   decide(ids: number[], approve: boolean, note?: string): Promise<DecideResult>;
 }
 
+/** Projeto de `owner/repo`, sem diferença de caixa (como a chave do hub). */
+const sameProject = (p: HubProposal, owner: string, repo: string) =>
+  p.owner.toLowerCase() === owner.toLowerCase() && p.repo.toLowerCase() === repo.toLowerCase();
+
 /**
  * Lê as propostas com o hub no ar e relê com o push `hub.proposals.changed`.
  * Fica na tela Hub (não na seção) para os contadores do painel lateral, a
  * Visão geral e a seção Propostas usarem os mesmos dados.
+ *
+ * Com `project`, só as pendentes daquele `owner/repo` (o filtro do
+ * `hub.proposals.list`) e sem o histórico: é o cartão da Visão geral do
+ * projeto (#100).
  */
-export function useHubProposals(): ProposalsData {
+export function useHubProposals(project?: { owner: string; repo: string }): ProposalsData {
   const { api, hub } = useTower();
   const [pending, setPending] = useState<HubProposal[]>([]);
   const [past, setPast] = useState<HubProposal[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [ranking, setRanking] = useState<HubRanking | null | undefined>(undefined);
   const seq = useRef(0);
+  const owner = project?.owner;
+  const repo = project?.repo;
 
   const load = useCallback(async () => {
     const id = ++seq.current;
     try {
+      const scope = owner && repo ? { owner, repo } : null;
       const [p, all] = await Promise.all([
-        api.hubCall<HubProposals>("hub.proposals.list", { state: "pendente", limit: 200 }),
-        api.hubCall<HubProposals>("hub.proposals.list", { state: "todos", limit: 200 }),
+        api.hubCall<HubProposals>("hub.proposals.list", { state: "pendente", limit: 200, ...scope }),
+        scope ? null : api.hubCall<HubProposals>("hub.proposals.list", { state: "todos", limit: 200 }),
       ]);
       if (id !== seq.current) return;
-      setPending(p.proposals);
-      setPast(all.proposals.filter((x) => x.state !== "pendente").slice(0, PROPOSALS_HISTORY));
+      // O filtro é do hub; aqui só garante (um hub antigo que o ignore não mistura projetos).
+      setPending(scope ? p.proposals.filter((x) => sameProject(x, scope.owner, scope.repo)) : p.proposals);
+      setPast(all ? all.proposals.filter((x) => x.state !== "pendente").slice(0, PROPOSALS_HISTORY) : []);
       setError(null);
+      setLoaded(true);
       if (!p.proposals.some((x) => x.kind === "priority")) return;
       // O ranking só posiciona; se falhar, a tabela sai sem as posições.
       try {
@@ -149,7 +165,7 @@ export function useHubProposals(): ProposalsData {
     } catch (e) {
       if (id === seq.current) setError(errText(e));
     }
-  }, [api]);
+  }, [api, owner, repo]);
 
   useEffect(() => {
     if (!hub.connected) return;
@@ -190,7 +206,104 @@ export function useHubProposals(): ProposalsData {
     [api, load],
   );
 
-  return { pending, past, ranking, error, load, decide };
+  return { pending, past, ranking, error, loaded, load, decide };
+}
+
+/**
+ * Decisão de uma proposta por vez, nas listas dos cartões (Visão geral do
+ * Hub e do projeto): ocupado enquanto o hub responde e a mensagem do
+ * resultado, ou a falha de leitura se não houver uma.
+ */
+export function useProposalDecision(data: ProposalsData) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<DecideResult | null>(null);
+  const decide = async (id: number, approve: boolean) => {
+    setBusy(true);
+    setMsg(null);
+    setMsg(await data.decide([id], approve));
+    setBusy(false);
+  };
+  const note = msg ?? (data.error ? { text: data.error, error: true } : null);
+  return { busy, note, decide };
+}
+
+/** Mensagem do cartão: o resultado da decisão ou o erro, como alerta. */
+export function ProposalNote({ note }: { note: DecideResult | null }) {
+  if (!note) return null;
+  return (
+    <p role={note.error ? "alert" : "status"} className={`hub-card-msg ${note.error ? "start-error" : "state-on"}`}>
+      {note.text}
+    </p>
+  );
+}
+
+/**
+ * Uma proposta pendente na lista de um cartão (`hub-card-list`): o tipo, o
+ * item (abre o item na tela Projeto), o título, o valor proposto (com o
+ * atual antes, em `withCurrent`), a justificativa resumida com o resto sob
+ * demanda e os botões de rejeitar e aprovar. `readOnly` (web, #100): os
+ * botões desabilitados, ligados ao aviso pelo id dele.
+ */
+export function ProposalItem({
+  p,
+  title = p.title,
+  withCurrent = false,
+  rejectLabel = "Recusar",
+  busy,
+  onDecide,
+  readOnly,
+}: {
+  p: HubProposal;
+  title?: string | null;
+  withCurrent?: boolean;
+  rejectLabel?: string;
+  busy: boolean;
+  onDecide(id: number, approve: boolean): void;
+  readOnly?: { noteId: string };
+}) {
+  const nav = useNav();
+  const { hub } = useTower();
+  const proj = hubProjectOf(hub.projects, p.owner, p.repo);
+  return (
+    <li aria-label={`Proposta #${p.id}`}>
+      <span className="badge">{p.kind === "priority" ? "prioridade" : "status"}</span>
+      <div className="hub-card-text">
+        <button
+          type="button"
+          className="linklike mono"
+          title={p.ref ?? `${p.owner}/${p.repo}#${p.number}`}
+          onClick={() => nav.go({ name: "project", owner: p.owner, repo: p.repo, item: { ghNumber: p.number } })}
+        >
+          {itemShort(proj, p.number)}
+        </button>
+        {title && <> {title}</>} {withCurrent && <>{valueText(p.kind, p.current, proj)} </>}
+        <span className="muted">→</span> <strong>{valueText(p.kind, p.proposed, proj)}</strong>
+        <div className="hub-card-sub">
+          <Why text={p.justification} />
+        </div>
+      </div>
+      <button
+        type="button"
+        className="btn btn-sm"
+        disabled={busy || !!readOnly}
+        aria-describedby={readOnly?.noteId}
+        aria-label={`${rejectLabel} a proposta #${p.id}`}
+        onClick={() => onDecide(p.id, false)}
+      >
+        {rejectLabel}
+      </button>
+      <button
+        type="button"
+        className="btn btn-sm btn-primary"
+        disabled={busy || !!readOnly}
+        aria-describedby={readOnly?.noteId}
+        aria-label={`Aprovar a proposta #${p.id}`}
+        onClick={() => onDecide(p.id, true)}
+      >
+        Aprovar
+      </button>
+    </li>
+  );
 }
 
 /**

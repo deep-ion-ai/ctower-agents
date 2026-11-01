@@ -133,7 +133,7 @@ describe.each([360, 414])("celular, %i px", (width) => {
 
   it("uma aba por vez: as abertas numa lista no cabeçalho", async () => {
     const api = mobileApi();
-    const user = renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
+    const user = renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "items" });
     await user.click(await screen.findByRole("button", { name: /^#201 WebDaemonApi/ }));
     await screen.findByRole("region", { name: "Detalhe do item" });
     const trigger = screen.getByRole("button", { name: /^Abas abertas \(2\): .*#201/ });
@@ -165,10 +165,15 @@ describe.each([360, 414])("celular, %i px", (width) => {
     expect(side()).toBeNull();
   });
 
-  it("abrir um projeto: os itens no corpo, sem abrir a gaveta, e as abas segmentadas (#25)", async () => {
+  it("abrir um projeto: a Visão geral (#99); em Itens, os itens no corpo, sem abrir a gaveta, e as abas segmentadas (#25)", async () => {
     const api = mobileApi();
     const user = renderApp(api, { name: "project" });
     await user.click(await screen.findByRole("button", { name: "ctower-agents" }));
+    // Sem `view`, o projeto abre na Visão geral (#99).
+    const first = await screen.findByRole("navigation", { name: "Abas do projeto" });
+    expect(within(first).getByRole("button", { name: "Visão geral" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("region", { name: "Itens do projeto" })).toBeNull();
+    await user.click(within(first).getByRole("button", { name: "Itens" }));
     const items = await screen.findByRole("region", { name: "Itens do projeto" });
     expect(side()).toBeNull();
     // A árvore não fica também na gaveta (fechada): só no corpo.
@@ -201,7 +206,7 @@ describe.each([360, 414])("celular, %i px", (width) => {
 
   it("nenhum texto manda usar atalho de teclado no projeto (#25)", async () => {
     const api = mobileApi();
-    renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
+    renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "items" });
     const items = await screen.findByRole("region", { name: "Itens do projeto" });
     await within(items).findByRole("button", { name: /^#201 WebDaemonApi/ });
     const body = document.querySelector(".shell-main")!.textContent ?? "";
@@ -225,7 +230,7 @@ describe.each([360, 414])("celular, %i px", (width) => {
 
   it("mudar status e prioridade do item pelo hub (sem reordenar)", async () => {
     const api = mobileApi();
-    const user = renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents" });
+    const user = renderApp(api, { name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "items" });
     await user.click(await screen.findByRole("button", { name: /^#201 WebDaemonApi/ }));
     const panel = await screen.findByRole("region", { name: "Detalhe do item" });
 

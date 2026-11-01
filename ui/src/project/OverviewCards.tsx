@@ -1,6 +1,8 @@
 // Cartões de ação da Visão geral do projeto (#19), que entram pela prop
-// `extra` de `ProjectOverview`: saúde do projeto, "Buscar issues agora" e o
-// gestor com o escopo do projeto. As regras ficam em overview.ts.
+// `extra` de `ProjectOverview`: saúde do projeto, "Buscar issues agora", o
+// gestor com o escopo do projeto, as propostas dele (#100) e as revisões
+// (#101). As regras ficam em overview.ts.
+import { useId, useMemo, useState } from "react";
 import type { HubProject } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -13,6 +15,14 @@ import { projectSignals } from "./overview";
 import { runProjectSync, useSyncRun, type ProjectSyncInfo } from "./sync-now";
 import { SYNC_DESKTOP_NOTE, SyncStatus } from "./SyncNow";
 import { DesktopOnly } from "../web/DesktopOnly";
+import { DESKTOP_ONLY_NOTE } from "../web/mode";
+import { ProposalItem, ProposalNote, useHubProposals, useProposalDecision } from "../hub/HubProposals";
+import { pendingInOrder } from "../hub/proposalOrder";
+import type { Review } from "../protocol/gen";
+import { changeLabel, changeRef, forgeLabel, PROJECT_ITEM } from "../util/item";
+import type { Clone } from "./clones";
+import { entryName, markPr, markReviewed, openPr, projectEntries, useReviewEntries, type ReviewEntry } from "../review/entries";
+import { noteReviewed, reviewKey, useReviews, wasReviewed } from "../review/ui-store";
 
 /**
  * Saúde do projeto: os sinais de aviso e críticos do hub com este
@@ -164,6 +174,209 @@ export function ProjectGestorCard({ owner, repo }: { owner: string; repo: string
       <div className="hub-card-msg">
         <GestorLauncher project={{ owner, repo }} />
       </div>
+    </section>
+  );
+}
+
+/**
+ * Propostas do gestor deste projeto (#100): só as pendentes deste
+ * `owner/repo`, na ordem do ranking (`pendingInOrder`), cada uma com o item,
+ * o valor atual → o proposto e a justificativa resumida. Aprovar e Rejeitar
+ * na própria linha (`hub.proposals.decide`): a decidida sai do cartão na
+ * releitura, e a decidida em outro lugar sai pelo push
+ * `hub.proposals.changed`. Na web, os botões ficam desabilitados com o aviso
+ * padrão das ações só do desktop. A lista completa, com nota e decisão em
+ * lote, segue no Hub.
+ */
+export function ProjectProposalsCard({ owner, repo }: { owner: string; repo: string }) {
+  const { hub, web } = useTower();
+  const nav = useNav();
+  const data = useHubProposals({ owner, repo });
+  const { busy, note, decide } = useProposalDecision(data);
+  const noteId = useId();
+  const list = useMemo(
+    () => pendingInOrder(data.pending, data.ranking?.items ?? [], hub.projects),
+    [data.pending, data.ranking, hub.projects],
+  );
+  return (
+    <section className="hub-card" aria-labelledby="pj-ov-propostas">
+      <div className="hub-card-head">
+        <h2 id="pj-ov-propostas">Propostas do gestor · {list.length}</h2>
+        <button type="button" className="btn btn-sm" onClick={() => nav.openTab(hubTab("proposals"))}>
+          Ver no Hub
+        </button>
+      </div>
+      {list.length === 0 ? (
+        // Sem leitura e com erro, só o erro (abaixo).
+        (data.loaded || !data.error) && (
+          <p className="muted hub-card-empty">
+            {data.loaded ? "Nenhuma proposta pendente neste projeto." : "Lendo as propostas…"}
+          </p>
+        )
+      ) : (
+        <ul className="hub-card-list" aria-label="Propostas pendentes do projeto">
+          {list.map((x) => (
+            <ProposalItem
+              key={x.proposal.id}
+              p={x.proposal}
+              title={x.title}
+              withCurrent
+              rejectLabel="Rejeitar"
+              busy={busy}
+              onDecide={decide}
+              readOnly={web ? { noteId } : undefined}
+            />
+          ))}
+        </ul>
+      )}
+      {web && list.length > 0 && (
+        <p id={noteId} className="muted hub-card-msg desktop-only-note">
+          {DESKTOP_ONLY_NOTE}
+        </p>
+      )}
+      <ProposalNote note={note} />
+    </section>
+  );
+}
+
+/**
+ * Revisões deste projeto (#101): os itens em revisão (`em_revisao`) ou com
+ * decisões autônomas pendentes, do dashboard de cada ambiente conectado com
+ * o projeto (`clones`), cada um com o título, as pendentes (do `review.get`,
+ * o mesmo da tela de Revisão) e o link para a tela completa. "Marcar como
+ * revisada" na própria linha grava as pendentes no PR do item
+ * (`review.mark_reviewed`, como o botão da tela de Revisão), sem sair da
+ * Visão geral; o item marcado sai do cartão e só volta com decisão nova. Não
+ * há reprovar: o usuário só confirma que revisou. Na web, os botões ficam
+ * desabilitados com o aviso padrão das ações só do desktop.
+ */
+export function ProjectReviewsCard({ clones }: { clones: readonly Clone[] }) {
+  const { api, web } = useTower();
+  const nav = useNav();
+  const [, putReview] = useReviews();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
+  const noteId = useId();
+  const candidates = clones.flatMap((c) => projectEntries(c.env, c.project, c.items));
+  // Na web, os work items vêm do dashboard do hub (ids do hub): sem `review.get`.
+  const read = useReviewEntries(api, candidates, { read: !web });
+  // Marcado aqui ou na tela de Revisão: sai até chegar decisão nova.
+  const list = read.entries.filter((e) => !(wasReviewed(reviewKey(e.env, e.workItemId)) && e.count === 0));
+  const multiEnv = clones.length > 1;
+  const envName = (id: string) => clones.find((c) => c.env === id)?.name ?? id;
+
+  const mark = async (e: ReviewEntry) => {
+    const name = entryName(e);
+    setBusy(true);
+    setNote(null);
+    try {
+      // As pendentes e o PR de agora (o dashboard pode estar atrasado).
+      const r = await api.call<Review>(e.env, "review.get", { work_item_id: e.workItemId });
+      const pr = markPr(r);
+      let marked = 0;
+      if (r.decisions.length > 0) {
+        if (!pr)
+          throw new Error(
+            `${name}: sem ${changeLabel(e.project)} no espelho do ${forgeLabel(e.project)} (sincronize depois de abrir o ${changeLabel(e.project)}).`,
+          );
+        marked = (await markReviewed(api, e.env, e.workItemId, { pr: pr.number })).marked;
+      } else {
+        // Nada pendente (só em revisão): a confirmação de que revisou, sem gravar nada.
+        noteReviewed(reviewKey(e.env, e.workItemId));
+      }
+      putReview(reviewKey(e.env, e.workItemId), await api.call<Review>(e.env, "review.get", { work_item_id: e.workItemId }));
+      setNote({
+        text: `${name} revisado${marked > 0 ? `: ${plural(marked, "decisão marcada", "decisões marcadas")} como revisada${marked === 1 ? "" : "s"}` : ""}.`,
+        error: false,
+      });
+    } catch (err) {
+      setNote({ text: err instanceof Error ? err.message : String(err), error: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sub = (e: ReviewEntry) => {
+    const pr = openPr(e.review);
+    return [
+      plural(e.count, "decisão pendente", "decisões pendentes"),
+      e.ghNumber === PROJECT_ITEM
+        ? "sessões sem issue associada"
+        : pr
+          ? `${changeRef(e.project, pr.number)} aberto`
+          : e.review
+            ? `sem ${changeLabel(e.project)} aberto`
+            : null,
+      multiEnv ? envName(e.env) : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  };
+
+  return (
+    <section className="hub-card" aria-labelledby="pj-ov-revisoes">
+      <div className="hub-card-head">
+        <h2 id="pj-ov-revisoes">Revisões · {list.length}</h2>
+        <button type="button" className="btn btn-sm" onClick={() => nav.go({ name: "review" })}>
+          Ver na Revisão
+        </button>
+      </div>
+      {read.error && (
+        <p role="alert" className="hub-card-msg start-error">
+          {read.error}
+        </p>
+      )}
+      {list.length === 0 ? (
+        <p className="muted hub-card-empty">
+          {clones.length === 0
+            ? "Nenhum ambiente conectado tem este projeto: as revisões aparecem quando um deles conectar."
+            : "Nada em revisão neste projeto."}
+        </p>
+      ) : (
+        <ul className="hub-card-list" aria-label="Itens em revisão do projeto">
+          {list.map((e) => {
+            const name = entryName(e);
+            return (
+              <li key={reviewKey(e.env, e.workItemId)} aria-label={`Revisão de ${name}`}>
+                <span className="badge" data-tone={e.count > 0 ? "attention" : undefined}>
+                  {e.count}
+                </span>
+                <span className="hub-card-text">
+                  <button
+                    type="button"
+                    className="linklike"
+                    title="Abrir na tela de Revisão"
+                    onClick={() => nav.go({ name: "review", env: e.env, workItemId: e.workItemId })}
+                  >
+                    {name}
+                  </button>
+                  <span className="hub-card-sub">{sub(e)}</span>
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={busy || web}
+                  aria-describedby={web ? noteId : undefined}
+                  aria-label={`Marcar ${name} como revisada`}
+                  onClick={() => void mark(e)}
+                >
+                  Marcar como revisada
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {web && list.length > 0 && (
+        <p id={noteId} className="muted hub-card-msg desktop-only-note">
+          {DESKTOP_ONLY_NOTE}
+        </p>
+      )}
+      {note && (
+        <p role={note.error ? "alert" : "status"} className={`hub-card-msg ${note.error ? "start-error" : "state-on"}`}>
+          {note.text}
+        </p>
+      )}
     </section>
   );
 }

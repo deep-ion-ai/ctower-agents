@@ -1,6 +1,7 @@
 // Estado da Revisão que sobrevive à troca de aba (só a aba ativa fica
 // montada): o último `review.get` de cada item (contadores e PR do painel
-// lateral) e, por item, o filtro e as decisões abertas.
+// lateral) e, por item, o filtro e as decisões abertas; e os itens já
+// marcados como revisados nesta execução.
 import { useCallback, useEffect, useState } from "react";
 import type { Review } from "../protocol/gen";
 
@@ -15,6 +16,8 @@ export interface ReviewUi {
 const EMPTY: ReviewUi = { filter: "autonomas", open: {} };
 const uis = new Map<string, ReviewUi>();
 const reviews = new Map<string, Review>();
+/** Itens marcados como revisados nesta execução (o cartão da Visão geral os tira, #101). */
+const reviewed = new Set<string>();
 const subs = new Set<() => void>();
 
 export const reviewKey = (env: string, workItemId: number) => `${env}:${workItemId}`;
@@ -49,8 +52,18 @@ export function useReviews(): [ReadonlyMap<string, Review>, (key: string, r: Rev
   return [reviews, put];
 }
 
+/** Anota o item como revisado (`review.mark_reviewed` deu certo). */
+export function noteReviewed(key: string): void {
+  reviewed.add(key);
+  for (const s of subs) s();
+}
+
+/** O item foi marcado como revisado nesta execução? */
+export const wasReviewed = (key: string) => reviewed.has(key);
+
 /** Esquece tudo (entre testes). */
 export function resetReviewUi(): void {
   uis.clear();
   reviews.clear();
+  reviewed.clear();
 }
