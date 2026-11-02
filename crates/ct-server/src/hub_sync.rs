@@ -198,6 +198,24 @@ pub struct HubSender {
     /// Resumo novo ainda não confirmado pelo hub: com o outbox vazio, vai
     /// num envio sem mudanças.
     cleanup_dirty: AtomicBool,
+    /// Relatório do plano da conta (#106); `None` = não informa (testes).
+    plan_source: Option<PlanSource>,
+    plan: Mutex<PlanSlot>,
+}
+
+/// Monta o relatório do plano do ambiente (conta, statusline, leitura).
+pub type PlanSource = Arc<dyn Fn() -> ct_core::plan::EnvPlanReport + Send + Sync>;
+
+/// Intervalo mínimo entre duas montagens do relatório do plano.
+pub const PLAN_EVERY: Duration = Duration::from_secs(15);
+
+#[derive(Default)]
+struct PlanSlot {
+    checked: Option<std::time::Instant>,
+    /// Último confirmado pelo hub.
+    sent: Option<ct_core::plan::EnvPlanReport>,
+    /// Mudou e ainda não foi confirmado.
+    pending: Option<ct_core::plan::EnvPlanReport>,
 }
 
 impl HubSender {
@@ -223,7 +241,36 @@ impl HubSender {
             announced: AtomicBool::new(false),
             cleanup: Mutex::new(None),
             cleanup_dirty: AtomicBool::new(false),
+            plan_source: None,
+            plan: Mutex::default(),
         }
+    }
+
+    /// Informa o plano da conta ao hub (#106): o relatório é remontado a
+    /// cada [`PLAN_EVERY`] e vai no envio só quando muda.
+    pub fn with_plan(mut self, source: PlanSource) -> Self {
+        self.plan_source = Some(source);
+        self
+    }
+
+    /// Remonta o relatório do plano, se já deu o prazo. `true` = há um
+    /// relatório novo para enviar.
+    fn refresh_plan(&self) -> bool {
+        let Some(source) = &self.plan_source else {
+            return false;
+        };
+        {
+            let slot = self.plan.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.checked.is_some_and(|t| t.elapsed() < PLAN_EVERY) {
+                return slot.pending.is_some();
+            }
+        }
+        // Fora do lock: pode rodar o `claude auth status`.
+        let report = source();
+        let mut slot = self.plan.lock().unwrap_or_else(|e| e.into_inner());
+        slot.checked = Some(std::time::Instant::now());
+        slot.pending = (slot.sent.as_ref() != Some(&report)).then_some(report);
+        slot.pending.is_some()
     }
 
     /// Resumo do último plano de limpeza, levado ao hub no próximo envio
@@ -419,6 +466,8 @@ impl HubSender {
 
     fn push_batches(&self, f: &mut Flushed) -> Result<(), String> {
         let env_id = self.sessions.ledger().env_id().to_string();
+        // Antes do outbox: um plano novo vai no primeiro lote, ou sozinho.
+        let plan_due = self.refresh_plan();
         loop {
             let batch = self
                 .sessions
@@ -428,6 +477,7 @@ impl HubSender {
             let Some(last) = batch.last().map(|e| e.seq) else {
                 if !self.announced.load(Ordering::Relaxed)
                     || self.cleanup_dirty.load(Ordering::SeqCst)
+                    || plan_due
                 {
                     self.send(&env_id, Vec::new(), 0)?;
                     self.announced.store(true, Ordering::Relaxed);
@@ -464,16 +514,31 @@ impl HubSender {
         // durante o envio a levanta de novo e vai no próximo.
         let dirty = self.cleanup_dirty.swap(false, Ordering::SeqCst);
         let cleanup = *self.cleanup.lock().unwrap_or_else(|e| e.into_inner());
+        let plan = self
+            .plan
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .clone();
         let body = serde_json::to_string(&PushRequest {
             env_id: env_id.to_string(),
             entries,
             pending,
             cleanup,
+            plan: plan.clone(),
         })
         .expect("PushRequest serializa");
         let r = self.post_push(url, token, body);
         if r.is_err() && dirty {
             self.cleanup_dirty.store(true, Ordering::SeqCst);
+        }
+        if r.is_ok() && plan.is_some() {
+            let mut slot = self.plan.lock().unwrap_or_else(|e| e.into_inner());
+            // Um relatório mais novo, montado durante o envio, fica pendente.
+            if slot.pending == plan {
+                slot.pending = None;
+            }
+            slot.sent = plan;
         }
         r
     }
@@ -727,6 +792,75 @@ mod tests {
         tokio::task::spawn_blocking(move || s.push_pending())
             .await
             .unwrap()
+    }
+
+    /// Plano da conta (#106): vai no envio quando muda, e só então.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plano_da_conta_vai_ao_hub_quando_muda() {
+        use ct_core::plan::{EnvPlanReport, PlanAccount, PlanReading, PlanWindow};
+        use std::sync::atomic::AtomicI64;
+        let hub = new_hub();
+        let tok = hub.lock().add_legacy_env_token("a").unwrap();
+        let dead = DeadHub::new();
+        let url = dead.url.clone();
+        serve_hub(hub.clone(), dead.revive()).await;
+        let a = Srv::new(FakeClaude::exit(0));
+        let pct = Arc::new(AtomicI64::new(10));
+        let calls = Arc::new(AtomicI64::new(0));
+        let source: PlanSource = {
+            let (pct, calls) = (Arc::clone(&pct), Arc::clone(&calls));
+            Arc::new(move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                EnvPlanReport {
+                    account: Some(PlanAccount {
+                        key: "conta-a".into(),
+                        email: Some("fulano@example.com".into()),
+                        org_name: None,
+                        subscription_type: None,
+                    }),
+                    latest: Some(PlanReading {
+                        read_at: 1,
+                        five_hour: Some(PlanWindow {
+                            used_percentage: pct.load(Ordering::SeqCst) as f64,
+                            resets_at: i64::MAX,
+                        }),
+                        seven_day: None,
+                    }),
+                    ..Default::default()
+                }
+            })
+        };
+        let s = Arc::new(
+            HubSender::new(
+                a.env.sessions.clone(),
+                remote(&url, &tok),
+                Duration::from_secs(5),
+            )
+            .with_plan(source),
+        );
+        let stored = |hub: &SharedHub| {
+            hub.lock().list_env_plans().unwrap()[0]
+                .2
+                .latest
+                .unwrap()
+                .five_hour
+                .unwrap()
+                .used_percentage
+        };
+        push(&s).await.unwrap();
+        assert_eq!(stored(&hub), 10.0);
+        assert!(s.plan.lock().unwrap().pending.is_none());
+        // Dentro do prazo, nem remonta.
+        push(&s).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Remontado sem mudança: nada pendente.
+        s.plan.lock().unwrap().checked = None;
+        assert!(!s.refresh_plan());
+        // Mudou: vai no próximo envio.
+        pct.store(55, Ordering::SeqCst);
+        s.plan.lock().unwrap().checked = None;
+        push(&s).await.unwrap();
+        assert_eq!(stored(&hub), 55.0);
     }
 
     /// Dois ambientes e um `cthubd`: hub fora, mudanças esperam no outbox

@@ -55,7 +55,7 @@ export function deepLinkTab(search: string): OpenTab | null {
       return {
         screen: projectAt(
           { name: "project", owner, repo },
-          isPage(view) ? view : "items",
+          isPage(view) ? view : undefined,
           isSection(section) ? section : undefined,
         ),
       };

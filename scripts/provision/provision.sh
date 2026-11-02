@@ -342,6 +342,20 @@ install_env_bins() {
   fi
 }
 
+# Statusline do Claude Code no ambiente (#106): grava o uso de cada sessão
+# para o selo do plano. Idempotente; um statusLine que já exista passa a rodar
+# dentro do nosso, com a mesma saída. Falha aqui não interrompe o resto.
+install_statusline() {
+  local ctower="$BIN/ctower"
+  [[ -x $ctower ]] || ctower="$(command -v ctower || true)"
+  if [[ -z $ctower ]]; then
+    echo "ctower não encontrado; pulei o statusline (rode 'ctower statusline install' depois)." >&2
+    return 0
+  fi
+  "$ctower" statusline install --ctower-bin "$ctower" \
+    || echo "Aviso: não instalei o statusline; rode 'ctower statusline install' depois." >&2
+}
+
 # Porta do hub: `port` do config do cthubd, depois CTHUB_PORT, por fim 7879.
 hub_port() {
   local port
@@ -850,6 +864,7 @@ if [[ -f "$REPO/Cargo.toml" ]]; then
       ENV_SKIPPED=1
     else
       install_env_bins
+      install_statusline
       if [[ $WANT_HUB -eq 1 && $HUB_DEFERRED -eq 0 ]]; then
         link_local_env
         if [[ $WANT_DOCS -eq 1 ]]; then

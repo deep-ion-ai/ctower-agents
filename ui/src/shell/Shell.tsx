@@ -49,6 +49,7 @@ import { useMaintenancePending } from "../maintenance/pending";
 import { maintenanceTab } from "../maintenance/sections";
 import { WEB_HIDDEN_SCREENS } from "../web/mode";
 import { useWebSession } from "../web/WebGate";
+import { PlanStatusItem } from "../plan/PlanStatus";
 
 /** Comandos do shell para as telas (e para a paleta, #312). */
 export interface ShellApi {
@@ -754,6 +755,12 @@ function Resizer({ width, onWidth }: { width: number; onWidth(w: number): void }
   );
 }
 
+/** Ambiente ativo para o selo do plano: o do terminal ativo ou o do endereço da tela. */
+function activeEnv(nav: Nav): string | undefined {
+  if (nav.screen.name === "terminal") return nav.active?.env;
+  return "env" in nav.screen ? nav.screen.env : undefined;
+}
+
 function StatusBar({
   now,
   term,
@@ -836,6 +843,8 @@ function StatusBar({
           Remote Control
         </button>
       )}
+      {/* Plano da conta do ambiente ativo (#107). */}
+      <PlanStatusItem env={activeEnv(nav)} now={now} onOpen={() => nav.go({ name: "control" })} />
       <span className="sb-spacer" />
       {!web && uiUpdate?.available && (
         <button type="button" className="sb-item sb-update" onClick={() => nav.openTab(maintenanceTab("app-updates"))}>

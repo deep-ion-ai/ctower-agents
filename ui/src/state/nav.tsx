@@ -31,10 +31,10 @@ export type Screen =
       item?: ItemIntent;
       /**
        * Aba do projeto (#17): Visão geral, Itens, Sessões ou Configurações.
-       * Sem ela, Itens: é o que o endereço sem `view` mostrava antes (árvore
-       * e quadro), e os links de fora (Sala de controle, Hub, paleta, PWA)
-       * seguem caindo no mesmo lugar. Com `item`, vale Itens. Monte com
-       * `projectAt` (project/sections.ts), que tira `view` em Itens.
+       * Sem ela, a Visão geral (#99): abrir o projeto mostra estado,
+       * atribuições e sessões. Com `item`, vale Itens. Monte com `projectAt`
+       * (project/sections.ts), que tira `view` na Visão geral e põe
+       * `view: "items"` em Itens.
        */
       view?: ProjectPage;
       /** Seção das Configurações do projeto (só com `view: "settings"`); sem ela, Geral. */

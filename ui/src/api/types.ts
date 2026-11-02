@@ -2,6 +2,7 @@
 // do daemon ficam em ../protocol/gen, gerados dos tipos Rust.
 
 import type { SessionMode } from "../protocol/gen";
+import type { PlanPrefs } from "../plan/thresholds";
 
 /** Ambiente como a UI o vê: o token nunca vem para o JavaScript. */
 export interface EnvView {
@@ -132,6 +133,12 @@ export interface UiConfig {
   notify: NotifyPrefs;
   session: SessionDefaults;
   appearance: Appearance;
+  /**
+   * Alerta do plano da conta (#108): limiares por janela e por conta, prazo
+   * de leitura velha e a notificação. Ausente em arquivos antigos: os padrões
+   * (lido com `planPrefs`).
+   */
+  plan?: PlanPrefs;
 }
 
 /** Verificação de versão nova do app (src-tauri/src/updater.rs). */

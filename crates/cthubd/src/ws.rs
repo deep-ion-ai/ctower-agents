@@ -476,6 +476,44 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
     }
 }
 
+/// Resposta de `hub.plan.accounts` (issue #106).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HubPlanAccounts {
+    /// Uma por conta, com os ambientes que a usam e a regra do reset
+    /// aplicada em `now`.
+    pub accounts: Vec<ct_core::plan::AccountPlan>,
+    /// Ambientes com conta desconhecida (sem login, ou `claude auth status`
+    /// falhou): fora de qualquer agregado.
+    pub unknown: Vec<ct_core::plan::AccountEnv>,
+    /// Relógio do hub na resposta (ms).
+    pub now: i64,
+}
+
+/// `hub.plan.accounts`: agrupa os ambientes pela conta. Na web, e-mail e
+/// organização não saem do hub (a conta fica só com a chave opaca).
+fn plan_accounts(st: &HubState, web: bool) -> RpcResult {
+    let envs = st
+        .hub
+        .lock()
+        .list_env_plans()
+        .map_err(|e| (-32000, e.to_string()))?;
+    let now = ct_core::now_ms();
+    let (mut accounts, unknown) = ct_core::plan::group_accounts(envs, now);
+    if web {
+        for (i, a) in accounts.iter_mut().enumerate() {
+            a.account.email = None;
+            a.account.org_name = None;
+            a.account.key = format!("conta-{}", i + 1);
+        }
+    }
+    Ok(json!(HubPlanAccounts {
+        accounts,
+        unknown,
+        now,
+    }))
+}
+
 /// Resposta de `hub.web.sessions.revoke`.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -618,6 +656,7 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         }
         "github.status" | "github.set_token" | "github.clear_token" => github(st, method, &p).await,
         "hub.env.call" => env_call(st, p).await,
+        "hub.plan.accounts" => plan_accounts(st, web_session.is_some()),
         // Log do hub (#65): as últimas linhas, mascaradas.
         "hub.logs.tail" => ct_http::logs::rpc_tail(ct_http::logs::global(), &p).await,
         "hub.workitem.body" => workitem_body(st, p).await,
@@ -1767,6 +1806,7 @@ mod export {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/src/protocol/hub-gen");
         let _ = fs::remove_dir_all(&dir);
         HubInfo::export_all_to(&dir).unwrap();
+        HubPlanAccounts::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
         ProjectDeleted::export_all_to(&dir).unwrap();
@@ -1844,6 +1884,10 @@ pub(crate) mod tests {
     /// Chamada ao despacho do `/ws`, sem conexão (testes de outros módulos).
     pub(crate) async fn tests_call(st: &HubState, method: &str) -> Value {
         call(st, method, json!({}), None).await.unwrap()
+    }
+    /// Como [`tests_call`], numa conexão da web (`/web/ws`).
+    pub(crate) async fn tests_call_web(st: &HubState, method: &str) -> Value {
+        call(st, method, json!({}), Some("web-1")).await.unwrap()
     }
     use crate::router;
     use ct_core::WorkItemKind;

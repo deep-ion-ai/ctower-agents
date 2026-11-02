@@ -697,6 +697,10 @@ Cópias fora do destino (histórico de versões da pasta sincronizada, cópias �
 
 `env.info.hub_config` traz `linked` (há `hub_url` e `hub.token`), `config_rev` local, `pulled_at` e `age_ms` (idade do cache), `max_age_ms` e `stale` (limite `secrets_max_age_hours` e se ele passou), `last_error`, `failures` e `legacy_hub`.
 
+### Plano das contas (`hub.plan.accounts`)
+
+Cada ambiente informa, no envio, a conta do Claude Code (`claude auth status`), a saúde do statusline e a leitura mais recente das janelas do plano (docs/ambiente.md, "Uso do plano"). O hub agrupa os ambientes pela conta (`orgId` com `email`): vários ambientes na mesma conta viram uma conta só, e a leitura mais recente de qualquer um deles vale para todos. Contas diferentes nunca se misturam; ambiente sem login fica em `unknown`, fora dos agregados. `hub.plan.accounts` aplica a regra do reset no relógio do hub. Na UI web, a resposta não traz e-mail nem organização.
+
 ### Hub fora do ar
 
 Nada para: sessões, hooks e decisões gravam localmente e esperam no outbox, e o ambiente usa a última configuração em cache. Envio e pull tentam de novo com backoff até 5 min. `env.info` e a UI mostram as pendências, o `config_rev` local e a idade dele. O MCP `ledger_list_decisions` com escopo `epic`/`project` devolve as decisões locais com `partial: true` se o hub não responder.

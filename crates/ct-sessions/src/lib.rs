@@ -22,6 +22,7 @@ pub mod transcript_view;
 pub mod transcripts;
 pub mod trust;
 pub mod update;
+pub mod usage;
 
 pub use github::{GithubSync, ProjectSync};
 pub use gitlab::GitlabRemote;
@@ -40,6 +41,7 @@ pub use shell::{Shell, SHELL_LIMIT};
 pub use tracker_sync::{JiraGitlabSync, TrackerSyncConfig};
 pub use transcript_view::{ContextUsage, TranscriptEntry, TranscriptSource, TranscriptTail};
 pub use transcripts::TranscriptIntegrity;
+pub use usage::{SessionUsage, StatuslineInstall};
 
 use ct_ledger::Ledger;
 use ct_pty::PtySession;

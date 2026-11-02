@@ -2,7 +2,7 @@ import "./review.css";
 import { GESTOR_LABEL } from "../control-room/attention";
 import { changeLabel, changeLabels, changeRef, forgeLabel, isGitlabProject, itemRef, itemShort, PROJECT_ITEM } from "../util/item";
 import { useCallback, useEffect, useId, useState } from "react";
-import type { Decision, Marked, PrComment, Project, Review } from "../protocol/gen";
+import type { Decision, PrComment, Review } from "../protocol/gen";
 import type { HubHistory } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -10,29 +10,9 @@ import { Icon } from "../shell/icons";
 import { SideContent, SideGroup, SidePanel, SideRow } from "../shell/SidePanel";
 import { prUrl } from "../terminal/TerminalScreen";
 import { reviewKey, useReviewUi, useReviews, type ReviewFilter } from "./ui-store";
+import { entryName, markPr, markReviewed, openPr, projectEntries, useReviewEntries, type ReviewEntry } from "./entries";
 
-/** Item com decisões a revisar (ou em revisão), num ambiente. */
-interface Entry {
-  env: string;
-  workItemId: number;
-  /** Ausente no gestor (o sentinela fica fora de `projects`). */
-  project?: Project;
-  ghNumber?: number;
-  title: string;
-  gestor: boolean;
-  /** Pendentes: do `review.get` quando já lido; senão, do dashboard. */
-  count: number;
-  review?: Review;
-}
-
-const openPr = (r?: Review) => r?.prs.find((p) => p.state === "open");
-
-/** Nome do item: "#28 título", "Planejamento · projeto" ou o gestor. */
-function entryName(e: Pick<Entry, "gestor" | "ghNumber" | "title" | "project">): string {
-  if (e.gestor) return GESTOR_LABEL;
-  if (e.ghNumber === PROJECT_ITEM) return `Planejamento · ${e.project?.name ?? ""}`.trim();
-  return `${e.ghNumber !== undefined ? itemRef(e.ghNumber, e.project) : ""} ${e.title}`.trim();
-}
+type Entry = ReviewEntry;
 
 /**
  * Revisão das decisões autônomas antes do merge (spec §7.6), no modelo do
@@ -42,49 +22,18 @@ function entryName(e: Pick<Entry, "gestor" | "ghNumber" | "title" | "project">):
 export function ReviewScreen({ env, workItemId }: { env?: string; workItemId?: number }) {
   const { envs, status, dashboards, api } = useTower();
   const nav = useNav();
-  const [reviews, putReview] = useReviews();
 
   const connected = envs.filter((e) => status[e.id]?.connected).map((e) => e.id);
   const candidates: Entry[] = connected.flatMap((id) => {
     const d = dashboards[id];
     if (!d) return [];
-    const items: Entry[] = d.projects.flatMap((p) =>
-      p.work_items
-        .filter((w) => w.status === "em_revisao" || w.pending_decisions > 0)
-        .map((w) => ({
-          env: id,
-          workItemId: w.id,
-          project: p.project,
-          ghNumber: w.gh_number,
-          title: w.title ?? "",
-          gestor: false,
-          count: w.pending_decisions,
-        })),
-    );
+    const items = d.projects.flatMap((p) => projectEntries(id, p.project, p.work_items));
     if (d.gestor_work_item_id !== null)
       items.push({ env: id, workItemId: d.gestor_work_item_id, title: GESTOR_LABEL, gestor: true, count: 0 });
     return items;
   });
-  // Relê quando a lista ou os contadores do dashboard mudam.
-  const sig = candidates.map((c) => `${c.env}:${c.workItemId}:${c.count}`).join(",");
-
-  useEffect(() => {
-    for (const c of sig.split(",").filter(Boolean)) {
-      const [e, id] = c.split(":");
-      api.call<Review>(e, "review.get", { work_item_id: Number(id) }).then(
-        (r) => putReview(reviewKey(e, Number(id)), r),
-        () => {},
-      );
-    }
-  }, [api, sig, putReview]);
-
-  const entries = candidates
-    .map((c) => {
-      const review = reviews.get(reviewKey(c.env, c.workItemId));
-      return { ...c, review, count: review?.decisions.length ?? c.count };
-    })
-    // O gestor não tem contador no dashboard: só entra com decisões pendentes.
-    .filter((e) => !e.gestor || e.count > 0);
+  // O gestor não tem contador no dashboard: só entra com decisões pendentes.
+  const entries = useReviewEntries(api, candidates).entries.filter((e) => !e.gestor || e.count > 0);
   const withPr = entries.filter((e) => openPr(e.review));
   const noPr = entries.filter((e) => !openPr(e.review));
   // "PR", "MR" ou "PR/MR", conforme as forjas dos itens listados (#352).
@@ -219,7 +168,7 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
     void loadHistory();
   }, [loadHistory]);
 
-  const pr = openPr(review ?? undefined) ?? review?.prs[review.prs.length - 1];
+  const pr = markPr(review ?? undefined);
   const pending = review?.decisions ?? [];
   const n = pending.length;
   const guided = history?.decisions.filter((d) => d.origin === "orientada") ?? [];
@@ -241,11 +190,7 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
     if (!pr && !gestor) return;
     setBusy(true);
     try {
-      await api.call<Marked>(env, "review.mark_reviewed", {
-        work_item_id: workItemId,
-        ...(pr && !gestor ? { pr: pr.number } : {}),
-        ...(ids ? { decision_ids: ids } : {}),
-      });
+      await markReviewed(api, env, workItemId, { pr: pr && !gestor ? pr.number : undefined, ids });
       await load();
       await loadHistory();
     } catch (e) {

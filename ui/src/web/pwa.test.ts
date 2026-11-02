@@ -39,7 +39,7 @@ test("deep link: item, propostas, ambientes, dispositivos e desconhecido", () =>
 
 test("deep link do projeto numa aba e numa seção (#17)", () => {
   const base = { name: "project", owner: "deep-ion-ai", repo: "demo" };
-  // Sem `view` (ou desconhecida): Itens, o endereço de sempre.
+  // Sem `view` (ou desconhecida): a Visão geral (#99), o endereço do projeto sem `view`.
   expect(deepLinkTab("?go=project&project=deep-ion-ai/demo")).toEqual({ screen: base });
   expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=nova")).toEqual({ screen: base });
   expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=sessions")?.screen).toEqual({ ...base, view: "sessions" });
@@ -53,15 +53,14 @@ test("deep link do projeto numa aba e numa seção (#17)", () => {
     ...base,
     view: "settings",
   });
-  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=overview&section=rules")?.screen).toEqual({
-    ...base,
-    view: "overview",
-  });
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=overview&section=rules")?.screen).toEqual(base);
+  expect(deepLinkTab("?go=project&project=deep-ion-ai/demo&view=items")?.screen).toEqual({ ...base, view: "items" });
   // GitLab: o `owner` com barras (divide na última).
   expect(deepLinkTab("?go=project&project=grupo/sub/app&view=items")?.screen).toEqual({
     name: "project",
     owner: "grupo/sub",
     repo: "app",
+    view: "items",
   });
   expect(deepLinkTab("?go=project&project=sem-barra")).toBeNull();
   expect(deepLinkTab("?go=project")).toBeNull();

@@ -42,7 +42,7 @@ Anote o resultado de cada passo (ok / falhou + o que apareceu) e cole no PR.
 4. Peça outro comando e clique **Sempre nesta sessão**. Peça o mesmo comando de novo. **Esperado:** na segunda vez não há pedido.
 5. Peça outro comando e clique **Responder no terminal**. **Esperado:** a faixa some, o foco vai para o console e o menu do Claude Code aparece no xterm; responda nele.
 6. Peça outro comando e não responda. **Esperado:** depois de 2 min a faixa some sozinha e o menu aparece no xterm. Com o app fechado, o menu aparece na hora.
-7. Barra de status: com a sessão ativa, **Esperado:** "Contexto N% · Xk/200k", atualizado ao fim de cada resposta.
+7. Barra de status: com a sessão ativa, **Esperado:** "Contexto N% · Xk/200k", atualizado ao fim de cada resposta. Com o statusline do Control Tower no ambiente (#110), a janela é a real da sessão (ex.: "Xk/1M" num modelo de 1M sem `[1m]` no alias).
 8. Redimensione a janela. **Esperado:** o terminal acompanha o tamanho, sem quebrar o desenho do Claude Code.
 
 ## 5. Queda do daemon e reconexão
@@ -171,6 +171,7 @@ Rode no Windows (WSL) e no macOS com o Mac mini remoto.
 10. **Janela estreita:** diminua a janela (ou abra o painel lateral largo) até o console ficar com menos de ~480 px (dois consoles abaixo de ~400 px cada no split). **Esperado:** o painel passa a ficar por cima do console, com sombra, e o PTY não muda de largura.
 11. **Sessão do projeto (#0):** sem a seção PR; a pasta é o clone principal (com o aviso), e as decisões e eventos são os do #0. No gestor, só Decisões e Eventos.
 12. Abra um shell no worktree (aba de shell) com o painel aberto. **Esperado:** o painel some na aba do shell e volta ao voltar para a sessão.
+13. **Sessão (#110):** com o statusline instalado no ambiente, o topo do painel mostra **Sessão**: modelo e esforço, contexto (% e tokens na janela real), custo "(estimativa)" e duração, cache de prompt (acerto e validade) e **Plano da conta <e-mail>** com 5h e Semanal ("N% · renova HH:MM"). Janela que já passou do reset mostra "renovada … aguardando nova leitura", sem percentual. Na web, "Plano da conta" sem o nome. Sem o statusline, só modelo e contexto do transcript. Numa sessão parada ou encerrada, "Última leitura há …".
 
 ### 10.5 Muitas abas e sessão do projeto (#427)
 
@@ -290,3 +291,43 @@ Pré-requisito: um ambiente conectado com um projeto do GitHub (com ou sem o hub
 5. Corrija a causa e sincronize. **Esperado:** na primeira rodada bem-sucedida o aviso, o selo e o "falhando" somem, e volta o "Último sync".
 6. Web (PWA). **Esperado:** **Sincronizar este projeto** no cabeçalho, no menu da lista de **Projetos** e na paleta aparecem desabilitados, com "Buscar issues fica no app desktop" (ou "Fica no app desktop" no menu e na paleta); o estado do sync e os avisos aparecem igual.
 7. Compatibilidade: com um ambiente ainda na versão anterior, **Esperado:** só "Último sync", sem "falhando", selo nem aviso de ciclos (o "Sync atrasado" de antes continua).
+
+## 19. Selo do plano da conta (#107)
+
+Pré-requisito: um ambiente com o statusline instalado (`ctower statusline install`, docs/ambiente.md, "Uso do plano") e logado no Claude Code; uma sessão interativa que já respondeu ao menos uma vez.
+
+1. Barra de status, com uma sessão ativa no Terminal (ou numa tela de um ambiente). **Esperado:** o selo da conta do ambiente, "5h 72% · libera às 14:30 · sem. 64% · atualizado há X min", com o ponto verde. A dica mostra a conta, as duas janelas com o reset e diz que o percentual é da conta toda, não do projeto. Sem ambiente ativo (Sala de controle, Hub), o selo aparece se houver só uma conta. Clicar no selo abre a Sala de controle.
+2. Tom. **Esperado:** a partir de 80% numa janela, o selo fica em aviso (laranja); a partir de 95%, crítico (vermelho). Com limiares mudados (seção 21), valem os da conta.
+3. Sala de controle, painel lateral, grupo **Plano das contas**. **Esperado:** cada conta uma vez (pelo e-mail ou organização), com "5h: N% · libera às HH:MM", "Semanal: N% · libera em DD/MM às HH:MM", "atualizado há X min" e os ambientes que a usam. Dois ambientes na mesma conta aparecem sob a mesma conta, com o mesmo selo.
+4. Responda na sessão. **Esperado:** o selo e a lista se atualizam sozinhos, sem recarregar (com hub, em até uns 6 s, depois do envio do ambiente).
+5. Espere passar o reset da janela de 5h sem usar a conta. **Esperado:** "5h renovada às HH:MM · sem leitura nova", sem o percentual antigo, até a próxima resposta.
+6. Ambiente sem login no Claude Code. **Esperado:** em **Plano das contas**, "Conta desconhecida" com a explicação e o ambiente, sem selo; na barra, "Plano: conta desconhecida". Ambiente sem o statusline (ou desatualizado): "statusline não instalado: sem leitura do plano" e o botão **Instalar statusline** (só no desktop, com o ambiente conectado).
+7. Nenhuma sessão gravou uso ainda. **Esperado:** "sem leitura do plano", sem número.
+8. Web (PWA). **Esperado:** o mesmo selo e a mesma lista, com o que o hub tem; sem e-mail, cada conta aparece como "Conta de <ambientes>"; sem o botão de instalar.
+
+## 20. Uso por sessão (#109)
+
+Pré-requisito: o mesmo da seção 19, com algumas sessões vivas (de preferência em dois ambientes, um deles numa conta diferente ou sem login).
+
+1. Sala de controle, painel lateral, **Visões** → **Uso por sessão**. **Esperado:** o título "Uso por sessão" e um grupo por conta, com o selo da conta no cabeçalho ("5h N% · libera às HH:MM · sem. N%") e "Ambientes: …". Em cada linha: o estado ("aguardando você", "rodando" ou "parada no turno"), o projeto e o item, o **custo estimado** ("US$ 1,50 (estimativa)"; a dica da coluna diz que não é a cobrança), o **contexto** em % da janela real ("42% de 200k"), **Parada há** (desde o último evento; "rodando" para a que está em andamento) e o modelo com o esforço. Clicar na sessão abre o terminal dela. Com mais de um ambiente, a linha diz o ambiente.
+2. **Ordenar por**: **Custo estimado** (padrão) põe a mais cara no topo de cada grupo; **Tempo parada**, a parada há mais tempo. Sessões sem número (sem leitura, ou rodando) ficam no fim.
+3. Sessão de ambiente sem o statusline (ou que ainda não respondeu). **Esperado:** "sem leitura" no custo e no contexto, sem número.
+4. Ambiente sem login no Claude Code. **Esperado:** as sessões dele no grupo **Conta desconhecida**, no fim, com a explicação e sem selo.
+5. Responda numa sessão. **Esperado:** o custo e o contexto dela se atualizam sozinhos em até uns 2 s (sem reler as outras); as demais se atualizam a cada 30 s.
+6. Web (PWA). **Esperado:** a mesma visão, com a leitura pelo canal do hub; a conta aparece como "Conta de <ambientes>".
+
+## 21. Alerta do plano e confirmação ao iniciar sessão (#108)
+
+Pré-requisito: o da seção 19. Para forçar os níveis sem gastar a conta, baixe os limiares (passo 1).
+
+1. Configurações › Este app › **Plano da conta** › **Limiares padrão**. **Esperado:** aviso 80 e crítico 95 nas janelas de 5h e semanal. Ponha aviso 96 com crítico 95: "O aviso precisa ser menor que o crítico.", nada gravado; 0 ou 101: "Use números inteiros de 1 a 100.". Um valor válido grava ao sair do campo (ou Enter), e o selo muda de tom na hora.
+2. **Limiares por conta**. **Esperado:** cada conta conhecida, "usa o padrão". Marcada, ganha limiares próprios (a partir do padrão), que valem para todos os ambientes dela; desmarcada, volta ao padrão. Conta configurada que sumiu aparece com **Remover**.
+3. Baixe o aviso para abaixo do uso atual da janela de 5h e responda numa sessão. **Esperado:** uma notificação do sistema, "Plano da conta perto do limite", com a conta, o percentual e o horário de reset. Responda de novo, ou reabra o app: nenhuma notificação nova. Baixe o crítico também: uma notificação "Plano da conta quase esgotado".
+4. Dois ambientes na mesma conta, sessões nos dois. **Esperado:** uma notificação por cruzamento, não uma por ambiente.
+5. Configurações › Este app › Notificações › **Plano da conta**, desmarcado. **Esperado:** o selo muda de tom, sem notificação.
+6. **Leitura velha demais** (padrão 60 min): ponha 1 e espere 2 min sem usar a conta. **Esperado:** o selo mostra o número sem o tom de aviso, nada notifica e a modal de início não pede confirmação. Janela já renovada também não alerta.
+7. Iniciar sessão (▶ numa issue ou "Iniciar sessão de planejamento") com a conta no aviso. **Esperado:** "Uso do plano da conta" com o selo do ambiente e, antes do botão, "Conta …: janela de 5h em N%, libera às HH:MM. A janela está perto do limite."; **Iniciar sessão** inicia direto.
+8. A mesma modal com a conta no crítico. **Esperado:** o aviso em vermelho, "iniciar pede confirmação"; **Iniciar sessão** (ou Ctrl/⌘+Enter) troca o rodapé por "Janela do plano quase esgotada. Iniciar mesmo assim?" com **Voltar** e **Iniciar mesmo assim**; só este último inicia. Trocar o ambiente desfaz o passo.
+9. Projeto atribuído a ambientes de contas diferentes (visão do hub). **Esperado:** a lista "Uso do plano da conta por ambiente" mostra a conta e o uso de cada ambiente; clicar numa linha escolhe o ambiente, e o aviso passa a ser o da conta dele.
+10. Reiniciar o gestor de projetos com a conta no crítico. **Esperado:** o mesmo aviso e a mesma confirmação.
+11. Web (PWA). **Esperado:** os limiares em Configurações › Plano da conta (guardados no navegador); a notificação só com a permissão de notificação já dada.

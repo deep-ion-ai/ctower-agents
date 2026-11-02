@@ -179,7 +179,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(
             HubSender::new(sessions.clone(), t, HUB_TIMEOUT)
                 .with_config(config)
-                .with_retention_days(cfg.retention_days),
+                .with_retention_days(cfg.retention_days)
+                .with_plan({
+                    let s = sessions.clone();
+                    Arc::new(move || ct_server::plan::report(&s, ct_core::now_ms()))
+                }),
         )
     });
     if let Some(s) = &hub_sender {

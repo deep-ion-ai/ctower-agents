@@ -39,6 +39,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "recovery.archived",
   "transcript.tail",
   "session.context",
+  "session.usage",
   "session.get",
   "session.start",
   "session.start_project",
@@ -424,6 +425,19 @@ export class WebDaemonApi implements DaemonApi, WebAuth {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 0);
     return Promise.resolve(null);
+  }
+
+  // Notificação do alerta do plano (#108): só com a permissão já dada (a
+  // inscrição da PWA pede); pelo service worker, que funciona no celular.
+  async notify(title: string, body: string): Promise<void> {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      if (reg) await reg.showNotification(title, { body });
+      else new Notification(title, { body });
+    } catch {
+      // sem notificação: o selo e a modal de início já mostram o alerta
+    }
   }
 
   // Preferências da web no navegador (tema, telas), nada sensível.

@@ -3,6 +3,7 @@ import type { DocsStatus } from "./DocsStatus";
 import type { HubConfigStatus } from "./HubConfigStatus";
 import type { HubSyncStatus } from "./HubSyncStatus";
 import type { RemoteControlStatus } from "./RemoteControlStatus";
+import type { StatuslineHealth } from "./StatuslineHealth";
 import type { TrackerReadiness } from "./TrackerReadiness";
 import type { UpdateStatus } from "./UpdateStatus";
 
@@ -55,4 +56,9 @@ remote_control: RemoteControlStatus,
  * Pasta de docs dos projetos (#440): `docs_root` e se está acessível
  * agora (a montagem do compartilhamento pode ter caído).
  */
-docs: DocsStatus, };
+docs: DocsStatus, 
+/**
+ * Statusline do Claude Code no ambiente (#106): instalado, versão e se
+ * encadeia um de terceiros. Ausente = ambiente anterior à #106.
+ */
+statusline?: StatuslineHealth, };
