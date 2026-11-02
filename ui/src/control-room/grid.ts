@@ -48,5 +48,8 @@ export function useGridPrefs(): [GridPrefs, (p: Partial<GridPrefs>) => void] {
   return [prefs, set];
 }
 
-/** Visões do painel lateral; `null` = tudo (faixa, grade e o fim do dia). */
-export type ControlView = "attention" | "running" | "done";
+/**
+ * Visões do painel lateral; `null` = tudo (faixa, grade e o fim do dia).
+ * `usage`: a visão por sessão, agrupada por conta (#109).
+ */
+export type ControlView = "attention" | "running" | "done" | "usage";

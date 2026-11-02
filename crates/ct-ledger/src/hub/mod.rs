@@ -605,6 +605,12 @@ ALTER TABLE issue_cache ADD COLUMN meta TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE sync_state ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
 "#,
+    // 28: relatório do plano da conta que cada ambiente informa ao enviar
+    // (issue #106): conta, statusline e leitura mais recente, em JSON
+    // (`ct_core::plan::EnvPlanReport`). Nulo = o ambiente nunca informou.
+    r#"
+ALTER TABLE env ADD COLUMN plan_report TEXT;
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1915,6 +1921,34 @@ impl Hub {
             params![env_id, c.checked_at, c.items.max(0), c.bytes.max(0)],
         )?;
         Ok(())
+    }
+
+    /// Guarda o último relatório do plano do ambiente (issue #106).
+    pub fn set_env_plan(&self, env_id: &str, report: &ct_core::plan::EnvPlanReport) -> Result<()> {
+        let json = serde_json::to_string(report).expect("EnvPlanReport serializa");
+        self.conn.execute(
+            "UPDATE env SET plan_report = ?2 WHERE env_id = ?1",
+            params![env_id, json],
+        )?;
+        Ok(())
+    }
+
+    /// Relatórios do plano dos ambientes que já informaram: `(env_id, nome,
+    /// relatório)`. Um JSON ilegível conta como conta desconhecida.
+    pub fn list_env_plans(&self) -> Result<Vec<(String, String, ct_core::plan::EnvPlanReport)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT env_id, name, plan_report FROM env
+             WHERE plan_report IS NOT NULL AND env_id IS NOT NULL ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let raw: String = r.get(2)?;
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                serde_json::from_str(&raw).unwrap_or_default(),
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Revisão da configuração (`hub_meta.config_rev`, spec do hub como
@@ -4640,7 +4674,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 27);
+        assert_eq!(v, 28);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

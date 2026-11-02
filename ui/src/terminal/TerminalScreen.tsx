@@ -38,7 +38,8 @@ import {
   vscodePath,
   type SessionActionId,
 } from "./actions";
-import { contextText, contextWindow, useContextUsage } from "./context";
+import { contextText, contextTokens, contextWindow, useContextUsage } from "./context";
+import { useSessionUsage } from "./usage";
 import { ContextPanel, loadContextOpen, saveContextOpen } from "./ContextPanel";
 import { permissionText, remaining } from "./permission";
 import { findPrompt, PERMISSION_PENDING, promptBlocked, renderPrompt, sendReadyPrompt } from "./prompts";
@@ -202,8 +203,15 @@ export function TerminalScreen() {
   // Uso de contexto: só da sessão viva (a encerrada não muda mais).
   const activeLive =
     !!activeSession && !!dashboards[activeSession.env]?.live_sessions.some((x) => x.id === activeSession.session);
-  const usage = useContextUsage(api, activeLive ? activeSession.env : null, activeLive ? activeSession.session : null);
-  const context = usage ? contextText(usage.tokens, contextWindow(activeInfo?.s?.model ?? usage.model)) : null;
+  const usageEnv = activeLive ? activeSession.env : null;
+  const usageSession = activeLive ? activeSession.session : null;
+  const usage = useContextUsage(api, usageEnv, usageSession);
+  // Leitura do statusline (#110): a janela real; sem ela, o palpite pelo alias.
+  const { usage: reading } = useSessionUsage(api, usageEnv, usageSession, { poll: true });
+  const context =
+    usage || reading
+      ? contextText(contextTokens(usage, reading), contextWindow(activeInfo?.s?.model ?? usage?.model, reading))
+      : null;
   const activeRc = activeSession ? rcView(activeInfo?.s, undefined, 0) : null;
   const remote = activeRc?.kind === "on" ? activeRc.url : null;
   const { setTermStatus } = shell;

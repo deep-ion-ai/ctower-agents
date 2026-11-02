@@ -77,6 +77,16 @@ O laço do GitHub pula os projetos com rastreador Jira: as issues deles vêm do 
 
 O repositório dos projetos Jira fica no GitLab (self-hosted, HTTPS ou SSH). O clone é um `git clone` da URL do cadastro com a credencial do git do ambiente (credential helper, como o `osxkeychain`, ou a chave SSH), sem pedir senha (`GIT_TERMINAL_PROMPT=0`); se a credencial não responder a partir do daemon, o relato da atribuição sai com erro e o comando para clonar à mão. Um clone existente vale se o `origin` for o mesmo host e caminho, em HTTPS ou SSH. No mesmo ciclo do Jira, o daemon roda o comando de credencial do GitLab e chama o [glab](https://gitlab.com/gitlab-org/cli) com `GITLAB_HOST` do cadastro e `GITLAB_TOKEN` só no ambiente do processo, sem ler nem alterar a configuração global do glab: `glab version` e `glab api version` na prontidão (`env.info.trackers[].gitlab`) e `glab mr list -R <caminho> --all -s <branch> -F json` para cada work item em andamento. MR aberto leva a `em_revisao` e mesclado a `concluido`, como o PR; a limpeza apaga a branch remota no GitLab (`glab api -X DELETE`) só se a ponta for o último commit do MR. O guarda-corpo bloqueia sempre o `glab mr merge` e o merge pelo `glab api`.
 
+### Uso do plano (statusline do Claude Code)
+
+O provisionamento registra `ctower statusline --v <n>` como `statusLine` no `settings.json` da pasta de configuração do Claude Code do ambiente (`CLAUDE_CONFIG_DIR` ou `~/.claude`). Para instalar ou atualizar à mão: `ctower statusline install`. Rodar de novo não muda nada; se já havia um `statusLine` de outra origem, ele passa a rodar dentro do nosso (fica em `~/.config/ctower/statusline-chain.json`) e a saída dele continua aparecendo.
+
+A cada atualização de uma sessão interativa (do Control Tower ou aberta direto no terminal), o comando grava `~/.local/share/ctower/usage/<session_id>.json` (0600) só com os campos de uso: modelo, esforço, custo estimado pelo cliente, janela de contexto, cache de prompt e as janelas do plano (5h e semanal). Ficam de fora a pasta de trabalho, o transcript e os dados do repositório. Arquivos sem atualização há 30 dias são apagados. O statusline não roda em `claude -p`.
+
+O `ctowerd` lê a conta do ambiente com `claude auth status` (relida a cada 5 minutos) e expõe `session.usage` (última leitura da sessão, ou `null`), `account.get` (conta, saúde do statusline e o plano pelas sessões do ambiente) e `env.statusline.install`. O `env.info` traz a saúde do statusline (instalado, versão, se encadeia outro). Ligado a um hub, o ambiente envia a conta e a leitura mais recente quando mudam; o hub agrupa os ambientes pela conta em `hub.plan.accounts` (docs/hub.md).
+
+Regra do reset: com `agora >= resets_at`, a janela já renovou; o percentual antigo não é mostrado nem usado em alerta até chegar leitura nova.
+
 ## Diagnóstico
 
 Diagnóstico: `ctower status`; reiniciar com sessões vivas exige `ctower restart --force`.

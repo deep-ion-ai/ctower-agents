@@ -65,6 +65,9 @@ pub(crate) async fn push(State(st): State<HubState>, headers: HeaderMap, body: B
         if let Some(c) = &req.cleanup {
             hub.set_env_cleanup(&req.env_id, c)?;
         }
+        if let Some(p) = &req.plan {
+            hub.set_env_plan(&req.env_id, p)?;
+        }
         if r.quarantined > 0 {
             tracing::warn!(
                 "push de {}: {} linha(s) em quarentena de projeto(s) não cadastrado(s) no hub: {} \
@@ -550,6 +553,41 @@ mod tests {
                 items: 4,
                 bytes: 5_000_000_000
             })
+        );
+
+        // Plano da conta (issue #106): guardado a cada envio que o traz; um
+        // lote sem o campo mantém o último.
+        let plano = json!({ "env_id": l.env_id(), "entries": [], "pending": 0,
+            "plan": {
+                "account": { "key": "conta-a/fulano@example.com", "email": "fulano@example.com",
+                             "org_name": "Acme", "subscription_type": "max" },
+                "statusline": { "installed": true, "version": 1, "current": 1, "chained": false },
+                "latest": { "read_at": 1_000,
+                    "five_hour": { "used_percentage": 72.0, "resets_at": 4_102_444_800_000i64 } }
+            } });
+        let (s, v) = post(&st, "/sync/push", Some(&tok), plano).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let sem = json!({ "env_id": l.env_id(), "entries": [], "pending": 0 });
+        let (s, _) = post(&st, "/sync/push", Some(&tok), sem).await;
+        assert_eq!(s, StatusCode::OK);
+        let v = crate::ws::tests::tests_call(&st, "hub.plan.accounts").await;
+        assert_eq!(v["accounts"].as_array().unwrap().len(), 1, "{v}");
+        assert_eq!(v["accounts"][0]["account"]["email"], "fulano@example.com");
+        assert_eq!(v["accounts"][0]["envs"][0]["name"], "wsl");
+        assert_eq!(v["accounts"][0]["plan"]["five_hour"]["state"], "ok");
+        assert_eq!(
+            v["accounts"][0]["plan"]["five_hour"]["used_percentage"],
+            72.0
+        );
+        assert_eq!(v["accounts"][0]["plan"]["seven_day"]["state"], "none");
+        assert_eq!(v["unknown"], json!([]));
+        // Na web, nem e-mail nem organização.
+        let v = crate::ws::tests::tests_call_web(&st, "hub.plan.accounts").await;
+        assert!(!v.to_string().contains("example.com"), "{v}");
+        assert!(!v.to_string().contains("Acme"), "{v}");
+        assert_eq!(
+            v["accounts"][0]["plan"]["five_hour"]["used_percentage"],
+            72.0
         );
 
         let q = |n: i64| json!({ "owner": "deep-ion-ai", "repo": "demo", "number": n, "scope": "project" });

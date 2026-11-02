@@ -575,3 +575,18 @@ input.set-input-num {
 .set-input.tabc-hex {
   width: 9ch;
 }
+
+/* Plano da conta (#108): aviso e crítico por janela. */
+.plan-thresholds .set-inline {
+  flex-wrap: wrap;
+}
+
+.plan-thr-name {
+  min-width: 120px;
+}
+
+.plan-thr-account {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

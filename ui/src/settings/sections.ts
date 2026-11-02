@@ -15,6 +15,8 @@ export type SettingsSection =
   | "appearance"
   | "terminal"
   | "notifications"
+  /** Alerta do plano da conta (#108): limiares, leitura velha. */
+  | "plan"
   /** Só na web (#201): a sessão web deste navegador e o botão de sair. */
   | "web-access"
   // Ambiente
@@ -31,6 +33,7 @@ export const SECTION_LABEL: Record<SettingsSection, string> = {
   appearance: "Aparência",
   terminal: "Terminal",
   notifications: "Notificações",
+  plan: "Plano da conta",
   "web-access": "Acesso web",
   github: "GitHub",
   "daemon-update": "Atualização do daemon",
@@ -41,7 +44,7 @@ export const SECTION_LABEL: Record<SettingsSection, string> = {
 /** Seções de cada escopo, na ordem do índice. */
 export const SCOPE_SECTIONS: Record<SettingsScope, SettingsSection[]> = {
   // As atualizações do app ficam em Manutenção › Atualizações › Este app (#336).
-  app: ["connections", "sessions", "appearance", "terminal", "notifications", "web-access"],
+  app: ["connections", "sessions", "appearance", "terminal", "notifications", "plan", "web-access"],
   // A Limpeza fica só em Manutenção › Limpeza (#22): aqui, um atalho em Projetos locais.
   env: ["github", "daemon-update", "local-projects", "env-notifications"],
 };
@@ -80,6 +83,7 @@ const KEYWORDS: Record<SettingsSection, string> = {
   appearance: "tema claro escuro sistema cores dark light abas texto fundo hex",
   terminal: "fonte tamanho zoom console",
   notifications: "avisos aguardando erro desconectado",
+  plan: "limiar limiares aviso crítico uso 5h semanal conta alerta leitura velha statusline",
   "web-access": "sair logout sessão web navegador cookie revogar",
   github: "token gh sync sincronização intervalo",
   "daemon-update": "update_ref canal intervalo update_check_interval_hours versão atualizar rollback",

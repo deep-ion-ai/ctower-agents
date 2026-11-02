@@ -50,6 +50,8 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.proposals.decide",
     "hub.dashboard.get",
     "hub.envs.list",
+    // Plano das contas (#106): na web, sem e-mail nem organização.
+    "hub.plan.accounts",
     // Regras do agente (épico #353): só a leitura, que a UI web mostra no
     // projeto e no épico; editar, importar e decidir propostas ficam fora.
     "hub.rules.get",

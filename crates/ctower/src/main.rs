@@ -6,6 +6,7 @@ mod hook;
 mod hub;
 mod secrets;
 mod status;
+mod statusline;
 mod update;
 
 use clap::{Parser, Subcommand};
@@ -66,10 +67,34 @@ enum Cmd {
         #[arg(long, value_name = "owner/repo")]
         repo: Option<String>,
     },
+    /// Statusline do Claude Code: grava o uso da sessão (lê o JSON no stdin).
+    /// `ctower statusline install` o registra no ambiente.
+    Statusline {
+        /// Versão do registro (vem no comando instalado).
+        #[arg(long = "v", hide = true)]
+        v: Option<u32>,
+        #[command(subcommand)]
+        cmd: Option<StatuslineCmd>,
+    },
     /// Secrets e variáveis entregues pelo hub a este ambiente.
     Secrets {
         #[command(subcommand)]
         cmd: SecretsCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum StatuslineCmd {
+    /// Registra o statusline no settings.json do Claude Code do ambiente
+    /// (idempotente; um statusLine de terceiros passa a rodar dentro dele).
+    Install {
+        /// Pasta de configuração do Claude Code (padrão: CLAUDE_CONFIG_DIR
+        /// ou ~/.claude).
+        #[arg(long)]
+        claude_dir: Option<std::path::PathBuf>,
+        /// Caminho do ctower no comando registrado (padrão: este binário).
+        #[arg(long)]
+        ctower_bin: Option<String>,
     },
 }
 
@@ -138,6 +163,13 @@ fn main() {
             item,
             repo,
         } => clean::clean(dry_run, item, repo),
+        Cmd::Statusline { v: _, cmd } => match cmd {
+            None => std::panic::catch_unwind(statusline::run).unwrap_or(0),
+            Some(StatuslineCmd::Install {
+                claude_dir,
+                ctower_bin,
+            }) => statusline::install(claude_dir, ctower_bin),
+        },
         Cmd::Secrets { cmd } => match cmd {
             SecretsCmd::RotateEnvKey => secrets::rotate_env_key(),
         },

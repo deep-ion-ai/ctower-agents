@@ -24,6 +24,7 @@ test("lugares da web: sem Terminal, Manutenção, Segurança do Hub nem as Confi
   ]);
   expect(SETTINGS_PLACES.filter(placeOnWeb).map((p) => webPlaceLabel(p.label))).toEqual([
     "Configurações › Aparência",
+    "Configurações › Plano da conta",
     "Configurações › Acesso web",
   ]);
 });

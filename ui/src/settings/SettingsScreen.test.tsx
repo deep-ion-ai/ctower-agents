@@ -733,3 +733,55 @@ test("cores das abas (#73): ui.json antigo sem `tabs` abre vazio e trocar o tema
   expect(within(sec).getByLabelText("Texto de Shell (HEX)")).toHaveValue("");
   await waitFor(() => expect(document.documentElement.style.getPropertyValue("--tab-shell-fg")).toBe(""));
 });
+
+test("Plano da conta (#108): limiares padrão e por conta com validação, prazo de leitura e notificação", async () => {
+  const { api, user } = setup();
+  api.on("account.get", {
+    account: { key: "conta-a", email: "fulano@example.com", org_name: null, subscription_type: "max" },
+    statusline: null,
+    plan: { five_hour: { state: "none" }, seven_day: { state: "none" }, read_at: null },
+    latest: null,
+    now: NOW,
+  });
+  const padrao = await screen.findByRole("region", { name: "Plano da conta: Limiares padrão" });
+  const aviso5h = within(padrao).getByLabelText("Padrão: Janela de 5h, aviso (%)");
+  const critico5h = within(padrao).getByLabelText("Padrão: Janela de 5h, crítico (%)");
+  expect(aviso5h).toHaveValue(80);
+  expect(critico5h).toHaveValue(95);
+  // Aviso >= crítico: erro, nada gravado.
+  await user.clear(aviso5h);
+  await user.type(aviso5h, "96");
+  await user.tab();
+  expect(within(padrao).getByRole("alert")).toHaveTextContent("O aviso precisa ser menor que o crítico.");
+  expect(api.uiConfig.plan).toBeUndefined();
+  // Fora de 1 a 100.
+  await user.clear(aviso5h);
+  await user.type(aviso5h, "0");
+  expect(within(padrao).getByRole("alert")).toHaveTextContent("Use números inteiros de 1 a 100.");
+  await user.clear(aviso5h);
+  await user.type(aviso5h, "70{Enter}");
+  await waitFor(() => expect(api.uiConfig.plan?.default.five_hour).toEqual({ warn: 70, critical: 95 }));
+  expect(api.uiConfig.plan?.default.seven_day).toEqual({ warn: 80, critical: 95 });
+
+  // Por conta: a conta conhecida, com limiares próprios a partir do padrão.
+  const contas = screen.getByRole("region", { name: "Plano da conta: Limiares por conta" });
+  const own = await within(contas).findByRole("checkbox", { name: /fulano@example.com/ });
+  await user.click(own);
+  await waitFor(() => expect(api.uiConfig.plan?.accounts["conta-a"]?.five_hour).toEqual({ warn: 70, critical: 95 }));
+  const sem = within(contas).getByLabelText("fulano@example.com: Janela semanal, crítico (%)");
+  await user.clear(sem);
+  await user.type(sem, "90");
+  await user.tab();
+  await waitFor(() => expect(api.uiConfig.plan?.accounts["conta-a"]?.seven_day).toEqual({ warn: 80, critical: 90 }));
+
+  // Prazo da leitura velha demais.
+  const prazo = screen.getByLabelText("Leitura velha demais (min)");
+  await user.clear(prazo);
+  await user.type(prazo, "30{Enter}");
+  await waitFor(() => expect(api.uiConfig.plan?.stale_minutes).toBe(30));
+
+  // Notificação, na seção Notificações.
+  const notif = screen.getByRole("region", { name: "Notificações: Plano da conta" });
+  await user.click(within(notif).getByRole("checkbox", { name: /Plano da conta perto do limite/ }));
+  await waitFor(() => expect(api.uiConfig.plan?.notify).toBe(false));
+});

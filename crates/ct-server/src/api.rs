@@ -42,6 +42,11 @@ pub struct EnvInfo {
     /// Pasta de docs dos projetos (#440): `docs_root` e se está acessível
     /// agora (a montagem do compartilhamento pode ter caído).
     pub docs: ct_sessions::docs::DocsStatus,
+    /// Statusline do Claude Code no ambiente (#106): instalado, versão e se
+    /// encadeia um de terceiros. Ausente = ambiente anterior à #106.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub statusline: Option<ct_core::plan::StatuslineHealth>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,6 +147,10 @@ mod export {
         ct_sessions::ArchivedItem::export_all_to(&dir).unwrap();
         ct_sessions::TranscriptTail::export_all_to(&dir).unwrap();
         ct_sessions::ContextUsage::export_all_to(&dir).unwrap();
+        // Uso por sessão e plano da conta (#106).
+        ct_sessions::SessionUsage::export_all_to(&dir).unwrap();
+        ct_sessions::StatuslineInstall::export_all_to(&dir).unwrap();
+        crate::plan::EnvAccount::export_all_to(&dir).unwrap();
         ct_sessions::ProjectSync::export_all_to(&dir).unwrap();
         ct_sessions::GestorScope::export_all_to(&dir).unwrap();
         ct_sessions::RemoteControlEnable::export_all_to(&dir).unwrap();
