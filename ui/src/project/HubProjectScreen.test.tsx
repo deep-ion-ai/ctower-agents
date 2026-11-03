@@ -710,6 +710,15 @@ test("abas do projeto (#17): sem `view`, Visão geral (#99); cada aba troca o en
   );
   const ints = screen.getByRole("list", { name: "Interrompidas em WSL" });
   expect(ints).toHaveTextContent("processo perdido");
+  // Descartar ao lado (#138): a confirmação, e só então o `session.archive`.
+  api.on("session.archive", {});
+  await user.click(within(ints).getByRole("button", { name: "Descartar: #62 Item 62" }));
+  const dlg = await screen.findByRole("alertdialog", { name: "Descartar a sessão?" });
+  expect(dlg).toHaveTextContent("#62 Item 62");
+  expect(api.callsTo("session.archive")).toHaveLength(0);
+  await user.click(within(dlg).getByRole("button", { name: "Descartar" }));
+  await waitFor(() => expect(api.callsTo("session.archive")[0].params).toEqual({ session_id: INT62.id }));
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   await user.click(within(ints).getByRole("button", { name: "Abrir na Recuperação: #62 Item 62" }));
   expect(await screen.findByRole("tab", { name: /Recuperação/, selected: true })).toBeInTheDocument();
 

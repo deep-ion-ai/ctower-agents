@@ -791,3 +791,42 @@ test("metadados do tracker na tela local (tree.get): 'No GitHub', mesmo com o hu
   // Sem o histórico do hub não há lateral: o cartão fica sozinho na área dele.
   expect(card.parentElement).not.toHaveClass("iv-has-side");
 });
+
+test("sessão interrompida no histórico (#138): recuperar e descartar daqui, com o item de volta ao backlog", async () => {
+  const STOP_ID = "s-1";
+  const api = build(true)
+    .on("dashboard.get", (_: unknown, env: string) =>
+      env === "wsl"
+        ? dashboard(
+            { live_sessions: [LIVE50], interrupted_sessions: [session({ id: STOP_ID, work_item_id: 50, state: "interrupted" })] },
+            [WI50, WI62],
+          )
+        : dashboard({ projects: [] }),
+    )
+    .onHub("hub.workitem.history", {
+      ...HISTORY,
+      sessions: [...HISTORY.sessions, hubSession(STOP_ID, { state: "interrupted", exit_code: null, ended_at: null })],
+    })
+    .on("session.archive", {});
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  const panel = await openPanel(user, "ui: painel de detalhe");
+  const sessoes = await within(panel).findByRole("region", { name: "Sessões" });
+  expect(within(sessoes).getByRole("button", { name: "Recuperar a sessão claude em WSL" })).toBeInTheDocument();
+  await user.click(within(sessoes).getByRole("button", { name: "Descartar a sessão claude em WSL" }));
+  const dlg = await screen.findByRole("alertdialog", { name: "Descartar a sessão?" });
+  expect(dlg).toHaveTextContent("#50 ui: painel de detalhe");
+  const backlog = within(dlg).getByRole("radio", { name: "Voltar o item para o backlog" });
+  await waitFor(() => expect(backlog).toBeEnabled());
+  await user.click(backlog);
+  await user.click(within(dlg).getByRole("button", { name: "Descartar" }));
+  await waitFor(() => expect(api.callsTo("hub.workitem.set_status")).toHaveLength(1));
+  expect(api.callsTo("session.archive")[0]).toMatchObject({ env: "wsl", params: { session_id: STOP_ID } });
+  expect(api.callsTo("hub.workitem.set_status")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    number: 50,
+    status: "backlog",
+    reason: "sessão interrompida descartada",
+  });
+});

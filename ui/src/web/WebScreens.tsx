@@ -15,12 +15,14 @@ import { ago } from "../util/time";
 import type { Session } from "../protocol/gen";
 import { RESUME_PROMPT } from "../recovery/RecoveryScreen";
 import { markReviewedOnEnvs, rcRequested } from "./envActions";
+import { DISCARD_LABEL, discardTarget, useDiscard } from "../recovery/discard";
 
 /** Recuperação na web: as sessões interrompidas; retomar com o ambiente online. */
 export function WebRecovery() {
   const { envs, dashboards, status, api } = useTower();
   const nav = useNav();
   const now = useNow();
+  const discard = useDiscard();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const resume = async (env: string, s: Session) => {
@@ -55,7 +57,7 @@ export function WebRecovery() {
       </h1>
       <p className="muted">
         Sessões que pararam no meio do trabalho. Retomar liga o Remote Control, para continuar no app Claude; descartar
-        fica no app desktop.
+        encerra sem retomar.
       </p>
       {error && (
         <p role="alert" className="web-error">
@@ -85,6 +87,19 @@ export function WebRecovery() {
                   onClick={() => void resume(r.env.id, r.s)}
                 >
                   {busy === r.s.id ? "Retomando…" : "Retomar"}
+                </button>
+              )}
+              {status[r.env.id]?.connected && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy !== null}
+                  aria-label={`${DISCARD_LABEL} ${itemLabel(r.project, r.wi, r.gestor, r.scope)}`}
+                  onClick={(e) =>
+                    discard(discardTarget(r.env.id, dashboards[r.env.id], r.s), { origin: e.currentTarget })
+                  }
+                >
+                  {DISCARD_LABEL}
                 </button>
               )}
               <button

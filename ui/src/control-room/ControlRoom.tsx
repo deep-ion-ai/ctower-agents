@@ -2,6 +2,7 @@ import "./control-room.css";
 import { useState } from "react";
 import { useNow } from "../App";
 import { goToAction } from "../shell/BottomPanel";
+import { useDiscard } from "../recovery/discard";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 import { attention } from "./attention";
@@ -29,6 +30,7 @@ export function ControlRoom() {
   const t = useTower();
   const nav = useNav();
   const now = useNow();
+  const discard = useDiscard();
   const [view, setView] = useState<ControlView | null>(null);
   const [grid, setGrid] = useGridPrefs();
   const items = attention({
@@ -98,7 +100,7 @@ export function ControlRoom() {
       </header>
       {showAttention && <WaitingNow items={highlight} now={now} />}
       {showAttention && (
-        <AttentionStrip items={strip} now={now} onAction={(a) => goToAction(nav, a, (url) => void t.api.openUrl(url).catch(() => {}))} onDismiss={t.dismissAlert} />
+        <AttentionStrip items={strip} now={now} onAction={(a) => goToAction(nav, a, (url) => void t.api.openUrl(url).catch(() => {}))} onDismiss={t.dismissAlert} onDiscard={(d, origin) => discard(d, { origin })} />
       )}
       {showTiles && (
         <TileGrid

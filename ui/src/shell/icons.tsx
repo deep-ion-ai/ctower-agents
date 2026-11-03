@@ -90,6 +90,8 @@ const PATHS = {
   /** Prompt (`>_`): shell livre no worktree (#423). */
   prompt: <path d="M4 7l5 5-5 5M12 18h8" />,
   stop: <rect x="6" y="6" width="12" height="12" rx="1.5" />,
+  /** Lixeira: descartar sem retomar (#138). */
+  trash: <path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6" />,
   code: <path d="M8 7l-5 5 5 5M16 7l5 5-5 5" />,
   pr: (
     <>

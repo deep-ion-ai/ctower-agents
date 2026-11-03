@@ -81,6 +81,7 @@ describe("ações visíveis na web só com o ambiente online", () => {
     await user.click(screen.getByRole("button", { name: "Recuperação" }));
     expect(await screen.findByRole("heading", { name: "Recuperação · 1" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Retomar/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Descartar/ })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Revisão" }));
     expect(await screen.findByRole("heading", { name: "Revisão · 1" })).toBeInTheDocument();
@@ -187,6 +188,18 @@ describe("ações da sessão pelo canal reverso", () => {
     });
     // Abre o painel da sessão retomada.
     expect(await screen.findByRole("region", { name: "Ações da sessão" })).toBeInTheDocument();
+  });
+
+  it("descartar pela Recuperação (#138): a confirmação e o session.archive pelo canal", async () => {
+    const int = hubSession({ id: "s-1", state: "interrupted", ended_at: now - 60_000 });
+    const api = webApi({ live_sessions: [], interrupted_sessions: [int] }).on("session.archive", {});
+    const user = renderApp(api, { name: "recovery" });
+    await user.click(await screen.findByRole("button", { name: /^Descartar .*#201/ }));
+    const dlg = await screen.findByRole("alertdialog", { name: "Descartar a sessão?" });
+    expect(within(dlg).getByRole("radio", { name: "Não mexer no item" })).toBeChecked();
+    await user.click(within(dlg).getByRole("button", { name: "Descartar" }));
+    await waitFor(() => expect(api.callsTo("session.archive")).toHaveLength(1));
+    expect(api.callsTo("session.archive")[0]).toMatchObject({ env: ENV, params: { session_id: "s-1" } });
   });
 
   it("erro do ambiente aparece no painel", async () => {

@@ -376,6 +376,14 @@
   gap: 16px;
 }
 
+/* Interrompida: "Abrir na Recuperação" e "Descartar" lado a lado (#138). */
+.pj-ses-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .pj-ses-kind {
   margin: 0;
   padding: 8px 14px 0;
