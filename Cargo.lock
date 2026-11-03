@@ -538,6 +538,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "toml 0.8.23",
  "ts-rs",
  "uuid",
 ]
@@ -674,6 +675,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.27.0",
+ "toml 0.8.23",
  "toml_edit",
  "tower",
  "tracing",

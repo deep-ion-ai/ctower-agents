@@ -471,14 +471,35 @@ impl Sessions {
         }
         // Regras do agente vigentes no cache do pull, relidas a cada início
         // e retomada (spec do Jira e GitLab §10.1).
-        let rules = {
+        // Issue fora do espelho (#143): o épico é desconhecido; a sessão sobe
+        // com o aviso, para o agente parar e perguntar.
+        let (rules, epic_unresolved) = {
             let l = self.ledger();
-            l.session_rules(project, wi)?.system_prompt(project)
+            let rules = l.session_rules(project, wi)?.system_prompt(project);
+            (rules, l.epic_resolution(project, wi)?)
+        };
+        let rules = match &epic_unresolved {
+            None => rules,
+            Some(reason) => Some(
+                rules
+                    .into_iter()
+                    .chain([epic_warning(reason)])
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
         };
         let docs_line = docs.instruction();
         args.extend(agent.args(gestor, rules.as_deref(), docs_line.as_deref()));
         if !prompt.is_empty() {
-            args.push(prompt.to_string());
+            // Os comandos de credencial deste ambiente no lugar dos do
+            // cadastro (`[credentials]`, #143).
+            args.push(cfg.credentials.snapshot().rewrite_prompt(
+                &project.gh_owner,
+                &project.gh_repo,
+                &project.tracker,
+                &project.forge,
+                prompt,
+            ));
         }
         let mut argv = vec![cfg.claude_bin.clone()];
         argv.extend(args.iter().cloned());
@@ -516,6 +537,9 @@ impl Sessions {
         env.extend(docs.env());
         if docs.unreachable {
             self.docs_unreachable(project, wi, &session.id)?;
+        }
+        if let Some(reason) = &epic_unresolved {
+            self.epic_unresolved(project, wi, &session.id, reason)?;
         }
         let spawned = PtySession::spawn(
             SpawnSpec {
@@ -609,6 +633,30 @@ impl Sessions {
         Ok(())
     }
 
+    /// Sessão de issue com o épico desconhecido (#143): alerta
+    /// `epic_unresolved` para a UI, evento no work item e aviso no log.
+    fn epic_unresolved(
+        &self,
+        project: &Project,
+        wi: &WorkItem,
+        session_id: &str,
+        reason: &str,
+    ) -> Result<()> {
+        tracing::warn!("sessão {session_id}: {EPIC_UNRESOLVED}: {reason}");
+        self.notify(
+            "alert",
+            json!({ "kind": EPIC_UNRESOLVED, "session_id": session_id, "error": reason }),
+        );
+        self.ledger().append_event(NewEvent {
+            project_id: project.id,
+            work_item_id: Some(wi.id),
+            session_id: Some(session_id),
+            kind: EPIC_UNRESOLVED,
+            payload: json!({ "reason": reason }),
+        })?;
+        Ok(())
+    }
+
     /// Pré-aceita a confiança na raiz do repositório e no worktree. Falha
     /// vira alerta (a sessão segue; o humano responde ao diálogo).
     fn pre_trust(
@@ -682,6 +730,18 @@ impl Sessions {
 }
 
 /// `mcp.json` da sessão: servidor HTTP do ledger com os cabeçalhos de autenticação.
+/// Alerta e evento da sessão de issue sem o épico resolvido (#143).
+pub const EPIC_UNRESOLVED: &str = "epic_unresolved";
+
+/// Aviso no system prompt da sessão sem o épico resolvido.
+fn epic_warning(reason: &str) -> String {
+    format!(
+        "Atenção (Control Tower): não foi possível resolver o épico desta issue: {reason}. \
+         Se ela pertencer a um épico, as regras dele não foram carregadas nesta sessão. \
+         Antes de alterar qualquer arquivo, pare e pergunte ao usuário como seguir."
+    )
+}
+
 pub(crate) fn mcp_config(port: u16, hook_token: &str, session_id: &str) -> Value {
     json!({
         "mcpServers": {
@@ -901,6 +961,62 @@ mod tests {
         });
     }
 
+    /// `[credentials]` do ambiente (#143): o prompt que a UI montou com os
+    /// comandos do cadastro chega ao agente com os deste ambiente; o
+    /// cadastro no ledger não muda.
+    #[test]
+    fn prompt_usa_a_credencial_do_ambiente() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        assign_jira_gitlab(&env, true);
+        let p = jira_gitlab_project(&env);
+        env.cfg.credentials.replace(ct_core::CredentialOverrides(
+            [(
+                "grupo/projeto/app".to_string(),
+                ct_core::CredentialOverride {
+                    tracker_cmd: "/usr/bin/pass show jira | head -1".into(),
+                    forge_cmd: String::new(),
+                },
+            )]
+            .into(),
+        ));
+        let jira = ct_core::jira_cli_prefix(p.tracker.jira().unwrap());
+        let glab = ct_core::glab_cli_prefix(p.forge.gitlab().unwrap());
+        let prompt = format!("Leia com `{jira} issue view PROJ-1`. MR com `{glab} mr create`.");
+        let s = env
+            .sessions
+            .start(StartRequest {
+                project_id: p.id,
+                prompt,
+                ..env.request(1, "Um")
+            })
+            .unwrap();
+        let sent = s.launch_cmd.last().unwrap();
+        assert!(
+            sent.contains(
+                r#"JIRA_API_TOKEN="$(/usr/bin/pass show jira | head -1)" jira issue view"#
+            ),
+            "{sent}"
+        );
+        assert!(
+            sent.contains(&format!("GITLAB_TOKEN=\"$({GITLAB_CMD})\" glab")),
+            "{sent}"
+        );
+        assert_eq!(
+            jira_gitlab_project(&env)
+                .tracker
+                .jira()
+                .unwrap()
+                .credential_cmd,
+            JIRA_CMD
+        );
+        let (eff, applied) = env.sessions.with_env_credentials(p);
+        assert!(applied.tracker && !applied.forge);
+        assert_eq!(
+            eff.tracker.jira().unwrap().credential_cmd,
+            "/usr/bin/pass show jira | head -1"
+        );
+    }
+
     fn jira_gitlab_project(env: &TestEnv) -> Project {
         let l = env.sessions.ledger();
         l.list_projects()
@@ -1037,6 +1153,7 @@ mod tests {
     #[test]
     fn inicia_sessao_em_worktree_com_argv_env_e_arquivos() {
         let env = TestEnv::new(FakeClaude::exit(0));
+        env.mirror_issues(&[(12, None, false)]);
         let s = env.sessions.start(env.request(12, "Autenticação")).unwrap();
         let out = env.wait_fake_output(&s.id);
 
@@ -1165,6 +1282,7 @@ mod tests {
     #[test]
     fn modelo_e_modo_vao_no_argv_e_ficam_na_sessao() {
         let env = TestEnv::new(FakeClaude::exit(0));
+        env.mirror_issues(&[(16, None, false)]);
         let mut req = env.request(16, "Modelo");
         req.agent = AgentOptions {
             model: Some("opus".into()),
@@ -1277,14 +1395,21 @@ mod tests {
             .unwrap();
         assert_eq!(appended(&p).as_deref(), Some(projeto));
 
-        // Com o modo subagents, as regras vêm antes da instrução do modo.
+        // Fora do espelho (#143): as do projeto, o aviso de épico não
+        // resolvido e, com o modo subagents, a instrução do modo por último.
         let mut req = env.request(43, "Sem espelho");
         req.agent.mode = SessionMode::Subagents;
         let s = env.sessions.start(req).unwrap();
-        assert_eq!(
-            appended(&s).unwrap(),
-            format!("{projeto}\n\n{SUBAGENTS_PROMPT}")
-        );
+        let got = appended(&s).unwrap();
+        assert!(got.starts_with(&format!("{projeto}\n\nAtenção (Control Tower): não foi possível resolver o épico desta issue: a issue deep-ion-ai/demo#43 não está no cache")), "{got}");
+        assert!(got.contains("pare e pergunte ao usuário"), "{got}");
+        assert!(got.ends_with(&format!("\n\n{SUBAGENTS_PROMPT}")), "{got}");
+        let alert = env
+            .notices()
+            .into_iter()
+            .find(|(k, v)| k == "alert" && v["kind"] == EPIC_UNRESOLVED)
+            .expect("alerta epic_unresolved");
+        assert_eq!(alert.1["session_id"], s.id.as_str());
     }
 
     /// Docs fora do repositório (#440): com `docs_root` inacessível nada é

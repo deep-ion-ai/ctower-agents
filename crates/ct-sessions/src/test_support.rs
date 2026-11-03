@@ -115,6 +115,7 @@ impl TestEnv {
             process_env: Some(Vec::new()),
             shell: Some(write_fake_shell(tmp.path()).to_string_lossy().into()),
             docs_root: Some(tmp.path().join("docs")),
+            credentials: Default::default(),
         };
         let notices = Arc::new(Mutex::new(Vec::new()));
         let (sessions, project_id) = build(&cfg, &repo, &notices, forward.clone(), file_ledger);

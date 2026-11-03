@@ -23,6 +23,7 @@ export type { DocsConfig } from "./DocsConfig";
 export type { DocsDir } from "./DocsDir";
 export type { DocsStatus } from "./DocsStatus";
 export type { EnvAccount } from "./EnvAccount";
+export type { EnvCredential } from "./EnvCredential";
 export type { EnvInfo } from "./EnvInfo";
 export type { Event } from "./Event";
 export type { ForgeConfig } from "./ForgeConfig";

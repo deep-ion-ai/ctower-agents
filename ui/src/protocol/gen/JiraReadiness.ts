@@ -22,6 +22,12 @@ server_matches: boolean,
  */
 credential_ok: boolean, 
 /**
+ * O comando de credencial é o do `config.toml` deste ambiente
+ * (`[credentials]`, #143), não o do cadastro. Opcional no TypeScript:
+ * ambiente anterior não manda.
+ */
+credential_from_env?: boolean, 
+/**
  * `jira me` respondeu com a senha.
  */
 me_ok: boolean, 

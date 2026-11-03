@@ -397,6 +397,68 @@ impl Conn {
                     .map_err(|e| (-32603, e.to_string()))?
                     .map(|v| json!(v))
             }
+            "env.credentials.get" | "env.credentials.set" => {
+                let Some(c) = self.st.env_config.clone() else {
+                    return Err(invalid("edição do config.toml desativada neste ambiente"));
+                };
+                if method == "env.credentials.set" {
+                    let owner = str_param(p, "owner")?.to_string();
+                    let repo = str_param(p, "repo")?.to_string();
+                    let text = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                    let (tracker_cmd, forge_cmd) = (text("tracker_cmd"), text("forge_cmd"));
+                    let c = Arc::clone(&c);
+                    tokio::task::spawn_blocking(move || {
+                        c.set_credentials(&owner, &repo, &tracker_cmd, &forge_cmd)
+                    })
+                    .await
+                    .map_err(|e| (-32603, e.to_string()))??;
+                }
+                let readiness = self
+                    .st
+                    .tracker
+                    .as_ref()
+                    .map(|t| t.readiness())
+                    .unwrap_or_default();
+                let linked = self.linked();
+                let rows = blocking(&sessions, move |s| {
+                    let overrides = c.credentials().unwrap_or_default();
+                    let l = s.ledger();
+                    let mut rows = Vec::new();
+                    for x in assigned_projects(&l, linked)? {
+                        let (jira, gitlab) = (x.tracker.jira(), x.forge.gitlab());
+                        if jira.is_none() && gitlab.is_none() {
+                            continue;
+                        }
+                        let o = overrides
+                            .get(&x.gh_owner, &x.gh_repo)
+                            .cloned()
+                            .unwrap_or_default();
+                        rows.push(crate::env_config::EnvCredential {
+                            tracker: x.tracker.kind(),
+                            forge: x.forge.kind(),
+                            project_tracker_cmd: jira
+                                .map(|j| j.credential_cmd.clone())
+                                .unwrap_or_default(),
+                            project_forge_cmd: gitlab
+                                .map(|g| g.credential_cmd.clone())
+                                .unwrap_or_default(),
+                            tracker_cmd: o.tracker_cmd,
+                            forge_cmd: o.forge_cmd,
+                            readiness: readiness
+                                .iter()
+                                .find(|r| r.owner == x.gh_owner && r.repo == x.gh_repo)
+                                .cloned(),
+                            sync: l.sync_state(x.id)?,
+                            owner: x.gh_owner,
+                            repo: x.gh_repo,
+                            name: x.name,
+                        });
+                    }
+                    Ok(rows)
+                })
+                .await?;
+                Ok(json!(rows))
+            }
             "env.check_update" => match &self.st.updates {
                 Some(u) => Ok(json!(u.check().await)),
                 None => Err(invalid("atualização desativada neste ambiente")),
@@ -519,6 +581,30 @@ impl Conn {
                     Ok(s.ledger().get_issue(project_id, gh_number)?)
                 })
                 .await?;
+                // Fora do espelho do Jira (#143): lê a issue direto no Jira,
+                // para a sessão saber o épico (e as regras dele). Falhando,
+                // a sessão sobe com o aviso `epic_unresolved`.
+                let cached = match (cached, &self.st.tracker) {
+                    (None, Some(t)) => {
+                        let t = Arc::clone(t);
+                        tokio::task::spawn_blocking(move || {
+                            if !t.handles(project_id) {
+                                return None;
+                            }
+                            t.fetch_issue(project_id, gh_number)
+                                .inspect_err(|e| {
+                                    tracing::warn!(
+                                        "session.start: issue {gh_number} fora do espelho: {e}"
+                                    )
+                                })
+                                .ok()
+                                .flatten()
+                        })
+                        .await
+                        .map_err(|e| (-32603, e.to_string()))?
+                    }
+                    (c, _) => c,
+                };
                 let title = title
                     .or_else(|| cached.as_ref().map(|i| i.title.clone()))
                     .ok_or_else(|| {
@@ -1459,6 +1545,70 @@ mod tests {
         assert_eq!(v["error"]["code"], -32602, "{v}");
         let v = ui
             .call("env.config.set", json!({ "key": "update_ref" }))
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// #143: `env.credentials.get|set` lista os projetos Jira/GitLab com o
+    /// comando do cadastro e o deste ambiente, grava no config.toml e vale
+    /// na hora para as sessões (o `SharedCredentials` delas).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn credencial_do_ambiente_editavel_pelo_ws() {
+        let mut srv = Srv::linked(FakeClaude::exit(0));
+        srv.env.assign_config(1, |p| {
+            p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
+                url: "https://jira.example.com".into(),
+                project_key: "ACME".into(),
+                credential_cmd: "pass show jira | head -1".into(),
+                ..Default::default()
+            });
+        });
+        let path = srv.env.tmp.path().join("config.toml");
+        srv.state.env_config = Some(Arc::new(
+            crate::env_config::EnvConfig::new(path.clone(), 180, None)
+                .with_credentials(srv.env.cfg.credentials.clone()),
+        ));
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui.call("env.credentials.get", json!({})).await;
+        let rows = v["result"].as_array().unwrap_or_else(|| panic!("{v}"));
+        assert_eq!(rows.len(), 1, "{v}");
+        assert_eq!(rows[0]["tracker"], "jira");
+        assert_eq!(rows[0]["project_tracker_cmd"], "pass show jira | head -1");
+        assert_eq!(rows[0]["tracker_cmd"], "");
+        let (owner, repo) = (rows[0]["owner"].clone(), rows[0]["repo"].clone());
+
+        let v = ui
+            .call(
+                "env.credentials.set",
+                json!({ "owner": owner, "repo": repo,
+                        "tracker_cmd": "/usr/bin/pass show jira | head -1" }),
+            )
+            .await;
+        assert_eq!(
+            v["result"][0]["tracker_cmd"], "/usr/bin/pass show jira | head -1",
+            "{v}"
+        );
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("tracker_cmd = \"/usr/bin/pass show jira | head -1\""));
+        let p = srv
+            .env
+            .sessions
+            .ledger()
+            .get_project(srv.env.project_id)
+            .unwrap();
+        let (eff, applied) = srv.env.sessions.with_env_credentials(p);
+        assert!(applied.tracker);
+        assert_eq!(
+            eff.tracker.jira().unwrap().credential_cmd,
+            "/usr/bin/pass show jira | head -1"
+        );
+        let v = ui
+            .call(
+                "env.credentials.set",
+                json!({ "owner": owner, "repo": repo, "tracker_cmd": "a\nb" }),
+            )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
     }

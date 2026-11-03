@@ -179,6 +179,38 @@ impl Ledger {
         Ok(issue.and_then(|i| i.parent_number).filter(|n| *n > 0))
     }
 
+    /// Se dá para saber o épico da sessão (#143). `None` = resolvido (com ou
+    /// sem épico); `Some(motivo)` = a issue não está no espelho do
+    /// rastreador deste ambiente, então a ligação com o épico (e as regras
+    /// dele) é desconhecida. Sessão de épico, do projeto (#0) e do gestor
+    /// não dependem do espelho.
+    pub fn epic_resolution(&self, project: &Project, wi: &WorkItem) -> Result<Option<String>> {
+        if project.kind == ct_core::ProjectKind::Gestor
+            || wi.gh_number <= 0
+            || wi.kind == WorkItemKind::Epic
+            || self.get_issue(wi.project_id, wi.gh_number)?.is_some()
+        {
+            return Ok(None);
+        }
+        let mut reason = format!(
+            "a issue {} não está no cache do rastreador deste ambiente: não dá para saber se ela \
+             pertence a um épico",
+            project.item_ref(wi.gh_number)
+        );
+        if let Some(s) = self.sync_state(project.id)? {
+            if let Some(e) = s
+                .last_error
+                .as_deref()
+                .filter(|_| s.failing_since.is_some() || s.last_ok_at.is_none())
+            {
+                reason.push_str(&format!(" (sync do rastreador falhando: {e})"));
+            }
+        } else {
+            reason.push_str(" (o sync do rastreador ainda não rodou neste ambiente)");
+        }
+        Ok(Some(reason))
+    }
+
     /// Regras vigentes da sessão do work item (§10.1). O gestor não recebe
     /// regras de projeto.
     pub fn session_rules(&self, project: &Project, wi: &WorkItem) -> Result<SessionRules> {
@@ -296,6 +328,39 @@ mod tests {
             |_| "/home/u/projetos/demo".into(),
         )
         .unwrap();
+    }
+
+    /// #143: issue fora do espelho = épico desconhecido, com o motivo (e o
+    /// erro do sync, se ele está falhando); no espelho, resolvido.
+    #[test]
+    fn epico_sem_espelho_vem_com_o_motivo() {
+        let (l, p) = ledger_with_project();
+        let wi = l.ensure_work_item(p.id, 11, WorkItemKind::Issue).unwrap();
+        let r = l.epic_resolution(&p, &wi).unwrap().unwrap();
+        assert!(r.contains("deep-ion-ai/demo#11 não está no cache"), "{r}");
+        assert!(r.contains("ainda não rodou"), "{r}");
+
+        l.record_sync_error(p.id, "comando de credencial do Jira não imprimiu nada")
+            .unwrap();
+        let r = l.epic_resolution(&p, &wi).unwrap().unwrap();
+        assert!(
+            r.contains(
+                "sync do rastreador falhando: comando de credencial do Jira não imprimiu nada"
+            ),
+            "{r}"
+        );
+
+        // Épico e sessão do projeto não dependem do espelho.
+        let epic = l.ensure_work_item(p.id, 10, WorkItemKind::Epic).unwrap();
+        assert_eq!(l.epic_resolution(&p, &epic).unwrap(), None);
+
+        l.apply_tracker_batch(&GithubSnapshot {
+            project_id: p.id,
+            issues: vec![issue(11, Some(10), false)],
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(l.epic_resolution(&p, &wi).unwrap(), None);
     }
 
     #[test]

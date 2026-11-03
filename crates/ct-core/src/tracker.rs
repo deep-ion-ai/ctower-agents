@@ -385,6 +385,11 @@ pub struct JiraReadiness {
     pub server_matches: bool,
     /// O comando de credencial respondeu com uma linha não vazia.
     pub credential_ok: bool,
+    /// O comando de credencial é o do `config.toml` deste ambiente
+    /// (`[credentials]`, #143), não o do cadastro. Opcional no TypeScript:
+    /// ambiente anterior não manda.
+    #[cfg_attr(feature = "ts", ts(as = "Option<bool>", optional))]
+    pub credential_from_env: bool,
     /// `jira me` respondeu com a senha.
     pub me_ok: bool,
     /// Versão do Jira (`jira serverinfo`).
@@ -416,6 +421,9 @@ pub struct GitlabReadiness {
     /// Versão do glab; `None` = não encontrado.
     pub cli: Option<String>,
     pub credential_ok: bool,
+    /// O comando de credencial é o do `config.toml` deste ambiente (#143).
+    #[cfg_attr(feature = "ts", ts(as = "Option<bool>", optional))]
+    pub credential_from_env: bool,
     /// `glab api version` respondeu com o token.
     pub api_ok: bool,
     pub error: Option<String>,

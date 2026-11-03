@@ -57,9 +57,15 @@ target_idle_days = 14               # apaga só o target/ de worktree que fica, 
 dir = ""                            # vazio = ~/.local/state/ctower/logs (~/Library/Logs/ctower no macOS)
 max_file_mb = 10                    # tamanho de cada arquivo antes de rotacionar; 0 desliga o arquivo
 max_files = 5                       # arquivos guardados, contando o atual (ctowerd.jsonl, .1 … .4)
+
+# Comandos de credencial do Jira e do GitLab só deste ambiente, no lugar dos
+# do cadastro (veja "Credencial por ambiente" abaixo). Uma tabela por projeto.
+[credentials."acme/acme-web"]
+tracker_cmd = "/usr/bin/pass show acme/jira | head -1"     # vazio ou ausente = o do cadastro
+forge_cmd = "/usr/bin/pass show acme/gitlab | head -1"     # idem, para o GitLab
 ```
 
-`update_ref` e `gh_sync_interval_secs` também podem ser editados pela UI (`env.config.set`): o daemon grava no `config.toml`, preservando o resto do arquivo, e aplica sem restart.
+`update_ref` e `gh_sync_interval_secs` também podem ser editados pela UI (`env.config.set`): o daemon grava no `config.toml`, preservando o resto do arquivo, e aplica sem restart. O mesmo vale para `[credentials]`, em Configurações › Ambiente › Credenciais do Jira e GitLab (`env.credentials.get|set`).
 
 ### Permissões pela UI
 
@@ -72,6 +78,14 @@ A cada ciclo o daemon espelha as issues abertas e as fechadas nos últimos 30 di
 ### Projetos Jira
 
 O laço do GitHub pula os projetos com rastreador Jira: as issues deles vêm do [jira-cli](https://github.com/ankitpokhrel/jira-cli) do ambiente, sem rede própria do daemon. A cada ciclo o daemon roda o comando de credencial do cadastro (`/bin/sh -c`, sem TTY, prazo de 10 s, só a primeira linha) e passa a saída como `JIRA_API_TOKEN` só ao processo do `jira`; a senha não vai para log, evento nem mensagem de erro. A configuração do jira-cli é a do ambiente (`~/.config/.jira/.config.yml`, gerada por `jira init`, ou o `config_file` do cadastro como `JIRA_CONFIG_FILE`), com o `server` igual à URL do cadastro. O ciclo lista as issues alteradas desde o último sucesso (`updated >= -<m>m`), relê com `jira issue view --raw` só as novas ou alteradas e reconcilia uma vez por dia (abertas e fechadas nos últimos 30 dias). Categoria de status `done` fecha a issue. Com o cache do `gpg-agent` expirado, o comando de credencial falha ou trava, o sync fica em erro com o motivo e o backoff vale como no GitHub; rode o comando num terminal do ambiente e o ciclo seguinte volta. O `env.info` mostra a prontidão (`trackers`): jira-cli e versão, configuração, servidor, credencial, `jira me` e versão do Jira. Só o ambiente de sync do projeto envia o espelho ao hub.
+
+### Credencial por ambiente
+
+O comando de credencial do Jira e do GitLab vem do cadastro do projeto no hub e é o mesmo para todos os ambientes. Quando o caminho do binário ou o gerenciador de senhas muda de um ambiente para outro (por exemplo, `/opt/homebrew/bin/pass` no macOS e `/usr/bin/pass` no Linux), cada ambiente pode usar o seu próprio comando em `[credentials."owner/repo"]` (`tracker_cmd` para o Jira, `forge_cmd` para o GitLab). Também dá para editar pela UI, em Configurações › Ambiente › Credenciais do Jira e GitLab, que mostra o comando do cadastro, o deste ambiente e o resultado da última leitura (credencial ok ou o erro, e o sync falhando há N ciclos). O comando deste ambiente vale no sync, no "Ver issue", no glab e no prompt da sessão, onde substitui o `"$(<comando>)"` do cadastro. A mudança vale no próximo uso, sem reiniciar. Os outros ambientes e o cadastro do hub continuam iguais, e o comando nunca é enviado ao hub. Na prontidão (`env.info.trackers`), `credential_from_env` indica que a credencial veio deste ambiente.
+
+### Épico da sessão de issue
+
+As regras do épico chegam à sessão de uma issue pelo espelho do rastreador (`issue_cache`), que liga a issue ao épico. Num projeto Jira, se a issue ainda não está no espelho (sync falhando, issue fora do JQL), o `session.start` lê a issue direto no Jira com `jira issue view` e a grava no cache antes de criar a sessão. Se mesmo assim não der para resolver o épico, a sessão sobe com um aviso no system prompt para o agente parar e perguntar antes de trabalhar. Também saem o alerta `epic_unresolved` na UI e um evento no work item, e `ledger_get_context` e `rules_get` trazem `epic_resolution: "falhou: <motivo>"`, com o último erro do sync quando ele está falhando. Com o épico resolvido, `epic_resolution` vem como `"ok"`.
 
 ### GitLab
 

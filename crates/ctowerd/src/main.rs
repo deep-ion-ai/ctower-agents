@@ -78,6 +78,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("ambiente {env_name} ({env_id})");
     let ledger = Ledger::open(&dirs.ledger_db(), &env_id)?;
 
+    // `[credentials]` (#143): editável pela UI, vale no próximo uso.
+    let credentials = ct_core::SharedCredentials::new(cfg.credentials.clone());
     let (events, _) = broadcast::channel(1024);
     let sessions = Sessions::new(
         SessionsConfig {
@@ -98,6 +100,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             process_env: None,
             shell: None,
             docs_root: cfg.docs_root(),
+            credentials: credentials.clone(),
         },
         ledger,
         notifier(events.clone()),
@@ -138,7 +141,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Duration::from_secs(cfg.jira_view_timeout_secs.max(1)),
             Duration::from_secs(cfg.jira_list_timeout_secs.max(1)),
         );
-    let gitlab = Arc::new(tracker_cfg.gitlab());
+    let gitlab = Arc::new(tracker_cfg.gitlab().with_credentials(credentials.clone()));
     let tracker = Arc::new(JiraGitlabSync::new(sessions.clone(), tracker_cfg));
 
     // Sem hub o ambiente sobe, mas sem projetos e sem iniciar sessões;
@@ -204,11 +207,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         events.clone(),
     ));
     // `update_ref` e `gh_sync_interval_secs` editáveis pela UI sem restart.
-    let env_config = Arc::new(EnvConfig::new(
-        dirs.config.join("config.toml"),
-        cfg.gh_sync_interval_secs,
-        Some(Arc::clone(&updates)),
-    ));
+    let env_config = Arc::new(
+        EnvConfig::new(
+            dirs.config.join("config.toml"),
+            cfg.gh_sync_interval_secs,
+            Some(Arc::clone(&updates)),
+        )
+        .with_credentials(credentials.clone()),
+    );
     if cfg.gh_sync_interval_secs == 0 {
         tracing::info!("sync periódico com o GitHub desligado (gh_sync_interval_secs = 0)");
     }

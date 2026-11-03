@@ -111,6 +111,18 @@ test.each([
     title: "Sessão iniciada sem a pasta de docs: docs_root inacessível",
     action: { to: "terminal", env: "wsl", session: session().id },
   },
+  {
+    caso: "sessão de issue iniciada sem o épico resolvido (#143)",
+    p: {
+      dashboards: { wsl: dashboard({ live_sessions: [session()] }, [workItem()]) },
+      alerts: [
+        { env: "wsl", kind: "epic_unresolved", session_id: session().id, detail: "issue fora do cache", at: NOW },
+      ],
+    },
+    kind: "alert",
+    title: "Sessão iniciada sem saber o épico da issue: as regras do épico podem estar faltando",
+    action: { to: "terminal", env: "wsl", session: session().id },
+  },
 ])("$caso", ({ p, kind, title, action }) => {
   const items = attention(input(p as Partial<AttentionInput>));
   expect(items).toHaveLength(1);

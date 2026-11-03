@@ -3,6 +3,7 @@
 
 pub mod branch;
 mod clock;
+mod credentials;
 pub mod docs;
 pub mod files;
 pub mod guard;
@@ -14,6 +15,9 @@ mod repo_url;
 pub mod tracker;
 
 pub use clock::{civil_from_days, hlc, now_ms, parse_iso8601, utc_stamp};
+pub use credentials::{
+    CredentialApplied, CredentialOverride, CredentialOverrides, SharedCredentials,
+};
 pub use docs::DocsConfig;
 pub use logs::LogsConfig;
 pub use model::*;
