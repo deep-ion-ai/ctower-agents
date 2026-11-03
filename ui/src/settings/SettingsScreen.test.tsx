@@ -785,3 +785,60 @@ test("Plano da conta (#108): limiares padrão e por conta com validação, prazo
   await user.click(within(notif).getByRole("checkbox", { name: /Plano da conta perto do limite/ }));
   await waitFor(() => expect(api.uiConfig.plan?.notify).toBe(false));
 });
+
+/** `env.credentials.get|set` em memória (#143): um projeto Jira + GitLab. */
+function withCredentials(api: FakeDaemonApi) {
+  let row = {
+    owner: "acme",
+    repo: "web",
+    name: "acme-web",
+    tracker: "jira",
+    forge: "gitlab",
+    project_tracker_cmd: "/opt/homebrew/bin/pass show jira | head -1",
+    project_forge_cmd: "/opt/homebrew/bin/pass show gitlab | head -1",
+    tracker_cmd: "",
+    forge_cmd: "",
+    readiness: null,
+    sync: { project_id: 1, last_attempt_at: NOW, last_ok_at: null, last_error: "comando de credencial do Jira não imprimiu nada", failures: 4, failing_since: NOW },
+  };
+  api
+    .on("env.credentials.get", () => [row])
+    .on("env.credentials.set", ({ tracker_cmd, forge_cmd }: { tracker_cmd: string; forge_cmd: string }) => {
+      if (tracker_cmd.includes("\n")) throw new Error("uma linha só");
+      row = { ...row, tracker_cmd, forge_cmd };
+      return [row];
+    });
+  act(() => api.push("wsl", "session_started"));
+}
+
+test("credencial do Jira por ambiente: mostra a do cadastro, o sync falhando, grava e volta ao cadastro (#143)", async () => {
+  const { api, user } = setup(ENV);
+  withCredentials(api);
+  const sec = await screen.findByRole("region", {
+    name: "Credenciais do Jira e GitLab: Comandos de credencial deste ambiente",
+  });
+  const campo = await within(sec).findByLabelText("Comando do Jira de acme-web");
+  expect(within(sec).getByText("/opt/homebrew/bin/pass show jira | head -1")).toBeInTheDocument();
+  expect(within(sec).getByRole("status")).toHaveTextContent(/sync falhando há 4 ciclo\(s\)/);
+  expect(within(sec).getByRole("button", { name: "Salvar" })).toBeDisabled();
+
+  await user.type(campo, "/usr/bin/pass show jira | head -1");
+  await user.click(within(sec).getByRole("button", { name: "Salvar" }));
+  await waitFor(() =>
+    expect(api.calls.filter((c) => c.method === "env.credentials.set").map((c) => c.params)).toEqual([
+      { owner: "acme", repo: "web", tracker_cmd: "/usr/bin/pass show jira | head -1", forge_cmd: "" },
+    ]),
+  );
+  await waitFor(() => expect(within(sec).getByText("alterada")).toBeInTheDocument());
+
+  await user.click(within(sec).getByRole("button", { name: "Usar o do cadastro" }));
+  await waitFor(() =>
+    expect(api.calls.filter((c) => c.method === "env.credentials.set").slice(-1)[0]?.params).toEqual({
+      owner: "acme",
+      repo: "web",
+      tracker_cmd: "",
+      forge_cmd: "",
+    }),
+  );
+  await waitFor(() => expect(campo).toHaveValue(""));
+});

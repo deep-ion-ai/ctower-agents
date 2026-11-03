@@ -134,6 +134,7 @@ const ALERT_TEXT: Record<string, string> = {
   secrets_stale: "Sessão iniciada com secrets de uma configuração desatualizada",
   secrets_unavailable: "Sessão iniciada sem secrets: cache do ambiente ilegível",
   docs_unreachable: "Sessão iniciada sem a pasta de docs: docs_root inacessível",
+  epic_unresolved: "Sessão iniciada sem saber o épico da issue: as regras do épico podem estar faltando",
 };
 
 /** Rótulo das sessões do gestor de projetos (sem projeto nem issue). */

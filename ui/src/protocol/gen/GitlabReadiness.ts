@@ -9,6 +9,10 @@ export type GitlabReadiness = {
  */
 cli: string | null, credential_ok: boolean, 
 /**
+ * O comando de credencial é o do `config.toml` deste ambiente (#143).
+ */
+credential_from_env?: boolean, 
+/**
  * `glab api version` respondeu com o token.
  */
 api_ok: boolean, error: string | null, };

@@ -176,6 +176,9 @@ mod tests {
             "env.check_update",
             "env.config.get",
             "env.config.set",
+            // Comandos de credencial do ambiente (#143): só no desktop.
+            "env.credentials.get",
+            "env.credentials.set",
             "cleanup.status",
             "cleanup.plan",
             "cleanup.run",

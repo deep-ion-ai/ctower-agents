@@ -528,6 +528,7 @@ mod tests {
         };
         let gh = (ct_core::TrackerConfig::Github, ct_core::ForgeConfig::Github);
         env.assign_with_rules(gh.0.clone(), gh.1.clone(), false, 1, regras(1, "antiga"));
+        env.mirror_issues(&[(1, None, false)]);
         let t = env.tmp.path().join("t.jsonl");
         std::fs::write(&t, "conversa\n").unwrap();
         let old = interrupted_with(&env, Some(&t), AgentOptions::default());

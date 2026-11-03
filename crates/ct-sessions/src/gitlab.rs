@@ -22,6 +22,8 @@ pub struct GitlabRemote {
     pub cli_deadline: Duration,
     /// Prazo do comando de credencial.
     pub credential_deadline: Duration,
+    /// Comandos de credencial deste ambiente (`[credentials]`, #143).
+    pub credentials: ct_core::SharedCredentials,
 }
 
 impl GitlabRemote {
@@ -30,7 +32,15 @@ impl GitlabRemote {
             glab_bin: glab_bin.to_string(),
             cli_deadline: ct_gitlab::DEADLINE,
             credential_deadline: CREDENTIAL_DEADLINE,
+            credentials: Default::default(),
         }
+    }
+
+    /// Com os comandos de credencial deste ambiente no lugar dos do
+    /// cadastro (#143).
+    pub fn with_credentials(mut self, credentials: ct_core::SharedCredentials) -> Self {
+        self.credentials = credentials;
+        self
     }
 
     /// O glab para o host do cadastro.
@@ -44,16 +54,25 @@ impl GitlabRemote {
             .map_err(|e| e.to_string())
     }
 
-    /// Configuração, glab e token de um projeto GitLab.
-    fn open<'p>(&self, project: &'p Project) -> Result<(&'p GitlabConfig, Glab, Secret)> {
-        let gl = project.forge.gitlab().ok_or_else(|| {
+    /// Configuração, glab e token de um projeto GitLab, com o comando de
+    /// credencial deste ambiente quando houver.
+    fn open(&self, project: &Project) -> Result<(GitlabConfig, Glab, Secret)> {
+        let (mut tracker, mut forge) = (project.tracker.clone(), project.forge.clone());
+        self.credentials.apply(
+            &project.gh_owner,
+            &project.gh_repo,
+            &mut tracker,
+            &mut forge,
+        );
+        let gl = forge.gitlab().cloned().ok_or_else(|| {
             SessionsError::Invalid(format!(
                 "{}/{} não tem forja GitLab",
                 project.gh_owner, project.gh_repo
             ))
         })?;
-        let token = self.token(gl).map_err(SessionsError::Invalid)?;
-        Ok((gl, self.cli(gl), token))
+        let token = self.token(&gl).map_err(SessionsError::Invalid)?;
+        let cli = self.cli(&gl);
+        Ok((gl, cli, token))
     }
 }
 
@@ -75,20 +94,20 @@ impl RemoteBranches for GitlabRemote {
     fn pr_head_sha(&self, project: &Project, pr: &PrRow) -> Result<Option<String>> {
         let (gl, cli, token) = self.open(project)?;
         let sha = cli
-            .mr_head_sha(&token, &project_path(project, gl), pr.number)
+            .mr_head_sha(&token, &project_path(project, &gl), pr.number)
             .map_err(gitlab_error)?;
         Ok(sha)
     }
 
     fn remote_branch_sha(&self, project: &Project, branch: &str) -> Result<Option<String>> {
         let (gl, cli, token) = self.open(project)?;
-        cli.branch_sha(&token, &project_path(project, gl), branch)
+        cli.branch_sha(&token, &project_path(project, &gl), branch)
             .map_err(gitlab_error)
     }
 
     fn delete_remote_branch(&self, project: &Project, branch: &str) -> Result<bool> {
         let (gl, cli, token) = self.open(project)?;
-        cli.delete_branch(&token, &project_path(project, gl), branch)
+        cli.delete_branch(&token, &project_path(project, &gl), branch)
             .map_err(gitlab_error)
     }
 }

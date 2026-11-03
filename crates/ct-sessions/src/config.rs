@@ -98,6 +98,9 @@ pub struct DaemonConfig {
     pub cleanup: CleanupConfig,
     /// Log em arquivo, que a tela Logs da UI lê (`[logs]`, #65).
     pub logs: ct_core::LogsConfig,
+    /// Comandos de credencial do Jira e do GitLab só deste ambiente
+    /// (`[credentials."owner/repo"]`, #143), no lugar dos do cadastro.
+    pub credentials: ct_core::CredentialOverrides,
 }
 
 /// `[cleanup]` do `config.toml` (épico #284): o job de verificação das
@@ -178,6 +181,7 @@ impl Default for DaemonConfig {
             update_check_interval_hours: 6,
             cleanup: CleanupConfig::default(),
             logs: Default::default(),
+            credentials: Default::default(),
         }
     }
 }

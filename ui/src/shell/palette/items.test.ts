@@ -54,6 +54,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Configurações › Este app › Notificações",
     "Configurações › Este app › Plano da conta",
     "Configurações › Ambiente › GitHub",
+    "Configurações › Ambiente › Credenciais do Jira e GitLab",
     "Configurações › Ambiente › Atualização do daemon",
     "Configurações › Ambiente › Projetos locais",
     "Configurações › Ambiente › Notificações",
