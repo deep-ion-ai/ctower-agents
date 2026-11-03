@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.4.0...v1.5.0) (2026-11-02)
+
+
+### Features
+
+* **ui:** cartão Propostas do gestor na Visão geral do projeto ([#100](https://github.com/deep-ion-ai/ctower-agents/issues/100)) ([#103](https://github.com/deep-ion-ai/ctower-agents/issues/103)) ([552f85f](https://github.com/deep-ion-ai/ctower-agents/commit/552f85f6310a7354798c98eb7b138ae799be450e))
+* **ui:** cartão Revisões na Visão geral do projeto ([#101](https://github.com/deep-ion-ai/ctower-agents/issues/101)) ([#104](https://github.com/deep-ion-ai/ctower-agents/issues/104)) ([84f745c](https://github.com/deep-ion-ai/ctower-agents/commit/84f745cda3aec7f78d2c324ca7c174e1304ac2b9))
+* **ui:** Visão geral como aba padrão do projeto ([#99](https://github.com/deep-ion-ai/ctower-agents/issues/99)) ([#102](https://github.com/deep-ion-ai/ctower-agents/issues/102)) ([735a515](https://github.com/deep-ion-ai/ctower-agents/commit/735a515707c6a53b8bd8a0ce5c9bed234d518fcc))
+* **ui:** Visão geral como aba padrão do projeto, com propostas do gestor e revisões ([#98](https://github.com/deep-ion-ai/ctower-agents/issues/98)) ([638512c](https://github.com/deep-ion-ai/ctower-agents/commit/638512cca53ccfa61620cddf563c9955439f358a))
+
 ## [1.4.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.3.0...v1.4.0) (2026-10-31)
 
 
