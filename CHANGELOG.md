@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.6.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.5.0...v1.6.0) (2026-11-03)
+
+
+### Features
+
+* **ui:** descartar uma sessão interrompida sem retomá-la ([#138](https://github.com/deep-ion-ai/ctower-agents/issues/138)) ([ea7345a](https://github.com/deep-ion-ai/ctower-agents/commit/ea7345a74002d463861924776b69ce0888f69d94))
+* **ui:** descartar uma sessão interrompida sem retomá-la ([#138](https://github.com/deep-ion-ai/ctower-agents/issues/138)) ([1a4932c](https://github.com/deep-ion-ai/ctower-agents/commit/1a4932c3c2c995db677355142e0387193edc524f))
+* **ui:** propostas do gestor em lote e largura ajustável na Visão geral ([#139](https://github.com/deep-ion-ai/ctower-agents/issues/139)) ([e59d166](https://github.com/deep-ion-ai/ctower-agents/commit/e59d16656921ab5295581442c70a1e78df9314e4))
+* **ui:** propostas do gestor em lote e largura ajustável na Visão geral ([#139](https://github.com/deep-ion-ai/ctower-agents/issues/139)) ([85a55c6](https://github.com/deep-ion-ai/ctower-agents/commit/85a55c61a3fce59ea46af461c2a1b7a33f374faa))
+
+
+### Bug Fixes
+
+* **jira:** credencial do tracker por ambiente e épico garantido nas sessões de issue ([#143](https://github.com/deep-ion-ai/ctower-agents/issues/143)) ([ebbecf0](https://github.com/deep-ion-ai/ctower-agents/commit/ebbecf0f2cc454bcb55b06f0b8deea49dfd3bd1a))
+* **jira:** credencial do tracker por ambiente e épico garantido nas sessões de issue ([#143](https://github.com/deep-ion-ai/ctower-agents/issues/143)) ([733cf73](https://github.com/deep-ion-ai/ctower-agents/commit/733cf73ee837d3566868cffaf05c205d4fa815f5))
+
 ## [1.5.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.4.0...v1.5.0) (2026-11-02)
 
 
