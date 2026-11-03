@@ -45,6 +45,7 @@ import { openScreen } from "./places";
 import { tabKind } from "./tabColors";
 import { SCREEN_LABEL, tabLook } from "./titles";
 import { StartSessionHost } from "../project/StartSessionModal";
+import { DiscardHost } from "../recovery/discard";
 import { useMaintenancePending } from "../maintenance/pending";
 import { maintenanceTab } from "../maintenance/sections";
 import { WEB_HIDDEN_SCREENS } from "../web/mode";
@@ -229,143 +230,145 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
     <ShellCtx.Provider value={shell}>
       <SideSlotProvider slot={side.slot}>
         <StartSessionHost>
-          <div className="shell" data-mobile={mobile ? "true" : undefined}>
-            <header className="titlebar">
-              {mobile ? (
-                <>
-                  <button
-                    type="button"
-                    className="ibtn"
-                    aria-label={layout.sideOpen ? "Fechar painel lateral" : "Abrir painel lateral"}
-                    aria-expanded={layout.sideOpen}
-                    onClick={shell.toggleSide}
-                  >
-                    <Icon name="menu" size={20} />
-                  </button>
-                  <MobileTabs />
-                </>
-              ) : (
-                <div className="brand">
-                  <Logo />
-                  Control Tower
-                </div>
-              )}
-              <button
-                type="button"
-                className="cmd-trigger"
-                aria-label="Abrir paleta de comandos"
-                aria-keyshortcuts="Meta+K Control+K"
-                onClick={shell.openPalette}
-              >
-                <Icon name="search" size={14} />
-                <span className="cmd-text">Buscar sessões, issues, projetos e comandos</span>
-                <kbd className="kbd">{shortcutLabel("K")}</kbd>
-              </button>
-              <div className="titlebar-actions">
-                {!web && (
-                  <button
-                    type="button"
-                    className="ibtn"
-                    aria-label={syncing ? "Buscando issues…" : "Buscar issues agora"}
-                    title={`Buscar agora as issues do ${syncTrackers(dashboards)} em todos os ambientes conectados`}
-                    aria-busy={syncing}
-                    disabled={syncing}
-                    onClick={() => void syncNow()}
-                  >
-                    <Icon name="sync" />
-                  </button>
+          <DiscardHost>
+            <div className="shell" data-mobile={mobile ? "true" : undefined}>
+              <header className="titlebar">
+                {mobile ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ibtn"
+                      aria-label={layout.sideOpen ? "Fechar painel lateral" : "Abrir painel lateral"}
+                      aria-expanded={layout.sideOpen}
+                      onClick={shell.toggleSide}
+                    >
+                      <Icon name="menu" size={20} />
+                    </button>
+                    <MobileTabs />
+                  </>
+                ) : (
+                  <div className="brand">
+                    <Logo />
+                    Control Tower
+                  </div>
                 )}
                 <button
                   type="button"
-                  className="ibtn"
-                  aria-label={warns.length > 0 ? `Notificações, ${plural(warns.length, "aviso", "avisos")}` : "Notificações"}
-                  title="Avisos"
-                  aria-haspopup={mobile ? "dialog" : undefined}
-                  onClick={() => (mobile ? setSheet(true) : shell.showPanel("warnings"))}
+                  className="cmd-trigger"
+                  aria-label="Abrir paleta de comandos"
+                  aria-keyshortcuts="Meta+K Control+K"
+                  onClick={shell.openPalette}
                 >
-                  <Icon name="bell" />
-                  {warns.length > 0 && <span className="ibtn-dot" aria-hidden="true" />}
+                  <Icon name="search" size={14} />
+                  <span className="cmd-text">Buscar sessões, issues, projetos e comandos</span>
+                  <kbd className="kbd">{shortcutLabel("K")}</kbd>
                 </button>
-                {webSession && (
+                <div className="titlebar-actions">
+                  {!web && (
+                    <button
+                      type="button"
+                      className="ibtn"
+                      aria-label={syncing ? "Buscando issues…" : "Buscar issues agora"}
+                      title={`Buscar agora as issues do ${syncTrackers(dashboards)} em todos os ambientes conectados`}
+                      aria-busy={syncing}
+                      disabled={syncing}
+                      onClick={() => void syncNow()}
+                    >
+                      <Icon name="sync" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="ibtn"
-                    aria-label="Sair"
-                    title={`Sair da sessão web${webSession.identity ? ` (${webSession.identity})` : ""}`}
-                    onClick={() => {
-                      setLogoutError(null);
-                      webSession.logout().catch((e) => setLogoutError(e instanceof Error ? e.message : String(e)));
-                    }}
+                    aria-label={warns.length > 0 ? `Notificações, ${plural(warns.length, "aviso", "avisos")}` : "Notificações"}
+                    title="Avisos"
+                    aria-haspopup={mobile ? "dialog" : undefined}
+                    onClick={() => (mobile ? setSheet(true) : shell.showPanel("warnings"))}
                   >
-                    <Icon name="logout" />
+                    <Icon name="bell" />
+                    {warns.length > 0 && <span className="ibtn-dot" aria-hidden="true" />}
                   </button>
-                )}
-              </div>
-            </header>
-
-            <div className="shell-work">
-              {!mobile && <ActivityBar counts={counts} onToggleSide={shell.toggleSide} />}
-
-              <div
-                className="sidepanel"
-                role="region"
-                aria-label="Painel lateral"
-                hidden={!layout.sideOpen}
-                style={mobile ? undefined : { width: layout.sideWidth }}
-              >
-                <div ref={side.ref} className="sidepanel-slot" />
-                {!side.filled && <DefaultSide onCollapse={shell.toggleSide} />}
-              </div>
-              {layout.sideOpen && (
-                <>
-                  {!mobile && <Resizer width={layout.sideWidth} onWidth={(w) => setLayout({ sideWidth: w })} />}
-                  {/* Gaveta (tela estreita): tocar fora fecha. */}
-                  <div className="sidepanel-scrim" aria-hidden="true" onClick={shell.toggleSide} />
-                </>
-              )}
-
-              <div className="shell-main">
-                {logoutError && (
-                  <div className="banner" role="alert">
-                    {logoutError}
-                  </div>
-                )}
-                {banners}
-                {!mobile && <EditorTabs />}
-                <div className="editor" role="tabpanel" id="editor-area" aria-label="Área de editor">
-                  {children}
+                  {webSession && (
+                    <button
+                      type="button"
+                      className="ibtn"
+                      aria-label="Sair"
+                      title={`Sair da sessão web${webSession.identity ? ` (${webSession.identity})` : ""}`}
+                      onClick={() => {
+                        setLogoutError(null);
+                        webSession.logout().catch((e) => setLogoutError(e instanceof Error ? e.message : String(e)));
+                      }}
+                    >
+                      <Icon name="logout" />
+                    </button>
+                  )}
                 </div>
-                {layout.panelOpen && !mobile && (
-                  <BottomPanel
-                    tab={layout.panelTab}
-                    onTab={(panelTab) => setLayout({ panelTab })}
-                    onClose={shell.togglePanel}
-                    events={events}
-                    warnings={warns}
-                    now={now}
-                  />
+              </header>
+
+              <div className="shell-work">
+                {!mobile && <ActivityBar counts={counts} onToggleSide={shell.toggleSide} />}
+
+                <div
+                  className="sidepanel"
+                  role="region"
+                  aria-label="Painel lateral"
+                  hidden={!layout.sideOpen}
+                  style={mobile ? undefined : { width: layout.sideWidth }}
+                >
+                  <div ref={side.ref} className="sidepanel-slot" />
+                  {!side.filled && <DefaultSide onCollapse={shell.toggleSide} />}
+                </div>
+                {layout.sideOpen && (
+                  <>
+                    {!mobile && <Resizer width={layout.sideWidth} onWidth={(w) => setLayout({ sideWidth: w })} />}
+                    {/* Gaveta (tela estreita): tocar fora fecha. */}
+                    <div className="sidepanel-scrim" aria-hidden="true" onClick={shell.toggleSide} />
+                  </>
                 )}
+
+                <div className="shell-main">
+                  {logoutError && (
+                    <div className="banner" role="alert">
+                      {logoutError}
+                    </div>
+                  )}
+                  {banners}
+                  {!mobile && <EditorTabs />}
+                  <div className="editor" role="tabpanel" id="editor-area" aria-label="Área de editor">
+                    {children}
+                  </div>
+                  {layout.panelOpen && !mobile && (
+                    <BottomPanel
+                      tab={layout.panelTab}
+                      onTab={(panelTab) => setLayout({ panelTab })}
+                      onClose={shell.togglePanel}
+                      events={events}
+                      warnings={warns}
+                      now={now}
+                    />
+                  )}
+                </div>
               </div>
+
+              {/* Celular: a barra de atividades vira barra inferior; sem barra de status. */}
+              {mobile && <ActivityBar bottom counts={counts} onToggleSide={shell.toggleSide} />}
+
+              {paletteOpen && <CommandPalette onClose={shell.closePalette} />}
+              {sheet && mobile && <WarningsSheet items={warns} now={now} onClose={() => setSheet(false)} />}
+              {keysOpen && <ShortcutsSheet web={web} mobile={mobile} onClose={() => setKeysOpen(false)} />}
+
+              {!mobile && (
+                <StatusBar
+                  now={now}
+                  term={nav.screen.name === "terminal" ? termStatus : null}
+                  warnings={warns.length}
+                  onWarnings={() => shell.showPanel("warnings")}
+                  onSync={() => shell.showPanel("sync")}
+                  onShortcuts={shell.openShortcuts}
+                />
+              )}
             </div>
-
-            {/* Celular: a barra de atividades vira barra inferior; sem barra de status. */}
-            {mobile && <ActivityBar bottom counts={counts} onToggleSide={shell.toggleSide} />}
-
-            {paletteOpen && <CommandPalette onClose={shell.closePalette} />}
-            {sheet && mobile && <WarningsSheet items={warns} now={now} onClose={() => setSheet(false)} />}
-            {keysOpen && <ShortcutsSheet web={web} mobile={mobile} onClose={() => setKeysOpen(false)} />}
-
-            {!mobile && (
-              <StatusBar
-                now={now}
-                term={nav.screen.name === "terminal" ? termStatus : null}
-                warnings={warns.length}
-                onWarnings={() => shell.showPanel("warnings")}
-                onSync={() => shell.showPanel("sync")}
-                onShortcuts={shell.openShortcuts}
-              />
-            )}
-          </div>
+          </DiscardHost>
         </StartSessionHost>
       </SideSlotProvider>
     </ShellCtx.Provider>

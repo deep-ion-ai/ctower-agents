@@ -102,6 +102,9 @@ pub struct SessionsConfig {
     /// Raiz da pasta de docs dos projetos (`docs_root`, #440); `None` = sem
     /// docs neste ambiente.
     pub docs_root: Option<PathBuf>,
+    /// Comandos de credencial do Jira e do GitLab deste ambiente
+    /// (`[credentials]` do `config.toml`, #143).
+    pub credentials: ct_core::SharedCredentials,
 }
 
 /// Notificação para quem observa o daemon (o servidor repassa à UI):
@@ -144,6 +147,22 @@ impl Sessions {
 
     pub fn config(&self) -> &SessionsConfig {
         &self.inner.cfg
+    }
+
+    /// Projeto com os comandos de credencial deste ambiente
+    /// (`[credentials]`, #143) no lugar dos do cadastro. Só para rodar o
+    /// comando aqui: o que vai ao hub sai do ledger, sem a sobrescrita.
+    pub fn with_env_credentials(
+        &self,
+        mut project: ct_ledger::Project,
+    ) -> (ct_ledger::Project, ct_core::CredentialApplied) {
+        let applied = self.inner.cfg.credentials.apply(
+            &project.gh_owner,
+            &project.gh_repo,
+            &mut project.tracker,
+            &mut project.forge,
+        );
+        (project, applied)
     }
 
     /// Acesso direto ao ledger (consultas do servidor).

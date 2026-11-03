@@ -12,6 +12,7 @@ import { permissionText } from "../terminal/permission";
 import { rcOn, rcUrl } from "../terminal/remote";
 import { DOCS_HELP_URL } from "../project/docs";
 import { SYNC_FAIL_ALERT, syncFailures } from "../project/sync-health";
+import type { DiscardTarget } from "../recovery/discard";
 
 /** Intervalo padrão do sync com o GitHub (`gh_sync_interval_secs` = 180). */
 export const SYNC_INTERVAL_MS = 180_000;
@@ -61,6 +62,8 @@ export interface AttentionItem {
    * (`claude.ai/code/<rc_session_id>`); o toque abre direto (spec do épico #205 §10.3).
    */
   remote?: string;
+  /** Interrompida: "Descartar" ao lado de "Recuperar" (#138), sem passar pela retomada. */
+  discard?: DiscardTarget;
 }
 
 export interface AttentionInput {
@@ -131,6 +134,7 @@ const ALERT_TEXT: Record<string, string> = {
   secrets_stale: "Sessão iniciada com secrets de uma configuração desatualizada",
   secrets_unavailable: "Sessão iniciada sem secrets: cache do ambiente ilegível",
   docs_unreachable: "Sessão iniciada sem a pasta de docs: docs_root inacessível",
+  epic_unresolved: "Sessão iniciada sem saber o épico da issue: as regras do épico podem estar faltando",
 };
 
 /** Rótulo das sessões do gestor de projetos (sem projeto nem issue). */
@@ -168,6 +172,17 @@ export function itemLabel(project?: Project, wi?: DashboardWorkItem, gestor = fa
   if (wi.gh_number === PROJECT_ITEM) return `${project ? project.name + " · " : ""}sessão do projeto`;
   const t = wi.title ? ` ${wi.title}` : "";
   return `${project ? project.name + " " : ""}${itemShort(project, wi.gh_number)}${t}`;
+}
+
+/** Issue no hub de uma sessão (`owner`/`repo`/número); `null` no gestor e no planejamento do projeto. */
+export function issueRef(
+  project?: Pick<Project, "gh_owner" | "gh_repo">,
+  wi?: Pick<DashboardWorkItem, "gh_number">,
+  gestor = false,
+): { owner: string; repo: string; number: number } | null {
+  return !gestor && wi && project && wi.gh_number !== PROJECT_ITEM
+    ? { owner: project.gh_owner, repo: project.gh_repo, number: wi.gh_number }
+    : null;
 }
 
 export function attention(input: AttentionInput): AttentionItem[] {
@@ -280,12 +295,13 @@ export function attention(input: AttentionInput): AttentionItem[] {
 
     for (const s of d.interrupted_sessions) {
       const { wi, project, gestor, scope } = lookup(d, s);
+      const title = itemLabel(project, wi, gestor, scope);
       out.push({
         key: `int:${env.id}:${s.id}`,
         kind: "interrupted",
         env: env.id,
         label: "Interrompida",
-        title: itemLabel(project, wi, gestor, scope),
+        title,
         detail:
           s.exit_code === null
             ? "A sessão parou no meio do trabalho"
@@ -293,6 +309,8 @@ export function attention(input: AttentionInput): AttentionItem[] {
         since: s.last_event_at,
         actionLabel: "Recuperar",
         action: { to: "recovery" },
+        // Só com o ambiente no ar (na web, com o canal reverso): o archive vai a ele.
+        discard: st?.connected ? { env: env.id, session: s.id, name: title, item: issueRef(project, wi, gestor) } : undefined,
       });
     }
 

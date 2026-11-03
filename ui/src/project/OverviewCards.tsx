@@ -2,7 +2,7 @@
 // `extra` de `ProjectOverview`: saúde do projeto, "Buscar issues agora", o
 // gestor com o escopo do projeto, as propostas dele (#100) e as revisões
 // (#101). As regras ficam em overview.ts.
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { HubProject } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -16,7 +16,8 @@ import { runProjectSync, useSyncRun, type ProjectSyncInfo } from "./sync-now";
 import { SYNC_DESKTOP_NOTE, SyncStatus } from "./SyncNow";
 import { DesktopOnly } from "../web/DesktopOnly";
 import { DESKTOP_ONLY_NOTE } from "../web/mode";
-import { ProposalItem, ProposalNote, useHubProposals, useProposalDecision } from "../hub/HubProposals";
+import { ProposalItem, ProposalNote, useHubProposals, useProposalBatch } from "../hub/HubProposals";
+import { CARD_WIDTH_TEXT, CARD_WIDTHS, useCardWidth, type CardWidth } from "./ui-store";
 import { pendingInOrder } from "../hub/proposalOrder";
 import type { Review } from "../protocol/gen";
 import { changeLabel, changeRef, forgeLabel, PROJECT_ITEM } from "../util/item";
@@ -179,29 +180,99 @@ export function ProjectGestorCard({ owner, repo }: { owner: string; repo: string
 }
 
 /**
+ * Controle de largura de um cartão da Visão geral (#139): normal (uma
+ * coluna), larga (duas) ou a linha inteira, lembrado por cartão nesta
+ * máquina (`useCardWidth`). Some quando o grid tem uma coluna só (CSS).
+ */
+export function CardWidthControl({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: CardWidth;
+  onChange(w: CardWidth): void;
+}) {
+  return (
+    <span className="card-width" role="group" aria-label={`Largura do cartão ${label}`}>
+      {CARD_WIDTHS.map((w) => (
+        <button
+          key={w}
+          type="button"
+          className="card-width-opt"
+          data-w={w}
+          aria-pressed={value === w}
+          aria-label={CARD_WIDTH_TEXT[w]}
+          title={CARD_WIDTH_TEXT[w]}
+          onClick={() => onChange(w)}
+        >
+          <span aria-hidden="true" />
+        </button>
+      ))}
+    </span>
+  );
+}
+
+/**
  * Propostas do gestor deste projeto (#100): só as pendentes deste
  * `owner/repo`, na ordem do ranking (`pendingInOrder`), cada uma com o item,
  * o valor atual → o proposto e a justificativa resumida. Aprovar e Rejeitar
  * na própria linha (`hub.proposals.decide`): a decidida sai do cartão na
  * releitura, e a decidida em outro lugar sai pelo push
- * `hub.proposals.changed`. Na web, os botões ficam desabilitados com o aviso
- * padrão das ações só do desktop. A lista completa, com nota e decisão em
- * lote, segue no Hub.
+ * `hub.proposals.changed`.
+ *
+ * Decisão em lote (#139), com a lógica da seção do Hub (`useProposalBatch`):
+ * caixa por proposta, "Marcar todas" no cabeçalho, nota opcional e
+ * "Aprovar/Rejeitar marcadas (N)", com confirmação quando o lote tem mais de
+ * uma. O resultado lista as aplicadas e as recusadas com o motivo. Largura
+ * ajustável, "larga" por padrão. Na web, os botões e as caixas ficam
+ * desabilitados com o aviso padrão das ações só do desktop.
  */
 export function ProjectProposalsCard({ owner, repo }: { owner: string; repo: string }) {
   const { hub, web } = useTower();
   const nav = useNav();
   const data = useHubProposals({ owner, repo });
-  const { busy, note, decide } = useProposalDecision(data);
+  const batch = useProposalBatch(data);
+  const { busy, pickedIds } = batch;
+  const [confirm, setConfirm] = useState<{ approve: boolean; ids: number[] } | null>(null);
+  const [width, setWidth] = useCardWidth("proposals", "wide");
   const noteId = useId();
+  const noteFieldId = useId();
   const list = useMemo(
     () => pendingInOrder(data.pending, data.ranking?.items ?? [], hub.projects),
     [data.pending, data.ranking, hub.projects],
   );
+  const readOnly = web ? { noteId } : undefined;
+  // A lista mudou (push, releitura): o lote a confirmar já não vale.
+  useEffect(() => setConfirm(null), [data.pending]);
+
+  const ask = (approve: boolean) => {
+    if (pickedIds.length > 1) setConfirm({ approve, ids: pickedIds });
+    else void batch.decide(pickedIds, approve);
+  };
+  const run = async () => {
+    if (!confirm) return;
+    setConfirm(null);
+    await batch.decide(confirm.ids, confirm.approve);
+  };
+  const off = busy || !!readOnly;
+
   return (
-    <section className="hub-card" aria-labelledby="pj-ov-propostas">
+    <section className="hub-card pj-proposals" data-width={width} aria-labelledby="pj-ov-propostas">
       <div className="hub-card-head">
         <h2 id="pj-ov-propostas">Propostas do gestor · {list.length}</h2>
+        <CardWidthControl label="Propostas do gestor" value={width} onChange={setWidth} />
+        {list.length > 0 && (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={off}
+            aria-describedby={readOnly?.noteId}
+            onClick={batch.toggleAll}
+          >
+            {batch.allPicked ? "Desmarcar todas" : "Marcar todas"}
+          </button>
+        )}
         <button type="button" className="btn btn-sm" onClick={() => nav.openTab(hubTab("proposals"))}>
           Ver no Hub
         </button>
@@ -223,18 +294,77 @@ export function ProjectProposalsCard({ owner, repo }: { owner: string; repo: str
               withCurrent
               rejectLabel="Rejeitar"
               busy={busy}
-              onDecide={decide}
-              readOnly={web ? { noteId } : undefined}
+              onDecide={(id, approve) => void batch.decide([id], approve)}
+              readOnly={readOnly}
+              pick={{ checked: batch.picked.has(x.proposal.id), onToggle: () => batch.toggle(x.proposal.id) }}
             />
           ))}
         </ul>
+      )}
+      {list.length > 0 && (
+        <div className="pj-proposals-batch">
+          {!web && (
+            <div className="field">
+              <label htmlFor={noteFieldId}>Nota (opcional, vai junto com a decisão)</label>
+              <input
+                id={noteFieldId}
+                type="text"
+                value={batch.note}
+                onChange={(e) => batch.setNote(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={off || pickedIds.length === 0}
+              aria-describedby={readOnly?.noteId}
+              onClick={() => ask(true)}
+            >
+              Aprovar marcadas ({pickedIds.length})
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              disabled={off || pickedIds.length === 0}
+              aria-describedby={readOnly?.noteId}
+              onClick={() => ask(false)}
+            >
+              Rejeitar marcadas ({pickedIds.length})
+            </button>
+          </div>
+          {confirm && (
+            <div
+              role="alertdialog"
+              aria-label={confirm.approve ? "Aprovar as marcadas" : "Rejeitar as marcadas"}
+              className="pj-proposals-confirm"
+            >
+              <p>
+                {confirm.approve ? "Aprovar" : "Rejeitar"} {plural(confirm.ids.length, "proposta", "propostas")}
+                {batch.note.trim() && <> com a nota “{batch.note.trim()}”</>}?
+                {confirm.approve && " Se o valor atual mudou desde a proposta, ela vira obsoleta e as outras seguem."}
+              </p>
+              <button
+                type="button"
+                className={`btn btn-sm ${confirm.approve ? "btn-primary" : "btn-danger"}`}
+                onClick={() => void run()}
+              >
+                {confirm.approve ? "Aprovar" : "Rejeitar"} {confirm.ids.length}
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => setConfirm(null)}>
+                Cancelar
+              </button>
+            </div>
+          )}
+        </div>
       )}
       {web && list.length > 0 && (
         <p id={noteId} className="muted hub-card-msg desktop-only-note">
           {DESKTOP_ONLY_NOTE}
         </p>
       )}
-      <ProposalNote note={note} />
+      <ProposalNote note={batch.shown} />
     </section>
   );
 }
@@ -264,6 +394,7 @@ export function ProjectReviewsCard({ clones }: { clones: readonly Clone[] }) {
   const list = read.entries.filter((e) => !(wasReviewed(reviewKey(e.env, e.workItemId)) && e.count === 0));
   const multiEnv = clones.length > 1;
   const envName = (id: string) => clones.find((c) => c.env === id)?.name ?? id;
+  const [width, setWidth] = useCardWidth("reviews", "normal");
 
   const mark = async (e: ReviewEntry) => {
     const name = entryName(e);
@@ -314,9 +445,10 @@ export function ProjectReviewsCard({ clones }: { clones: readonly Clone[] }) {
   };
 
   return (
-    <section className="hub-card" aria-labelledby="pj-ov-revisoes">
+    <section className="hub-card" data-width={width} aria-labelledby="pj-ov-revisoes">
       <div className="hub-card-head">
         <h2 id="pj-ov-revisoes">Revisões · {list.length}</h2>
+        <CardWidthControl label="Revisões" value={width} onChange={setWidth} />
         <button type="button" className="btn btn-sm" onClick={() => nav.go({ name: "review" })}>
           Ver na Revisão
         </button>

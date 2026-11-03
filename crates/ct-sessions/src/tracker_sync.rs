@@ -140,6 +140,7 @@ impl TrackerSyncConfig {
             glab_bin: self.glab_bin.clone(),
             cli_deadline: self.glab_deadline,
             credential_deadline: self.credential_deadline,
+            credentials: Default::default(),
         }
     }
 }
@@ -444,6 +445,7 @@ impl JiraGitlabSync {
     /// Síncrono: chame fora do runtime.
     pub fn issue_description(&self, project_id: i64, number: i64) -> Result<serde_json::Value> {
         let project = self.sessions.ledger().get_project(project_id)?;
+        let (project, _) = self.sessions.with_env_credentials(project);
         let Some(jira) = project.tracker.jira().cloned() else {
             return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
         };
@@ -459,6 +461,42 @@ impl JiraGitlabSync {
             "description": v.pointer("/fields/description").cloned().unwrap_or_default(),
             "url": ct_core::item_url(&project.tracker_ref(), number),
         }))
+    }
+
+    /// Issue `number` fora do espelho, lida direto no Jira (`issue view`) e
+    /// gravada no cache deste ambiente, para a sessão saber o épico dela
+    /// (#143). Já no espelho, não chama o Jira. `Ok(None)` = o Jira
+    /// respondeu, mas a issue é de um tipo ignorado ou de outro projeto.
+    /// Síncrono: chame fora do runtime.
+    pub fn fetch_issue(&self, project_id: i64, number: i64) -> Result<Option<IssueRow>> {
+        if let Some(i) = self.sessions.ledger().get_issue(project_id, number)? {
+            return Ok(Some(i));
+        }
+        let project = self.sessions.ledger().get_project(project_id)?;
+        let (project, _) = self.sessions.with_env_credentials(project);
+        let Some(jira) = project.tracker.jira().cloned() else {
+            return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
+        };
+        let key = ct_core::item_key(&project.tracker_ref(), number);
+        let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
+            .with_deadline(self.cfg.view_deadline);
+        let fail = |e: String| SessionsError::Invalid(format!("Jira, {key}: {e}"));
+        let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
+            .map_err(|e| fail(e.to_string()))?;
+        let v = cli.view(&token, &key).map_err(|e| fail(e.to_string()))?;
+        let Some(row) = issue_row(&v, &jira) else {
+            return Ok(None);
+        };
+        self.sessions
+            .ledger()
+            .apply_tracker_batch(&GithubSnapshot {
+                project_id,
+                issues: vec![row.clone()],
+                synced_at: now_ms(),
+                ..GithubSnapshot::default()
+            })?;
+        tracing::info!("jira: {key} lida direto no Jira (fora do espelho) para a sessão");
+        Ok(Some(row))
     }
 
     pub fn sync_project(&self, project_id: i64) -> Result<ProjectSync> {
@@ -482,6 +520,8 @@ impl JiraGitlabSync {
             }
             l.get_project(project_id)?
         };
+        // Os comandos de credencial deste ambiente, se houver (#143).
+        let (project, from_env) = self.sessions.with_env_credentials(project);
         let Some(jira) = project.tracker.jira().cloned() else {
             return Ok(failed("projeto sem rastreador Jira"));
         };
@@ -492,7 +532,9 @@ impl JiraGitlabSync {
             .with_list_retry_waits(self.cfg.list_retry_waits.clone());
 
         let gitlab = project.forge.gitlab().cloned();
-        let (readiness, tokens) = self.check(&project, &jira, &cli, gitlab.as_ref(), now);
+        let (mut readiness, tokens) = self.check(&project, &jira, &cli, gitlab.as_ref(), now);
+        readiness.jira.credential_from_env = from_env.tracker;
+        readiness.gitlab.credential_from_env = from_env.forge;
         let slug = format!("{}/{}", project.gh_owner, project.gh_repo);
         // Issues gravadas nos lotes do ciclo.
         let mut batched = 0;
@@ -1290,6 +1332,81 @@ mod tests {
         assert!(story.issue.has_sub_issues, "Story com sub-task vira épico");
         assert_eq!(story.children[0].issue.gh_number, 3);
         assert!(tree.sync.unwrap().last_ok_at.is_some());
+    }
+
+    /// #143: a issue fora do espelho é lida direto no Jira e gravada no
+    /// cache, com o Epic Link; já no cache, o Jira não é chamado.
+    #[test]
+    fn issue_fora_do_espelho_vem_do_jira_com_o_epico() {
+        let j = setup(false);
+        let mut story = api_issue("PROJ-2", "História", "new");
+        story["fields"]["customfield_10601"] = "PROJ-1".into();
+        j.fake.set_view(&story);
+        let row = j.sync.fetch_issue(j.env.project_id, 2).unwrap().unwrap();
+        assert_eq!(row.parent_number, Some(1));
+        assert_eq!(j.fake.viewed(), vec!["PROJ-2"]);
+        let l = j.env.sessions.ledger();
+        assert_eq!(
+            l.get_issue(j.env.project_id, 2)
+                .unwrap()
+                .unwrap()
+                .parent_number,
+            Some(1)
+        );
+        let wi = l
+            .ensure_work_item(j.env.project_id, 2, WorkItemKind::Issue)
+            .unwrap();
+        assert_eq!(l.rules_epic(&wi).unwrap(), Some(1));
+        drop(l);
+        j.fake.clear_calls();
+        assert!(j.sync.fetch_issue(j.env.project_id, 2).unwrap().is_some());
+        assert!(j.fake.viewed().is_empty(), "do cache, sem chamar o Jira");
+    }
+
+    /// #143: o comando do cadastro não serve neste ambiente; o do
+    /// `[credentials]` vale no sync e na leitura direta, e a prontidão diz
+    /// que a credencial veio do ambiente.
+    #[test]
+    fn credencial_do_ambiente_vence_a_do_cadastro() {
+        let j = setup_with(false, |jira, _| {
+            jira.credential_cmd = "/caminho/que/nao/existe/pass show jira".into();
+        });
+        j.fake.set_issues(&arvore());
+        let r = &j.sync.sync_all().unwrap()[0];
+        assert!(!r.ok, "com o comando do cadastro, falha");
+        let p = j
+            .env
+            .sessions
+            .ledger()
+            .get_project(j.env.project_id)
+            .unwrap();
+        j.env.cfg.credentials.replace(ct_core::CredentialOverrides(
+            [(
+                format!("{}/{}", p.gh_owner, p.gh_repo),
+                ct_core::CredentialOverride {
+                    tracker_cmd: format!("printf '{SENHA}\\n'"),
+                    forge_cmd: String::new(),
+                },
+            )]
+            .into(),
+        ));
+        let r = &j.sync.sync_all().unwrap()[0];
+        assert!(r.ok, "{r:?}");
+        let ready = j.sync.readiness();
+        assert!(ready[0].jira.credential_ok && ready[0].jira.credential_from_env);
+        // O cadastro no ledger continua com o comando do hub.
+        assert_eq!(
+            j.env
+                .sessions
+                .ledger()
+                .get_project(j.env.project_id)
+                .unwrap()
+                .tracker
+                .jira()
+                .unwrap()
+                .credential_cmd,
+            "/caminho/que/nao/existe/pass show jira"
+        );
     }
 
     /// "Ver issue" (#434): a descrição vem crua do `issue view`, sem passar

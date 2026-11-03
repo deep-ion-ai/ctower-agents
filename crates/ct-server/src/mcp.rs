@@ -200,6 +200,15 @@ fn hub_scope(scope: &str) -> Option<DecisionScope> {
     }
 }
 
+/// `epic_resolution` do `ledger_get_context` e do `rules_get` (#143): "ok"
+/// ou "falhou: <motivo>" quando a issue não está no espelho do rastreador.
+fn epic_resolution(l: &Ledger, p: &ct_ledger::Project, wi: &WorkItem) -> Result<String, String> {
+    Ok(match l.epic_resolution(p, wi).map_err(|e| e.to_string())? {
+        None => "ok".into(),
+        Some(reason) => format!("falhou: {reason}"),
+    })
+}
+
 /// Work items locais do escopo.
 fn scope_ids(l: &Ledger, wi: &WorkItem, scope: &str) -> Result<Vec<i64>, String> {
     let e = |e: ct_ledger::LedgerError| e.to_string();
@@ -429,6 +438,7 @@ fn call_tool(l: &Ledger, s: &Session, name: &str, args: &Value) -> Result<Value,
             let p = l.get_project(wi.project_id).map_err(e)?;
             let issue = l.get_issue(wi.project_id, wi.gh_number).map_err(e)?;
             let rules = l.session_rules(&p, &wi).map_err(e)?;
+            let epic_resolution = epic_resolution(l, &p, &wi)?;
             let mut ctx = json!({
                 "ref": p.item_ref(wi.gh_number),
                 // Rastreador e forja (#351): a sessão Jira usa `ref` como a
@@ -448,6 +458,9 @@ fn call_tool(l: &Ledger, s: &Session, name: &str, args: &Value) -> Result<Value,
                     "state": i.state,
                 })),
                 "parent_epic": issue.and_then(|i| i.parent_number),
+                // #143: "ok" ou "falhou: <motivo>" (issue fora do espelho:
+                // pare e pergunte antes de trabalhar).
+                "epic_resolution": epic_resolution,
                 "repository": format!("{}/{}", p.gh_owner, p.gh_repo),
                 "branch": wi.branch,
                 "worktree": wi.worktree_path,
@@ -472,6 +485,7 @@ fn call_tool(l: &Ledger, s: &Session, name: &str, args: &Value) -> Result<Value,
             let p = l.get_project(wi.project_id).map_err(e)?;
             let rules = l.session_rules(&p, &wi).map_err(e)?;
             Ok(json!({
+                "epic_resolution": epic_resolution(l, &p, &wi)?,
                 "project": {
                     "name": p.name,
                     "version": rules.project.as_ref().map(|r| r.version),
@@ -1083,6 +1097,17 @@ mod tests {
         assert_eq!(c["protected_branches"], json!(["develop", "main"]));
         // Sem espelho do GitHub: sem issue nem épico.
         assert!(c["issue"].is_null() && c["parent_epic"].is_null());
+        // ...e o aviso explícito de que o épico não foi resolvido (#143).
+        let er = c["epic_resolution"].as_str().unwrap();
+        assert!(
+            er.starts_with("falhou: a issue deep-ion-ai/demo#1 não está no cache"),
+            "{er}"
+        );
+        let r = call(&srv, &s.id, "rules_get", json!({})).await;
+        assert_eq!(
+            r["structuredContent"]["epic_resolution"],
+            c["epic_resolution"]
+        );
         srv.env.sessions.kill(&s.id).unwrap();
     }
 
@@ -1115,6 +1140,7 @@ mod tests {
         let r = call(&srv, &s.id, "ledger_get_context", json!({})).await;
         let c = &r["structuredContent"];
         assert_eq!(c["parent_epic"], 9);
+        assert_eq!(c["epic_resolution"], "ok");
         assert_eq!(c["issue"]["title"], "Sub-issue");
         assert_eq!(c["issue"]["state"], "open");
         srv.env.sessions.kill(&s.id).unwrap();

@@ -21,6 +21,8 @@ export type SettingsSection =
   | "web-access"
   // Ambiente
   | "github"
+  /** Comandos de credencial do Jira e do GitLab só deste ambiente (#143). */
+  | "tracker-credentials"
   | "daemon-update"
   | "local-projects"
   | "env-notifications";
@@ -36,6 +38,7 @@ export const SECTION_LABEL: Record<SettingsSection, string> = {
   plan: "Plano da conta",
   "web-access": "Acesso web",
   github: "GitHub",
+  "tracker-credentials": "Credenciais do Jira e GitLab",
   "daemon-update": "Atualização do daemon",
   "local-projects": "Projetos locais",
   "env-notifications": "Notificações",
@@ -46,7 +49,7 @@ export const SCOPE_SECTIONS: Record<SettingsScope, SettingsSection[]> = {
   // As atualizações do app ficam em Manutenção › Atualizações › Este app (#336).
   app: ["connections", "sessions", "appearance", "terminal", "notifications", "plan", "web-access"],
   // A Limpeza fica só em Manutenção › Limpeza (#22): aqui, um atalho em Projetos locais.
-  env: ["github", "daemon-update", "local-projects", "env-notifications"],
+  env: ["github", "tracker-credentials", "daemon-update", "local-projects", "env-notifications"],
 };
 
 export const scopeOf = (s: SettingsSection): SettingsScope => (SCOPE_SECTIONS.app.includes(s) ? "app" : "env");
@@ -86,6 +89,7 @@ const KEYWORDS: Record<SettingsSection, string> = {
   plan: "limiar limiares aviso crítico uso 5h semanal conta alerta leitura velha statusline",
   "web-access": "sair logout sessão web navegador cookie revogar",
   github: "token gh sync sincronização intervalo",
+  "tracker-credentials": "jira gitlab glab credencial senha token pass comando credential_cmd",
   "daemon-update": "update_ref canal intervalo update_check_interval_hours versão atualizar rollback",
   "local-projects": "clones worktrees repos_root",
   "env-notifications": "silenciar avisos ambiente",

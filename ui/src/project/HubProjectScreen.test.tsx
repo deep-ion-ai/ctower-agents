@@ -7,7 +7,8 @@ import type { HubDashboard, HubInfo, HubProject, HubTree, HubTreeNode, HubWorkIt
 import { HUB_CONFIG_UNLINKED, dashboard, healthSignal, hubAssignment, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
 // Cartão Propostas do gestor (#100).
 import * as fx from "../test/fixtures";
-import type { HubProposal, HubRanking } from "../protocol/hub-gen";
+import type { HubProposal, HubRanking, ProposalDecided } from "../protocol/hub-gen";
+import { resetProjectUi } from "./ui-store";
 import { hubItem as webItem, webApi } from "../test/web";
 import { DESKTOP_ONLY_NOTE } from "../web/mode";
 
@@ -710,6 +711,15 @@ test("abas do projeto (#17): sem `view`, Visão geral (#99); cada aba troca o en
   );
   const ints = screen.getByRole("list", { name: "Interrompidas em WSL" });
   expect(ints).toHaveTextContent("processo perdido");
+  // Descartar ao lado (#138): a confirmação, e só então o `session.archive`.
+  api.on("session.archive", {});
+  await user.click(within(ints).getByRole("button", { name: "Descartar: #62 Item 62" }));
+  const dlg = await screen.findByRole("alertdialog", { name: "Descartar a sessão?" });
+  expect(dlg).toHaveTextContent("#62 Item 62");
+  expect(api.callsTo("session.archive")).toHaveLength(0);
+  await user.click(within(dlg).getByRole("button", { name: "Descartar" }));
+  await waitFor(() => expect(api.callsTo("session.archive")[0].params).toEqual({ session_id: INT62.id }));
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   await user.click(within(ints).getByRole("button", { name: "Abrir na Recuperação: #62 Item 62" }));
   expect(await screen.findByRole("tab", { name: /Recuperação/, selected: true })).toBeInTheDocument();
 
@@ -1220,6 +1230,188 @@ describe("Visão geral (#100): Propostas do gestor", () => {
       expect(b).toBeDisabled();
       expect(b).toHaveAccessibleDescription(DESKTOP_ONLY_NOTE);
     }
+    expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(0);
+  });
+});
+
+// Propostas do gestor na Visão geral (#139): decisão em lote e largura ajustável.
+describe("Visão geral (#139): propostas em lote e largura do cartão", () => {
+  const ACME = fx.hubProject({ id: 30, gh_owner: "acme", gh_repo: "acme-web", name: "acme-web" });
+  const acmeAt = { name: "project" as const, owner: "acme", repo: "acme-web", view: "overview" as const };
+  const prop = (id: number, number: number, title: string) =>
+    fx.hubProposal({
+      id,
+      owner: "acme",
+      repo: "acme-web",
+      number,
+      ref: `acme/acme-web#${number}`,
+      title,
+      created_at: NOW - 1000 * id,
+      current: { priority: null },
+      proposed: { priority: "P2" },
+      justification: `justificativa de ${title}`,
+    });
+  const A = prop(1, 12, "Login no Safari");
+  const B = prop(2, 15, "Cadastro trava");
+  const C = prop(3, 20, "Relatório lento");
+
+  /**
+   * Hub fictício: `pending` é a lista viva; `obsolete` são os ids que, na
+   * decisão, viram obsoletos (o valor atual mudou) em vez de aplicados.
+   */
+  function setupBatch(initial: HubProposal[], { obsolete = [] as number[], web = false } = {}) {
+    let pending = [...initial];
+    const decideOne = (id: number, approve: boolean): ProposalDecided => {
+      const x = pending.find((y) => y.id === id);
+      if (!x) return { id, proposal: null, error: `proposta #${id} não existe` };
+      pending = pending.filter((y) => y.id !== id);
+      return obsolete.includes(id)
+        ? { id, proposal: { ...x, state: "obsoleta", decision_note: "valor atual mudou: prioridade P1" }, error: null }
+        : { id, proposal: { ...x, state: approve ? "aprovada" : "rejeitada" }, error: null };
+    };
+    const api = (web ? webApi() : setup(true))
+      .onHub("hub.tree.get", { project: ACME, sync: sync({ project_id: 30, last_ok_at: NOW }), roots: [], untracked: [] })
+      .onHub("hub.dashboard.get", { ...HUB_DASH, projects: [{ project: ACME, work_items: [] }] })
+      .onHub("hub.projects.list", [fx.hubProjectView(ACME)])
+      .onHub("hub.health.get", fx.NO_HEALTH)
+      .onHub("hub.ranking.get", { truncated: false, items: [] })
+      .onHub("hub.proposals.list", () => ({ proposals: pending, truncated: false }))
+      .onHub("hub.proposals.decide", (p: { id?: number; ids?: number[]; approve: boolean }) =>
+        p.ids ? p.ids.map((id) => decideOne(id, p.approve)) : decideOne(p.id!, p.approve).proposal,
+      );
+    return { api, drop: (id: number) => (pending = pending.filter((y) => y.id !== id)) };
+  }
+
+  it("Marcar todas e aprovar, com confirmação: uma chamada com todos os ids e o resultado no cartão", async () => {
+    const { api } = setupBatch([A, B, C]);
+    render(<App api={api} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const c = await card("Propostas do gestor · 3");
+    for (const id of [1, 2, 3]) expect(within(c).getByRole("checkbox", { name: `Marcar a proposta #${id}` })).not.toBeChecked();
+    expect(within(c).getByRole("button", { name: "Aprovar marcadas (0)" })).toBeDisabled();
+
+    await user.click(within(c).getByRole("button", { name: "Marcar todas" }));
+    expect(within(c).getByRole("button", { name: "Desmarcar todas" })).toBeInTheDocument();
+    await user.type(within(c).getByLabelText(/Nota/), "trimestre que vem");
+    await user.click(within(c).getByRole("button", { name: "Aprovar marcadas (3)" }));
+    // Mais de uma: pede confirmação antes de chamar o hub.
+    const ask = within(c).getByRole("alertdialog", { name: "Aprovar as marcadas" });
+    expect(ask).toHaveTextContent("Aprovar 3 propostas com a nota “trimestre que vem”?");
+    expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(0);
+    await user.click(within(ask).getByRole("button", { name: "Aprovar 3" }));
+
+    await waitFor(() => expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(1));
+    const call = api.hubCallsTo("hub.proposals.decide")[0].params as { ids: number[]; approve: boolean; note: string };
+    expect(call).toEqual({ ids: [1, 2, 3], approve: true, note: "trimestre que vem" });
+    const ok = await within(c).findByRole("status");
+    expect(ok).toHaveTextContent("3 proposta(s) aprovada(s).");
+    expect(ok).toHaveTextContent("Aplicadas: #1, #2, #3");
+    expect(await within(c).findByText("Nenhuma proposta pendente neste projeto.")).toBeInTheDocument();
+  });
+
+  it("Cancelar a confirmação não decide nada; uma só marcada vai direto, sem confirmação", async () => {
+    const { api } = setupBatch([A, B]);
+    render(<App api={api} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const c = await card("Propostas do gestor · 2");
+    await user.click(within(c).getByRole("button", { name: "Marcar todas" }));
+    await user.click(within(c).getByRole("button", { name: "Rejeitar marcadas (2)" }));
+    const ask = within(c).getByRole("alertdialog", { name: "Rejeitar as marcadas" });
+    await user.click(within(ask).getByRole("button", { name: "Cancelar" }));
+    expect(within(c).queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(0);
+
+    await user.click(within(c).getByRole("checkbox", { name: "Marcar a proposta #1" }));
+    await user.click(within(c).getByRole("button", { name: "Rejeitar marcadas (1)" }));
+    expect(within(c).queryByRole("alertdialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(1));
+    expect(api.hubCallsTo("hub.proposals.decide")[0].params).toEqual({ id: 2, approve: false });
+  });
+
+  it("obsoleta entre a leitura e a decisão: aparece como recusada com o motivo, e as outras são aplicadas", async () => {
+    const { api } = setupBatch([A, B, C], { obsolete: [2] });
+    render(<App api={api} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const c = await card("Propostas do gestor · 3");
+    await user.click(within(c).getByRole("button", { name: "Marcar todas" }));
+    await user.click(within(c).getByRole("button", { name: "Aprovar marcadas (3)" }));
+    await user.click(within(c).getByRole("button", { name: "Aprovar 3" }));
+    const alert = await within(c).findByRole("alert");
+    expect(alert).toHaveTextContent("2 proposta(s) aprovada(s); 1 não (obsoleta ou já decidida).");
+    expect(alert).toHaveTextContent("Aplicadas: #1, #3");
+    const refused = within(alert).getByRole("list", { name: "Propostas recusadas" });
+    expect(refused).toHaveTextContent("Proposta #2 (acme/acme-web#15): obsoleta: valor atual mudou: prioridade P1");
+  });
+
+  it("push hub.proposals.changed: a que saiu da lista deixa de estar marcada e a confirmação aberta fecha", async () => {
+    const { api, drop } = setupBatch([A, B, C]);
+    render(<App api={api} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const c = await card("Propostas do gestor · 3");
+    await user.click(within(c).getByRole("checkbox", { name: "Marcar a proposta #1" }));
+    await user.click(within(c).getByRole("checkbox", { name: "Marcar a proposta #2" }));
+    await user.click(within(c).getByRole("button", { name: "Aprovar marcadas (2)" }));
+    expect(within(c).getByRole("alertdialog")).toBeInTheDocument();
+
+    drop(2);
+    act(() => api.hubPush("hub.proposals.changed"));
+    await waitFor(() => expect(within(c).queryByRole("listitem", { name: "Proposta #2" })).not.toBeInTheDocument());
+    expect(within(c).queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(within(c).getByRole("button", { name: "Aprovar marcadas (1)" })).toBeInTheDocument();
+    await user.click(within(c).getByRole("button", { name: "Aprovar marcadas (1)" }));
+    await waitFor(() => expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(1));
+    expect(api.hubCallsTo("hub.proposals.decide")[0].params).toEqual({ id: 1, approve: true });
+  });
+
+  it("largura: larga por padrão, com rótulo; a escolha fica por cartão nesta máquina, depois de reabrir o app", async () => {
+    const { api } = setupBatch([A]);
+    const { unmount } = render(<App api={api} initial={acmeAt} />);
+    const user = userEvent.setup();
+    const c = await card("Propostas do gestor · 1");
+    const group = within(c).getByRole("group", { name: "Largura do cartão Propostas do gestor" });
+    const opt = (g: HTMLElement, name: string) => within(g).getByRole("button", { name });
+    expect(within(group).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Normal",
+      "Larga",
+      "Linha inteira",
+    ]);
+    expect(opt(group, "Larga")).toHaveAttribute("aria-pressed", "true");
+    expect(opt(group, "Normal")).toHaveAttribute("aria-pressed", "false");
+    expect(c).toHaveAttribute("data-width", "wide");
+    // O de Revisões tem o próprio controle, normal por padrão.
+    const rv = await card("Revisões · 0");
+    const rvGroup = within(rv).getByRole("group", { name: "Largura do cartão Revisões" });
+    expect(opt(rvGroup, "Normal")).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(opt(group, "Linha inteira"));
+    expect(c).toHaveAttribute("data-width", "full");
+    expect(opt(group, "Linha inteira")).toHaveAttribute("aria-pressed", "true");
+    expect(rv).toHaveAttribute("data-width", "normal");
+
+    // Reabrir o app: só o que ficou no armazenamento da máquina.
+    unmount();
+    resetProjectUi();
+    render(<App api={setupBatch([A]).api} initial={acmeAt} />);
+    const again = await card("Propostas do gestor · 1");
+    expect(again).toHaveAttribute("data-width", "full");
+    const g2 = within(again).getByRole("group", { name: "Largura do cartão Propostas do gestor" });
+    expect(opt(g2, "Linha inteira")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("na web, as caixas e os botões do lote ficam desabilitados com a explicação padrão", async () => {
+    const { api } = setupBatch([A, B], { web: true });
+    render(<App api={api} initial={acmeAt} />);
+    const c = await card("Propostas do gestor · 2");
+    for (const el of [
+      within(c).getByRole("checkbox", { name: "Marcar a proposta #1" }),
+      within(c).getByRole("button", { name: "Marcar todas" }),
+      within(c).getByRole("button", { name: "Aprovar marcadas (0)" }),
+      within(c).getByRole("button", { name: "Rejeitar marcadas (0)" }),
+    ]) {
+      expect(el).toBeDisabled();
+      expect(el).toHaveAccessibleDescription(DESKTOP_ONLY_NOTE);
+    }
+    expect(within(c).queryByLabelText(/Nota/)).not.toBeInTheDocument();
     expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(0);
   });
 });

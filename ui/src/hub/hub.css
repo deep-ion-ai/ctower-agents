@@ -271,6 +271,36 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 16px;
+  /* Largura dos cartões (#139): o que cabe depende do grid, não da janela. */
+  container: hub-cards / inline-size;
+}
+
+/*
+ * Largura ajustável (#139): "larga" ocupa duas colunas quando o grid tem
+ * espaço para duas (2 × 320 px + o gap); com uma só, cai para ela, e o
+ * controle some. "Linha inteira" vale sempre.
+ */
+.hub-card[data-width="full"] {
+  grid-column: 1 / -1;
+}
+
+.card-width {
+  display: none;
+}
+
+@container hub-cards (min-width: 656px) {
+  .hub-card[data-width="wide"] {
+    grid-column: span 2;
+  }
+
+  .card-width {
+    display: inline-flex;
+  }
+
+  /* Visível, o controle é quem empurra os botões para a direita. */
+  .hub-card-head .card-width + .btn {
+    margin-left: 0;
+  }
 }
 
 .hub-card {
@@ -299,6 +329,78 @@
 
 .hub-card-head .btn {
   margin-left: auto;
+}
+
+/* Com o controle, o cabeçalho quebra antes de espremer o título. */
+.hub-card-head:has(.card-width) {
+  flex-wrap: wrap;
+}
+
+.hub-card-head:has(.card-width) h2 {
+  white-space: nowrap;
+}
+
+/*
+ * Controle de largura (#139): três botões com uma barra de largura
+ * crescente (normal, larga, linha inteira), à direita, antes dos botões.
+ */
+.hub-card-head .card-width {
+  flex: none;
+  margin-left: auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.card-width-opt {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.card-width-opt span {
+  display: block;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.card-width-opt[data-w="normal"] span {
+  width: 6px;
+}
+
+.card-width-opt[data-w="wide"] span {
+  width: 11px;
+}
+
+.card-width-opt[data-w="full"] span {
+  width: 16px;
+}
+
+.card-width-opt:hover {
+  color: var(--text-2);
+}
+
+.card-width-opt[aria-pressed="true"] {
+  background: var(--selected);
+  color: var(--running);
+}
+
+.card-width-opt:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+}
+
+.hub-card-head .btn + .btn {
+  margin-left: 0;
 }
 
 .hub-card-list {

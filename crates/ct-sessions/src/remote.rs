@@ -619,6 +619,7 @@ mod tests {
             "printf 'Enable Remote Control? (y/n) '; read ans; printf '%s' \"$ans\" > \"$out.ans\"; \
              echo 'Continue at https://claude.ai/code/session_01Pty'; sleep 30",
         ));
+        env.mirror_issues(&[(12, None, false)]);
         let s = env
             .sessions
             .start(rc_request(&env, 12, "Login \"web\""))

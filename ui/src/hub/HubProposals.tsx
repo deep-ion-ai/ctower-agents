@@ -94,11 +94,23 @@ export function Why({ text }: { text: string }) {
   );
 }
 
+/** Uma proposta do lote que o hub não aplicou, com o motivo (#139). */
+export interface RefusedProposal {
+  id: number;
+  /** Item da proposta (`owner/repo#n` ou a chave do tracker), se conhecido. */
+  ref: string | null;
+  reason: string;
+}
+
 export interface DecideResult {
   text: string;
   error: boolean;
   /** O hub recusou o pedido (nada decidido): a nota e as marcadas ficam. */
   failed?: boolean;
+  /** Lote: ids das aplicadas (aprovadas ou rejeitadas). */
+  applied?: number[];
+  /** Lote: as que não foram aplicadas, cada uma com o motivo. */
+  refused?: RefusedProposal[];
 }
 
 /** Propostas do hub: pendentes, últimas decididas e o ranking que as posiciona. */
@@ -137,6 +149,9 @@ export function useHubProposals(project?: { owner: string; repo: string }): Prop
   const [loaded, setLoaded] = useState(false);
   const [ranking, setRanking] = useState<HubRanking | null | undefined>(undefined);
   const seq = useRef(0);
+  // Para nomear as recusadas do lote pelo item, sem refazer `decide` a cada leitura.
+  const known = useRef<HubProposal[]>([]);
+  known.current = pending;
   const owner = project?.owner;
   const repo = project?.repo;
 
@@ -188,14 +203,7 @@ export function useHubProposals(project?: { owner: string; repo: string }): Prop
               : { text: `Proposta #${r.id} ${STATE_TEXT[r.state]}.`, error: false };
         } else {
           const res = await api.hubCall<ProposalDecided[]>("hub.proposals.decide", { ids, approve, ...extra });
-          const ok = res.filter((o) => o.proposal && o.proposal.state !== "obsoleta").length;
-          const failed = res.length - ok;
-          out = {
-            text: `${ok} proposta(s) ${approve ? "aprovada(s)" : "rejeitada(s)"}${
-              failed > 0 ? `; ${failed} não (obsoleta ou já decidida)` : ""
-            }.`,
-            error: failed > 0,
-          };
+          out = batchResult(res, approve, known.current);
         }
       } catch (e) {
         return { text: errText(e), error: true, failed: true };
@@ -207,6 +215,86 @@ export function useHubProposals(project?: { owner: string; repo: string }): Prop
   );
 
   return { pending, past, ranking, error, loaded, load, decide };
+}
+
+/**
+ * Resultado de `hub.proposals.decide` em lote: cada id na sua transação, e
+ * uma recusada (obsoleta, já decidida, inexistente) não impede as outras.
+ * O texto resume; `applied` e `refused` (com o motivo) detalham.
+ */
+export function batchResult(res: ProposalDecided[], approve: boolean, known: readonly HubProposal[] = []): DecideResult {
+  const applied: number[] = [];
+  const refused: RefusedProposal[] = [];
+  for (const o of res) {
+    const p = o.proposal ?? known.find((x) => x.id === o.id) ?? null;
+    const ref = p ? (p.ref ?? `${p.owner}/${p.repo}#${p.number}`) : null;
+    if (o.proposal && o.proposal.state !== "obsoleta" && o.proposal.state !== "pendente") applied.push(o.id);
+    else if (o.proposal?.state === "obsoleta")
+      refused.push({ id: o.id, ref, reason: `obsoleta: ${o.proposal.decision_note ?? "o valor atual mudou"}` });
+    else refused.push({ id: o.id, ref, reason: o.error ?? "não decidida" });
+  }
+  return {
+    text: `${applied.length} proposta(s) ${approve ? "aprovada(s)" : "rejeitada(s)"}${
+      refused.length > 0 ? `; ${refused.length} não (obsoleta ou já decidida)` : ""
+    }.`,
+    error: refused.length > 0,
+    applied,
+    refused,
+  };
+}
+
+/**
+ * Seleção e decisão em lote das propostas pendentes (#139), comum à seção
+ * Hub › Propostas e ao cartão da Visão geral do projeto: as marcadas, a nota
+ * opcional, ocupado enquanto o hub responde e a mensagem do resultado (ou a
+ * falha de leitura). As marcadas que deixam de estar pendentes (decididas
+ * aqui ou noutro lugar, relidas pelo push `hub.proposals.changed`) saem da
+ * seleção. O lote vai na ordem das pendentes, não na de marcação.
+ */
+export function useProposalBatch(data: ProposalsData) {
+  const { pending } = data;
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<DecideResult | null>(null);
+  const shown = msg ?? (data.error ? { text: data.error, error: true } : null);
+
+  useEffect(() => {
+    setPicked((s) => {
+      const n = new Set([...s].filter((id) => pending.some((x) => x.id === id)));
+      return n.size === s.size ? s : n;
+    });
+  }, [pending]);
+
+  const decide = async (ids: number[], approve: boolean) => {
+    setBusy(true);
+    setMsg(null);
+    const r = await data.decide(ids, approve, note);
+    setMsg(r);
+    if (!r.failed) {
+      setNote("");
+      setPicked((s) => {
+        const n = new Set(s);
+        for (const id of ids) n.delete(id);
+        return n;
+      });
+    }
+    setBusy(false);
+  };
+
+  const toggle = (id: number) =>
+    setPicked((s) => {
+      const n = new Set(s);
+      if (!n.delete(id)) n.add(id);
+      return n;
+    });
+
+  const allPicked = pending.length > 0 && pending.every((p) => picked.has(p.id));
+  const toggleAll = () => setPicked(allPicked ? new Set() : new Set(pending.map((p) => p.id)));
+  /** As marcadas, na ordem das pendentes. */
+  const pickedIds = pending.filter((p) => picked.has(p.id)).map((p) => p.id);
+
+  return { picked, pickedIds, toggle, allPicked, toggleAll, note, setNote, busy, shown, decide };
 }
 
 /**
@@ -228,12 +316,33 @@ export function useProposalDecision(data: ProposalsData) {
 }
 
 /** Mensagem do cartão: o resultado da decisão ou o erro, como alerta. */
-export function ProposalNote({ note }: { note: DecideResult | null }) {
+export function ProposalNote({ note, className = "hub-card-msg" }: { note: DecideResult | null; className?: string }) {
   if (!note) return null;
+  const cls = `${className} ${note.error ? "start-error" : "state-on"}`.trim();
+  const role = note.error ? "alert" : "status";
+  if (!note.applied?.length && !note.refused?.length)
+    return (
+      <p role={role} className={cls}>
+        {note.text}
+      </p>
+    );
   return (
-    <p role={note.error ? "alert" : "status"} className={`hub-card-msg ${note.error ? "start-error" : "state-on"}`}>
-      {note.text}
-    </p>
+    <div role={role} className={`${cls} proposal-result`}>
+      <p>{note.text}</p>
+      {note.applied && note.applied.length > 0 && (
+        <p className="muted">Aplicadas: {note.applied.map((id) => `#${id}`).join(", ")}</p>
+      )}
+      {note.refused && note.refused.length > 0 && (
+        <ul aria-label="Propostas recusadas">
+          {note.refused.map((r) => (
+            <li key={r.id}>
+              Proposta #{r.id}
+              {r.ref && <span className="mono"> ({r.ref})</span>}: {r.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -252,6 +361,7 @@ export function ProposalItem({
   busy,
   onDecide,
   readOnly,
+  pick,
 }: {
   p: HubProposal;
   title?: string | null;
@@ -260,24 +370,48 @@ export function ProposalItem({
   busy: boolean;
   onDecide(id: number, approve: boolean): void;
   readOnly?: { noteId: string };
+  /** Caixa de seleção para a decisão em lote (#139). */
+  pick?: { checked: boolean; onToggle(): void };
 }) {
   const nav = useNav();
   const { hub } = useTower();
   const proj = hubProjectOf(hub.projects, p.owner, p.repo);
   return (
     <li aria-label={`Proposta #${p.id}`}>
+      {pick && (
+        <input
+          type="checkbox"
+          aria-label={`Marcar a proposta #${p.id}`}
+          checked={pick.checked}
+          disabled={busy || !!readOnly}
+          aria-describedby={readOnly?.noteId}
+          onChange={pick.onToggle}
+        />
+      )}
       <span className="badge">{p.kind === "priority" ? "prioridade" : "status"}</span>
       <div className="hub-card-text">
-        <button
-          type="button"
-          className="linklike mono"
-          title={p.ref ?? `${p.owner}/${p.repo}#${p.number}`}
-          onClick={() => nav.go({ name: "project", owner: p.owner, repo: p.repo, item: { ghNumber: p.number } })}
-        >
-          {itemShort(proj, p.number)}
-        </button>
-        {title && <> {title}</>} {withCurrent && <>{valueText(p.kind, p.current, proj)} </>}
-        <span className="muted">→</span> <strong>{valueText(p.kind, p.proposed, proj)}</strong>
+        <span className="proposal-line">
+          <button
+            type="button"
+            className="linklike mono"
+            title={p.ref ?? `${p.owner}/${p.repo}#${p.number}`}
+            onClick={() => nav.go({ name: "project", owner: p.owner, repo: p.repo, item: { ghNumber: p.number } })}
+          >
+            {itemShort(proj, p.number)}
+          </button>
+          {title && (
+            <>
+              {" "}
+              <span className="proposal-line-title" title={title}>
+                {title}
+              </span>
+            </>
+          )}{" "}
+          <span className="proposal-line-change">
+            {withCurrent && <>{valueText(p.kind, p.current, proj)} </>}
+            <span className="muted">→</span> <strong>{valueText(p.kind, p.proposed, proj)}</strong>
+          </span>
+        </span>
         <div className="hub-card-sub">
           <Why text={p.justification} />
         </div>
@@ -319,38 +453,7 @@ export function ProposalsPanel({ now, data }: { now: number; data: ProposalsData
   const { hub } = useTower();
   const nav = useNav();
   const { pending, past, ranking } = data;
-  const [picked, setPicked] = useState<Set<number>>(new Set());
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<DecideResult | null>(null);
-  const shown = msg ?? (data.error ? { text: data.error, error: true } : null);
-
-  // Marcadas que deixaram de estar pendentes saem da seleção.
-  useEffect(() => {
-    setPicked((s) => {
-      const n = new Set([...s].filter((id) => pending.some((x) => x.id === id)));
-      return n.size === s.size ? s : n;
-    });
-  }, [pending]);
-
-  const decide = async (ids: number[], approve: boolean) => {
-    setBusy(true);
-    setMsg(null);
-    const r = await data.decide(ids, approve, note);
-    setMsg(r);
-    if (!r.failed) {
-      setNote("");
-      setPicked(new Set());
-    }
-    setBusy(false);
-  };
-
-  const toggle = (id: number) =>
-    setPicked((s) => {
-      const n = new Set(s);
-      if (!n.delete(id)) n.add(id);
-      return n;
-    });
+  const { picked, pickedIds, toggle, allPicked, toggleAll, note, setNote, busy, shown, decide } = useProposalBatch(data);
 
   const placed = useMemo(
     () => placeProposals(pending, ranking?.items ?? [], hub.projects),
@@ -544,34 +647,30 @@ export function ProposalsPanel({ now, data }: { now: number; data: ProposalsData
             <button
               type="button"
               className="btn"
-              onClick={() => setPicked(picked.size === pending.length ? new Set() : new Set(pending.map((p) => p.id)))}
+              onClick={toggleAll}
             >
-              {picked.size === pending.length ? "Desmarcar todas" : "Marcar todas"}
+              {allPicked ? "Desmarcar todas" : "Marcar todas"}
             </button>
             <button
               type="button"
               className="btn btn-primary"
-              disabled={busy || picked.size === 0}
-              onClick={() => decide([...picked], true)}
+              disabled={busy || pickedIds.length === 0}
+              onClick={() => decide(pickedIds, true)}
             >
-              Aprovar marcadas ({picked.size})
+              Aprovar marcadas ({pickedIds.length})
             </button>
             <button
               type="button"
               className="btn btn-danger"
-              disabled={busy || picked.size === 0}
-              onClick={() => decide([...picked], false)}
+              disabled={busy || pickedIds.length === 0}
+              onClick={() => decide(pickedIds, false)}
             >
-              Rejeitar marcadas ({picked.size})
+              Rejeitar marcadas ({pickedIds.length})
             </button>
           </div>
         </>
       )}
-      {shown && (
-        <p role={shown.error ? "alert" : "status"} className={shown.error ? "start-error" : "state-on"}>
-          {shown.text}
-        </p>
-      )}
+      <ProposalNote note={shown} className="" />
       {past.length > 0 && (
         <details className="proposals-past">
           <summary>Decididas e obsoletas · {past.length}</summary>

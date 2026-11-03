@@ -31,6 +31,7 @@ import { STATUS } from "./status";
 import { StatusMenu } from "./StatusMenu";
 import { mergedOpen, mergedOpenText } from "./TreeRow";
 import { DesktopOnly } from "../web/DesktopOnly";
+import { DISCARD_LABEL, useDiscard } from "../recovery/discard";
 
 export const PR_TEXT: Record<PrState, string> = { open: "aberto", merged: "mesclado", closed: "fechado" };
 export const ORIGIN_TEXT = { autonoma: "autônoma", orientada: "orientada", manual: "manual" } as const;
@@ -146,9 +147,10 @@ export function WorkItemPanel({
   /** O status mudou no hub: a tela relê a árvore. */
   onStatusChanged?: () => void;
 }) {
-  const { api, hub, dashboards, web, envs } = useTower();
+  const { api, hub, dashboards, web, envs, status } = useTower();
   const openShell = useOpenShell();
   const nav = useNav();
+  const discard = useDiscard();
   const owner = project.gh_owner;
   const repo = project.gh_repo;
   const hubUp = hub.up;
@@ -304,8 +306,13 @@ export function WorkItemPanel({
   const events = history?.events ?? [];
   const shown = events.slice(0, EVENTS_PAGE * pages);
 
+  // Interrompida num ambiente que esta UI alcança: recupera ou descarta daqui (#138).
+  const stoppedIn = (id: string) =>
+    envs.find((e) => status[e.id]?.connected && dashboards[e.id]?.interrupted_sessions.some((x) => x.id === id));
+
   const sessionRow = (s: HubSession) => {
     const l = live.find((x) => x.session === s.id);
+    const stopped = !l && s.state === "interrupted" ? stoppedIn(s.id) : undefined;
     const when = `início ${ago(s.started_at, now)}${
       s.ended_at !== null
         ? ` · fim ${ago(s.ended_at, now)} · duração ${duration(s.ended_at - s.started_at)}`
@@ -326,6 +333,35 @@ export function WorkItemPanel({
           >
             abrir ↗
           </button>
+        ) : stopped ? (
+          <span className="sess-actions">
+            <button
+              type="button"
+              className="linklike"
+              aria-label={`Recuperar a sessão ${s.tool} em ${stopped.name}`}
+              onClick={() => nav.go({ name: "recovery", env: stopped.id, session: s.id })}
+            >
+              recuperar
+            </button>
+            <button
+              type="button"
+              className="linklike"
+              aria-label={`${DISCARD_LABEL} a sessão ${s.tool} em ${stopped.name}`}
+              onClick={(e) =>
+                discard(
+                  {
+                    env: stopped.id,
+                    session: s.id,
+                    name: `${ref(n)} ${node.issue.title}`.trim(),
+                    item: { owner, repo, number: n },
+                  },
+                  { origin: e.currentTarget, onDone: () => setTick((t) => t + 1) },
+                )
+              }
+            >
+              {DISCARD_LABEL.toLowerCase()}
+            </button>
+          </span>
         ) : (
           <span className="muted mono">{s.exit_code !== null ? `saída ${s.exit_code}` : "sem código de saída"}</span>
         )}

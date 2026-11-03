@@ -5,6 +5,10 @@
 //! - `update_ref`: o ref seguido pelas atualizações ([`Updates::set_ref`]);
 //! - `gh_sync_interval_secs`: o intervalo do sync com o GitHub (`0`
 //!   desliga), lido pelo laço do `ctowerd` a cada volta.
+//!
+//! `env.credentials.get|set` (#143) editam, do mesmo jeito, os comandos de
+//! credencial do Jira e do GitLab deste ambiente (`[credentials."owner/repo"]`),
+//! que valem no próximo uso pelo [`ct_core::SharedCredentials`].
 
 use crate::update::Updates;
 use serde::Serialize;
@@ -37,6 +41,29 @@ pub struct ConfigItem {
     pub configured: bool,
 }
 
+/// Uma linha de `env.credentials.get` (#143): projeto Jira ou GitLab
+/// atribuído, os comandos do cadastro e os deste ambiente, e como foi a
+/// última leitura com eles aqui.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct EnvCredential {
+    pub owner: String,
+    pub repo: String,
+    pub name: String,
+    pub tracker: ct_core::TrackerKind,
+    pub forge: ct_core::ForgeKind,
+    /// Comando do cadastro (hub), o que vale sem sobrescrita.
+    pub project_tracker_cmd: String,
+    pub project_forge_cmd: String,
+    /// Comando deste ambiente; vazio = o do cadastro.
+    pub tracker_cmd: String,
+    pub forge_cmd: String,
+    /// Prontidão do último ciclo do sync do Jira neste ambiente.
+    pub readiness: Option<ct_core::TrackerReadiness>,
+    /// Último sync neste ambiente (erro e falhas seguidas).
+    pub sync: Option<ct_ledger::SyncState>,
+}
+
 pub struct EnvConfig {
     /// `<config>/config.toml`.
     path: PathBuf,
@@ -44,7 +71,12 @@ pub struct EnvConfig {
     updates: Option<Arc<Updates>>,
     /// Uma escrita por vez.
     write: std::sync::Mutex<()>,
+    /// `[credentials]` em uso no daemon; `None` = edição desligada.
+    credentials: Option<ct_core::SharedCredentials>,
 }
+
+/// Limite de cada comando de credencial editado pela UI.
+pub const MAX_CREDENTIAL_CMD: usize = 1000;
 
 impl EnvConfig {
     pub fn new(path: PathBuf, gh_sync_secs: u64, updates: Option<Arc<Updates>>) -> Self {
@@ -53,7 +85,95 @@ impl EnvConfig {
             gh_sync: watch::channel(gh_sync_secs).0,
             updates,
             write: std::sync::Mutex::new(()),
+            credentials: None,
         }
+    }
+
+    /// Liga `env.credentials.get|set` sobre as sobrescritas em uso.
+    pub fn with_credentials(mut self, credentials: ct_core::SharedCredentials) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
+    /// Sobrescritas em uso; `None` = edição desligada neste daemon.
+    pub fn credentials(&self) -> Option<ct_core::CredentialOverrides> {
+        self.credentials.as_ref().map(|c| c.snapshot())
+    }
+
+    /// Grava os comandos de credencial deste ambiente para `owner/repo` em
+    /// `[credentials."owner/repo"]` e aplica. Os dois vazios removem a
+    /// entrada (volta o comando do projeto).
+    pub fn set_credentials(
+        &self,
+        owner: &str,
+        repo: &str,
+        tracker_cmd: &str,
+        forge_cmd: &str,
+    ) -> Result<ct_core::CredentialOverrides, (i64, String)> {
+        let invalid = |m: String| (-32602, m);
+        let io = |e: io::Error| (-32000, format!("{}: {e}", self.path.display()));
+        let shared = self.credentials.as_ref().ok_or_else(|| {
+            (
+                -32000,
+                "edição das credenciais desligada neste ambiente".into(),
+            )
+        })?;
+        let (owner, repo) = (owner.trim(), repo.trim());
+        if owner.is_empty() || repo.is_empty() {
+            return Err(invalid("owner e repo são obrigatórios".into()));
+        }
+        let (tracker_cmd, forge_cmd) = (tracker_cmd.trim(), forge_cmd.trim());
+        for (name, cmd) in [("tracker_cmd", tracker_cmd), ("forge_cmd", forge_cmd)] {
+            if cmd.contains(['\n', '\r']) {
+                return Err(invalid(format!("{name}: o comando deve ter uma linha só")));
+            }
+            if cmd.len() > MAX_CREDENTIAL_CMD {
+                return Err(invalid(format!(
+                    "{name}: comando acima de {MAX_CREDENTIAL_CMD} caracteres"
+                )));
+            }
+        }
+        let key = format!("{owner}/{repo}");
+        let _guard = self.write.lock().unwrap();
+        let mut doc = self.read().map_err(io)?;
+        if !doc.contains_key("credentials") {
+            let mut t = toml_edit::Table::new();
+            t.set_implicit(true);
+            doc["credentials"] = toml_edit::Item::Table(t);
+        }
+        let creds = doc["credentials"].as_table_mut().ok_or_else(|| {
+            (
+                -32000,
+                "[credentials] do config.toml não é uma tabela".into(),
+            )
+        })?;
+        // A chave já gravada, com outra caixa, é a mesma.
+        let existing: Vec<String> = creds
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .filter(|k| k.trim().eq_ignore_ascii_case(&key))
+            .collect();
+        for k in existing {
+            creds.remove(&k);
+        }
+        if !tracker_cmd.is_empty() || !forge_cmd.is_empty() {
+            let mut t = toml_edit::Table::new();
+            if !tracker_cmd.is_empty() {
+                t["tracker_cmd"] = toml_edit::value(tracker_cmd);
+            }
+            if !forge_cmd.is_empty() {
+                t["forge_cmd"] = toml_edit::value(forge_cmd);
+            }
+            creds.insert(&key, toml_edit::Item::Table(t));
+        }
+        // O que o `DaemonConfig` vai ler no próximo início (o resto do
+        // arquivo não interessa aqui).
+        let parsed = toml::from_str::<CredentialsOnly>(&doc.to_string())
+            .map(|c| c.credentials)
+            .map_err(|e| (-32000, format!("[credentials] inválido: {e}")))?;
+        self.store(&doc).map_err(io)?;
+        shared.replace(parsed.clone());
+        Ok(parsed)
     }
 
     /// Intervalo do sync com o GitHub em segundos (`0` = desligado); o laço
@@ -164,6 +284,12 @@ impl EnvConfig {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct CredentialsOnly {
+    #[serde(default)]
+    credentials: ct_core::CredentialOverrides,
+}
+
 /// Nome de branch ou tag razoável (subconjunto de `git check-ref-format`).
 fn valid_ref(r: &str) -> bool {
     !r.is_empty()
@@ -220,6 +346,54 @@ mod tests {
         assert_eq!(
             c.set("gh_sync_interval_secs", &json!(0)).unwrap().value,
             json!(0)
+        );
+    }
+
+    /// #143: grava `[credentials."owner/repo"]` preservando o resto, aplica
+    /// na hora e remove a entrada com os dois comandos vazios.
+    #[test]
+    fn credenciais_do_ambiente_gravam_e_aplicam() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(&path, "# meu comentário\nport = 7878\n").unwrap();
+        let shared = ct_core::SharedCredentials::default();
+        let c = EnvConfig::new(path.clone(), 180, None).with_credentials(shared.clone());
+
+        let got = c
+            .set_credentials("acme", "web", " /usr/bin/pass show jira | head -1 ", "")
+            .unwrap();
+        let want = ct_core::CredentialOverride {
+            tracker_cmd: "/usr/bin/pass show jira | head -1".into(),
+            forge_cmd: String::new(),
+        };
+        assert_eq!(got.get("acme", "web"), Some(&want));
+        assert_eq!(shared.snapshot(), got);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("# meu comentário\nport = 7878\n"),
+            "{text}"
+        );
+        assert!(text.contains("[credentials.\"acme/web\"]"), "{text}");
+        // O arquivo continua legível pelo `DaemonConfig`.
+        let back: CredentialsOnly = toml::from_str(&text).unwrap();
+        assert_eq!(back.credentials, got);
+
+        // Outra caixa = a mesma chave; os dois vazios removem.
+        let got = c.set_credentials("ACME", "Web", "", "printf tok").unwrap();
+        assert_eq!(got.0.len(), 1);
+        assert_eq!(got.get("acme", "web").unwrap().forge_cmd, "printf tok");
+        let got = c.set_credentials("acme", "web", " ", "").unwrap();
+        assert!(got.is_empty());
+        assert!(shared.snapshot().is_empty());
+
+        for (o, r, t) in [("", "web", "x"), ("acme", "web", "a\nb")] {
+            assert_eq!(c.set_credentials(o, r, t, "").unwrap_err().0, -32602);
+        }
+        let off = EnvConfig::new(path, 180, None);
+        assert!(off.credentials().is_none());
+        assert_eq!(
+            off.set_credentials("a", "b", "x", "").unwrap_err().0,
+            -32000
         );
     }
 

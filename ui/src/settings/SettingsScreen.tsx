@@ -23,6 +23,11 @@ import {
   useEnvConfig,
 } from "./EnvConfigSettings";
 import { EnvsSettings } from "./EnvsSettings";
+import {
+  TrackerCredentialsControl,
+  credentialsChanged,
+  useTrackerCredentials,
+} from "./TrackerCredentialsSettings";
 import { ENV_TOKEN_HINT, GithubSettings } from "./GithubSettings";
 import { HubSettings } from "./HubSettings";
 import {
@@ -740,6 +745,7 @@ function useEnvItems(env: string | undefined): Item[] {
   const nav = useNav();
   const [syncing, setSyncing] = useState(false);
   const cfg = useEnvConfig(env);
+  const creds = useTrackerCredentials(env);
   if (!env) return [];
   const info = infos[env];
   const on = !!status[env]?.connected;
@@ -805,6 +811,19 @@ function useEnvItems(env: string | undefined): Item[] {
           </button>
         </div>
       ),
+    },
+    {
+      id: "tracker-credentials",
+      section: "tracker-credentials",
+      category: "Credenciais do Jira e GitLab",
+      name: "Comandos de credencial deste ambiente",
+      shownKey: "credentials",
+      keys: ["credentials"],
+      keywords: "jira gitlab glab credencial senha token pass comando credential_cmd ambiente",
+      description:
+        "Comando que imprime a senha do Jira ou o token do GitLab de cada projeto, só neste ambiente (caminho do pass, outro gerenciador de senhas). Vazio = o comando do cadastro do projeto. Grava em [credentials] do config.toml e vale na hora, sem reiniciar; os outros ambientes e o cadastro do hub não mudam.",
+      modified: credentialsChanged(creds),
+      control: <TrackerCredentialsControl creds={creds} connected={on} />,
     },
     {
       id: "update-ref",

@@ -54,6 +54,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Configurações › Este app › Notificações",
     "Configurações › Este app › Plano da conta",
     "Configurações › Ambiente › GitHub",
+    "Configurações › Ambiente › Credenciais do Jira e GitLab",
     "Configurações › Ambiente › Atualização do daemon",
     "Configurações › Ambiente › Projetos locais",
     "Configurações › Ambiente › Notificações",
@@ -97,6 +98,28 @@ test("dados locais: sessões, projetos e issues sem repetir entre ambientes; #0 
   ]);
   expect(sess[0].action).toEqual({ type: "terminal", env: "wsl", session: "s1" });
   expect(sess[1].action).toEqual({ type: "screen", screen: { name: "recovery", env: "wsl", session: "s2" } });
+  // "Descartar: …" da interrompida (#138), só buscando, com a issue para o status.
+  // Com o ambiente fora do ar (aqui, sem status), não aparece: o archive vai a ele.
+  expect(items.some((i) => i.id.startsWith("cmd:discard:"))).toBe(false);
+  const online = paletteItems(
+    src({
+      envs: [wsl],
+      status: { wsl: { env: "wsl", connected: true, error: null, since: 0 } },
+      dashboards: { wsl: dashboard({ live_sessions: [live], interrupted_sessions: [gone] }, items0) },
+    }),
+  );
+  const discard = online.find((i) => i.id === "cmd:discard:wsl:s2")!;
+  expect(discard).toMatchObject({ kind: "command", label: "Descartar: ctower-agents #27 Plano 4", browse: false, num: 27 });
+  expect(discard.action).toEqual({
+    type: "discard",
+    target: {
+      env: "wsl",
+      session: "s2",
+      name: "ctower-agents #27 Plano 4",
+      item: { owner: "deep-ion-ai", repo: "ctower-agents", number: 27 },
+    },
+  });
+  expect(online.some((i) => i.id === "cmd:discard:wsl:s1")).toBe(false);
 
   expect(byKind(items, "project")).toHaveLength(1);
   const issues = items.filter((i) => i.kind === "issue" || i.kind === "epic");
