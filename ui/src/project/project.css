@@ -497,3 +497,82 @@
 .pj-settings-note {
   margin: 6px 10px 0;
 }
+
+/*
+ * Propostas do gestor na Visão geral (#139): cabeçalho com "Marcar todas",
+ * caixa de seleção por linha e a barra do lote abaixo da lista.
+ */
+.pj-proposals .hub-card-head {
+  flex-wrap: wrap;
+}
+
+.pj-proposals .hub-card-list input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+}
+
+/*
+ * Larga ou linha inteira, com o grid em duas colunas ou mais: a linha do
+ * item (chave, título, atual → proposto) não quebra; o título longo é
+ * cortado com reticências (inteiro no title) e a justificativa fica abaixo,
+ * na largura toda. Numa coluna só (celular), a linha quebra como no normal.
+ */
+@container hub-cards (min-width: 656px) {
+  .pj-proposals:is([data-width="wide"], [data-width="full"]) .proposal-line {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35em;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .pj-proposals:is([data-width="wide"], [data-width="full"]) .proposal-line-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pj-proposals:is([data-width="wide"], [data-width="full"]) .proposal-line > :not(.proposal-line-title) {
+    flex: none;
+  }
+}
+
+.pj-proposals-batch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.pj-proposals-batch .field {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
+.pj-proposals-batch .form-actions {
+  margin: 0;
+}
+
+.pj-proposals-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-basis: 100%;
+}
+
+.pj-proposals-confirm p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.proposal-result p,
+.proposal-result ul {
+  margin: 0;
+}
+
+.proposal-result ul {
+  padding-left: 18px;
+}
