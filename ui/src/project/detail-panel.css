@@ -83,3 +83,4 @@
 .prline .pr { font-family: var(--mono); font-size: 12px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border-strong); background: none; color: var(--text-2); cursor: pointer; }
 .prline .pr[data-state="open"] { color: var(--running); }
 .prline .pr[data-state="merged"] { color: var(--epic); }
+.sess .sess-actions { display: inline-flex; gap: 10px; }

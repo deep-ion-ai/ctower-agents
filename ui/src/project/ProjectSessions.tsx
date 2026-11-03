@@ -1,6 +1,8 @@
 import "../hub/hub.css";
+import { DISCARD_LABEL, useDiscard } from "../recovery/discard";
 import { useNav } from "../state/nav";
-import { itemTitle, type ProviderProject } from "../util/item";
+import { useTower } from "../state/tower";
+import { itemTitle, PROJECT_ITEM, type ProviderProject } from "../util/item";
 import { ago } from "../util/time";
 import type { EnvSessions, ProjectSession, SessionKind } from "./sessions";
 
@@ -12,7 +14,7 @@ const KIND_LABEL: Record<SessionKind, string> = {
 
 /**
  * Aba Sessões do projeto (#17): por ambiente, as vivas (abrem o terminal),
- * as interrompidas (abrem na Recuperação, onde se retoma ou descarta) e as
+ * as interrompidas (abrem na Recuperação ou se descartam aqui mesmo, #138) e as
  * que saíram com erro (abrem o terminal com a saída). Ambiente que só o hub
  * conhece fica só leitura. Os dados vêm de `projectSessions`.
  */
@@ -29,21 +31,38 @@ export function ProjectSessions({
   emptyText: string;
 }) {
   const nav = useNav();
+  const discard = useDiscard();
+  const { status } = useTower();
   if (groups.length === 0) return <p className="muted">{emptyText}</p>;
 
   const action = (g: EnvSessions, s: ProjectSession, label: string) => {
     const env = g.env;
     if (!env) return null;
     if (s.kind === "interrupted") {
+      const item =
+        project && s.gh !== PROJECT_ITEM ? { owner: project.gh_owner, repo: project.gh_repo, number: s.gh } : null;
       return (
-        <button
-          type="button"
-          className="btn btn-sm"
-          aria-label={`Abrir na Recuperação: ${label}`}
-          onClick={() => nav.go({ name: "recovery", env, session: s.id })}
-        >
-          Abrir na Recuperação
-        </button>
+        <span className="pj-ses-actions">
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-label={`Abrir na Recuperação: ${label}`}
+            onClick={() => nav.go({ name: "recovery", env, session: s.id })}
+          >
+            Abrir na Recuperação
+          </button>
+          {/* O archive vai ao ambiente: só com ele no ar (na web, com o canal reverso). */}
+          {status[env]?.connected && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label={`${DISCARD_LABEL}: ${label}`}
+              onClick={(e) => discard({ env, session: s.id, name: label, item }, { origin: e.currentTarget })}
+            >
+              {DISCARD_LABEL}
+            </button>
+          )}
+        </span>
       );
     }
     return (

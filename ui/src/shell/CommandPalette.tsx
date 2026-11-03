@@ -16,6 +16,7 @@ import { loadRecent, pushRecent } from "./palette/recent";
 import { openPlace } from "./places";
 import { useShell } from "./Shell";
 import { useStartSession } from "./start";
+import { useDiscard } from "../recovery/discard";
 import { projectAt } from "../project/sections";
 import { projectSyncInfo, runProjectSync, syncAddrOf } from "../project/sync-now";
 
@@ -41,6 +42,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
   const nav = useNav();
   const shell = useShell();
   const startSession = useStartSession();
+  const discard = useDiscard();
   const openShell = useOpenShell();
   const liveGestor = useLiveGestor();
   // Ações da sessão ativa (#424), publicadas pelo cabeçalho dela na tela Terminal.
@@ -112,6 +114,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
         return published?.run(a.id);
       case "shortcuts":
         return shell.openShortcuts();
+      case "discard":
+        return discard(a.target);
       case "sync-project": {
         const addr = syncAddrOf(tower, a.screen);
         if (!addr) return;

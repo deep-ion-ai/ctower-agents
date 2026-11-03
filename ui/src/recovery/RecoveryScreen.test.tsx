@@ -130,7 +130,9 @@ test("descartar arquiva e recarrega a lista", async () => {
   const card = await detail(/#29 ct-client/);
   api.on("recovery.list", [item(S97, WI97, "perdido")]);
   await user.click(within(card).getByRole("button", { name: "Descartar" }));
-  expect(api.callsTo("session.archive")[0].params).toEqual({ session_id: S29.id });
+  // A confirmação (#138), com o padrão de não mexer no work item.
+  await user.click(within(await screen.findByRole("alertdialog", { name: /Descartar/ })).getByRole("button", { name: "Descartar" }));
+  await waitFor(() => expect(api.callsTo("session.archive")[0].params).toEqual({ session_id: S29.id }));
   // A que sobrou passa a ser a mostrada.
   expect(await detail(/#97 Paginação/)).toBeInTheDocument();
   expect(within(await side()).getAllByRole("listitem")).toHaveLength(1);

@@ -1,0 +1,115 @@
+/* Confirmação do "Descartar" (#138): modal curta, a mesma em todas as telas. */
+.dc-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--scrim) 66%, transparent);
+}
+
+.dc-modal {
+  width: 100%;
+  max-width: 480px;
+  max-height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 24px 64px var(--shadow);
+  font-size: 13px;
+}
+
+.dc-modal:focus {
+  outline: none;
+}
+
+.dc-modal h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.dc-modal p {
+  margin: 0;
+}
+
+.dc-name {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.dc-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.dc-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  justify-content: space-between;
+  padding: 6px 10px;
+}
+
+.dc-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.dc-list li[data-tone="done"] .dc-state {
+  color: var(--done);
+}
+
+.dc-list li[data-tone="attention"] .dc-state {
+  color: var(--attention);
+}
+
+.dc-list li[data-tone="error"] .dc-state {
+  color: var(--error-soft);
+}
+
+.dc-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.dc-outcome legend {
+  padding: 0 4px;
+  color: var(--muted);
+}
+
+.dc-outcome label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dc-outcome:disabled label {
+  opacity: 0.6;
+}
+
+.dc-note {
+  font-size: 12px;
+}
+
+.dc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

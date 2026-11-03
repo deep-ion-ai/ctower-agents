@@ -1,5 +1,6 @@
 import type { Alert } from "../state/tower";
 import { ago } from "../util/time";
+import { DISCARD_LABEL, type DiscardTarget } from "../recovery/discard";
 import type { AttentionAction, AttentionItem } from "./attention";
 
 const TONE: Record<AttentionItem["kind"], string> = {
@@ -20,11 +21,14 @@ export function AttentionStrip({
   now,
   onAction,
   onDismiss,
+  onDiscard,
 }: {
   items: AttentionItem[];
   now: number;
   onAction: (a: AttentionAction) => void;
   onDismiss: (a: Alert) => void;
+  /** Interrompida: descarta sem retomar (#138); ausente, o botão não aparece. */
+  onDiscard?: (t: DiscardTarget, origin: Element) => void;
 }) {
   if (items.length === 0) return null;
   return (
@@ -48,6 +52,16 @@ export function AttentionStrip({
               {it.alert && (
                 <button type="button" className="btn" onClick={() => onDismiss(it.alert!)}>
                   Dispensar
+                </button>
+              )}
+              {it.discard && onDiscard && (
+                <button
+                  type="button"
+                  className="btn"
+                  aria-label={`${DISCARD_LABEL}: ${it.title}`}
+                  onClick={(e) => onDiscard(it.discard!, e.currentTarget)}
+                >
+                  {DISCARD_LABEL}
                 </button>
               )}
             </div>

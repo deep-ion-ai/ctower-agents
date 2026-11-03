@@ -1,5 +1,6 @@
 import "./recovery.css";
-import { GESTOR_LABEL } from "../control-room/attention";
+import { GESTOR_LABEL, issueRef } from "../control-room/attention";
+import { DISCARD_LABEL, useDiscard, type DiscardTarget } from "./discard";
 import { itemRef, PROJECT_ITEM } from "../util/item";
 import { useCallback, useEffect, useState } from "react";
 import { contextNote } from "../project/templates";
@@ -124,6 +125,7 @@ export function RecoveryScreen({ env, session }: { env?: string; session?: strin
   const { envs, status, dashboards, api } = useTower();
   const nav = useNav();
   const startSession = useStartSession();
+  const discard = useDiscard();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [archived, setArchived] = useState<Archived[]>([]);
   const [prompts, setPrompts] = useState<Record<string, string>>({});
@@ -191,6 +193,12 @@ export function RecoveryScreen({ env, session }: { env?: string; session?: strin
     return `${itemRef(wi.gh_number, project)} ${titleOf(r)}`.trim();
   };
 
+  const targetOf = (r: Row): DiscardTarget => {
+    const wi = r.item.work_item;
+    const project = dashboards[r.env]?.projects.find((p) => p.project.id === wi.project_id)?.project;
+    return { env: r.env, session: r.item.session.id, name: nameOf(r), item: issueRef(project, wi, gestorOf(r)) };
+  };
+
   const resume = (r: Row) =>
     api.call<Session>(r.env, "session.resume", {
       session_id: r.item.session.id,
@@ -237,6 +245,20 @@ export function RecoveryScreen({ env, session }: { env?: string; session?: strin
   const select = (r: Row | Archived) =>
     nav.openTab({ id: nav.current, screen: { name: "recovery", env: r.env, session: r.item.session.id } });
 
+  // "Descartar todas" (#138): as interrompidas do ambiente da sessão escolhida
+  // (com uma só lista de ambiente, esse). Cada uma com o resultado na confirmação.
+  const discardEnv = selected?.env ?? gone?.env ?? rows?.[0]?.env;
+  const discardable = (rows ?? []).filter((r) => r.env === discardEnv);
+  const discardAll = (origin: Element) =>
+    discard(discardable.map(targetOf), {
+      origin,
+      onDone: () => {
+        // A escolhida pode ter saído da lista: volta para a primeira.
+        nav.openTab({ id: nav.current, screen: { name: "recovery" } });
+        void load();
+      },
+    });
+
   return (
     <main className="page recovery">
       <SideContent>
@@ -244,21 +266,39 @@ export function RecoveryScreen({ env, session }: { env?: string; session?: strin
           title="Recuperação"
           label="Sessões interrompidas"
           actions={
-            <button
-              type="button"
-              className="ibtn"
-              aria-label="Retomar todas"
-              aria-describedby="rc-all-d"
-              data-tip={`Retomar todas (${resumable.length})`}
-              disabled={busy || resumable.length === 0}
-              onClick={() => setConfirming(true)}
-            >
-              <Icon name="recovery" />
-              <span id="rc-all-d" hidden>
-                {plural(resumable.length, "sessão com transcript", "sessões com transcript")}
-                {lostCount > 0 && `; ${plural(lostCount, "fica de fora", "ficam de fora")}`}
-              </span>
-            </button>
+            <>
+              <button
+                type="button"
+                className="ibtn"
+                aria-label="Retomar todas"
+                aria-describedby="rc-all-d"
+                data-tip={`Retomar todas (${resumable.length})`}
+                disabled={busy || resumable.length === 0}
+                onClick={() => setConfirming(true)}
+              >
+                <Icon name="recovery" />
+                <span id="rc-all-d" hidden>
+                  {plural(resumable.length, "sessão com transcript", "sessões com transcript")}
+                  {lostCount > 0 && `; ${plural(lostCount, "fica de fora", "ficam de fora")}`}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="ibtn"
+                aria-label={`${DISCARD_LABEL} todas`}
+                aria-describedby="rc-discard-all-d"
+                data-tip={`${DISCARD_LABEL} todas (${discardable.length})`}
+                disabled={busy || discardable.length === 0}
+                onClick={(e) => discardAll(e.currentTarget)}
+              >
+                <Icon name="trash" />
+                <span id="rc-discard-all-d" hidden>
+                  {discardEnv
+                    ? `${plural(discardable.length, "interrompida", "interrompidas")} em ${envName(discardEnv)}, sem retomar`
+                    : "Nenhuma interrompida"}
+                </span>
+              </button>
+            </>
           }
         >
           {confirming && (
@@ -361,11 +401,15 @@ export function RecoveryScreen({ env, session }: { env?: string; session?: strin
           onOpenWorktree={() =>
             act(selected, () => api.openVsCode(selected.env, selected.item.work_item.worktree_path!))
           }
-          onDiscard={() =>
-            act(selected, async () => {
-              await api.call(selected.env, "session.archive", { session_id: selected.item.session.id });
-              // Senão o endereço mostraria a própria sessão, agora entre as descartadas.
-              nav.openTab({ id: nav.current, screen: { name: "recovery" } });
+          onDiscard={(origin) =>
+            discard(targetOf(selected), {
+              origin,
+              onDone: (res) => {
+                if (!res[0]?.ok) return;
+                // Senão o endereço mostraria a própria sessão, agora entre as descartadas.
+                nav.openTab({ id: nav.current, screen: { name: "recovery" } });
+                void load();
+              },
             })
           }
         />
@@ -419,7 +463,7 @@ function Detail({
   onResume(): void;
   onRestart(origin: Element): void;
   onOpenWorktree(): void;
-  onDiscard(): void;
+  onDiscard(origin: Element): void;
 }) {
   const { session: s, work_item: wi, transcript } = r.item;
   const integ = INTEGRITY[transcript];
@@ -474,8 +518,8 @@ function Detail({
           Abrir worktree
         </button>
         <span className="recovery-spacer" />
-        <button type="button" className="btn btn-danger" onClick={onDiscard}>
-          Descartar
+        <button type="button" className="btn btn-danger" onClick={(e) => onDiscard(e.currentTarget)}>
+          {DISCARD_LABEL}
         </button>
       </div>
       {error && (

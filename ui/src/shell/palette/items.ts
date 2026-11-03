@@ -27,6 +27,7 @@ import {
 import type { StartTarget } from "../start";
 import type { SessionAction, SessionActionId } from "../../terminal/actions";
 import { placeOnWeb, webPlaceLabel } from "../../web/mode";
+import { DISCARD_LABEL, discardTarget, type DiscardTarget } from "../../recovery/discard";
 
 export type PaletteKind = "session" | "issue" | "epic" | "project" | "place" | "command";
 
@@ -51,7 +52,9 @@ export type PaletteAction =
   /** Troca a busca da paleta (ex.: "Sincronizar projeto…" lista os projetos). */
   | { type: "query"; query: string }
   /** Folha de atalhos e gestos (#27). */
-  | { type: "shortcuts" };
+  | { type: "shortcuts" }
+  /** Descartar uma interrompida sem retomar (#138): abre a confirmação. */
+  | { type: "discard"; target: DiscardTarget };
 
 export interface PaletteItem {
   /** Estável entre aberturas: vai para os recentes. */
@@ -205,7 +208,26 @@ function sessions(src: PaletteSources): PaletteItem[] {
           : { type: "terminal", env: e.id, session: s.id },
       };
     };
-    return [...d.live_sessions.map((s) => one(s, false)), ...d.interrupted_sessions.map((s) => one(s, true))];
+    // "Descartar: <sessão>" ao lado da interrompida (só buscando, com o ambiente no ar), o mesmo da Recuperação.
+    const discards = (src.status[e.id]?.connected ? d.interrupted_sessions : []).map((s): PaletteItem => {
+      const target = discardTarget(e.id, d, s);
+      const { wi, project } = lookup(d, s);
+      return {
+        id: `cmd:discard:${e.id}:${s.id}`,
+        kind: "command",
+        label: `${DISCARD_LABEL}: ${target.name}`,
+        detail: [project?.name, e.name, "interrompida · encerrar sem retomar"].filter(Boolean).join(" · "),
+        keywords: "descartar encerrar arquivar sessão interrompida",
+        num: wi && wi.gh_number !== PROJECT_ITEM ? wi.gh_number : undefined,
+        browse: false,
+        action: { type: "discard", target },
+      };
+    });
+    return [
+      ...d.live_sessions.map((s) => one(s, false)),
+      ...d.interrupted_sessions.map((s) => one(s, true)),
+      ...discards,
+    ];
   });
 }
 

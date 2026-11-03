@@ -58,7 +58,9 @@ Anote o resultado de cada passo (ok / falhou + o que apareceu) e cole no PR.
 2. Confira o cartão: branch, worktree, "Transcript: original" ou "restaurável do backup", `git status` do worktree.
 3. **Esperado:** o cartão **Últimas linhas** mostra o fim da conversa (você, agente, ferramenta), com "do backup" se o original se perdeu.
 4. Edite o prompt de retomada e clique **Retomar**. **Esperado:** nova aba com a mesma conversa do Claude (`--resume`) no mesmo worktree.
-5. Com outra sessão interrompida, clique **Descartar**. **Esperado:** ela sai de **Interrompidas** e aparece em **Descartadas recentemente**; aberta, mostra as últimas linhas e só **Recomeçar com nota**.
+5. Com outra sessão interrompida, clique **Descartar**. **Esperado:** uma confirmação avisa que a conversa não será retomada e oferece **Não mexer no item** (marcado), **Marcar o item como concluído** e **Voltar o item para o backlog** (estes dois só com o hub no ar). Confirmado, ela sai de **Interrompidas** e aparece em **Descartadas recentemente**; aberta, mostra as últimas linhas e só **Recomeçar com nota**. O status do item só muda se você escolheu.
+6. Descartar fora da Recuperação (#138). Com sessões interrompidas, confira **Descartar** ao lado de **Recuperar** no cartão "Interrompida" da Sala de controle, ao lado de **Abrir na Recuperação** na aba **Sessões** do projeto, em **descartar** na lista de sessões do painel do item e no comando "Descartar: …" da paleta (buscando "descartar"). **Esperado:** a mesma confirmação em todos; depois de confirmar, a sessão some da faixa, das listas e do contador da barra de atividades.
+7. **Descartar todas** (ícone de lixeira no painel da Recuperação). **Esperado:** descarta só as interrompidas do ambiente da sessão selecionada e, antes de fechar, mostra o resultado de cada uma ("descartada" ou o erro).
 
 ## 7. Revisar
 
