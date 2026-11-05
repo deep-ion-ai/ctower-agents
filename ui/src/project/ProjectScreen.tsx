@@ -177,6 +177,7 @@ export function ProjectScreen(props: {
       roots={mine?.roots ?? null}
       syncedAt={mine?.sync?.last_ok_at ?? null}
       sync={syncInfo}
+      syncAddr={{ env, projectId }}
       error={error}
       item={props.item}
       liveOf={liveOf}
@@ -188,7 +189,7 @@ export function ProjectScreen(props: {
         const wi = clone?.items.find((w) => w.gh_number === gh);
         return wi ? { name: "review", env, workItemId: wi.id } : null;
       }}
-      onReload={() => void load()}
+      onReload={load}
       docs={clones}
       // Trilha "Projetos › X" (#16): trocar de projeto é pelo índice.
       picker={<ProjectTrail name={name} title={p ? `${p.gh_owner}/${p.gh_repo}` : undefined} />}

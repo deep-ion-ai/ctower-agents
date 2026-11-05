@@ -181,6 +181,7 @@ export function HubProjectScreen({
       roots={mine?.roots ?? null}
       syncedAt={mine?.sync?.last_ok_at ?? null}
       sync={syncInfo}
+      syncAddr={{ owner: ref.owner, repo: ref.repo }}
       error={error}
       item={item}
       liveOf={liveOf}
@@ -202,7 +203,7 @@ export function HubProjectScreen({
         }
         return null;
       }}
-      onReload={() => void load()}
+      onReload={load}
       docs={clones}
       headExtra={
         <>
