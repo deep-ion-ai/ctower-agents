@@ -315,6 +315,12 @@
   font-size: 12px;
 }
 
+/* "Só minhas" desabilitado: o "eu" do rastreador ainda não é conhecido. */
+.tree-mine[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: help;
+}
+
 /* Aviso discreto: projeto Jira sem nenhuma sprint lida no espelho. */
 .tree-sprint-hint {
   margin: 0;

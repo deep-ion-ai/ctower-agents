@@ -644,3 +644,44 @@ test("Editar template na modal abre a aba do template usado e fecha a modal; no 
   expect(screen.getByRole("tab", { name: "Template · Épico" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("heading", { name: "Template: Épico" })).toBeInTheDocument();
 });
+
+describe("Só minhas (#151)", () => {
+  afterEach(() => window.sessionStorage.clear());
+  /** A árvore com o "eu" do sync (se houver) e a filha #30 atribuída a ele. */
+  const meuTree = (me?: string): ProjectTree => ({
+    ...TREE,
+    sync: sync({ last_ok_at: NOW, ...(me !== undefined ? { me } : {}) }),
+    roots: TREE.roots.map((r) =>
+      r.issue.gh_number !== 27
+        ? r
+        : {
+            ...r,
+            children: r.children.map((c) =>
+              c.issue.gh_number === 30 ? { ...c, issue: { ...c.issue, assignees: ["Fulano"] } } : c,
+            ),
+          },
+    ),
+  });
+
+  test("na Árvore e no Quadro, só as minhas; o épico abre expandido com as filhas minhas", async () => {
+    const { user } = setup(meuTree("fulano"));
+    await screen.findByText("Plano 4 — UI Tauri");
+    await user.click(screen.getByRole("button", { name: "Recolher épico #27" }));
+    await user.click(screen.getByRole("checkbox", { name: "Só minhas" }));
+    expect(screen.getByRole("button", { name: "Recolher épico #27" })).toHaveAttribute("aria-expanded", "true");
+    expect(within(side()).getByText("ui: esqueleto Tauri")).toBeInTheDocument();
+    expect(within(side()).queryByText("ct-server: lacunas")).not.toBeInTheDocument();
+    expect(within(side()).queryByText("ui: Projeto, Recuperação e Revisão")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Quadro" }));
+    const cards = screen.getAllByRole("button", { name: /#\d+/ }).filter((b) => b.classList.contains("card"));
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveTextContent("ui: esqueleto Tauri");
+  });
+
+  test("sem o 'eu' do rastreador, o toggle fica desabilitado e a árvore inteira", async () => {
+    setup(meuTree());
+    await screen.findByText("Plano 4 — UI Tauri");
+    expect(screen.getByRole("checkbox", { name: "Só minhas" })).toBeDisabled();
+    expect(within(side()).getByText("ct-server: lacunas")).toBeInTheDocument();
+  });
+});

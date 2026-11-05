@@ -714,6 +714,46 @@ impl Conn {
                     .map_err(|e| (-32603, e.to_string()))?
                     .map_err(from_sessions)
             }
+            // "Adicionar issue pelo ID" (#148): a issue fora do JQL e os pais
+            // dela entram no espelho deste ambiente. Pedido pelo hub
+            // (`hub.tracker.add_issue`, ao ambiente de sync) ou direto. Com
+            // algo gravado, o outbox vai ao hub antes da resposta (melhor
+            // esforço), para a árvore do hub já trazer a issue.
+            "tracker.add_issue" => {
+                let tracker = self
+                    .st
+                    .tracker
+                    .clone()
+                    .ok_or_else(|| (-32000, "leitura do Jira desativada".into()))?;
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let key =
+                    match p.get("key") {
+                        Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+                        Some(Value::Number(n)) => n.to_string(),
+                        _ => return Err(invalid(
+                            "parâmetro obrigatório: key (a chave, como ACME-123, ou só o número)",
+                        )),
+                    };
+                let sender = self.st.hub_sender.clone();
+                tokio::task::spawn_blocking(move || {
+                    if !tracker.handles(project_id) {
+                        return Err(ct_sessions::SessionsError::Invalid(
+                            "projeto sem rastreador Jira".into(),
+                        ));
+                    }
+                    let r = tracker.add_issue(project_id, &key)?;
+                    if let (false, Some(s)) = (r.already, sender) {
+                        if let Err(e) = s.push_pending() {
+                            tracing::warn!("tracker.add_issue: envio ao hub adiado: {e}");
+                        }
+                    }
+                    Ok(r)
+                })
+                .await
+                .map_err(|e| (-32603, e.to_string()))?
+                .map(|r| json!(r))
+                .map_err(from_sessions)
+            }
             "github.status" | "github.set_token" | "github.clear_token" => {
                 let gh = self
                     .st
@@ -3028,6 +3068,7 @@ mod tests {
                 etags: vec![],
                 synced_at: 1,
                 gone: Vec::new(),
+                me: None,
             })
             .unwrap();
             let dec = |wi: i64, origin| {

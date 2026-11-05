@@ -33,6 +33,7 @@ Anote o resultado de cada passo (ok / falhou + o que apareceu) e cole no PR.
 6. No índice, digite parte do nome (ou de `owner/repo`) em **Filtrar projetos**. **Esperado:** só as linhas que casam; sem nenhuma, "Nenhum projeto com …". **+ Novo projeto** abre o formulário de cadastro no próprio índice (só no desktop, com o hub conectado).
 7. Prioridade entre projetos: arraste um projeto para a metade de baixo de outro, ou foque a linha e tecle **Alt+↑**/**Alt+↓**. **Esperado:** "… desceu/subiu na ordem dos projetos." e a lista (e os `#n`) muda de ordem. Na PWA (só leitura) as linhas não arrastam e Alt+↑/↓ não faz nada.
 8. Sem hub (hub fora do ar ou sem conexão): abra **Projetos**. **Esperado:** o aviso "Hub fora do ar: cada ambiente mostra os próprios projetos…", os projetos agrupados por ambiente (com a sincronização do ambiente e as sessões), sem **⚙**, sem **+ Novo projeto** e sem reordenar; clicar abre o projeto pelos dados locais daquele ambiente. Sem nenhum projeto, "Nenhum projeto cadastrado…" e **Configurar o hub**.
+9. Só minhas (#151). Num projeto (GitHub ou Jira) já sincronizado, com issues atribuídas a você e a outras pessoas, abra a aba **Itens**. **Esperado:** abaixo da busca, **Só minhas**. Marque. **Esperado:** só as issues atribuídas ao usuário da credencial do sync (o login do token no GitHub, o `jira me` do ambiente de sync no Jira); um épico aparece se ele ou uma filha for sua, expandido e só com as filhas suas; sem nenhuma, "Nada casa com a busca e os filtros…". Troque para **Quadro**. **Esperado:** os mesmos cards; o card do épico só se o próprio épico for seu. Repita pela visão do hub e com o hub fora (visão local). Num projeto que ainda não sincronizou (ou com o `jira me` falhando), **Só minhas** aparece desabilitado, com a dica de que o seu usuário no rastreador ainda não é conhecido.
 
 ## 4. Responder permissão
 
@@ -333,3 +334,17 @@ Pré-requisito: o da seção 19. Para forçar os níveis sem gastar a conta, bai
 9. Projeto atribuído a ambientes de contas diferentes (visão do hub). **Esperado:** a lista "Uso do plano da conta por ambiente" mostra a conta e o uso de cada ambiente; clicar numa linha escolhe o ambiente, e o aviso passa a ser o da conta dele.
 10. Reiniciar o gestor de projetos com a conta no crítico. **Esperado:** o mesmo aviso e a mesma confirmação.
 11. Web (PWA). **Esperado:** os limiares em Configurações › Plano da conta (guardados no navegador); a notificação só com a permissão de notificação já dada.
+
+## 22. Adicionar issue pelo ID (#150)
+
+Pré-requisito: um projeto Jira com o ambiente de sync escolhido e conectado (hub 1.12 e ambiente 2.12 ou maiores) e uma issue do projeto que esteja fora do JQL do cadastro (por exemplo, `ACME-123`).
+
+1. Abra o projeto Jira (aba **Itens**). **Esperado:** no cabeçalho, o botão **Adicionar issue**. Num projeto GitHub, o botão não aparece.
+2. Clique **Adicionar issue**. **Esperado:** o diálogo "Adicionar issue pelo ID" com o campo da chave já focado e o aviso de que, sem work item, a issue sai do espelho na próxima reconciliação do sync. Digite `ACME 123` e **Adicionar**. **Esperado:** "Chave inválida…" no próprio diálogo, sem chamar o ambiente.
+3. Digite `ACME-123` (ou `acme-123`, `123` ou o link `…/browse/ACME-123`) e **Adicionar**. **Esperado:** "Adicionando…", o diálogo fecha, a árvore recarrega com a issue (e o épico dela, se não estava) e a aba do item abre.
+4. Repita com a mesma chave. **Esperado:** só abre a aba do item (a issue já estava no espelho).
+5. Uma chave de outro projeto (`OUTRO-1`) ou que não existe (`ACME-999999`). **Esperado:** a mensagem do ambiente no diálogo ("… é de outro projeto…", "… não existe no Jira…"), que segue aberto para corrigir.
+6. Pare o `ctowerd` do ambiente de sync (ou, nas Configurações do projeto, deixe sem ambiente de sync). **Esperado:** **Adicionar issue** desabilitado, com o motivo na dica (o mesmo do **Sincronizar este projeto**).
+7. Na paleta, digite `adicionar issue`. **Esperado:** **Projeto: Adicionar issue pelo ID… — <projeto>** para cada projeto Jira; escolher abre a aba **Itens** do projeto com o diálogo aberto.
+8. Com o hub fora (visão local), no ambiente do projeto. **Esperado:** o mesmo botão e o mesmo diálogo, chamando o próprio ambiente. Na web (PWA), igual à visão do hub.
+9. Sem iniciar sessão na issue adicionada, espere a próxima reconciliação com poda do sync. **Esperado:** a issue some da árvore (com work item, ela fica).

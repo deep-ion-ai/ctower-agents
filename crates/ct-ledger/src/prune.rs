@@ -479,6 +479,7 @@ mod tests {
             )],
             synced_at: now_ms(),
             gone: Vec::new(),
+            me: None,
         })
         .unwrap();
         (wi.id, s.id)
@@ -730,6 +731,7 @@ mod tests {
             etags: vec![("/repos/deep-ion-ai/demo/issues?x".into(), "e".into())],
             synced_at: now_ms(),
             gone: Vec::new(),
+            me: None,
         })
         .unwrap();
         l.conn
@@ -942,6 +944,7 @@ mod tests {
             etags: vec![],
             synced_at: now_ms(),
             gone: Vec::new(),
+            me: None,
         })
         .unwrap();
     }

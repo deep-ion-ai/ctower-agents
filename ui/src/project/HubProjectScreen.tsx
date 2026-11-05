@@ -178,9 +178,12 @@ export function HubProjectScreen({
       uiKey={key}
       name={p?.name ?? `${owner}/${repo}`}
       project={p}
+      // "Só minhas" (#151): o "eu" do rastreador, do projeto no hub ou da árvore.
+      me={hubProject?.sync?.me ?? mine?.sync?.me ?? null}
       roots={mine?.roots ?? null}
       syncedAt={mine?.sync?.last_ok_at ?? null}
       sync={syncInfo}
+      syncAddr={{ owner: ref.owner, repo: ref.repo }}
       error={error}
       item={item}
       liveOf={liveOf}
@@ -202,7 +205,7 @@ export function HubProjectScreen({
         }
         return null;
       }}
-      onReload={() => void load()}
+      onReload={load}
       docs={clones}
       headExtra={
         <>

@@ -1,14 +1,15 @@
+import { useId } from "react";
 import type { Sprint, WorkItemStatus } from "../protocol/gen";
 import { ACTIVE_SPRINT, ALL_SPRINTS, NO_SPRINT, sprintLabel } from "./sprints";
 import { STATUS } from "./status";
-import { SPRINTS_UNREAD, STATUS_ORDER, type SortKey, type TreeFilters } from "./tree-view";
+import { MINE_UNKNOWN, SPRINTS_UNREAD, STATUS_ORDER, type SortKey, type TreeFilters } from "./tree-view";
 
 export type ProjectView = "tree" | "board";
 
 /**
- * Filtro da árvore no painel lateral: a busca sempre, e a sprint nos
- * projetos Jira; com `more`, os chips de status, a ordenação e "mostrar
- * concluídos".
+ * Filtro da árvore no painel lateral: a busca e "Só minhas" sempre, e a
+ * sprint nos projetos Jira; com `more`, os chips de status, a ordenação e
+ * "mostrar concluídos".
  */
 export function TreeControls({
   value,
@@ -16,6 +17,7 @@ export function TreeControls({
   more,
   sprints = null,
   sprintsUnread = false,
+  me = null,
 }: {
   value: TreeFilters;
   onChange: (f: TreeFilters) => void;
@@ -24,7 +26,14 @@ export function TreeControls({
   sprints?: readonly Sprint[] | null;
   /** Projeto Jira sem nenhuma issue com sprint no espelho: o aviso no lugar da lista vazia. */
   sprintsUnread?: boolean;
+  /**
+   * O "eu" do rastreador (`SyncState.me`); `null` = desconhecido (sync
+   * ainda não rodou ou `jira me` falhou): "Só minhas" fica desabilitado.
+   */
+  me?: string | null;
 }) {
+  const known = !!me?.trim();
+  const hintId = useId();
   const toggle = (k: WorkItemStatus) => {
     const chips = new Set(value.chips);
     if (!chips.delete(k)) chips.add(k);
@@ -40,6 +49,25 @@ export function TreeControls({
         value={value.query}
         onChange={(e) => onChange({ ...value, query: e.target.value })}
       />
+      <label
+        className="ctl tree-mine"
+        title={known ? `Só as issues atribuídas a ${me}` : MINE_UNKNOWN}
+        aria-disabled={known ? undefined : "true"}
+      >
+        <input
+          type="checkbox"
+          checked={known && value.mine}
+          disabled={!known}
+          aria-describedby={known ? undefined : hintId}
+          onChange={(e) => onChange({ ...value, mine: e.target.checked })}
+        />
+        Só minhas
+      </label>
+      {!known && (
+        <span id={hintId} className="sr-only">
+          {MINE_UNKNOWN}
+        </span>
+      )}
       {sprints && (
         <label className="ctl tree-sprint">
           Sprint

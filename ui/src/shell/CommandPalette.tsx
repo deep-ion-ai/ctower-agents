@@ -18,7 +18,8 @@ import { useShell } from "./Shell";
 import { useStartSession } from "./start";
 import { useDiscard } from "../recovery/discard";
 import { projectAt } from "../project/sections";
-import { projectSyncInfo, runProjectSync, syncAddrOf } from "../project/sync-now";
+import { projectSyncInfo, runProjectSync, syncAddrOf, syncKey } from "../project/sync-now";
+import { requestAddIssue } from "../project/add-issue";
 
 const LIST_ID = "palette-list";
 const optId = (i: number) => `palette-opt-${i}`;
@@ -122,6 +123,13 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
         // De outro lugar, abre a Visão geral do projeto: o cartão mostra o resultado.
         if (a.open) nav.go(projectAt(a.screen, "overview"));
         return void runProjectSync(tower.api, projectSyncInfo(tower, addr));
+      }
+      case "add-issue": {
+        const addr = syncAddrOf(tower, a.screen);
+        if (!addr) return;
+        // Na aba Itens do projeto, que abre o diálogo ao ver o pedido.
+        nav.go(projectAt(a.screen, "items"));
+        return requestAddIssue(syncKey(addr));
       }
       case "query":
         return;
