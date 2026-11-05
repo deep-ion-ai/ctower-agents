@@ -36,6 +36,15 @@ pub struct IssueRow {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(as = "Option<Vec<IssueMeta>>", optional))]
     pub meta: Vec<IssueMeta>,
+    /// Identificadores dos responsáveis, para comparar com o "eu" do
+    /// rastreador (`SyncState.me`, #149) com `ct_core::is_assignee`: no Jira,
+    /// os do `fields.assignee` (`name` e `key` no Server/DC, `accountId` e
+    /// `emailAddress` no Cloud, os que vierem); no GitHub, o `login` de cada
+    /// um de `assignees`. Vazio = sem responsável, ou espelho anterior à
+    /// coluna; ausente no protocolo = vazio, como `meta`.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<String>>", optional))]
+    pub assignees: Vec<String>,
 }
 
 /// Um metadado do tracker: `field` é o ID no tracker (`status`,
@@ -78,6 +87,10 @@ pub struct GithubSnapshot {
     /// Issues que não existem mais no GitHub (apagadas ou transferidas,
     /// #89): saem do espelho, e o work item delas vai para concluído.
     pub gone: Vec<GoneIssue>,
+    /// O "eu" do rastreador nesta rodada (#149): o login do token do GitHub
+    /// ou a saída do `jira me`. Vai ao `sync_state.me` com a rodada bem
+    /// sucedida; `None` mantém o anterior.
+    pub me: Option<String>,
 }
 
 /// Issue que sumiu do GitHub (#89): um épico do espelho que respondeu
@@ -143,14 +156,24 @@ pub struct SyncState {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub failing_since: Option<i64>,
+    /// O "eu" do rastreador (#149), para o filtro "só minhas": no GitHub, o
+    /// login do token que o sync usa; no Jira, a saída do `jira me` do
+    /// ambiente de sync (o username no Server/DC, o e-mail no Cloud). Compare
+    /// com `IssueRow.assignees` por `ct_core::is_assignee` (sem caixa,
+    /// qualquer identificador). `None` = ainda não conhecido; ausente no
+    /// TypeScript = ambiente ou hub anterior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub me: Option<String>,
 }
 
 /// Colunas de `row_to_sync`.
 const SYNC_COLS: &str =
-    "project_id, last_attempt_at, last_ok_at, last_error, failures, failing_since";
+    "project_id, last_attempt_at, last_ok_at, last_error, failures, failing_since, me";
 
 const ISSUE_COLS: &str =
-    "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints, meta";
+    "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints, meta,
+     assignees";
 const PR_COLS: &str = "number, work_item_id, head, base, state, url, updated_at, head_sha";
 
 fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
@@ -165,6 +188,7 @@ fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
         updated_at: r.get(7)?,
         sprints: json_col(r, 8)?,
         meta: json_col(r, 9)?,
+        assignees: json_col(r, 10)?,
     })
 }
 
@@ -189,6 +213,7 @@ fn row_to_sync(r: &Row) -> rusqlite::Result<SyncState> {
         last_error: r.get(3)?,
         failures: r.get(4)?,
         failing_since: r.get(5)?,
+        me: r.get(6)?,
     })
 }
 
@@ -309,15 +334,18 @@ impl GhMirror<'_> {
         let labels = serde_json::to_string(&i.labels).expect("Vec<String> serializa");
         let sprints = serde_json::to_string(&i.sprints).expect("Vec<Sprint> serializa");
         let meta = serde_json::to_string(&i.meta).expect("Vec<IssueMeta> serializa");
+        let assignees = serde_json::to_string(&i.assignees).expect("Vec<String> serializa");
         self.0.execute(
             "INSERT INTO issue_cache (project_id, gh_number, title, state, labels, parent_number,
-                                      has_sub_issues, url, updated_at, synced_at, sprints, meta)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                                      has_sub_issues, url, updated_at, synced_at, sprints, meta,
+                                      assignees)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT (project_id, gh_number) DO UPDATE SET
                 title = excluded.title, state = excluded.state, labels = excluded.labels,
                 parent_number = excluded.parent_number, has_sub_issues = excluded.has_sub_issues,
                 url = excluded.url, updated_at = excluded.updated_at, synced_at = excluded.synced_at,
-                sprints = excluded.sprints, meta = excluded.meta",
+                sprints = excluded.sprints, meta = excluded.meta,
+                assignees = excluded.assignees",
             params![
                 project_id,
                 i.gh_number,
@@ -330,7 +358,8 @@ impl GhMirror<'_> {
                 i.updated_at,
                 synced_at,
                 sprints,
-                meta
+                meta,
+                assignees
             ],
         )?;
         Ok(prev)
@@ -422,12 +451,13 @@ impl GhMirror<'_> {
             )?;
         }
         self.0.execute(
-            "INSERT INTO sync_state (project_id, last_attempt_at, last_ok_at, last_error)
-             VALUES (?1, ?2, ?2, NULL)
+            "INSERT INTO sync_state (project_id, last_attempt_at, last_ok_at, last_error, me)
+             VALUES (?1, ?2, ?2, NULL, ?3)
              ON CONFLICT (project_id) DO UPDATE SET
                 last_attempt_at = excluded.last_attempt_at, last_ok_at = excluded.last_ok_at,
-                last_error = NULL, failures = 0, failing_since = NULL",
-            params![s.project_id, s.synced_at],
+                last_error = NULL, failures = 0, failing_since = NULL,
+                me = coalesce(excluded.me, sync_state.me)",
+            params![s.project_id, s.synced_at, s.me],
         )?;
         Ok(())
     }
@@ -800,6 +830,7 @@ mod tests {
             etags: vec![("k".into(), "e1".into())],
             synced_at: 100,
             gone: Vec::new(),
+            me: None,
         }
     }
 
@@ -812,8 +843,9 @@ mod tests {
             "parent_number": null, "has_sub_issues": false, "url": "u", "updated_at": 1,
         });
         let i: IssueRow = serde_json::from_value(v).unwrap();
-        assert!(i.meta.is_empty() && i.sprints.is_empty());
+        assert!(i.meta.is_empty() && i.sprints.is_empty() && i.assignees.is_empty());
         assert_eq!(serde_json::to_value(&i).unwrap()["meta"], json!([]));
+        assert_eq!(serde_json::to_value(&i).unwrap()["assignees"], json!([]));
         let mut com = issue(8, "open");
         com.meta = vec![IssueMeta {
             field: "status".into(),
@@ -822,6 +854,40 @@ mod tests {
         }];
         let back: IssueRow = serde_json::from_value(serde_json::to_value(&com).unwrap()).unwrap();
         assert_eq!(back, com);
+    }
+
+    /// #149: os responsáveis vão e voltam do cache; o `me` da rodada vai ao
+    /// `sync_state`, e uma rodada sem ele mantém o anterior.
+    #[test]
+    fn responsaveis_e_me_no_cache() {
+        let (l, p) = ledger_with_project();
+        let mut i = issue(1, "open");
+        i.assignees = vec!["fulano".into(), "fulano@example.com".into()];
+        let mut s = snap(p.id, vec![i.clone(), issue(2, "open")], vec![]);
+        s.me = Some("fulano".into());
+        l.apply_github(&s).unwrap();
+        assert_eq!(
+            l.get_issue(p.id, 1).unwrap().unwrap().assignees,
+            i.assignees
+        );
+        assert!(l.get_issue(p.id, 2).unwrap().unwrap().assignees.is_empty());
+        let st = l.sync_state(p.id).unwrap().unwrap();
+        assert_eq!(st.me.as_deref(), Some("fulano"));
+        assert_eq!(serde_json::to_value(&st).unwrap()["me"], json!("fulano"));
+        l.apply_github(&snap(p.id, vec![], vec![])).unwrap();
+        assert_eq!(
+            l.sync_state(p.id).unwrap().unwrap().me.as_deref(),
+            Some("fulano")
+        );
+        let tree = l.project_tree(p.id).unwrap();
+        assert_eq!(tree.sync.unwrap().me.as_deref(), Some("fulano"));
+        // `SyncState` sem `me` (ambiente anterior) e sem `me` no JSON.
+        let st: SyncState = serde_json::from_value(json!({
+            "project_id": 1, "last_attempt_at": 1, "last_ok_at": null, "last_error": null,
+        }))
+        .unwrap();
+        assert_eq!(st.me, None);
+        assert!(serde_json::to_value(&st).unwrap().get("me").is_none());
     }
 
     fn events(l: &Ledger, wi: i64, kind: &str) -> usize {
@@ -1226,6 +1292,7 @@ mod tests {
             etags: vec![("k".into(), "e1".into())],
             synced_at: 100,
             gone: Vec::new(),
+            me: None,
         };
         assert!(l.apply_github(&s).is_err());
         assert!(l.list_issues(p.id).unwrap().is_empty());

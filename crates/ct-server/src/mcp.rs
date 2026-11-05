@@ -882,6 +882,7 @@ mod tests {
                     etags: vec![],
                     synced_at: 1,
                     gone: Vec::new(),
+                    me: None,
                 },
                 "hub-id",
             )
@@ -1134,6 +1135,7 @@ mod tests {
                 etags: vec![],
                 synced_at: 1,
                 gone: Vec::new(),
+                me: None,
             })
             .unwrap();
         let s = srv.env.sessions.start(srv.env.request(1, "A")).unwrap();

@@ -19,4 +19,13 @@ sprints?: Array<Sprint>,
  * Tipo, Prioridade…). Vazio no GitHub e no espelho anterior à coluna;
  * ausente no protocolo = vazio, como `sprints`.
  */
-meta?: Array<IssueMeta>, };
+meta?: Array<IssueMeta>, 
+/**
+ * Identificadores dos responsáveis, para comparar com o "eu" do
+ * rastreador (`SyncState.me`, #149) com `ct_core::is_assignee`: no Jira,
+ * os do `fields.assignee` (`name` e `key` no Server/DC, `accountId` e
+ * `emailAddress` no Cloud, os que vierem); no GitHub, o `login` de cada
+ * um de `assignees`. Vazio = sem responsável, ou espelho anterior à
+ * coluna; ausente no protocolo = vazio, como `meta`.
+ */
+assignees?: Array<string>, };

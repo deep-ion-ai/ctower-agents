@@ -9,4 +9,13 @@ failures?: number,
 /**
  * Início da sequência de falhas; `None` = a última rodada deu certo.
  */
-failing_since?: number, };
+failing_since?: number, 
+/**
+ * O "eu" do rastreador (#149), para o filtro "só minhas": no GitHub, o
+ * login do token que o sync usa; no Jira, a saída do `jira me` do
+ * ambiente de sync (o username no Server/DC, o e-mail no Cloud). Compare
+ * com `IssueRow.assignees` por `ct_core::is_assignee` (sem caixa,
+ * qualquer identificador). `None` = ainda não conhecido; ausente no
+ * TypeScript = ambiente ou hub anterior.
+ */
+me?: string, };

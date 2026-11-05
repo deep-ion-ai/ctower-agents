@@ -327,6 +327,15 @@ ALTER TABLE issue_cache ADD COLUMN meta TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE sync_state ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
 "#,
+    // 18: responsáveis de cada issue do espelho (JSON de `Vec<String>`, os
+    // identificadores comparáveis, #149) e o "eu" do rastreador no
+    // `sync_state` (login do token do GitHub ou `jira me`). `[]` e nulo no
+    // que já estava gravado; o sync relê o projeto uma vez
+    // (`MIRROR_VERSION`) e grava o `me` na próxima rodada.
+    r#"
+ALTER TABLE issue_cache ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE sync_state ADD COLUMN me TEXT;
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo

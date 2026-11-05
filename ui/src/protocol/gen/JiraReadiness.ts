@@ -32,6 +32,15 @@ credential_from_env?: boolean,
  */
 me_ok: boolean, 
 /**
+ * Saída do `jira me`: o usuário da credencial do sync, o "eu" do filtro
+ * "só minhas" (#149). O jira-cli imprime o `login` do `.config.yml`,
+ * sem falar com o servidor: o username no Server/DC (no `bearer`, o
+ * `name` do `/myself`, gravado pelo `jira init`) e o e-mail no Cloud.
+ * Compare com `is_assignee`. `None` = `jira me` falhou ou voltou
+ * vazio; ausente no TypeScript = ambiente anterior.
+ */
+me?: string, 
+/**
  * Versão do Jira (`jira serverinfo`).
  */
 server_version: string | null, 

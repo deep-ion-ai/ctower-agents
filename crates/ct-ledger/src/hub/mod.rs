@@ -611,6 +611,13 @@ ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
     r#"
 ALTER TABLE env ADD COLUMN plan_report TEXT;
 "#,
+    // 29: responsáveis de cada issue do espelho e o "eu" do rastreador no
+    // `sync_state` (#149), as mesmas colunas da migração 18 do `ledger.db`.
+    // O `me` do GitHub vem do sync do hub; o do Jira, do `tracker_status`.
+    r#"
+ALTER TABLE issue_cache ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE sync_state ADD COLUMN me TEXT;
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -3476,6 +3483,7 @@ mod tests {
                 etags: vec![("/repos/deep-ion-ai/demo/issues?x".into(), "e".into())],
                 synced_at: 5,
                 gone: Vec::new(),
+                me: None,
             },
             "hub",
         )
@@ -3995,6 +4003,7 @@ mod tests {
             etags: vec![("k".into(), "e".into())],
             synced_at: 5,
             gone: Vec::new(),
+            me: None,
         };
         let r = hub
             .apply_github(&snap(vec![pr(PrState::Open)], vec![issue("open")]), "hub")
@@ -4674,7 +4683,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 28);
+        assert_eq!(v, 29);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
