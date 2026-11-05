@@ -174,6 +174,7 @@ export function ProjectScreen(props: {
       uiKey={key}
       name={name}
       project={p}
+      me={sync?.me ?? null}
       roots={mine?.roots ?? null}
       syncedAt={mine?.sync?.last_ok_at ?? null}
       sync={syncInfo}

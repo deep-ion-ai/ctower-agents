@@ -1,5 +1,6 @@
 import type { WorkItemStatus } from "../protocol/gen";
 import type { Priority } from "../protocol/hub-gen";
+import { isAssignee } from "./assignee";
 import { ALL_SPRINTS, matchesSprint, sprintShowsDone, type SprintFilter, type SprintIssue } from "./sprints";
 
 /** Janela de "atividade recente" para o épico começar expandido. */
@@ -22,7 +23,7 @@ export const STATUS_ORDER: WorkItemStatus[] = [
  * (`HubTreeNode`). Prioridade e ordem só existem na visão do hub.
  */
 export interface ViewNode {
-  issue: { gh_number: number; title: string; state: string } & SprintIssue;
+  issue: { gh_number: number; title: string; state: string; assignees?: readonly string[] } & SprintIssue;
   work_item: { status: WorkItemStatus; priority?: Priority | null; rank?: number | null } | null;
   summary: { last_activity_at: number | null };
   children: ViewNode[];
@@ -40,6 +41,12 @@ export interface TreeFilters {
    * escolhida nesta execução (vale a guardada do projeto).
    */
   sprint: SprintFilter | null;
+  /**
+   * "Só minhas" (#151): só as issues atribuídas ao "eu" do rastreador
+   * (`SyncState.me`), que cada função recebe à parte. Com o "eu"
+   * desconhecido, a tela o desliga (`mineFilters`).
+   */
+  mine: boolean;
 }
 
 export const NO_FILTERS: TreeFilters = {
@@ -48,11 +55,22 @@ export const NO_FILTERS: TreeFilters = {
   sort: "activity",
   showDone: false,
   sprint: null,
+  mine: false,
 };
 
-/** Há busca, chip ou sprint escolhida: os épicos aparecem expandidos. */
+/** Há busca, chip, sprint escolhida ou "Só minhas": os épicos aparecem expandidos. */
 export const narrowing = (f: TreeFilters) =>
-  f.query.trim() !== "" || f.chips.size > 0 || (f.sprint ?? ALL_SPRINTS) !== ALL_SPRINTS;
+  f.query.trim() !== "" || f.chips.size > 0 || (f.sprint ?? ALL_SPRINTS) !== ALL_SPRINTS || f.mine === true;
+
+/**
+ * Filtros guardados antes do "Só minhas" (sem `mine`) valem como desligado;
+ * sem o "eu" do rastreador (`me`), o filtro também fica desligado (não
+ * esconde a árvore toda), mas a escolha guardada continua lá.
+ */
+export const mineFilters = (f: TreeFilters, me: string | null | undefined): TreeFilters => ({
+  ...f,
+  mine: f.mine === true && !!me?.trim(),
+});
 
 export const isOpen = (n: ViewNode) => n.issue.state === "open";
 
@@ -76,8 +94,14 @@ export function matchesQuery(n: ViewNode, query: string): boolean {
 }
 
 const matchesChips = (n: ViewNode, f: TreeFilters) => f.chips.size === 0 || f.chips.has(statusKey(n));
-export const matches = (n: ViewNode, f: TreeFilters) =>
-  matchesQuery(n, f.query) && matchesChips(n, f) && matchesSprint(n.issue, f.sprint ?? ALL_SPRINTS);
+const matchesMine = (n: ViewNode, f: TreeFilters, me: string | null | undefined) =>
+  f.mine !== true || isAssignee(n.issue.assignees, me);
+/** `me`: o "eu" do rastreador, para o "Só minhas" (sem ele, nada é meu). */
+export const matches = (n: ViewNode, f: TreeFilters, me?: string | null) =>
+  matchesQuery(n, f.query) &&
+  matchesChips(n, f) &&
+  matchesSprint(n.issue, f.sprint ?? ALL_SPRINTS) &&
+  matchesMine(n, f, me);
 
 /** Atividade mais recente do nó e das filhas (null = sem work item/atividade). */
 export function lastActivity(n: ViewNode): number | null {
@@ -145,8 +169,10 @@ export interface TreeView<T extends ViewNode> {
  * "Concluído") traz avulsas
  * fechadas e épicos totalmente fechados; uma sprint escolhida (ou a ativa)
  * também, para mostrar a sprint inteira.
+ * "Só minhas" (`me`, o "eu" do rastreador): o épico aparece se ele ou uma
+ * filha for minha, e só com as filhas minhas.
  */
-export function buildView<T extends ViewNode>(roots: readonly T[], f: TreeFilters): TreeView<T> {
+export function buildView<T extends ViewNode>(roots: readonly T[], f: TreeFilters, me?: string | null): TreeView<T> {
   const epics: EpicView<T>[] = [];
   const loose: T[] = [];
   // O chip "Concluído" pede os encerrados: sem isso o filtro nunca mostraria nada.
@@ -158,13 +184,15 @@ export function buildView<T extends ViewNode>(roots: readonly T[], f: TreeFilter
       if (!showDone && !isOpen(r) && !kids.some(isOpen)) continue;
       let shown = kids;
       if (narrowing(f)) {
-        const hits = kids.filter((c) => matches(c, f));
-        if (!matches(r, f) && hits.length === 0) continue;
-        // Épico que casa só com a busca (sem chips nem sprint) traz todas as filhas.
-        shown = matchesQuery(r, f.query) && f.chips.size === 0 && sprint === ALL_SPRINTS ? kids : hits;
+        // Épico que casa com a busca (sem chips nem sprint) traz todas as
+        // filhas; com "Só minhas", todas as minhas.
+        const byEpic = matchesQuery(r, f.query) && f.chips.size === 0 && sprint === ALL_SPRINTS;
+        const hits = kids.filter((c) => (byEpic ? matchesMine(c, f, me) : matches(c, f, me)));
+        if (!matches(r, f, me) && hits.length === 0) continue;
+        shown = hits;
       }
       epics.push({ epic: r, shown: sortNodes(shown, f.sort) });
-    } else if ((showDone || isOpen(r)) && matches(r, f)) {
+    } else if ((showDone || isOpen(r)) && matches(r, f, me)) {
       loose.push(r);
     }
   }
@@ -189,10 +217,10 @@ export interface BoardItem<T extends ViewNode> {
  * o épico entra como card (sempre, sem filtro; com filtro, só se ele mesmo casa),
  * seguido das sub-issues mostradas e das avulsas. A ordem de cada coluna é a da árvore.
  */
-export function boardItems<T extends ViewNode>(view: TreeView<T>, f: TreeFilters): BoardItem<T>[] {
+export function boardItems<T extends ViewNode>(view: TreeView<T>, f: TreeFilters, me?: string | null): BoardItem<T>[] {
   const items: BoardItem<T>[] = [];
   for (const { epic, shown } of view.epics) {
-    if (!narrowing(f) || matches(epic, f)) items.push({ node: epic, epicOf: null });
+    if (!narrowing(f) || matches(epic, f, me)) items.push({ node: epic, epicOf: null });
     for (const c of shown) items.push({ node: c, epicOf: epic.issue.gh_number });
   }
   for (const l of view.loose) items.push({ node: l, epicOf: null });
@@ -231,7 +259,10 @@ export function collapsedHint(epic: ViewNode): string {
 }
 
 export const EMPTY_FILTERED =
-  "Nada casa com a busca e os filtros. Limpe a busca, desmarque os chips de status ou escolha outra sprint.";
+  "Nada casa com a busca e os filtros. Limpe a busca, desmarque os chips de status, escolha outra sprint ou desligue “Só minhas”.";
+/** O "eu" do rastreador ainda não é conhecido: a dica do "Só minhas" desabilitado. */
+export const MINE_UNKNOWN =
+  "Seu usuário no rastreador ainda não é conhecido (o sync ainda não rodou, ou o “jira me” do ambiente de sync falhou).";
 export const EMPTY_ACTIVE_SPRINT = "Nenhum item na sprint ativa. Escolha outra sprint ou “Todas”.";
 /** Projeto Jira sem nenhuma issue com sprint no espelho. */
 export const SPRINTS_UNREAD = "sprints ainda não lidas (aguarde o próximo sync)";

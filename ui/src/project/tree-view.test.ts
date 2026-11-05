@@ -10,6 +10,8 @@ import {
   isExpanded,
   lastActivity,
   matchesQuery,
+  mineFilters,
+  narrowing,
   sortNodes,
   statusKey,
   type TreeFilters,
@@ -233,5 +235,79 @@ describe("prioridade (visão do hub)", () => {
 
   test("sem prioridade (árvore local): a ordenação por prioridade cai no número", () => {
     expect(nums(sortNodes([n(9), n(3), n(5)], "priority"))).toEqual([3, 5, 9]);
+  });
+});
+
+describe("Só minhas (#151)", () => {
+  const ME = "fulano";
+  /** Nó com responsáveis (os identificadores do rastreador). */
+  const a = (num: number, who: string[], kids: ViewNode[] = []): ViewNode => {
+    const x = n(num, { kids });
+    return { ...x, issue: { ...x.issue, assignees: who } };
+  };
+  const mine = f({ mine: true });
+
+  test("issue minha: só ela entre as avulsas, sem diferenciar caixa nem espaços", () => {
+    const roots = [a(1, [" Fulano "]), a(2, ["beltrano"]), n(3)];
+    expect(nums(buildView(roots, mine, ME).loose)).toEqual([1]);
+    // Desligado, todas.
+    expect(nums(buildView(roots, f(), ME).loose)).toEqual([1, 2, 3]);
+  });
+
+  test("qualquer identificador do responsável basta (Jira Cloud: accountId e e-mail)", () => {
+    const roots = [a(1, ["5b10ac8d82e05b22cc7d4ef5", "fulano@example.com"])];
+    expect(nums(buildView(roots, mine, "FULANO@example.com").loose)).toEqual([1]);
+  });
+
+  test("épico com filha minha: aparece só com as filhas minhas", () => {
+    const roots = [a(1, ["beltrano"], [a(2, [ME]), a(3, ["beltrano"]), n(4)])];
+    const v = buildView(roots, mine, ME);
+    expect(nums(v.epics.map((e) => e.epic))).toEqual([1]);
+    expect(nums(v.epics[0].shown)).toEqual([2]);
+  });
+
+  test("épico meu sem filha minha: aparece sem filhas", () => {
+    const v = buildView([a(1, [ME], [a(2, ["beltrano"])])], mine, ME);
+    expect(nums(v.epics.map((e) => e.epic))).toEqual([1]);
+    expect(v.epics[0].shown).toHaveLength(0);
+  });
+
+  test("épico que casa com a busca não traz as filhas de outros", () => {
+    const roots = [a(1, [], [a(2, [ME]), a(3, ["beltrano"])])];
+    const v = buildView(roots, f({ mine: true, query: "item 1" }), ME);
+    expect(nums(v.epics[0].shown)).toEqual([2]);
+  });
+
+  test("nenhuma minha: árvore vazia", () => {
+    const roots = [a(1, ["beltrano"], [a(2, ["beltrano"])]), a(3, []), n(4)];
+    const v = buildView(roots, mine, ME);
+    expect(v.epics).toHaveLength(0);
+    expect(v.loose).toHaveLength(0);
+  });
+
+  test("entra no narrowing: os épicos abrem expandidos", () => {
+    expect(narrowing(mine)).toBe(true);
+    const velho = n(1, { last: NOW - 30 * DAY, kids: [n(2, { last: null })] });
+    expect(isExpanded(velho, mine, false, NOW, noLive)).toBe(true);
+  });
+
+  test("Quadro: o épico só entra como card se ele mesmo for meu", () => {
+    const roots = [a(1, ["beltrano"], [a(2, [ME])]), a(5, [ME], [a(6, ["beltrano"])]), a(7, [ME])];
+    const v = buildView(roots, mine, ME);
+    expect(boardItems(v, mine, ME).map((i) => [i.node.issue.gh_number, i.epicOf])).toEqual([
+      [2, 1],
+      [5, null],
+      [7, null],
+    ]);
+  });
+
+  test("mineFilters: sem o 'eu' (ou filtro guardado sem 'mine'), desligado", () => {
+    expect(mineFilters(mine, ME).mine).toBe(true);
+    expect(mineFilters(mine, null).mine).toBe(false);
+    expect(mineFilters(mine, "  ").mine).toBe(false);
+    const antigo = { query: "", chips: new Set<WorkItemStatus>(), sort: "activity", showDone: false, sprint: null };
+    const g = mineFilters(antigo as unknown as TreeFilters, ME);
+    expect(g.mine).toBe(false);
+    expect(narrowing(g)).toBe(false);
   });
 });
