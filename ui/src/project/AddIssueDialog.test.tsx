@@ -103,7 +103,10 @@ function setupHub(opts: { syncEnv?: string | null; envUp?: boolean; result?: Par
 }
 
 const head = () => document.querySelector<HTMLElement>(".project-head")!;
-const addButton = async () => within(head()).getByRole("button", { name: "Adicionar issue" });
+// O botão só aparece quando o cadastro do projeto (Jira) chega, o que pode vir
+// depois da árvore: espera por ele em vez de procurá-lo uma vez só.
+const addButton = () =>
+  waitFor(() => within(document.querySelector<HTMLElement>(".project-head")!).getByRole("button", { name: "Adicionar issue" }));
 const dialog = () => screen.findByRole("dialog", { name: "Adicionar issue pelo ID" });
 /** Aba do item aberta: a trilha termina na chave do Jira. */
 const itemOpened = async (key: string) => {
@@ -211,7 +214,7 @@ test("hub: sem ambiente de sync, o botão fica desabilitado com o motivo", async
   setupHub({ syncEnv: null });
   await screen.findByText("visão do hub");
   const btn = await addButton();
-  expect(btn).toBeDisabled();
+  await waitFor(() => expect(btn).toBeDisabled());
   expect(btn).toHaveAttribute(
     "title",
     "Projeto sem ambiente de sync: escolha um em Configurações › Repositório e rastreador.",
