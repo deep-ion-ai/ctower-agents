@@ -42,6 +42,10 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.workitem.history",
     // "Ver issue" (#434): só leitura, de passagem, sem gravar.
     "hub.workitem.body",
+    // "Adicionar issue pelo ID" (#148): escreve só no espelho do Jira (a
+    // issue que o Jira já mostra, que sai na poda sem work item), pelo
+    // ambiente de sync.
+    "hub.tracker.add_issue",
     "hub.workitem.set_status",
     "hub.workitem.set_priority",
     "hub.ranking.get",

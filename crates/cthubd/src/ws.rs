@@ -3,7 +3,8 @@
 //!
 //! Métodos: `hub.info`, `hub.status`, `hub.projects.list|add|update|delete|impact`,
 //! `hub.assignments.list|add|remove`, `hub.quarantine.list|discard`, `hub.tree.get`, `hub.workitem.history`,
-//! `hub.workitem.set_status|set_priority|move`, `hub.workitem.body`, `hub.projects.move`,
+//! `hub.workitem.set_status|set_priority|move`, `hub.workitem.body`,
+//! `hub.tracker.add_issue` (issue do Jira pelo ID, #148), `hub.projects.move`,
 //! `hub.ranking.get`, `hub.health.get`, `hub.proposals.list|decide`,
 //! `hub.dashboard.get`, `hub.envs.list`,
 //! `hub.rules.get|set|import|history` e `hub.rules.proposals.list|decide`
@@ -476,6 +477,49 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
     }
 }
 
+/// `hub.tracker.add_issue { owner, repo, key }` (#148): "Adicionar issue
+/// pelo ID" de projeto Jira. Vai só ao ambiente de sync do projeto
+/// (`tracker.add_issue` do canal reverso), como o "Ver issue": o hub não
+/// alcança o Jira. A issue e os pais dela chegam ao espelho do hub pelo
+/// outbox do ambiente (`issue_mirror`), enviado antes da resposta; a
+/// resposta (`TrackerIssueAdded`) volta como o ambiente mandou.
+async fn tracker_add_issue(st: &HubState, p: Value) -> RpcResult {
+    let (owner, repo) = (
+        str_param(&p, "owner")?.to_string(),
+        str_param(&p, "repo")?.to_string(),
+    );
+    let key = match p.get("key") {
+        Some(Value::String(s)) if !s.trim().is_empty() => Value::String(s.trim().to_string()),
+        Some(n @ Value::Number(_)) => n.clone(),
+        _ => {
+            return Err(invalid(
+                "parâmetro obrigatório: key (a chave, como ACME-123, ou só o número)",
+            ))
+        }
+    };
+    let hub = st.hub.clone();
+    let (o, r) = (owner.clone(), repo.clone());
+    let project = tokio::task::spawn_blocking(move || hub.lock().find_project(&o, &r))
+        .await
+        .map_err(|e| (-32603, e.to_string()))?
+        .map_err(|e| (-32000, e.to_string()))?
+        .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
+    if project.tracker.kind() != ct_core::TrackerKind::Jira {
+        return Err((
+            -32000,
+            "adicionar issue pelo ID só vale para projeto Jira: no GitHub o espelho já traz o repositório todo".into(),
+        ));
+    }
+    let env = project.sync_env_id.clone().ok_or_else(|| {
+        (
+            -32000,
+            "projeto Jira sem ambiente de sync: a issue é lida por ele".to_string(),
+        )
+    })?;
+    let params = json!({ "owner": project.gh_owner, "repo": project.gh_repo, "key": key });
+    call_env(st, env, "tracker.add_issue", params).await
+}
+
 /// Resposta de `hub.plan.accounts` (issue #106).
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -660,6 +704,7 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         // Log do hub (#65): as últimas linhas, mascaradas.
         "hub.logs.tail" => ct_http::logs::rpc_tail(ct_http::logs::global(), &p).await,
         "hub.workitem.body" => workitem_body(st, p).await,
+        "hub.tracker.add_issue" => tracker_add_issue(st, p).await,
         m if m.starts_with("hub.update.") => update_call(st, method, &p).await,
         "hub.projects.add" | "hub.projects.update" => {
             let (st, method) = (st.clone(), method.to_string());
@@ -1847,6 +1892,8 @@ mod export {
         // Rastreador e forja (#347): os tipos soltos, além dos de `HubProject`.
         ct_core::TrackerKind::export_all_to(&dir).unwrap();
         ct_core::ForgeKind::export_all_to(&dir).unwrap();
+        // `hub.tracker.add_issue` (#148), a resposta do ambiente de sync.
+        ct_core::TrackerIssueAdded::export_all_to(&dir).unwrap();
 
         // (nome do tipo, caminho relativo sem extensão), ex.: serde_json/JsonValue.
         fn walk(dir: &Path, rel: &str, out: &mut Vec<(String, String)>) {
@@ -4227,6 +4274,97 @@ pub(crate) mod tests {
         let v = ui.call("hub.workitem.body", p(9)).await;
         assert_eq!(
             v["error"]["message"], "Jira, PROJ-9: o Jira recusou a senha (401)",
+            "{v}"
+        );
+    }
+
+    /// "Adicionar issue pelo ID" (#148): vai só ao ambiente de sync do
+    /// projeto Jira, com a chave como veio (o ambiente normaliza); projeto
+    /// GitHub, sem ambiente de sync, offline ou sem `key` dão erro claro.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tracker_add_issue_vai_ao_ambiente_de_sync() {
+        let (st, cookie) = hub_web();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let mut web = web_ui(&url, &cookie).await;
+        let v = ui
+            .call(
+                "hub.projects.add",
+                json!({
+                    "tracker": { "kind": "jira", "url": "https://jira.example.com",
+                                 "project_key": "ACME", "jql": "", "active_sprint_only": true,
+                                 "credential_cmd": "pass show jira" },
+                    "forge": { "kind": "gitlab", "clone_url": "git@git.example.com:acme/app.git",
+                               "credential_cmd": "pass show gitlab" }
+                }),
+            )
+            .await;
+        assert!(v["result"].is_object(), "{v}");
+        let p = |k: Value| json!({ "owner": "acme", "repo": "app", "key": k });
+        let msg = |v: &Value| v["error"]["message"].as_str().unwrap_or("").to_string();
+
+        let v = ui.call("hub.tracker.add_issue", p(json!("ACME-123"))).await;
+        assert!(msg(&v).contains("sem ambiente de sync"), "{v}");
+        let v = ui.call("hub.tracker.add_issue", p(json!(""))).await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        let v = ui
+            .call(
+                "hub.tracker.add_issue",
+                json!({ "owner": "acme", "repo": "nada", "key": "1" }),
+            )
+            .await;
+        assert_eq!(msg(&v), "projeto acme/nada não está no hub", "{v}");
+
+        st.hub.lock().ingest("env-x", "x", &[]).unwrap();
+        st.hub.lock().ingest("env-y", "y", &[]).unwrap();
+        for env in ["env-x", "env-y"] {
+            let v = ui
+                .call(
+                    "hub.assignments.add",
+                    json!({ "owner": "acme", "repo": "app", "env": env }),
+                )
+                .await;
+            assert!(v["result"].is_object(), "{v}");
+        }
+        let v = ui.call("hub.tracker.add_issue", p(json!("ACME-123"))).await;
+        assert_eq!(
+            v["error"]["code"],
+            crate::channel::CHANNEL_ENV_OFFLINE,
+            "{v}"
+        );
+
+        // Só o ambiente de sync (o primeiro atribuído, env-x) recebe o
+        // pedido; o env-y, também atribuído, segue offline.
+        let _x = fake_env(&st, &url, "env-x").await;
+        for (c, k) in [(&mut ui, json!(" ACME-123 ")), (&mut web, json!(123))] {
+            let v = c.call("hub.tracker.add_issue", p(k.clone())).await;
+            let want = if k.is_string() { json!("ACME-123") } else { k };
+            assert_eq!(
+                v["result"],
+                json!({ "method": "tracker.add_issue",
+                        "params": { "owner": "acme", "repo": "app", "key": want } }),
+                "{v}"
+            );
+        }
+    }
+
+    /// Projeto GitHub: o espelho já traz o repositório todo.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tracker_add_issue_recusa_projeto_github() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui
+            .call(
+                "hub.tracker.add_issue",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "key": "1" }),
+            )
+            .await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("só vale para projeto Jira"),
             "{v}"
         );
     }

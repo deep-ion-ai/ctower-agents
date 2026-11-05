@@ -162,6 +162,8 @@ mod export {
         // Rastreador e forja (#347): os tipos soltos, além dos de `Project`.
         ct_core::TrackerKind::export_all_to(&dir).unwrap();
         ct_core::ForgeKind::export_all_to(&dir).unwrap();
+        // "Adicionar issue pelo ID" (#148), resposta de `tracker.add_issue`.
+        ct_core::TrackerIssueAdded::export_all_to(&dir).unwrap();
 
         // (nome do tipo, caminho relativo sem extensão), ex.: serde_json/JsonValue.
         fn walk(dir: &Path, rel: &str, out: &mut Vec<(String, String)>) {

@@ -31,6 +31,9 @@ pub use tracker::{
     DEFAULT_MAX_ISSUES, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS,
 };
 
+// "Adicionar issue pelo ID" (#148).
+pub use tracker::TrackerIssueAdded;
+
 /// Versão do Control Tower (a do workspace).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
