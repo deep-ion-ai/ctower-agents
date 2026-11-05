@@ -1,6 +1,6 @@
 import { FakeDaemonApi } from "../../api/fake";
 import type { HubDashboard } from "../../protocol/hub-gen";
-import { dashboard, hubProject, project, session, workItem } from "../../test/fixtures";
+import { dashboard, hubProject, jiraProject, project, session, workItem } from "../../test/fixtures";
 import { paletteItems, SYNC_PROJECT_PREFIX, SYNC_WEB_NOTE, type PaletteItem, type PaletteSources } from "./items";
 
 const HUB_OFF: PaletteSources["hub"] = { up: false, dashboard: null, connected: false };
@@ -316,4 +316,30 @@ test("sync por projeto (#90): este projeto, 'Sincronizar projeto…' e um por pr
   // Sem aba de projeto ativa: sem "Sincronizar este projeto".
   const sem = paletteItems(src({ envs: [FakeDaemonApi.wslEnv()], dashboards: { wsl: dashboard() } }));
   expect(sem.find((i) => i.id === "cmd:sync-this")).toBeUndefined();
+});
+
+test("Adicionar issue pelo ID (#150): só no projeto Jira, só buscando, também na web", () => {
+  const sources = (web: boolean) =>
+    src({
+      web,
+      envs: [FakeDaemonApi.wslEnv()],
+      dashboards: {
+        wsl: dashboard({
+          projects: [
+            { project: project(), work_items: [] },
+            { project: jiraProject(), work_items: [] },
+          ],
+        }),
+      },
+    });
+  for (const web of [false, true]) {
+    const add = paletteItems(sources(web)).filter((i) => i.action.type === "add-issue");
+    expect(add.map((i) => [i.label, i.browse, i.disabled ?? false])).toEqual([
+      ["Projeto: Adicionar issue pelo ID… — app", false, false],
+    ]);
+    expect(add[0].action).toEqual({
+      type: "add-issue",
+      screen: { name: "project", env: "wsl", projectId: 7, owner: "grupo/projeto", repo: "app" },
+    });
+  }
 });

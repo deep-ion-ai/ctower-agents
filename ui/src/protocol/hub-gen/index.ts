@@ -111,6 +111,7 @@ export type { SyncState } from "./SyncState";
 export type { TokenStatus } from "./TokenStatus";
 export type { Tool } from "./Tool";
 export type { TrackerConfig } from "./TrackerConfig";
+export type { TrackerIssueAdded } from "./TrackerIssueAdded";
 export type { TrackerKind } from "./TrackerKind";
 export type { TrackerProgress } from "./TrackerProgress";
 export type { TrackerReadiness } from "./TrackerReadiness";

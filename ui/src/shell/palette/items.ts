@@ -12,6 +12,7 @@ import type { Dashboard, Session, WorkItemKind, WorkItemStatus } from "../../pro
 import type { HubView } from "../../state/tower";
 import type { OpenTab, Screen } from "../../state/nav";
 import { itemTab } from "../../project/tabs";
+import { ADD_ISSUE_COMMAND } from "../../project/add-issue";
 import { projectAt, projectsPlace, type ProjectPage, type ProjectSettingsSection } from "../../project/sections";
 import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../../util/item";
 import { liveGestorLabel } from "../../hub/HubGestor";
@@ -49,6 +50,11 @@ export type PaletteAction =
    * abre antes a Visão geral do projeto, onde o cartão mostra o resultado.
    */
   | { type: "sync-project"; screen: Extract<Screen, { name: "project" }>; open: boolean }
+  /**
+   * "Adicionar issue pelo ID" (#150): abre a aba Itens do projeto do
+   * endereço com o diálogo aberto.
+   */
+  | { type: "add-issue"; screen: Extract<Screen, { name: "project" }> }
   /** Troca a busca da paleta (ex.: "Sincronizar projeto…" lista os projetos). */
   | { type: "query"; query: string }
   /** Folha de atalhos e gestos (#27). */
@@ -374,6 +380,15 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
       at("rules", "Regras", "regras agentes instruções", "settings", "rules"),
       at("docs", "Docs", "docs pasta documentação", "settings", "docs"),
     );
+    // Só no projeto Jira (#150); também na web (o hub repassa ao ambiente de sync).
+    if (p.provider.tracker?.kind === "jira") {
+      out.push(
+        item("add-issue", `Projeto: ${ADD_ISSUE_COMMAND} — ${p.name}`, "adicionar issue id chave jira fora do filtro jql trazer", {
+          type: "add-issue",
+          screen: projectScreen(p),
+        }),
+      );
+    }
     if (!src.web) {
       out.push(
         // Nas Configurações › Ambientes do próprio projeto, com o formulário aberto (#18).

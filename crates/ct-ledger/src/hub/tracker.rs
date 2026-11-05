@@ -98,24 +98,34 @@ impl Hub {
             SyncChange::TrackerStatus(t) => {
                 // A fotografia do ambiente substitui a anterior; um ciclo sem
                 // sucesso ainda não visto (`last_ok_at` nulo) não apaga o
-                // último sucesso conhecido.
+                // último sucesso conhecido. O `jira me` da prontidão é o
+                // "eu" do projeto (#149); sem ele (falhou, ambiente
+                // anterior), fica o último conhecido.
+                let me = t
+                    .readiness
+                    .jira
+                    .me
+                    .as_deref()
+                    .filter(|m| !m.trim().is_empty());
                 self.conn.execute(
                     "INSERT INTO sync_state (project_id, last_attempt_at, last_ok_at, last_error,
-                        failures, failing_since)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                        failures, failing_since, me)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                      ON CONFLICT (project_id) DO UPDATE SET
                         last_attempt_at = excluded.last_attempt_at,
                         last_ok_at = coalesce(excluded.last_ok_at, sync_state.last_ok_at),
                         last_error = excluded.last_error,
                         failures = excluded.failures,
-                        failing_since = excluded.failing_since",
+                        failing_since = excluded.failing_since,
+                        me = coalesce(excluded.me, sync_state.me)",
                     params![
                         pid,
                         t.last_attempt_at,
                         t.last_ok_at,
                         t.last_error,
                         t.failures,
-                        t.failing_since
+                        t.failing_since,
+                        me
                     ],
                 )?;
                 let readiness =
@@ -333,6 +343,7 @@ mod tests {
                     cli: Some("1.7.0".into()),
                     config_present: true,
                     credential_ok: error.is_none(),
+                    me: error.is_none().then(|| "fulano".into()),
                     custom_fields: vec![JiraFieldInfo {
                         id: "customfield_10099".into(),
                         name: "Responsável pela implementação".into(),
@@ -648,6 +659,18 @@ mod tests {
         assert_eq!(prs[0].head_sha.as_deref(), Some("abc"));
         let st = hub.sync_state(p.id).unwrap().unwrap();
         assert_eq!((st.last_ok_at, st.last_error), (Some(30), None));
+        // O `jira me` da prontidão é o "eu" do projeto (#149).
+        assert_eq!(st.me.as_deref(), Some("fulano"));
+        assert_eq!(
+            hub.tree(OWNER, REPO)
+                .unwrap()
+                .unwrap()
+                .sync
+                .unwrap()
+                .me
+                .as_deref(),
+            Some("fulano")
+        );
         let ts = hub.tracker_status(p.id).unwrap().unwrap();
         assert_eq!((ts.env_id.as_str(), ts.env_name.as_str()), ("a", "a"));
         assert_eq!(ts.readiness.jira.cli.as_deref(), Some("1.7.0"));
@@ -670,6 +693,8 @@ mod tests {
         );
         // A sequência de falhas vem do ambiente de sync (issue #90).
         assert_eq!((st.failures, st.failing_since), (1, Some(30)));
+        // Sem `jira me` no relato, fica o último conhecido.
+        assert_eq!(st.me.as_deref(), Some("fulano"));
 
         // Trocado o ambiente de sync, o antigo deixa de valer.
         hub.update_project(

@@ -18,8 +18,9 @@ const CLOSED_WINDOW_MS: i64 = 30 * 86_400_000;
 /// Versão do que `issue_row` extrai de cada issue. Subir o número faz o
 /// próximo ciclo ler as issues sem os ETags gravados (uma vez), para que as
 /// que não mudaram no GitHub ganhem o que a leitura passou a extrair, como o
-/// `MIRROR_VERSION` do Jira: 1 = com os metadados (`meta`, #70).
-pub const MIRROR_VERSION: i64 = 1;
+/// `MIRROR_VERSION` do Jira: 1 = com os metadados (`meta`, #70); 2 = com os
+/// responsáveis (`assignees`, #149).
+pub const MIRROR_VERSION: i64 = 2;
 
 /// Chave, no `gh_etag`, da `MIRROR_VERSION` com que o espelho do projeto foi
 /// lido por último. Ausente = espelho anterior à versão 1.
@@ -248,8 +249,24 @@ pub fn issue_row(v: &Value) -> Option<IssueRow> {
             .and_then(time::parse_rfc3339)
             .unwrap_or(0),
         meta: issue_meta(v),
+        assignees: assignee_logins(v),
         ..Default::default()
     })
+}
+
+/// `login` de cada um de `assignees` (#149), na ordem da API, sem vazios.
+pub fn assignee_logins(v: &Value) -> Vec<String> {
+    v.get("assignees")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|u| u.get("login").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Metadados da issue para a tela, na ordem e sem os vazios: Situação,
@@ -502,6 +519,8 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
         etags,
         synced_at: input.now_ms,
         gone,
+        // Quem chama preenche com `GhClient::login` (#149).
+        me: None,
     })
 }
 
@@ -869,6 +888,22 @@ mod tests {
 
     fn m(field: &str, label: &str, value: &str) -> (String, String, String) {
         (field.into(), label.into(), value.into())
+    }
+
+    /// #149: os `login` de `assignees`, um, vários ou nenhum.
+    #[test]
+    fn responsaveis_pelo_login() {
+        let mut v = gh_issue(1, "open", None, 0);
+        v["assignees"] = json!([{ "login": "fulano" }]);
+        assert_eq!(issue_row(&v).unwrap().assignees, ["fulano"]);
+        v["assignees"] = json!([{ "login": "fulano" }, { "login": "Beltrano" }, { "id": 3 }]);
+        let r = issue_row(&v).unwrap();
+        assert_eq!(r.assignees, ["fulano", "Beltrano"]);
+        assert!(ct_core::is_assignee(&r.assignees, "beltrano"));
+        v["assignees"] = json!([]);
+        assert!(issue_row(&v).unwrap().assignees.is_empty());
+        v.as_object_mut().unwrap().remove("assignees");
+        assert!(issue_row(&v).unwrap().assignees.is_empty());
     }
 
     /// #70: Situação, Tipo, Responsável e Criador, nessa ordem.

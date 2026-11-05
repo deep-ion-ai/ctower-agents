@@ -575,6 +575,7 @@ mod tests {
                     etags: vec![],
                     synced_at: ct_core::now_ms(),
                     gone: Vec::new(),
+                    me: None,
                 })
                 .unwrap();
         }
@@ -888,6 +889,7 @@ mod tests {
                     etags: vec![],
                     synced_at: 1,
                     gone: Vec::new(),
+                    me: None,
                 })
                 .unwrap();
         };
@@ -995,6 +997,7 @@ mod tests {
                 etags: vec![],
                 synced_at: 1,
                 gone: Vec::new(),
+                me: None,
             })
             .unwrap();
         let c = e.cleaner();

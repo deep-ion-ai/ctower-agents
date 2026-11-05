@@ -434,6 +434,7 @@ mod tests {
                     etags: vec![],
                     synced_at: 1,
                     gone: Vec::new(),
+                    me: None,
                 },
                 "hub-id",
             )

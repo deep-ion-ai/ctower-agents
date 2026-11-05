@@ -392,6 +392,15 @@ pub struct JiraReadiness {
     pub credential_from_env: bool,
     /// `jira me` respondeu com a senha.
     pub me_ok: bool,
+    /// Saída do `jira me`: o usuário da credencial do sync, o "eu" do filtro
+    /// "só minhas" (#149). O jira-cli imprime o `login` do `.config.yml`,
+    /// sem falar com o servidor: o username no Server/DC (no `bearer`, o
+    /// `name` do `/myself`, gravado pelo `jira init`) e o e-mail no Cloud.
+    /// Compare com `is_assignee`. `None` = `jira me` falhou ou voltou
+    /// vazio; ausente no TypeScript = ambiente anterior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub me: Option<String>,
     /// Versão do Jira (`jira serverinfo`).
     pub server_version: Option<String>,
     /// Motivo da primeira falha, sem a senha.
@@ -602,6 +611,46 @@ pub fn issue_view_cmd(owner: &str, repo: &str, tracker: &TrackerConfig) -> Strin
     }
 }
 
+/// Resposta de `tracker.add_issue` no ambiente (#148), repassada como veio
+/// pelo `hub.tracker.add_issue`: a issue do Jira trazida ao espelho pelo ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct TrackerIssueAdded {
+    /// Chave normalizada (`ACME-123`).
+    pub key: String,
+    /// Número da issue no espelho (o `number` do work item).
+    pub number: i64,
+    pub title: String,
+    /// Já estava no espelho: o Jira não foi chamado.
+    pub already: bool,
+    /// Pais lidos e gravados junto (do mais próximo ao épico); vazio = sem
+    /// pai ou pai já no espelho.
+    pub ancestors: Vec<i64>,
+    /// A issue já tem work item neste ambiente: o `pinned_key` a mantém no
+    /// espelho. `false` = sai na próxima reconciliação com poda, a menos que
+    /// ganhe um work item (ou entre no JQL) antes.
+    pub work_item: bool,
+    /// A issue foi gravada, mas um pai não foi lido (o motivo).
+    pub warning: Option<String>,
+}
+
+/// Dois identificadores de usuário do rastreador são a mesma pessoa:
+/// iguais sem diferenciar maiúsculas, depois de tirar os espaços das pontas
+/// (#149). Vazio nunca bate.
+pub fn same_identity(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    !a.is_empty() && a.to_lowercase() == b.to_lowercase()
+}
+
+/// `me` (o "eu" do rastreador: `jira me` ou o login do token do GitHub) é
+/// um dos responsáveis da issue? `assignees` traz todos os identificadores
+/// conhecidos de cada responsável (no Jira, `name`, `key`, `accountId` e
+/// `emailAddress`, os que vierem; no GitHub, os `login`), e basta um bater
+/// ([`same_identity`]).
+pub fn is_assignee(assignees: &[String], me: &str) -> bool {
+    assignees.iter().any(|a| same_identity(a, me))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,6 +776,43 @@ mod tests {
         assert!(r.jira.me_ok && !r.jira.credential_ok);
         assert_eq!(r.gitlab, GitlabReadiness::default());
         assert!(r.jira.custom_fields.is_empty(), "ambiente anterior");
+    }
+
+    #[test]
+    fn identidade_sem_caixa_e_qualquer_identificador() {
+        let ids = vec![
+            "fulano".to_string(),
+            "JIRAUSER10001".to_string(),
+            "Fulano@Example.com".to_string(),
+        ];
+        assert!(is_assignee(&ids, "FULANO"));
+        assert!(is_assignee(&ids, " fulano@example.com "));
+        assert!(is_assignee(&ids, "jirauser10001"));
+        assert!(!is_assignee(&ids, "beltrano"));
+        assert!(!is_assignee(&ids, ""));
+        assert!(!is_assignee(&[String::new()], ""));
+        assert!(!is_assignee(&[], "fulano"));
+    }
+
+    /// `me` vai e volta; o JSON de um ambiente anterior (sem a chave) lê
+    /// `None`, e `None` não sai no JSON.
+    #[test]
+    fn me_do_jira_opcional() {
+        let j = JiraReadiness {
+            me: Some("fulano".into()),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&j).unwrap();
+        assert_eq!(v["me"], json!("fulano"));
+        assert_eq!(serde_json::from_value::<JiraReadiness>(v).unwrap(), j);
+        let v = serde_json::to_value(JiraReadiness::default()).unwrap();
+        assert!(v.get("me").is_none());
+        assert_eq!(
+            serde_json::from_value::<JiraReadiness>(json!({ "me_ok": true }))
+                .unwrap()
+                .me,
+            None
+        );
     }
 
     #[test]
