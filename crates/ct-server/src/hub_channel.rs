@@ -347,6 +347,135 @@ mod tests {
         assert_eq!(e.0, CHANNEL_ENV_OFFLINE);
     }
 
+    /// "Adicionar issue pelo ID" (#148) ponta a ponta com o `cthubd` de
+    /// verdade: o hub pede ao ambiente de sync pelo canal, a issue de fora do
+    /// JQL e o épico pai entram no cache do ambiente e chegam à árvore do hub
+    /// antes da resposta.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn issue_pelo_id_chega_ao_hub_pelo_ambiente_de_sync() {
+        use ct_jira::fake::{api_issue, FakeJira, FAKE_SERVER};
+        let hub = hub_state();
+        let url = hub_up(&hub).await;
+        let (mut srv, id) = env(&url, Some(&hub), None);
+        let fake = FakeJira::new(srv.env.tmp.path(), "senha-de-teste");
+        let jira = ct_core::JiraConfig {
+            url: FAKE_SERVER.into(),
+            project_key: "PROJ".into(),
+            jql: "labels = web".into(),
+            credential_cmd: "printf 'senha-de-teste\\n'".into(),
+            config_file: fake.config_file().display().to_string(),
+            epic_link_field: "customfield_10601".into(),
+            type_map: ct_core::default_type_map(),
+            ..Default::default()
+        };
+        {
+            let h = hub.hub.lock();
+            h.add_project_with(
+                &ct_ledger::NewHubProject {
+                    owner: "deep-ion-ai".into(),
+                    repo: "demo".into(),
+                    name: "demo".into(),
+                    base_branch: "develop".into(),
+                    protected_branches: vec![],
+                },
+                &ct_ledger::ProjectProvider {
+                    docs: Default::default(),
+                    tracker: ct_core::TrackerConfig::Jira(jira.clone()),
+                    forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                        host: "gitlab.example.com".into(),
+                        path: "deep-ion-ai/demo".into(),
+                        clone_url: "https://gitlab.example.com/deep-ion-ai/demo.git".into(),
+                        credential_cmd: "pass show gitlab".into(),
+                    }),
+                    branch_pattern: None,
+                    attribution: true,
+                },
+            )
+            .unwrap();
+            h.ingest(&id, "wsl", &[]).unwrap();
+            h.add_assignment("deep-ion-ai", "demo", &id, Some("/srv/demo"))
+                .unwrap();
+        }
+        let repo_path = srv.env.repo.display().to_string();
+        srv.env
+            .sessions
+            .ledger()
+            .apply_hub_config(
+                &ct_ledger::ConfigResponse {
+                    config_rev: 1,
+                    config_epoch: 1,
+                    changed: true,
+                    projects: Some(vec![ct_ledger::ConfigProject {
+                        docs: Default::default(),
+                        owner: "deep-ion-ai".into(),
+                        repo: "demo".into(),
+                        name: "demo".into(),
+                        base_branch: "develop".into(),
+                        protected_branches: vec![],
+                        repo_path,
+                        rev: 1,
+                        tracker: ct_core::TrackerConfig::Jira(jira),
+                        forge: ct_core::ForgeConfig::Github,
+                        branch_pattern: None,
+                        attribution: true,
+                        sync: true,
+                        rules: Default::default(),
+                    }]),
+                    removed: Some(vec![]),
+                },
+                |p| p.repo_path.clone(),
+            )
+            .unwrap();
+        let mut sete = api_issue("PROJ-7", "Tarefa", "new");
+        sete["fields"]["customfield_10601"] = "PROJ-8".into();
+        fake.set_view(&sete);
+        fake.set_view(&api_issue("PROJ-8", "Épico", "new"));
+        srv.state.tracker = Some(Arc::new(ct_sessions::JiraGitlabSync::new(
+            srv.env.sessions.clone(),
+            ct_sessions::TrackerSyncConfig::new(fake.bin().to_str().unwrap()),
+        )));
+        let task = spawn(srv.state.clone(), fast()).unwrap();
+        let ch = Arc::clone(&hub.channels);
+        wait(|| ch.is_online(&id)).await;
+
+        let p = json!({ "owner": "deep-ion-ai", "repo": "demo", "key": "PROJ-7" });
+        let r = ch.call(&id, "tracker.add_issue", p.clone()).await.unwrap();
+        assert_eq!(
+            r,
+            json!({ "key": "PROJ-7", "number": 7, "title": "Resumo de PROJ-7",
+                    "already": false, "ancestors": [8], "work_item": false,
+                    "warning": null })
+        );
+        let tree =
+            serde_json::to_value(hub.hub.lock().tree("deep-ion-ai", "demo").unwrap()).unwrap();
+        let roots = tree["roots"].as_array().unwrap();
+        assert_eq!(roots.len(), 1, "{tree}");
+        assert_eq!(roots[0]["issue"]["gh_number"], 8);
+        assert_eq!(roots[0]["children"][0]["issue"]["gh_number"], 7);
+
+        // De novo: já no espelho, sem chamar o Jira; erro com a mensagem.
+        fake.clear_calls();
+        let r = ch.call(&id, "tracker.add_issue", p).await.unwrap();
+        assert_eq!(r["already"], true);
+        assert!(fake.calls().is_empty());
+        let e = ch
+            .call(
+                &id,
+                "tracker.add_issue",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "key": 99 }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e,
+            (
+                -32000,
+                "PROJ-99 não existe no Jira (ou a credencial não tem acesso a ela)".into()
+            )
+        );
+        task.abort();
+    }
+
     /// Mesmo que o hub peça (aqui um hub falso, sem a lista dele), o
     /// ambiente recusa o que está fora da lista e atende o que está nela.
     #[tokio::test(flavor = "multi_thread")]

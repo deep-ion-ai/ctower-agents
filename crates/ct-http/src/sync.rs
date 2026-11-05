@@ -115,6 +115,10 @@ pub const CHANNEL_METHODS: &[&str] = &[
     // "Ver issue" de projeto Jira (#434): o hub não alcança o Jira e lê a
     // descrição pelo ambiente de sync, sem gravar.
     "tracker.issue_body",
+    // "Adicionar issue pelo ID" (#148): o hub pede ao ambiente de sync do
+    // projeto Jira; só traz ao espelho uma issue que o Jira já mostra (sai
+    // na próxima poda se não ganhar work item).
+    "tracker.add_issue",
     // Tela Logs na web (#65): só as últimas linhas, já mascaradas; o modo
     // seguir é por conexão e fica no app desktop.
     "logs.tail",
@@ -194,6 +198,8 @@ mod tests {
             assert!(!channel_method_allowed(m), "{m}");
         }
         assert!(channel_method_allowed("logs.tail"));
+        // Issue do Jira pelo ID (#148), pedida pelo hub ao ambiente de sync.
+        assert!(channel_method_allowed("tracker.add_issue"));
         assert!(channel_method_allowed("session.start"));
         // Linha do tempo do work item (#422): só leitura, vai para a web.
         assert!(channel_method_allowed("events.list"));

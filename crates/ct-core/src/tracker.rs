@@ -602,6 +602,29 @@ pub fn issue_view_cmd(owner: &str, repo: &str, tracker: &TrackerConfig) -> Strin
     }
 }
 
+/// Resposta de `tracker.add_issue` no ambiente (#148), repassada como veio
+/// pelo `hub.tracker.add_issue`: a issue do Jira trazida ao espelho pelo ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct TrackerIssueAdded {
+    /// Chave normalizada (`ACME-123`).
+    pub key: String,
+    /// Número da issue no espelho (o `number` do work item).
+    pub number: i64,
+    pub title: String,
+    /// Já estava no espelho: o Jira não foi chamado.
+    pub already: bool,
+    /// Pais lidos e gravados junto (do mais próximo ao épico); vazio = sem
+    /// pai ou pai já no espelho.
+    pub ancestors: Vec<i64>,
+    /// A issue já tem work item neste ambiente: o `pinned_key` a mantém no
+    /// espelho. `false` = sai na próxima reconciliação com poda, a menos que
+    /// ganhe um work item (ou entre no JQL) antes.
+    pub work_item: bool,
+    /// A issue foi gravada, mas um pai não foi lido (o motivo).
+    pub warning: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

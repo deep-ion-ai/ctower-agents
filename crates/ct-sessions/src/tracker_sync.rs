@@ -49,8 +49,8 @@ use crate::github::ProjectSync;
 use crate::gitlab::{project_path, GitlabRemote};
 use crate::{Result, Sessions, SessionsError};
 use ct_core::{
-    now_ms, GitlabConfig, GitlabReadiness, JiraConfig, JiraReadiness, PrState, TrackerKind,
-    TrackerProgress, TrackerReadiness, WorkItemStatus,
+    now_ms, GitlabConfig, GitlabReadiness, JiraConfig, JiraReadiness, PrState, TrackerIssueAdded,
+    TrackerKind, TrackerProgress, TrackerReadiness, WorkItemStatus,
 };
 use ct_gitlab::{mr_row, Glab};
 use ct_jira::{
@@ -375,6 +375,83 @@ fn plan(cfg: &JiraConfig, input: &TrackerInput, now: i64) -> Plan {
     }
 }
 
+/// Pais lidos acima da issue adicionada pelo ID (sub-task → história →
+/// épico, com folga).
+const ADD_MAX_ANCESTORS: usize = 3;
+
+/// `ACME-123`, `acme-123`, `123` ou um link `…/browse/ACME-123` → chave e
+/// número do projeto. A mensagem de erro diz o que está errado (formato ou
+/// chave de outro projeto).
+pub fn normalize_issue_key(
+    cfg: &JiraConfig,
+    input: &str,
+) -> std::result::Result<(String, i64), String> {
+    let pk = cfg.project_key.trim();
+    let raw = input.trim();
+    let t = raw
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .trim();
+    let invalid = || format!("chave inválida: \"{raw}\" (use {pk}-123 ou só o número)");
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let n = if digits(t) {
+        t
+    } else {
+        let (prefix, n) = t.rsplit_once('-').ok_or_else(invalid)?;
+        if prefix.is_empty() || !digits(n) {
+            return Err(invalid());
+        }
+        if !prefix.eq_ignore_ascii_case(pk) {
+            return Err(format!(
+                "{}-{n} é de outro projeto: este projeto usa a chave {pk}",
+                prefix.to_uppercase()
+            ));
+        }
+        n
+    };
+    let key = format!("{pk}-{}", n.trim_start_matches('0'));
+    let number = cfg.number_from_key(&key).ok_or_else(invalid)?;
+    Ok((key, number))
+}
+
+/// Falha do `issue view` na adição pelo ID: o 404 vira "não existe".
+fn view_error(key: &str, e: &JiraError) -> String {
+    match e {
+        JiraError::Failed(m) if m.contains("404") => {
+            format!("{key} não existe no Jira (ou a credencial não tem acesso a ela)")
+        }
+        e => format!("Jira, {key}: {e}"),
+    }
+}
+
+/// Por que o `issue_row` recusou a issue: movida para outro projeto, tipo
+/// ignorado pelo `type_map` ou resposta incompleta.
+fn row_refused(key: &str, v: &serde_json::Value, cfg: &JiraConfig) -> String {
+    let got = v
+        .get("key")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if cfg.number_from_key(got).is_none() {
+        return format!(
+            "{key} é de outro projeto: o Jira a devolveu como {got}, e este projeto usa a chave {}",
+            cfg.project_key
+        );
+    }
+    let ty = v
+        .pointer("/fields/issuetype/name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if cfg.type_map.get(ty) == Some(&ct_core::JiraTypeRole::Ignore) {
+        return format!("{key} é do tipo \"{ty}\", que o mapa de tipos do projeto ignora");
+    }
+    format!("Jira, {key}: resposta sem os campos da issue")
+}
+
 /// Erro de um ciclo: a mensagem vai ao `sync_state` (nunca com a senha).
 type CycleError = String;
 
@@ -497,6 +574,110 @@ impl JiraGitlabSync {
             })?;
         tracing::info!("jira: {key} lida direto no Jira (fora do espelho) para a sessão");
         Ok(Some(row))
+    }
+
+    /// "Adicionar issue pelo ID" (#148): traz ao espelho deste ambiente a
+    /// issue `key` (`ACME-123`, `123` ou o link `/browse/ACME-123`), fora do
+    /// JQL do projeto, com os pais dela (o épico, pelo Epic Link ou pelo
+    /// `parent`, e a história de uma sub-task), lidos com `issue view`. No
+    /// ambiente de sync, as linhas sobem ao hub como `issue_mirror`, pelo
+    /// outbox de sempre. Já no espelho, responde sem chamar o Jira.
+    ///
+    /// Não há lista própria de issues adicionadas: com work item, o
+    /// `pinned_key` a mantém; sem, ela sai na próxima reconciliação com poda.
+    ///
+    /// Erros (`SessionsError::Invalid`, uma mensagem para cada caso): chave
+    /// inválida, chave de outro projeto (digitada ou a issue movida), issue
+    /// que não existe, tipo ignorado pelo `type_map`, credencial que falhou
+    /// ou senha recusada, e as demais falhas do jira-cli. Síncrono: chame
+    /// fora do runtime.
+    pub fn add_issue(&self, project_id: i64, key: &str) -> Result<TrackerIssueAdded> {
+        let project = self.sessions.ledger().get_project(project_id)?;
+        let (project, _) = self.sessions.with_env_credentials(project);
+        let Some(jira) = project.tracker.jira().cloned() else {
+            return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
+        };
+        let (key, number) = normalize_issue_key(&jira, key).map_err(SessionsError::Invalid)?;
+        let work_item =
+            |l: &Ledger| -> Result<bool> { Ok(l.find_work_item(project_id, number)?.is_some()) };
+        {
+            let l = self.sessions.ledger();
+            if let Some(i) = l.get_issue(project_id, number)? {
+                return Ok(TrackerIssueAdded {
+                    key,
+                    number,
+                    title: i.title,
+                    already: true,
+                    ancestors: Vec::new(),
+                    work_item: work_item(&l)?,
+                    warning: None,
+                });
+            }
+        }
+        let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
+            .with_deadline(self.cfg.view_deadline);
+        let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
+            .map_err(|e| SessionsError::Invalid(format!("Jira, {key}: {e}")))?;
+        let v = cli
+            .view(&token, &key)
+            .map_err(|e| SessionsError::Invalid(view_error(&key, &e)))?;
+        let row = match issue_row(&v, &jira) {
+            Some(r) => r,
+            None => return Err(SessionsError::Invalid(row_refused(&key, &v, &jira))),
+        };
+
+        // Pais: até o primeiro que já está no espelho. A falha de um deles
+        // não impede a issue (fica no aviso).
+        let mut rows = vec![row.clone()];
+        let mut ancestors = Vec::new();
+        let mut warning = None;
+        let mut parent = row.parent_number;
+        while let Some(p) = parent.filter(|_| ancestors.len() < ADD_MAX_ANCESTORS) {
+            if p == number
+                || ancestors.contains(&p)
+                || self.sessions.ledger().get_issue(project_id, p)?.is_some()
+            {
+                break;
+            }
+            let pkey = ct_core::item_key(&project.tracker_ref(), p);
+            let parent_row = match cli.view(&token, &pkey) {
+                Ok(pv) => issue_row(&pv, &jira).ok_or_else(|| row_refused(&pkey, &pv, &jira)),
+                Err(e) => Err(view_error(&pkey, &e)),
+            };
+            match parent_row {
+                Ok(r) => {
+                    parent = r.parent_number;
+                    ancestors.push(p);
+                    rows.push(r);
+                }
+                Err(e) => {
+                    tracing::warn!("jira: pai de {key} não lido: {e}");
+                    warning = Some(format!("o pai {pkey} não foi lido: {e}"));
+                    break;
+                }
+            }
+        }
+
+        let l = self.sessions.ledger();
+        l.apply_tracker_batch(&GithubSnapshot {
+            project_id,
+            issues: rows,
+            synced_at: now_ms(),
+            ..GithubSnapshot::default()
+        })?;
+        tracing::info!(
+            "jira: {key} adicionada ao espelho pelo ID (pais lidos: {})",
+            ancestors.len()
+        );
+        Ok(TrackerIssueAdded {
+            key,
+            number,
+            title: row.title,
+            already: false,
+            ancestors,
+            work_item: work_item(&l)?,
+            warning,
+        })
     }
 
     pub fn sync_project(&self, project_id: i64) -> Result<ProjectSync> {
@@ -2930,5 +3111,252 @@ mod tests {
         j.fake.set_list_for("labels = outra", Some(&um));
         assert!(j.sync.sync_all().unwrap()[0].ok);
         assert_eq!(numbers(&j.env), vec![1]);
+    }
+
+    /// Marca da reconciliação com mais de um dia: o próximo ciclo é
+    /// reconciliação (com poda, no projeto com JQL).
+    fn envelhece_a_marca(j: &Jira) {
+        let key = full_mark_key("deep-ion-ai", "demo");
+        let l = j.env.sessions.ledger();
+        let mark = l.etag(&key).unwrap().unwrap();
+        let (_, fp) = mark.split_once(' ').unwrap();
+        l.apply_github(&GithubSnapshot {
+            project_id: j.env.project_id,
+            etags: vec![(key.clone(), format!("{} {fp}", now_ms() - FULL_EVERY_MS))],
+            synced_at: now_ms(),
+            ..GithubSnapshot::default()
+        })
+        .unwrap();
+    }
+
+    fn mirrored_in_outbox(env: &TestEnv) -> Vec<i64> {
+        let mut v: Vec<i64> = env
+            .sessions
+            .ledger()
+            .outbox_pending(1000)
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| match e.change {
+                SyncChange::IssueMirror(m) if !m.removed => Some(m.issue.gh_number),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Projeto com JQL (1 a 4 dentro) já podado, e a 7 (fora do JQL, Epic
+    /// Link para o épico 8, também fora) só no `issue view`.
+    fn fora_do_jql() -> Jira {
+        let j = com_jql(&[1, 2, 3, 4]);
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert_eq!(numbers(&j.env), vec![1, 2, 3, 4]);
+        let mut sete = api_issue("PROJ-7", "Tarefa", "new");
+        sete["fields"]["customfield_10601"] = "PROJ-8".into();
+        j.fake.set_view(&sete);
+        j.fake.set_view(&api_issue("PROJ-8", "Épico", "new"));
+        j.env.sessions.ledger().outbox_ack(i64::MAX).unwrap();
+        j.fake.clear_calls();
+        j
+    }
+
+    #[test]
+    fn normaliza_a_chave_pelo_projeto() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        let fake = FakeJira::new(env.tmp.path(), SENHA);
+        let cfg = JiraConfig {
+            project_key: "ACME".into(),
+            ..jira_config(&fake)
+        };
+        let ok = |s: &str| normalize_issue_key(&cfg, s).unwrap();
+        assert_eq!(ok("ACME-123"), ("ACME-123".into(), 123));
+        assert_eq!(ok("  acme-123 "), ("ACME-123".into(), 123));
+        assert_eq!(ok("123"), ("ACME-123".into(), 123));
+        assert_eq!(
+            ok("https://jira.example.com/browse/ACME-123"),
+            ("ACME-123".into(), 123)
+        );
+        assert_eq!(
+            ok("https://jira.example.com/browse/ACME-123?focus=1"),
+            ("ACME-123".into(), 123)
+        );
+        assert_eq!(
+            normalize_issue_key(&cfg, "OUTRO-5").unwrap_err(),
+            "OUTRO-5 é de outro projeto: este projeto usa a chave ACME"
+        );
+        for bad in ["", "ACME", "ACME-", "ACME-x1", "0", "ACME-0", "-5"] {
+            assert_eq!(
+                normalize_issue_key(&cfg, bad).unwrap_err(),
+                format!("chave inválida: \"{bad}\" (use ACME-123 ou só o número)"),
+                "{bad}"
+            );
+        }
+    }
+
+    /// #148: a issue de fora do JQL e o épico pai entram no cache do
+    /// ambiente e no outbox (`issue_mirror`, para o hub); de novo, já no
+    /// espelho, sem chamar o Jira.
+    #[test]
+    fn issue_pelo_id_entra_com_o_epico_e_sobe_ao_hub() {
+        let j = fora_do_jql();
+        let r = j.sync.add_issue(j.env.project_id, "proj-7").unwrap();
+        assert_eq!(
+            r,
+            TrackerIssueAdded {
+                key: "PROJ-7".into(),
+                number: 7,
+                title: "Resumo de PROJ-7".into(),
+                already: false,
+                ancestors: vec![8],
+                work_item: false,
+                warning: None,
+            }
+        );
+        assert_eq!(j.fake.viewed(), vec!["PROJ-7", "PROJ-8"]);
+        assert_eq!(numbers(&j.env), vec![1, 2, 3, 4, 7, 8]);
+        let tree = j
+            .env
+            .sessions
+            .ledger()
+            .project_tree(j.env.project_id)
+            .unwrap();
+        let epico = tree.roots.iter().find(|n| n.issue.gh_number == 8).unwrap();
+        assert_eq!(epico.children[0].issue.gh_number, 7);
+        assert_eq!(mirrored_in_outbox(&j.env), vec![7, 8], "sobem ao hub");
+
+        j.env.sessions.ledger().outbox_ack(i64::MAX).unwrap();
+        j.fake.clear_calls();
+        let r = j.sync.add_issue(j.env.project_id, "7").unwrap();
+        assert!(r.already && r.ancestors.is_empty(), "{r:?}");
+        assert!(j.fake.calls().is_empty(), "do espelho, sem chamar o Jira");
+        assert!(mirrored_in_outbox(&j.env).is_empty());
+    }
+
+    /// Sub-task: a história e o épico dela vêm juntos; o pai que já está no
+    /// espelho não é lido de novo.
+    #[test]
+    fn sub_task_traz_a_historia_e_o_epico() {
+        let j = fora_do_jql();
+        let mut historia = api_issue("PROJ-9", "História", "new");
+        historia["fields"]["customfield_10601"] = "PROJ-8".into();
+        j.fake.set_view(&historia);
+        let mut sub = api_issue("PROJ-10", "Sub-tarefa", "new");
+        sub["fields"]["issuetype"]["subtask"] = true.into();
+        sub["fields"]["parent"] = serde_json::json!({ "key": "PROJ-9" });
+        j.fake.set_view(&sub);
+        let r = j.sync.add_issue(j.env.project_id, "PROJ-10").unwrap();
+        assert_eq!(r.ancestors, vec![9, 8]);
+        assert_eq!(numbers(&j.env), vec![1, 2, 3, 4, 8, 9, 10]);
+
+        // A 7 tem o épico 8, já no espelho: só ela é lida.
+        j.fake.clear_calls();
+        let r = j.sync.add_issue(j.env.project_id, "7").unwrap();
+        assert!(r.ancestors.is_empty(), "{r:?}");
+        assert_eq!(j.fake.viewed(), vec!["PROJ-7"]);
+    }
+
+    /// O pai que falha na leitura não impede a issue: vai no aviso.
+    #[test]
+    fn pai_que_falha_vira_aviso() {
+        let j = fora_do_jql();
+        j.fake.remove_view("PROJ-8");
+        let r = j.sync.add_issue(j.env.project_id, "7").unwrap();
+        assert!(r.ancestors.is_empty());
+        assert_eq!(
+            r.warning.as_deref(),
+            Some("o pai PROJ-8 não foi lido: PROJ-8 não existe no Jira (ou a credencial não tem acesso a ela)")
+        );
+        assert_eq!(numbers(&j.env), vec![1, 2, 3, 4, 7]);
+    }
+
+    /// Sem work item, a issue adicionada (e o épico dela) sai na
+    /// reconciliação seguinte; com work item, as duas ficam.
+    #[test]
+    fn adicionada_sem_work_item_sai_na_reconciliacao_e_com_work_item_fica() {
+        let j = fora_do_jql();
+        assert!(!j.sync.add_issue(j.env.project_id, "7").unwrap().work_item);
+        j.env.sessions.ledger().outbox_ack(i64::MAX).unwrap();
+        envelhece_a_marca(&j);
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert_eq!(numbers(&j.env), vec![1, 2, 3, 4]);
+        let mut removed = removed_in_outbox(&j.env);
+        removed.sort();
+        assert_eq!(removed, vec![7, 8], "o hub recebe a remoção");
+
+        let j = fora_do_jql();
+        j.sync.add_issue(j.env.project_id, "7").unwrap();
+        j.env
+            .sessions
+            .ledger()
+            .ensure_work_item(j.env.project_id, 7, WorkItemKind::Issue)
+            .unwrap();
+        // Com o work item, a resposta diz que ela fica.
+        assert!(j.sync.add_issue(j.env.project_id, "7").unwrap().work_item);
+        envelhece_a_marca(&j);
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        assert_eq!(numbers(&j.env), vec![1, 2, 3, 4, 7, 8]);
+    }
+
+    /// Cada erro com a sua mensagem, sem nada gravado.
+    #[test]
+    fn erros_da_adicao_pelo_id() {
+        let j = fora_do_jql();
+        let pid = j.env.project_id;
+        let err = |k: &str| j.sync.add_issue(pid, k).unwrap_err().to_string();
+
+        // Não existe (404 do jira-cli).
+        assert_eq!(
+            err("PROJ-99"),
+            "PROJ-99 não existe no Jira (ou a credencial não tem acesso a ela)"
+        );
+        // Outro projeto: digitada, sem chamar o Jira, ou movida no Jira.
+        j.fake.clear_calls();
+        assert_eq!(
+            err("OUTRO-7"),
+            "OUTRO-7 é de outro projeto: este projeto usa a chave PROJ"
+        );
+        assert!(j.fake.calls().is_empty());
+        let mut movida = api_issue("OUTRO-3", "Tarefa", "new");
+        movida["key"] = "OUTRO-3".into();
+        std::fs::write(
+            j.fake
+                .config_file()
+                .parent()
+                .unwrap()
+                .join("issues/PROJ-11.json"),
+            movida.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            err("11"),
+            "PROJ-11 é de outro projeto: o Jira a devolveu como OUTRO-3, e este projeto usa a chave PROJ"
+        );
+        // Tipo ignorado pelo `type_map`.
+        let mut cfg = jira_config(&j.fake);
+        cfg.jql = "labels = web".into();
+        cfg.type_map
+            .insert("Teste".into(), ct_core::JiraTypeRole::Ignore);
+        assign(&j.env, cfg, true, 3);
+        j.fake.set_view(&api_issue("PROJ-12", "Teste", "new"));
+        assert_eq!(
+            err("PROJ-12"),
+            "PROJ-12 é do tipo \"Teste\", que o mapa de tipos do projeto ignora"
+        );
+        // Senha recusada e comando de credencial falhando.
+        j.fake.fail_view_401("PROJ-7", true);
+        assert_eq!(err("7"), "Jira, PROJ-7: o Jira recusou a senha (401)");
+        j.fake.fail_view_401("PROJ-7", false);
+        let mut cfg = jira_config(&j.fake);
+        cfg.credential_cmd = "exit 3".into();
+        assign(&j.env, cfg, true, 4);
+        let e = err("7");
+        assert!(
+            e.starts_with("Jira, PROJ-7: comando de credencial do Jira falhou"),
+            "{e}"
+        );
+        assert!(!e.contains(SENHA));
+
+        assert_eq!(numbers(&j.env), vec![1, 2, 3, 4], "nada gravado");
+        assert!(mirrored_in_outbox(&j.env).is_empty());
     }
 }
