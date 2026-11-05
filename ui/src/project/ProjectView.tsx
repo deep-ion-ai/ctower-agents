@@ -37,7 +37,9 @@ import {
 import { EMPTY_ACTIVE_SPRINT, EMPTY_FILTERED, EMPTY_OPEN, SPRINTS_UNREAD, buildView, isExpanded, narrowing, priorityOf, statusKey } from "./tree-view";
 import { useProjectUi } from "./ui-store";
 import { SyncHead } from "./SyncNow";
-import type { ProjectSyncInfo } from "./sync-now";
+import type { ProjectSyncInfo, SyncAddr } from "./sync-now";
+import { AddIssueDialog } from "./AddIssueDialog";
+import { ADD_ISSUE_LABEL, addIssue, addIssueState, takeAddIssueRequest, useAddIssueRequest } from "./add-issue";
 import { docsFolderState, type DocsCandidate } from "./docs";
 import type { DocsDir } from "../protocol/gen";
 import { useViewChoice } from "./view-choice";
@@ -86,6 +88,12 @@ export interface ProjectViewProps<T extends ProjectNode> {
    * Sem ele, só "sincronizado há…" pelo `syncedAt`.
    */
   sync?: ProjectSyncInfo;
+  /**
+   * Endereço do projeto para o "Adicionar issue pelo ID" (#150): pelo hub
+   * (`owner/repo`) ou no ambiente (`project_id`). Só vale em projeto Jira,
+   * com `sync` (o mesmo critério do "Sincronizar este projeto").
+   */
+  syncAddr?: SyncAddr;
   error: string | null;
   item?: ItemIntent;
   /** Sessões vivas do item que a UI conhece (0 = sessão do projeto). */
@@ -108,7 +116,8 @@ export interface ProjectViewProps<T extends ProjectNode> {
   reviewOf?: (gh: number) => Screen | null;
   /** Ambientes conectados com o projeto, para "Abrir pasta de docs" (#444, só no desktop). */
   docs?: DocsCandidate[];
-  onReload: () => void;
+  /** Recarrega a árvore; a promessa resolve com ela recarregada. */
+  onReload: () => void | Promise<void>;
 }
 
 const isClosed = (n: ProjectNode) => n.issue.state === "closed" || n.work_item?.status === "concluido";
@@ -153,6 +162,15 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   const chosen = ui.filters.sprint ?? (sprintKey ? readSprintChoice(sprintKey) : ALL_SPRINTS);
   const filters = { ...ui.filters, sprint: sprints ? effectiveSprint(chosen, sprints) : ALL_SPRINTS };
   const focus = p.item?.ghNumber ?? null;
+  // "Adicionar issue pelo ID" (#150), só no projeto Jira: pelo botão do
+  // cabeçalho ou pela paleta (o pedido espera a tela do projeto montar).
+  const addAt = jira && p.sync && p.syncAddr ? { info: p.sync, addr: p.syncAddr, ...addIssueState(p.sync) } : null;
+  const [adding, setAdding] = useState(false);
+  const addKey = addAt?.info.key ?? null;
+  const addRequested = useAddIssueRequest(addKey);
+  useEffect(() => {
+    if (addRequested && addKey && takeAddIssueRequest(addKey)) setAdding(true);
+  }, [addRequested, addKey]);
   const node = focus !== null ? all.find((x) => x.issue.gh_number === focus) : undefined;
   const parent = node ? roots?.find((r) => r.children.some((c) => c.issue.gh_number === focus)) : undefined;
 
@@ -197,6 +215,22 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   // Provedor do projeto: chave do Jira e MR do GitLab no lugar de #n e PR (#352).
   const prov = p.project;
   const ref = (n: number) => itemShort(prov, n);
+
+  // Deu certo (ou já estava no espelho): a árvore recarrega com a issue e
+  // a aba do item abre.
+  const addDialog = adding && addAt && (
+    <AddIssueDialog
+      project={prov}
+      reason={addAt.reason}
+      submit={(key) => addIssue(api, addAt.addr, key)}
+      onAdded={async (r) => {
+        setAdding(false);
+        await p.onReload();
+        nav.openTab(itemTab(p.addr, r.number, r.title, prov));
+      }}
+      onClose={() => setAdding(false)}
+    />
+  );
 
   const onMenu = (e: ReactMouseEvent, n: T) => {
     e.preventDefault();
@@ -474,6 +508,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     return (
       <main className="project-screen">
         {side}
+        {addDialog}
         {node && p.project ? (
           <WorkItemPanel
             key={focus}
@@ -548,6 +583,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   return (
     <main className="project-screen">
       {side}
+      {addDialog}
       <div className="pj-overview">
         {/* Celular: a trilha "Projetos › X", que no desktop abre o painel. */}
         {mobile && <div className="pj-picker">{p.picker}</div>}
@@ -568,6 +604,17 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
             <span className="muted project-sync">
               {p.syncedAt ? `sincronizado ${ago(p.syncedAt, now)}` : "ainda não sincronizado"}
             </span>
+          )}
+          {addAt && (
+            <button
+              type="button"
+              className="btn"
+              disabled={!addAt.enabled}
+              title={addAt.reason ?? "Trazer ao Control Tower uma issue do Jira que está fora do filtro do projeto"}
+              onClick={() => setAdding(true)}
+            >
+              {ADD_ISSUE_LABEL}
+            </button>
           )}
           {docs && (
             <button
