@@ -42,7 +42,9 @@ pub fn list_entry(v: &Value, cfg: &JiraConfig) -> Option<ListEntry> {
 /// - fechada = categoria do status `done` (o nome do status vem traduzido);
 /// - as sprints vêm do `sprint_field` (vazio = detectado, ver [`crate::sprint`]);
 /// - os metadados são os campos padrão ([`crate::meta::STANDARD_FIELDS`]) e
-///   depois os campos próprios do cadastro (`extra_fields`).
+///   depois os campos próprios do cadastro (`extra_fields`);
+/// - os responsáveis são os identificadores do `fields.assignee`
+///   ([`assignee_ids`]).
 pub fn issue_row(v: &Value, cfg: &JiraConfig) -> Option<IssueRow> {
     let key = v.get("key")?.as_str()?;
     let number = cfg.number_from_key(key)?;
@@ -137,7 +139,29 @@ pub fn issue_row(v: &Value, cfg: &JiraConfig) -> Option<IssueRow> {
             .unwrap_or(0),
         sprints: crate::sprint::issue_sprints(f, &cfg.sprint_field),
         meta: crate::meta::issue_meta(f, &cfg.extra_fields),
+        assignees: assignee_ids(f.get("assignee")),
     })
+}
+
+/// Identificadores do responsável (`fields.assignee`) para comparar com o
+/// `jira me` (#149): `name` e `key` (Server/DC), `accountId` e
+/// `emailAddress` (Cloud, o e-mail só se a privacidade da conta deixar), os
+/// que vierem, sem vazios nem repetidos (sem caixa). O `displayName` fica
+/// de fora: não identifica ninguém (vai no `meta`).
+pub fn assignee_ids(assignee: Option<&Value>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let Some(a) = assignee.filter(|a| a.is_object()) else {
+        return out;
+    };
+    for k in ["name", "key", "accountId", "emailAddress"] {
+        let Some(id) = a.get(k).and_then(Value::as_str).map(str::trim) else {
+            continue;
+        };
+        if !id.is_empty() && !out.iter().any(|o| ct_core::same_identity(o, id)) {
+            out.push(id.to_string());
+        }
+    }
+    out
 }
 
 /// Data do Jira (`2026-10-28T10:15:30.000-0300`; também aceita `Z` e
@@ -214,6 +238,66 @@ mod tests {
         assert_eq!(r.url, "https://jira.example.com/browse/PROJ-5450");
         assert_eq!(r.updated_at, 1_793_193_330_000);
         assert!(r.sprints.is_empty());
+    }
+
+    /// Responsável do Server/DC: `name` e `key` (o `key` repetido do
+    /// `name`, sem caixa, entra uma vez só); o `displayName` fica de fora.
+    #[test]
+    fn responsavel_do_server() {
+        let v = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "indeterminate",
+            json!({ "assignee": {
+                "name": "fulano", "key": "JIRAUSER10001",
+                "emailAddress": "fulano@example.com", "displayName": "Fulano de Tal",
+            } }),
+        );
+        let r = issue_row(&v, &cfg()).unwrap();
+        assert_eq!(
+            r.assignees,
+            ["fulano", "JIRAUSER10001", "fulano@example.com"]
+        );
+        assert!(ct_core::is_assignee(&r.assignees, "Fulano"));
+        let mesmo = json!({ "name": "fulano", "key": "Fulano" });
+        assert_eq!(assignee_ids(Some(&mesmo)), ["fulano"]);
+    }
+
+    /// Responsável do Cloud: `accountId` e `emailAddress`; o `jira me` do
+    /// Cloud (o e-mail) bate pelo `emailAddress`.
+    #[test]
+    fn responsavel_do_cloud() {
+        let v = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "indeterminate",
+            json!({ "assignee": {
+                "accountId": "000000:fulano-0001",
+                "emailAddress": "Fulano@Example.com", "displayName": "Fulano de Tal",
+            } }),
+        );
+        let r = issue_row(&v, &cfg()).unwrap();
+        assert_eq!(r.assignees, ["000000:fulano-0001", "Fulano@Example.com"]);
+        assert!(ct_core::is_assignee(&r.assignees, "fulano@example.com"));
+    }
+
+    /// Sem responsável (nulo ou ausente): lista vazia.
+    #[test]
+    fn sem_responsavel() {
+        let nulo = issue(
+            "PROJ-9",
+            "Tarefa",
+            false,
+            "new",
+            json!({ "assignee": null }),
+        );
+        assert!(issue_row(&nulo, &cfg()).unwrap().assignees.is_empty());
+        let ausente = issue("PROJ-9", "Tarefa", false, "new", json!({}));
+        assert!(issue_row(&ausente, &cfg()).unwrap().assignees.is_empty());
+        let vazio = json!({ "name": " ", "displayName": "Ninguém" });
+        assert!(assignee_ids(Some(&vazio)).is_empty());
     }
 
     /// Os 5 campos padrão, na ordem da tela, com o texto de cada um.

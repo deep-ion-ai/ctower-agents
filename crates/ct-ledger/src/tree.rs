@@ -162,6 +162,7 @@ mod tests {
             etags: vec![],
             synced_at: 10,
             gone: Vec::new(),
+            me: None,
         })
         .unwrap();
 
@@ -225,6 +226,7 @@ mod tests {
             etags: vec![],
             synced_at: 10,
             gone: Vec::new(),
+            me: None,
         })
         .unwrap();
 

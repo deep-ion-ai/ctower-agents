@@ -159,8 +159,8 @@ pub fn retry_key(owner: &str, repo: &str) -> String {
 /// Versão do que a leitura extrai de cada issue. Subir o número faz a
 /// marca da última reconciliação deixar de bater e o próximo ciclo reler o
 /// projeto uma vez (como mudar a configuração): 2 = com as sprints; 3 = com
-/// os metadados (`meta`).
-pub const MIRROR_VERSION: i64 = 3;
+/// os metadados (`meta`); 4 = com os responsáveis (`assignees`, #149).
+pub const MIRROR_VERSION: i64 = 4;
 
 /// Chave, no `gh_etag`, das issues fora do JQL que ficam no espelho por
 /// ter work item (separadas por espaço): cada ciclo as lê pela chave, como
@@ -783,6 +783,7 @@ impl JiraGitlabSync {
                         prs: Vec::new(),
                         etags: f.etags,
                         synced_at: now,
+                        me: readiness.jira.me.clone(),
                         ..GithubSnapshot::default()
                     };
                     if let (Some(gl), Some(t)) = (&gitlab, &gl_token) {
@@ -974,7 +975,11 @@ impl JiraGitlabSync {
             .map_err(|e| e.to_string())?;
         j.credential_ok = true;
         match cli.me(&token) {
-            Ok(_) => j.me_ok = true,
+            Ok(me) => {
+                j.me_ok = true;
+                // O "eu" do filtro "só minhas" (#149).
+                j.me = Some(me).filter(|m| !m.is_empty());
+            }
             Err(e) => j.error = Some(format!("jira me: {e}")),
         }
         let info = cli.server_info(&token).map_err(|e| e.to_string())?;
@@ -1798,6 +1803,20 @@ mod tests {
         let jr = &rd[0].jira;
         assert_eq!(jr.cli.as_deref(), Some("1.7.0"));
         assert!(jr.config_present && jr.server_matches && jr.credential_ok && jr.me_ok);
+        // A saída do `jira me` é o "eu" do projeto (#149), também no
+        // `sync_state` local.
+        assert_eq!(jr.me.as_deref(), Some("usuario"));
+        assert_eq!(
+            j.env
+                .sessions
+                .ledger()
+                .sync_state(j.env.project_id)
+                .unwrap()
+                .unwrap()
+                .me
+                .as_deref(),
+            Some("usuario")
+        );
         assert_eq!(jr.server_version.as_deref(), Some("8.5.2"));
         assert_eq!(jr.error, None);
         assert!(
@@ -1835,6 +1854,7 @@ mod tests {
         assert!(j.sync.sync_all().unwrap()[0].ok);
         let jr = &j.sync.readiness()[0].jira;
         assert!(!jr.me_ok && jr.error.as_deref().unwrap().starts_with("jira me:"));
+        assert_eq!(jr.me, None);
     }
 
     #[test]

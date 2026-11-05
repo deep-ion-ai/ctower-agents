@@ -179,6 +179,7 @@ mod tests {
             etags: vec![],
             synced_at: 100,
             gone: Vec::new(),
+            me: None,
         }
     }
 

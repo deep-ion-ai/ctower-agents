@@ -156,7 +156,12 @@ impl HubGithub {
             };
             (rev, SyncInput::load_hub(&h, project_id, now_ms())?)
         };
-        let fetched = fetch(&self.client, &input);
+        // O login do token é o "eu" do projeto (#149); sem ele, fica o
+        // último conhecido.
+        let fetched = fetch(&self.client, &input).map(|mut s| {
+            s.me = self.client.login().ok();
+            s
+        });
         let h = self.hub.lock();
         if h.live_project_rev(project_id)? != Some(rev) {
             tracing::info!(
@@ -341,6 +346,45 @@ mod tests {
         let ev = rx.try_recv().unwrap();
         assert_eq!(ev["event"], "hub_sync_status");
         assert_eq!(ev["data"]["ok"], true);
+    }
+
+    /// #149: o login do token do hub vai ao `sync_state.me` do projeto, e
+    /// os `login` dos responsáveis à issue do espelho.
+    #[test]
+    fn login_do_token_e_o_me_do_projeto() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let bin = fake_gh(tmp.path(), "tok");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("o", "r");
+        gh.set("/user", json!({ "login": "fulano" }));
+        gh.set(
+            &issues_path(o, r, "open", None),
+            json!([{ "number": 1, "title": "Issue 1", "state": "open", "labels": [],
+                     "html_url": "https://github.com/o/r/issues/1",
+                     "updated_at": "2026-10-14T10:00:00Z",
+                     "assignees": [{ "login": "Fulano" }, { "login": "beltrano" }] }]),
+        );
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        let hub = hub_com(o, r);
+        let (events, _) = broadcast::channel(16);
+        let sync = HubGithub::new(hub.clone(), client, "hub-id", events);
+        assert!(sync.sync_all().unwrap()[0].ok);
+        let h = hub.lock();
+        let pid = h.list_projects().unwrap()[0].id;
+        assert_eq!(
+            h.sync_state(pid).unwrap().unwrap().me.as_deref(),
+            Some("fulano")
+        );
+        let i = h.get_issue(pid, 1).unwrap().unwrap();
+        assert_eq!(i.assignees, ["Fulano", "beltrano"]);
+        assert!(ct_core::is_assignee(&i.assignees, "fulano"));
     }
 
     /// #89: o hub busca pelo mesmo `fetch`. O épico 1 do espelho do hub é

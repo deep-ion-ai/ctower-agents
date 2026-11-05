@@ -139,7 +139,10 @@ impl GithubSync {
         // Lock curto para ler; a rede roda sem ele.
         let input = SyncInput::load(&self.sessions.ledger(), project_id, now_ms())?;
         let result = match fetch(&self.client, &input) {
-            Ok(snap) => {
+            Ok(mut snap) => {
+                // O login do token é o "eu" do projeto (#149); sem ele, fica
+                // o último conhecido.
+                snap.me = self.client.login().ok();
                 let applied = self.sessions.ledger().apply_github(&snap)?;
                 for g in &applied.removed {
                     tracing::warn!("github: projeto {project_id}: {g}, removida do espelho");

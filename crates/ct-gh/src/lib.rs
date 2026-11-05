@@ -91,6 +91,9 @@ pub struct GhClient {
     cfg: GhConfig,
     agent: ureq::Agent,
     token: Mutex<Option<String>>,
+    /// `(token, login)` do último `GET /user` que deu certo (#149): o login
+    /// só é pedido de novo quando o token muda.
+    login: Mutex<Option<(String, String)>>,
 }
 
 struct Page {
@@ -106,6 +109,7 @@ impl GhClient {
             cfg,
             agent,
             token: Mutex::new(None),
+            login: Mutex::new(None),
         }
     }
 
@@ -294,6 +298,21 @@ impl GhClient {
     /// clone`); `None` = usar o login do próprio `gh`.
     pub fn configured_token(&self) -> Option<String> {
         self.file_token()
+    }
+
+    /// Login da conta do token em uso: o "eu" do GitHub no filtro "só
+    /// minhas" (#149), que o sync grava no `sync_state.me`. Pede `GET /user`
+    /// só quando o token muda; a falha não fica guardada.
+    pub fn login(&self) -> Result<String, GhError> {
+        let token = self.token()?;
+        if let Some((t, l)) = self.login.lock().unwrap().as_ref() {
+            if *t == token {
+                return Ok(l.clone());
+            }
+        }
+        let login = self.login_of(&token)?;
+        *self.login.lock().unwrap() = Some((token, login.clone()));
+        Ok(login)
     }
 
     /// Login da conta dona de `token` (GET /user).
@@ -516,6 +535,31 @@ mod tests {
     use super::*;
     use crate::fake::{fake_gh, fake_gh_calls, FakeGitHub};
     use serde_json::json;
+
+    /// #149: o login do token é pedido uma vez e de novo só quando o token
+    /// muda; a falha não fica guardada.
+    #[test]
+    fn login_do_token_em_cache() {
+        let d = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok-a");
+        let file = d.path().join("github.token");
+        std::fs::write(&file, "tok-a").unwrap();
+        let bin = fake_gh(d.path(), "tok-do-gh");
+        let c = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(crate::fake::FAKE_GH_TOKEN_TIMEOUT)
+                .with_token_file(file),
+        );
+        assert!(c.login().is_err(), "sem /user publicado");
+        gh.set("/user", json!({ "login": "fulano" }));
+        assert_eq!(c.login().unwrap(), "fulano");
+        assert_eq!(c.login().unwrap(), "fulano");
+        let users = || gh.requests().iter().filter(|(p, _)| p == "/user").count();
+        assert_eq!(users(), 2, "a falha e o primeiro sucesso");
+        *c.token.lock().unwrap() = Some("tok-b".into());
+        assert!(c.login().is_err(), "token novo: pede de novo");
+        assert_eq!(users(), 3);
+    }
 
     #[test]
     fn token_configurado_tem_prioridade_e_gh_e_reserva() {
