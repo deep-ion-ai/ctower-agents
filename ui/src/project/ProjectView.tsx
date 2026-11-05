@@ -34,7 +34,7 @@ import {
   saveSprintChoice,
   sprintLabel,
 } from "./sprints";
-import { EMPTY_ACTIVE_SPRINT, EMPTY_FILTERED, EMPTY_OPEN, SPRINTS_UNREAD, buildView, isExpanded, narrowing, priorityOf, statusKey } from "./tree-view";
+import { EMPTY_ACTIVE_SPRINT, EMPTY_FILTERED, EMPTY_OPEN, SPRINTS_UNREAD, buildView, isExpanded, mineFilters, narrowing, priorityOf, statusKey } from "./tree-view";
 import { useProjectUi } from "./ui-store";
 import { SyncHead } from "./SyncNow";
 import type { ProjectSyncInfo, SyncAddr } from "./sync-now";
@@ -94,6 +94,11 @@ export interface ProjectViewProps<T extends ProjectNode> {
    * com `sync` (o mesmo critério do "Sincronizar este projeto").
    */
   syncAddr?: SyncAddr;
+  /**
+   * O "eu" do rastreador (`SyncState.me`), para o "Só minhas" (#151);
+   * sem ele (sync ainda não rodou ou `jira me` falhou), o filtro fica desabilitado.
+   */
+  me?: string | null;
   error: string | null;
   item?: ItemIntent;
   /** Sessões vivas do item que a UI conhece (0 = sessão do projeto). */
@@ -160,7 +165,8 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   // execução, vale a guardada.
   const sprintKey = p.project ? `${p.project.gh_owner}/${p.project.gh_repo}`.toLowerCase() : null;
   const chosen = ui.filters.sprint ?? (sprintKey ? readSprintChoice(sprintKey) : ALL_SPRINTS);
-  const filters = { ...ui.filters, sprint: sprints ? effectiveSprint(chosen, sprints) : ALL_SPRINTS };
+  const me = p.me?.trim() || null;
+  const filters = mineFilters({ ...ui.filters, sprint: sprints ? effectiveSprint(chosen, sprints) : ALL_SPRINTS }, me);
   const focus = p.item?.ghNumber ?? null;
   // "Adicionar issue pelo ID" (#150), só no projeto Jira: pelo botão do
   // cabeçalho ou pela paleta (o pedido espera a tela do projeto montar).
@@ -325,7 +331,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     );
   };
 
-  const view = buildView(roots ?? [], filters);
+  const view = buildView(roots ?? [], filters, me);
   const nEpics = view.epics.length;
   const empty =
     roots && roots.length === 0
@@ -390,9 +396,11 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
         value={filters}
         onChange={(f) => {
           if (sprintKey && f.sprint !== filters.sprint) saveSprintChoice(sprintKey, f.sprint ?? ALL_SPRINTS);
-          setUi((u) => ({ ...u, filters: f }));
+          // Sem o "eu", o "Só minhas" aparece desligado, mas a escolha guardada fica.
+          setUi((u) => ({ ...u, filters: me ? f : { ...f, mine: u.filters.mine === true } }));
         }}
         more={ui.showFilters}
+        me={me}
         sprints={sprints}
         sprintsUnread={sprintsUnread}
       />
@@ -573,6 +581,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     <Board
       view={view}
       filters={filters}
+      me={me}
       now={now}
       focus={null}
       project={prov}

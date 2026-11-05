@@ -361,6 +361,46 @@ describe("Quadro (Kanban) somente leitura", () => {
   });
 });
 
+describe("Só minhas (#151)", () => {
+  afterEach(() => window.sessionStorage.clear());
+  /** Árvore do hub com o "eu" do sync e a filha #59 atribuída a ele. */
+  const meuTree = (): HubTree => ({
+    ...TREE,
+    sync: sync({ project_id: 7, last_ok_at: NOW, me: "fulano" }),
+    roots: TREE.roots.map((r) =>
+      r.issue.gh_number !== 64
+        ? r
+        : {
+            ...r,
+            children: r.children.map((c) =>
+              c.issue.gh_number === 59 ? { ...c, issue: { ...c.issue, assignees: ["fulano"] } } : c,
+            ),
+          },
+    ),
+  });
+
+  test("na Árvore e no Quadro do hub, só as minhas", async () => {
+    const api = setup(true).onHub("hub.tree.get", meuTree());
+    render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+    await screen.findByText("sync ambiente→hub");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "Só minhas" }));
+    expect(within(side()).getByText("sync ambiente→hub")).toBeInTheDocument();
+    expect(within(side()).queryByText("env_id e HLC")).not.toBeInTheDocument();
+    expect(within(side()).queryByText("Épico: parado")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Quadro" }));
+    const cards = screen.getAllByRole("button", { name: /#\d+/ }).filter((b) => b.classList.contains("card"));
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveTextContent("sync ambiente→hub");
+  });
+
+  test("sem o 'eu' no hub, o toggle fica desabilitado", async () => {
+    render(<App api={setup(true)} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+    await screen.findByText("sync ambiente→hub");
+    expect(screen.getByRole("checkbox", { name: "Só minhas" })).toBeDisabled();
+  });
+});
+
 describe("cabeçalho do épico", () => {
   const epicTree = (): HubTree => ({
     ...TREE,
