@@ -80,6 +80,8 @@ export function goToAction(nav: Nav, a: AttentionAction, openUrl?: (url: string)
       return nav.openTerminal({ env: a.env, session: a.session });
     case "project":
       return nav.go({ name: "project", env: a.env, projectId: a.projectId });
+    case "recovery":
+      return nav.go({ name: "recovery", env: a.env, session: a.session });
     case "maintenance":
       return nav.openTab(maintenanceTab(a.section));
     default:

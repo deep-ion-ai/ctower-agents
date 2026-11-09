@@ -84,6 +84,66 @@ test("painel lateral: item, ambiente, motivo e há quanto tempo; a primeira vem 
   expect(screen.getByRole("tab", { name: /Recuperação · #97/ })).toBeInTheDocument();
 });
 
+/** Volta à Sala de controle e clica em Recuperar no cartão da sessão. */
+async function recoverFromStrip(user: ReturnType<typeof userEvent.setup>, title: RegExp) {
+  await user.click(screen.getByRole("button", { name: "Sala de controle" }));
+  const faixa = (await screen.findByText(/Precisa de você ·/)).closest("section")!;
+  const card = within(faixa).getByText(title).closest("li")!;
+  await user.click(within(card).getByRole("button", { name: "Recuperar" }));
+}
+
+test("Recuperar na Sala de controle abre a sessão clicada, não a primeira da lista (#160)", async () => {
+  const { user } = setup();
+  await side();
+  await detail(/#29 ct-client/);
+  await recoverFromStrip(user, /#97 Paginação/);
+  expect(await detail(/#97 Paginação/)).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: /#29 ct-client/ })).not.toBeInTheDocument();
+  // A tela foi desmontada ao sair dela: o painel é outro.
+  const panel = await side();
+  expect(within(panel).getByRole("button", { name: /#97 Paginação/ })).toHaveAttribute("aria-current", "true");
+  expect(within(panel).getByRole("button", { name: /#29 ct-client/ })).not.toHaveAttribute("aria-current");
+  expect(screen.getByRole("tab", { name: /Recuperação · #97/ })).toBeInTheDocument();
+});
+
+test("Recuperar com interrompidas em ambientes diferentes abre a do ambiente certo (#160)", async () => {
+  const api = new FakeDaemonApi([FakeDaemonApi.wslEnv("wsl"), { ...FakeDaemonApi.wslEnv("vps"), name: "Servidor" }])
+    .on("dashboard.get", (_: unknown, env: string) =>
+      env === "wsl"
+        ? dashboard({ interrupted_sessions: [S29], sync: [sync({ last_ok_at: NOW })] }, [WI29])
+        : dashboard({ interrupted_sessions: [S97], sync: [sync({ last_ok_at: NOW })] }, [WI97]),
+    )
+    .on("recovery.list", (_: unknown, env: string) =>
+      env === "wsl" ? [item(S29, WI29, "original")] : [item(S97, WI97, "original")],
+    )
+    .on("recovery.archived", [])
+    .on("session.peek", { data: "" })
+    .on("transcript.tail", TAIL);
+  render(<App api={api} />);
+  const user = userEvent.setup();
+  await side();
+  await detail(/#29 ct-client/);
+  await recoverFromStrip(user, /#97 Paginação/);
+  const card = await detail(/#97 Paginação/);
+  expect(within(card).getByText("Servidor")).toBeInTheDocument();
+});
+
+test("sem sessão no endereço, a Recuperação aberta pelo menu lateral seleciona a primeira (#160)", async () => {
+  const { user } = setup({ name: "settings" });
+  await user.click(await screen.findByRole("button", { name: "Recuperação" }));
+  const panel = await side();
+  expect(await detail(/#29 ct-client/)).toBeInTheDocument();
+  expect(within(panel).getByRole("button", { name: /#29 ct-client/ })).toHaveAttribute("aria-current", "true");
+});
+
+test("sessão do endereço que já saiu da lista: usa a primeira, sem erro (#160)", async () => {
+  setup({ name: "recovery", env: "wsl", session: "ja-saiu" });
+  const panel = await side();
+  expect(await detail(/#29 ct-client/)).toBeInTheDocument();
+  expect(within(panel).getByRole("button", { name: /#29 ct-client/ })).toHaveAttribute("aria-current", "true");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 test("retomar com prompt editado abre o terminal da nova sessão", async () => {
   const { api, user } = setup({ name: "recovery", env: "wsl", session: S29.id });
   const card = await detail(/#29 ct-client/);

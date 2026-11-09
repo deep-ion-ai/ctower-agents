@@ -112,6 +112,22 @@ test("ordem por projeto: a aba nova entra depois da última do mesmo projeto", (
   expect(ids(s)[1]).toBe(terminalTabId(A));
 });
 
+// Recuperação (#160): a sessão escolhida vai no endereço da aba única da tela.
+
+test("abrir a Recuperação com sessão troca o endereço da aba; sem sessão, limpa", () => {
+  const recovery = (s: NavState) => s.editors.find((e) => e.id === "recovery");
+  let s = navReducer(initialNav({ name: "control" }), { type: "open", tab: { screen: { name: "recovery" } } });
+  s = navReducer(s, { type: "activate", id: "control" });
+  s = navReducer(s, { type: "open", tab: { screen: { name: "recovery", env: "wsl", session: "s2" } } });
+  expect(ids(s)).toEqual(["control", "recovery"]);
+  expect(s.current).toBe("recovery");
+  expect(recovery(s)).toMatchObject({ screen: { name: "recovery", env: "wsl", session: "s2" } });
+  // A paleta abre sem sessão: volta para a primeira da lista.
+  s = navReducer(s, { type: "open", tab: { screen: { name: "recovery" } } });
+  expect(recovery(s)).toMatchObject({ screen: { name: "recovery" } });
+  expect(recovery(s)).not.toMatchObject({ screen: { session: "s2" } });
+});
+
 // Antigo Hub › Projetos e atribuições (#18): o endereço vira o lugar novo ao abrir.
 
 test("endereço antigo do Hub › Projetos abre o projeto (Configurações) ou o índice, na aba deles", () => {

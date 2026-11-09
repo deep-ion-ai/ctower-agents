@@ -44,7 +44,7 @@ test.each([
     p: { dashboards: { wsl: dashboard({ interrupted_sessions: [session({ state: "interrupted" })] }, [workItem()]) } },
     kind: "interrupted",
     title: "ctower-agents #31 Item 31",
-    action: { to: "recovery" },
+    action: { to: "recovery", env: "wsl", session: session().id },
   },
   {
     caso: "saiu com erro nas últimas 24 h",
@@ -128,6 +128,24 @@ test.each([
   expect(items).toHaveLength(1);
   expect(items[0]).toMatchObject({ kind, title, action });
   expect(items[0].label).not.toBe("");
+});
+
+test("interrompidas em ambientes diferentes: cada ação leva o ambiente e a sessão dela (#160)", () => {
+  const vps = { ...FakeDaemonApi.wslEnv("vps"), name: "Servidor" };
+  const items = attention(
+    input({
+      envs: [env, vps],
+      status: { ...ok, vps: { env: "vps", connected: true, error: null, since: 0 } },
+      dashboards: {
+        wsl: dashboard({ interrupted_sessions: [session({ id: "s-a", state: "interrupted" })] }, [workItem()]),
+        vps: dashboard({ interrupted_sessions: [session({ id: "s-b", state: "interrupted" })] }, [workItem()]),
+      },
+    }),
+  );
+  expect(items.map((i) => i.action)).toEqual([
+    { to: "recovery", env: "wsl", session: "s-a" },
+    { to: "recovery", env: "vps", session: "s-b" },
+  ]);
 });
 
 test("ignora o que não pede o humano", () => {
