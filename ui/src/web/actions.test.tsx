@@ -190,6 +190,17 @@ describe("ações da sessão pelo canal reverso", () => {
     expect(await screen.findByRole("region", { name: "Ações da sessão" })).toBeInTheDocument();
   });
 
+  it("Recuperar na Sala de controle (#160): a lista com todas as interrompidas, sem seleção", async () => {
+    const a = hubSession({ id: "s-a", state: "interrupted", ended_at: now - 60_000 });
+    const b = hubSession({ id: "s-b", state: "interrupted", ended_at: now - 60_000 });
+    const api = webApi({ live_sessions: [], interrupted_sessions: [a, b] });
+    const user = renderApp(api, { name: "control" });
+    const faixa = (await screen.findByText(/Precisa de você ·/)).closest("section")!;
+    await user.click(within(faixa).getAllByRole("button", { name: "Recuperar" })[1]);
+    expect(await screen.findByRole("heading", { name: "Recuperação · 2" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Retomar .*#201/ })).toHaveLength(2);
+  });
+
   it("descartar pela Recuperação (#138): a confirmação e o session.archive pelo canal", async () => {
     const int = hubSession({ id: "s-1", state: "interrupted", ended_at: now - 60_000 });
     const api = webApi({ live_sessions: [], interrupted_sessions: [int] }).on("session.archive", {});
