@@ -35,7 +35,7 @@ export type AttentionKind =
 
 export type AttentionAction =
   | { to: "terminal"; env: string; session: string }
-  | { to: "recovery" }
+  | { to: "recovery"; env: string; session: string }
   | { to: "settings" }
   | { to: "hub" }
   | { to: "maintenance"; section: MaintenanceSection }
@@ -308,7 +308,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
             : `O agente saiu com código ${s.exit_code} no meio do trabalho`,
         since: s.last_event_at,
         actionLabel: "Recuperar",
-        action: { to: "recovery" },
+        action: { to: "recovery", env: env.id, session: s.id },
         // Só com o ambiente no ar (na web, com o canal reverso): o archive vai a ele.
         discard: st?.connected ? { env: env.id, session: s.id, name: title, item: issueRef(project, wi, gestor) } : undefined,
       });
