@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.6.0...v1.7.0) (2026-11-05)
+
+
+### Features
+
+* **jira,sessions,hub:** adicionar issue do Jira pelo ID ([d1cead3](https://github.com/deep-ion-ai/ctower-agents/commit/d1cead3926803ec685bb02eabef973f75caceced)), closes [#148](https://github.com/deep-ion-ai/ctower-agents/issues/148)
+* **ledger,jira,gh:** responsável identificável na issue e "eu" do rastreador ([#149](https://github.com/deep-ion-ai/ctower-agents/issues/149)) ([387148a](https://github.com/deep-ion-ai/ctower-agents/commit/387148aaec6f1cff4ca9c2f553d68284a546cda9))
+* **ui:** "Adicionar issue pelo ID" na tela do projeto e na paleta ([04e494d](https://github.com/deep-ion-ai/ctower-agents/commit/04e494d5072701fe465e8a77220443a44798e8cc)), closes [#150](https://github.com/deep-ion-ai/ctower-agents/issues/150)
+* **ui:** filtro "Só minhas" na Árvore e no Quadro ([ee46e23](https://github.com/deep-ion-ai/ctower-agents/commit/ee46e238418d5bfb235f627f044f306a4053c69c)), closes [#151](https://github.com/deep-ion-ai/ctower-agents/issues/151)
+
 ## [1.6.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.5.0...v1.6.0) (2026-11-03)
 
 
