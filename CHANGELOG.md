@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.1](https://github.com/deep-ion-ai/ctower-agents/compare/v1.7.0...v1.7.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **ui:** "Recuperar" na Sala de controle abre a sessão clicada ([3b97924](https://github.com/deep-ion-ai/ctower-agents/commit/3b97924044b0277d7041e76c0399e5a0afcd61e3))
+* **ui:** "Recuperar" na Sala de controle abre a sessão clicada ([c51c852](https://github.com/deep-ion-ai/ctower-agents/commit/c51c8528146bfc7ffe0fcf79203f18d64ec85260)), closes [#160](https://github.com/deep-ion-ai/ctower-agents/issues/160)
+
 ## [1.7.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.6.0...v1.7.0) (2026-11-05)
 
 
