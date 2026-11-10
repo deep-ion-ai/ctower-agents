@@ -4458,13 +4458,13 @@ pub(crate) mod tests {
                     "tracker": { "kind": "jira", "url": "https://jira.x", "project_key": "PROJ",
                                  "jql": "", "active_sprint_only": true,
                                  "credential_cmd": "pass show jira" },
-                    "forge": { "kind": "gitlab", "clone_url": "git@git.x:pje/app.git",
+                    "forge": { "kind": "gitlab", "clone_url": "git@git.x:acme/app.git",
                                "credential_cmd": "pass show gitlab" }
                 }),
             )
             .await;
         assert!(v["result"].is_object(), "{v}");
-        let p = |n: i64| json!({ "owner": "pje", "repo": "app", "number": n });
+        let p = |n: i64| json!({ "owner": "acme", "repo": "app", "number": n });
 
         let v = ui.call("hub.workitem.body", p(7)).await;
         assert!(
@@ -4478,7 +4478,7 @@ pub(crate) mod tests {
         let v = ui
             .call(
                 "hub.assignments.add",
-                json!({ "owner": "pje", "repo": "app", "env": "env-x" }),
+                json!({ "owner": "acme", "repo": "app", "env": "env-x" }),
             )
             .await;
         assert_eq!(v["result"]["sync_env"], true, "{v}");

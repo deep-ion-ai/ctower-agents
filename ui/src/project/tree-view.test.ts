@@ -84,7 +84,7 @@ describe("busca", () => {
     expect(matchesQuery(x, "proj-4")).toBe(true);
     expect(matchesQuery(x, "PROJ-44")).toBe(false);
     // Trecho de título com hífen continua sendo título.
-    expect(matchesQuery(n(7, { title: "pje-web 12" }), "pje-web")).toBe(true);
+    expect(matchesQuery(n(7, { title: "acme-web 12" }), "acme-web")).toBe(true);
   });
 
   test("épico aparece quando uma sub-issue casa, só com as que casam", () => {

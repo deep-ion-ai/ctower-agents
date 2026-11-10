@@ -4,9 +4,9 @@ import { linkedIssue, renderFileMarkdown, renderIssueMarkdown } from "./issue-ma
 
 const GH: ProviderProject = { gh_owner: "deep-ion-ai", gh_repo: "ctower-agents", tracker: { kind: "github" } };
 const JIRA = {
-  gh_owner: "pje",
+  gh_owner: "acme",
   gh_repo: "app",
-  tracker: { kind: "jira", url: "https://jira.x", project_key: "PROJ" },
+  tracker: { kind: "jira", url: "https://jira.example.com", project_key: "PROJ" },
 } as unknown as ProviderProject;
 
 const dom = (html: string) => {
@@ -73,7 +73,7 @@ test("chave do Jira do projeto vira link; de outro projeto, não", () => {
   const d = dom(renderIssueMarkdown("PROJ-5450 e OUTRO-1 e XPROJ-2", JIRA));
   const refs = [...d.querySelectorAll("a[data-issue]")].map((a) => a.textContent);
   expect(refs).toEqual(["PROJ-5450"]);
-  expect(d.querySelector("a")?.getAttribute("href")).toBe("https://jira.x/browse/PROJ-5450");
+  expect(d.querySelector("a")?.getAttribute("href")).toBe("https://jira.example.com/browse/PROJ-5450");
 });
 
 test("linkedIssue: URL da issue do mesmo repositório abre no app; outra, não", () => {
@@ -85,7 +85,7 @@ test("linkedIssue: URL da issue do mesmo repositório abre no app; outra, não",
   expect(linkedIssue(a("https://github.com/deep-ion-ai/ctower-agents/issues/40#issuecomment-1"), GH)).toBe(40);
   expect(linkedIssue(a("https://github.com/deep-ion-ai/ctower-agents/issues/40x"), GH)).toBeNull();
   expect(linkedIssue(a("https://github.com/outro/repo/issues/40"), GH)).toBeNull();
-  expect(linkedIssue(a("https://jira.x/browse/PROJ-9"), JIRA)).toBe(9);
+  expect(linkedIssue(a("https://jira.example.com/browse/PROJ-9"), JIRA)).toBe(9);
 });
 
 describe("arquivo .md da sessão (#167)", () => {
