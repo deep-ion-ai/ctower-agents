@@ -1020,6 +1020,7 @@ mod tests {
     fn caminho_padrao_e_repos_root() {
         let p = ConfigProject {
             docs: Default::default(),
+            session_templates: Default::default(),
             owner: "o".into(),
             repo: "r".into(),
             name: "r".into(),

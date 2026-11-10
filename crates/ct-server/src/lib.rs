@@ -55,8 +55,9 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// (descrição da issue do Jira para o "Ver issue", pelo canal do hub). 2.11
 /// (#90): `failures` e `failing_since` no `SyncState` (falhas seguidas do
 /// sync do projeto). 2.12 (#148): `tracker.add_issue` (issue do Jira pelo
-/// ID, também pelo canal do hub).
-pub const PROTOCOL_VERSION: &str = "2.12";
+/// ID, também pelo canal do hub). 2.13 (#166): `session_templates` em
+/// `Project` (templates do prompt inicial do projeto, vindos do hub).
+pub const PROTOCOL_VERSION: &str = "2.13";
 
 #[derive(Clone)]
 pub struct AppState {

@@ -3,6 +3,7 @@ import type { DocsConfig } from "./DocsConfig";
 import type { ForgeConfig } from "./ForgeConfig";
 import type { LocationState } from "./LocationState";
 import type { ProjectKind } from "./ProjectKind";
+import type { SessionTemplates } from "./SessionTemplates";
 import type { TrackerConfig } from "./TrackerConfig";
 
 export type Project = { id: number, name: string, 
@@ -63,4 +64,9 @@ sync_role: boolean,
  * Pasta de docs do projeto fora do repositório, como veio do hub
  * (#440); desligada no projeto local legado.
  */
-docs: DocsConfig, };
+docs: DocsConfig, 
+/**
+ * Templates do prompt inicial do projeto, como vieram do hub (#166);
+ * vazios no projeto local legado (o global do rastreador).
+ */
+session_templates: SessionTemplates, };

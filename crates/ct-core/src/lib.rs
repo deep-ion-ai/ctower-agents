@@ -12,6 +12,7 @@ pub mod plan;
 #[macro_use]
 mod model;
 mod repo_url;
+pub mod session_templates;
 pub mod tracker;
 
 pub use clock::{civil_from_days, hlc, now_ms, parse_iso8601, utc_stamp};
@@ -22,6 +23,7 @@ pub use docs::DocsConfig;
 pub use logs::LogsConfig;
 pub use model::*;
 pub use repo_url::{github_repo_from_url, repo_from_url, RepoRef};
+pub use session_templates::SessionTemplates;
 pub use tracker::{
     change_label, change_ref, change_short, change_url, default_type_map, glab_cli_prefix,
     is_assignee, issue_view_cmd, item_key, item_ref, item_short, item_url, jira_cli_prefix,

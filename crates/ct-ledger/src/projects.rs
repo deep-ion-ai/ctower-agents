@@ -70,6 +70,9 @@ pub struct Project {
     /// Pasta de docs do projeto fora do repositório, como veio do hub
     /// (#440); desligada no projeto local legado.
     pub docs: ct_core::DocsConfig,
+    /// Templates do prompt inicial do projeto, como vieram do hub (#166);
+    /// vazios no projeto local legado (o global do rastreador).
+    pub session_templates: ct_core::SessionTemplates,
 }
 
 impl Default for Project {
@@ -95,6 +98,7 @@ impl Default for Project {
             attribution: true,
             sync_role: false,
             docs: ct_core::DocsConfig::default(),
+            session_templates: ct_core::SessionTemplates::default(),
         }
     }
 }
@@ -127,10 +131,10 @@ pub(crate) const COLS: &str =
     "id, name, gh_owner, gh_repo, repo_path, base_branch, protected_branches, created_at, \
      config_rev, unassigned_at, location_state, location_error, applied_rev, kind, \
      tracker_kind, tracker_config, forge_kind, forge_config, branch_pattern, attribution, \
-     sync_role, docs_config";
+     sync_role, docs_config, session_templates";
 
 /// Quantas colunas `COLS` tem (a seguinte é a primeira extra de uma consulta).
-pub(crate) const COLS_LEN: usize = 22;
+pub(crate) const COLS_LEN: usize = 23;
 
 pub(crate) fn location_state_col(r: &Row, idx: usize) -> rusqlite::Result<Option<LocationState>> {
     let s: Option<String> = r.get(idx)?;
@@ -163,6 +167,7 @@ pub(crate) fn row_to_project(r: &Row) -> rusqlite::Result<Project> {
         attribution: r.get(19)?,
         sync_role: r.get(20)?,
         docs: json_col(r, 21)?,
+        session_templates: json_col(r, 22)?,
     })
 }
 

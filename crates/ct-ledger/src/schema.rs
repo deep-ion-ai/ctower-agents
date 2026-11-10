@@ -336,6 +336,11 @@ ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
 ALTER TABLE issue_cache ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE sync_state ADD COLUMN me TEXT;
 "#,
+    // 19: templates do prompt inicial do projeto, como vêm do hub (#166):
+    // JSON de `SessionTemplates`. `{}` = sem override.
+    r#"
+ALTER TABLE project ADD COLUMN session_templates TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo

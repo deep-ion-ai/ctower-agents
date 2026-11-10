@@ -877,6 +877,7 @@ mod tests {
                 changed: true,
                 projects: Some(vec![ct_ledger::ConfigProject {
                     docs: Default::default(),
+                    session_templates: Default::default(),
                     owner: p.gh_owner.clone(),
                     repo: p.gh_repo.clone(),
                     name: p.name.clone(),

@@ -348,3 +348,15 @@ Pré-requisito: um projeto Jira com o ambiente de sync escolhido e conectado (hu
 7. Na paleta, digite `adicionar issue`. **Esperado:** **Projeto: Adicionar issue pelo ID… — <projeto>** para cada projeto Jira; escolher abre a aba **Itens** do projeto com o diálogo aberto.
 8. Com o hub fora (visão local), no ambiente do projeto. **Esperado:** o mesmo botão e o mesmo diálogo, chamando o próprio ambiente. Na web (PWA), igual à visão do hub.
 9. Sem iniciar sessão na issue adicionada, espere a próxima reconciliação com poda do sync. **Esperado:** a issue some da árvore (com work item, ela fica).
+
+## 23. Templates de sessão por projeto (#166)
+
+Pré-requisito: hub 1.13 e ambiente 2.13 ou maiores, com um projeto GitHub e um projeto Jira atribuídos ao ambiente.
+
+1. Abra o projeto GitHub › **Configurações › Templates de sessão**. **Esperado:** três linhas (Issue e sub-issue, Épico, Sessão do projeto), todas "herdando o template global", cada uma com **Personalizar**.
+2. Inicie uma sessão de issue antes de mudar nada. **Esperado:** o prompt é o mesmo de antes, e o rótulo mostra "template global". Repita no projeto Jira (template `jira_issue`).
+3. **Personalizar** em Issue e sub-issue. **Esperado:** o editor abre com o template global de issue do rastreador (no projeto Jira, o `jira_issue`). Troque o texto (por exemplo, `Issue {{key}}: {{title}} em {{branch}}`) e **Salvar template**. **Esperado:** a linha passa a "template do projeto", com **Editar** e **Voltar ao global**.
+4. Inicie uma sessão de issue. **Esperado:** o prompt vem do override, com as variáveis trocadas, e o rótulo diz "template do projeto". **Editar template ›** abre Configurações do projeto › Templates de sessão. Num épico e na sessão do projeto, o prompt e o rótulo continuam no global, e **Editar template ›** abre a aba do template global.
+5. Num segundo ambiente atribuído ao mesmo projeto, depois do próximo pull. **Esperado:** a mesma sessão de issue usa o override.
+6. **Voltar ao global** na linha de issue. **Esperado:** a linha volta a "herdando o template global" e a sessão de issue volta ao prompt de antes.
+7. Com um hub anterior à 1.13. **Esperado:** a seção mostra só o aviso para atualizar o hub, sem ações. Na web (PWA), as linhas aparecem sem as ações de mudar.
