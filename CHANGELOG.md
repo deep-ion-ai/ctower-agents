@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.8.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.7.1...v1.8.0) (2026-11-10)
+
+
+### Features
+
+* **secrets,sessions:** ler o valor atual de um secret durante a sessão ([82eaa1c](https://github.com/deep-ion-ai/ctower-agents/commit/82eaa1ce279cb0ba95bf89d17f9bca309b72fbac))
+* **secrets,sessions:** ler o valor atual de um secret durante a sessão ([49597c7](https://github.com/deep-ion-ai/ctower-agents/commit/49597c7d602fe19cbb4aa0b3dc5ce3dec93feeca)), closes [#165](https://github.com/deep-ion-ai/ctower-agents/issues/165)
+* templates de prompt inicial configuráveis por projeto ([#169](https://github.com/deep-ion-ai/ctower-agents/issues/169)) ([cba7ec0](https://github.com/deep-ion-ai/ctower-agents/commit/cba7ec01583f40cbb275ecd72390c8e0a1542173)), closes [#166](https://github.com/deep-ion-ai/ctower-agents/issues/166)
+* visualizador de markdown dos arquivos da sessão ([#171](https://github.com/deep-ion-ai/ctower-agents/issues/171)) ([6f1ddf6](https://github.com/deep-ion-ai/ctower-agents/commit/6f1ddf672b913c1b66d166aba9b138f64a3171b3)), closes [#167](https://github.com/deep-ion-ai/ctower-agents/issues/167)
+
 ## [1.7.1](https://github.com/deep-ion-ai/ctower-agents/compare/v1.7.0...v1.7.1) (2026-11-09)
 
 
