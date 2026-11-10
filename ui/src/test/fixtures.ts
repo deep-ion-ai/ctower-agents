@@ -65,6 +65,7 @@ export function project(p: Partial<Project> = {}): Project {
     attribution: true,
     sync_role: false,
     docs: { enabled: false, project_dirs: [], epic_dirs: [] },
+    session_templates: { issue: "", epic: "", project: "" },
     ...p,
   };
 }
@@ -325,6 +326,7 @@ export function hubProject(p: Partial<HubProject> = {}): HubProject {
     attribution: true,
     sync_env_id: null,
     docs: { enabled: false, project_dirs: [], epic_dirs: [] },
+    session_templates: { issue: "", epic: "", project: "" },
     ...p,
   };
 }

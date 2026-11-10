@@ -32,7 +32,7 @@ import { branchFor, branchFromPattern, patternOf, worktreeDirName } from "./bran
 import { STATE_SUFFIX, hubClones, liveSessions, localClone, type Clone } from "./clones";
 import { projectAt } from "./sections";
 import { itemTab, projectKey } from "./tabs";
-import { renderGestorTemplate, renderTemplate, scopeText, templateKeyFor } from "./templates";
+import { renderGestorTemplate, renderTemplate, resolveTemplate, scopeText } from "./templates";
 import { cachedTree } from "./ui-store";
 import { rcRequested } from "../web/envActions";
 import { PlanConfirm, PlanEnvChoices, PlanStartNote, usePlanGate } from "../plan/PlanStart";
@@ -309,12 +309,14 @@ function ItemStartModal({
     : "";
 
   const editKey = String(gh ?? PROJECT_ITEM);
-  // Template pelo rastreador do projeto (#351): os `jira_*` no Jira.
+  // Template pelo rastreador do projeto (#351): os `jira_*` no Jira; o
+  // override do projeto, vindo do hub, vence (#166). Ambiente anterior à
+  // 2.13 não traz `session_templates`: o global.
   const tracker = project?.tracker?.kind ?? "github";
-  const tplKey = templateKeyFor(issue ? kind : "project", tracker);
+  const tpl = resolveTemplate(config.templates, issue ? kind : "project", tracker, project?.session_templates);
   const base =
     project && (planning || issue)
-      ? renderTemplate(config.templates[tplKey], {
+      ? renderTemplate(tpl.text, {
           kind,
           number: issue?.gh_number ?? 0,
           owner: project.gh_owner,
@@ -657,8 +659,28 @@ function ItemStartModal({
                   {planning ? "da sessão do projeto" : kind === "epic" ? "de épico" : "de issue"}
                   {tracker === "jira" ? " do Jira" : ""}
                 </label>
+                <span className="sm-chip" data-tone="neutral" aria-label="Origem do template">
+                  {tpl.source === "project" ? "template do projeto" : "template global"}
+                </span>
                 <span className="sm-spacer" />
-                <button type="button" className="linklike" onClick={() => onOpenTab(templateTab(tplKey))}>
+                <button
+                  type="button"
+                  className="linklike"
+                  onClick={() =>
+                    onOpenTab(
+                      // Com override, as Configurações › Templates de sessão do projeto (#166).
+                      tpl.source === "project"
+                        ? {
+                            screen: projectAt(
+                              { name: "project", owner: project.gh_owner, repo: project.gh_repo },
+                              "settings",
+                              "templates",
+                            ),
+                          }
+                        : templateTab(tpl.key),
+                    )
+                  }
+                >
                   Editar template ›
                 </button>
                 {edited && (

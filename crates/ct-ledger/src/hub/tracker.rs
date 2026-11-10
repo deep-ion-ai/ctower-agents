@@ -242,6 +242,7 @@ mod tests {
     fn jira() -> ProjectProvider {
         ProjectProvider {
             docs: Default::default(),
+            session_templates: Default::default(),
             tracker: TrackerConfig::Jira(JiraConfig {
                 url: "https://jira.example.com".into(),
                 project_key: "PROJ".into(),

@@ -1,7 +1,8 @@
 // Prompt inicial a partir do template do tipo (spec §7.1) e do rastreador
 // do projeto (spec do Jira e GitLab §9, #351).
-import type { ForgeConfig, GitlabConfig, JiraConfig, TrackerConfig, WorkItemKind } from "../protocol/gen";
+import type { ForgeConfig, GitlabConfig, JiraConfig, SessionTemplates, TrackerConfig, WorkItemKind } from "../protocol/gen";
 import type { Templates } from "../api/types";
+import { DEFAULT_UI_CONFIG } from "../settings/defaults";
 import type { TemplateKey } from "../settings/sections";
 
 export interface TemplateVars {
@@ -91,6 +92,51 @@ export function templateFor(t: Templates, kind: WorkItemKind | "project", tracke
 export function templateKeyFor(kind: WorkItemKind | "project", tracker: TrackerConfig["kind"] = "github"): TemplateKey {
   if (tracker === "jira") return kind === "epic" ? "jira_epic" : kind === "project" ? "jira_project" : "jira_issue";
   return kind === "epic" ? "epic" : kind === "project" ? "project" : "issue";
+}
+
+/** Tipo de sessão com override por projeto (#166): a chave de `SessionTemplates`. */
+export type SessionTemplateKind = keyof SessionTemplates;
+
+export const SESSION_TEMPLATE_KINDS: SessionTemplateKind[] = ["issue", "epic", "project"];
+
+/** Chave do override do projeto para o tipo da sessão (sub-issue e sub-tarefa usam o de issue). */
+export const sessionTemplateKind = (kind: WorkItemKind | "project"): SessionTemplateKind =>
+  kind === "epic" ? "epic" : kind === "project" ? "project" : "issue";
+
+/** De onde veio o template: override do projeto, global do rastreador (`ui.json`) ou padrão de fábrica. */
+export type TemplateSource = "project" | "global" | "default";
+
+export interface ResolvedTemplate {
+  text: string;
+  source: TemplateSource;
+  /** Chave do template global do tipo e do rastreador (o "Editar template" sem override abre a aba dela). */
+  key: TemplateKey;
+}
+
+/** O template global do tipo e do rastreador, ou o padrão de fábrica se o global está vazio. */
+export function globalTemplate(t: Templates, kind: WorkItemKind | "project", tracker: TrackerConfig["kind"] = "github") {
+  const key = templateKeyFor(kind, tracker);
+  const global = t[key] ?? "";
+  return global.trim()
+    ? { text: global, source: "global" as const, key }
+    : { text: DEFAULT_UI_CONFIG.templates[key], source: "default" as const, key };
+}
+
+/**
+ * Template da sessão (#166): override do projeto (não vazio) > template
+ * global do rastreador > padrão de fábrica. `overrides` ausente = ambiente
+ * ou hub anterior à #166 (sem override).
+ */
+export function resolveTemplate(
+  t: Templates,
+  kind: WorkItemKind | "project",
+  tracker: TrackerConfig["kind"] = "github",
+  overrides?: SessionTemplates | null,
+): ResolvedTemplate {
+  const own = overrides?.[sessionTemplateKind(kind)] ?? "";
+  const key = templateKeyFor(kind, tracker);
+  if (own.trim()) return { text: own, source: "project", key };
+  return globalTemplate(t, kind, tracker);
 }
 
 /** Nota acrescentada quando a sessão interrompida recomeça do zero (sem o transcript, ou por escolha). */

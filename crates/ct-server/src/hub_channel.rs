@@ -380,6 +380,7 @@ mod tests {
                 },
                 &ct_ledger::ProjectProvider {
                     docs: Default::default(),
+                    session_templates: Default::default(),
                     tracker: ct_core::TrackerConfig::Jira(jira.clone()),
                     forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
                         host: "gitlab.example.com".into(),
@@ -407,6 +408,7 @@ mod tests {
                     changed: true,
                     projects: Some(vec![ct_ledger::ConfigProject {
                         docs: Default::default(),
+                        session_templates: Default::default(),
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),

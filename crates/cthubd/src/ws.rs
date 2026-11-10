@@ -1408,6 +1408,20 @@ fn docs_param(p: &Value) -> Result<Option<ct_core::DocsConfig>, (i64, String)> {
     }
 }
 
+/// `session_templates` (#166): `{ issue, epic, project }`, chave ausente ou
+/// vazia = o template global; o objeto inteiro substitui o anterior.
+fn templates_param(p: &Value) -> Result<Option<ct_core::SessionTemplates>, (i64, String)> {
+    match p.get("session_templates") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|e| invalid(format!("session_templates inválido: {e}"))),
+        Some(_) => Err(invalid(
+            "session_templates deve ser um objeto { issue, epic, project }",
+        )),
+    }
+}
+
 fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(None),
@@ -1443,6 +1457,7 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             branch_pattern: pattern_param(p)?.filter(|s| !s.is_empty()),
             attribution: bool_param(p, "attribution")?.unwrap_or(true),
             docs: docs_param(p)?.unwrap_or_default().normalized(),
+            session_templates: templates_param(p)?.unwrap_or_default().normalized(),
         };
         provider.validate().map_err(invalid)?;
         let base_branch = opt_str(p, "base_branch").unwrap_or_else(|| "develop".into());
@@ -1508,11 +1523,12 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         attribution: bool_param(p, "attribution")?,
         sync_env: opt_str(p, "sync_env"),
         docs: docs_param(p)?,
+        session_templates: templates_param(p)?,
     };
     if patch.is_empty() {
         return Err(invalid(
             "nada a mudar: informe name, base_branch, protected_branches, tracker, forge, \
-             branch_pattern, attribution, sync_env ou docs",
+             branch_pattern, attribution, sync_env, docs ou session_templates",
         ));
     }
     let cur = st
@@ -2623,6 +2639,46 @@ pub(crate) mod tests {
             .call(
                 "hub.projects.update",
                 json!({ "owner": "deep-ion-ai", "repo": "demo", "docs": true }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// Templates do prompt inicial do projeto (#166) pela edição: o objeto
+    /// inteiro substitui, a chave vazia volta ao global e outro tipo é
+    /// recusado.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn templates_de_sessao_pela_edicao() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let rev = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo",
+                        "session_templates": { "issue": "Issue {{key}}", "epic": "  " } }),
+            )
+            .await;
+        let t = &v["result"]["session_templates"];
+        assert_eq!(
+            t,
+            &json!({ "issue": "Issue {{key}}", "epic": "", "project": "" }),
+            "{v}"
+        );
+        let novo = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();
+        assert!(novo.as_i64() > rev.as_i64(), "{rev} → {novo}");
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "session_templates": {} }),
+            )
+            .await;
+        assert_eq!(v["result"]["session_templates"]["issue"], "", "{v}");
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "session_templates": "x" }),
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");

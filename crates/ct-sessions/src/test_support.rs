@@ -280,6 +280,7 @@ impl TestEnv {
         use ct_ledger::{ConfigProject, ConfigResponse};
         let mut project = ConfigProject {
             docs: Default::default(),
+            session_templates: Default::default(),
             owner: "deep-ion-ai".into(),
             repo: "demo".into(),
             name: "demo".into(),

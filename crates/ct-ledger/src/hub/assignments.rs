@@ -466,7 +466,7 @@ impl Hub {
                 "SELECT p.gh_owner, p.gh_repo, p.name, p.base_branch, p.protected_branches,
                         a.repo_path, max(a.rev, p.rev), p.tracker_kind, p.tracker_config,
                         p.forge_kind, p.forge_config, p.branch_pattern, p.attribution,
-                        p.sync_env_id IS ?1, p.id, p.docs_config
+                        p.sync_env_id IS ?1, p.id, p.docs_config, p.session_templates
                  FROM assignment a JOIN project p ON p.id = a.project_id
                  WHERE a.env_id = ?1 AND a.removed_at IS NULL AND p.deleted_at IS NULL
                  ORDER BY p.key",
@@ -488,6 +488,7 @@ impl Hub {
                     sync: r.get(13)?,
                     rules: Default::default(),
                     docs: crate::json_col(r, 15)?,
+                    session_templates: crate::json_col(r, 16)?,
                 };
                 Ok((id, p))
             })?;
