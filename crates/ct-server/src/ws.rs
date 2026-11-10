@@ -166,6 +166,19 @@ fn from_sessions(e: SessionsError) -> (i64, String) {
     }
 }
 
+/// Escopo do `file.read` (#167): `session_id` ou `project_id`, um dos dois.
+fn file_scope(p: &Value) -> Result<ct_sessions::files::FileScope, (i64, String)> {
+    use ct_sessions::files::FileScope;
+    match (
+        p.get("session_id").and_then(Value::as_str),
+        p.get("project_id").and_then(Value::as_i64),
+    ) {
+        (Some(s), None) => Ok(FileScope::Session(s.to_string())),
+        (None, Some(id)) => Ok(FileScope::Project(id)),
+        _ => Err(invalid("informe session_id ou project_id (um dos dois)")),
+    }
+}
+
 /// `remote_control` (bool, opcional; padrão `false`).
 fn remote_control_param(p: &Value) -> Result<bool, (i64, String)> {
     match p.get("remote_control") {
@@ -827,6 +840,28 @@ impl Conn {
                     path: path.display().to_string()
                 }))
             }
+            // Visualizador de markdown (#167): os `.md` da sessão (worktree e
+            // pasta de docs) ou, com `project_id`, só os da pasta de docs.
+            "file.read" => {
+                let path = str_param(p, "path")?.to_string();
+                let scope = file_scope(p)?;
+                let v = blocking(&sessions, move |s| s.read_file(&scope, &path)).await?;
+                Ok(json!(v))
+            }
+            "files.shared" => {
+                let id = str_param(p, "session_id")?.to_string();
+                let v = blocking(&sessions, move |s| s.shared_files(&id)).await?;
+                Ok(json!(v))
+            }
+            "docs.list" => {
+                let id = i64_param(p, "project_id")?;
+                let epic = match p.get("epic") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_i64().ok_or_else(|| invalid("epic inválido"))?),
+                };
+                let v = blocking(&sessions, move |s| s.docs_files(id, epic)).await?;
+                Ok(json!(v))
+            }
             "review.get" => {
                 let id = i64_param(p, "work_item_id")?;
                 blocking(&sessions, move |s| review_get(s, id)).await
@@ -1373,6 +1408,50 @@ mod tests {
         assert_eq!(v["error"]["code"], -32000, "{v}");
         let m = v["error"]["message"].as_str().unwrap();
         assert!(m.contains("docs desligados"), "{v}");
+    }
+
+    /// `file.read`, `files.shared` e `docs.list` (#167): escopo obrigatório
+    /// (um dos dois), leitura dentro da pasta da sessão e recusa fora dela;
+    /// a validação completa está nos testes do `ct-sessions::files`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn file_read_e_arquivos_compartilhados() {
+        let srv = Srv::new(FakeClaude::sleep(30));
+        let s = srv.env.sessions.start(srv.env.request(1, "A")).unwrap();
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        std::fs::write(std::path::Path::new(&s.cwd).join("a.md"), "# A").unwrap();
+        for p in [
+            json!({ "path": "a.md" }),
+            json!({ "path": "a.md", "session_id": s.id, "project_id": 1 }),
+            json!({ "session_id": s.id }),
+        ] {
+            let v = ui.call("file.read", p.clone()).await;
+            assert_eq!(v["error"]["code"], -32602, "{p} {v}");
+        }
+        let v = ui
+            .call("file.read", json!({ "session_id": s.id, "path": "a.md" }))
+            .await;
+        assert_eq!(v["result"]["content"], "# A", "{v}");
+        let v = ui
+            .call(
+                "file.read",
+                json!({ "session_id": s.id, "path": "../x.md" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32000, "{v}");
+        srv.env.sessions.share_file(&s.id, "a.md", None).unwrap();
+        let v = ui.call("files.shared", json!({ "session_id": s.id })).await;
+        assert_eq!(v["result"].as_array().unwrap().len(), 1, "{v}");
+        let id = srv.env.project_id;
+        let v = ui.call("docs.list", json!({ "project_id": id })).await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("docs desligados"),
+            "{v}"
+        );
+        srv.env.sessions.kill(&s.id).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]

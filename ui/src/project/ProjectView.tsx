@@ -40,7 +40,8 @@ import { SyncHead } from "./SyncNow";
 import type { ProjectSyncInfo, SyncAddr } from "./sync-now";
 import { AddIssueDialog } from "./AddIssueDialog";
 import { ADD_ISSUE_LABEL, addIssue, addIssueState, takeAddIssueRequest, useAddIssueRequest } from "./add-issue";
-import { docsFolderState, type DocsCandidate } from "./docs";
+import { docsFilesState, docsFolderState, type DocsCandidate } from "./docs";
+import { DocsFilesDialog } from "../files/DocsFilesDialog";
 import type { DocsDir } from "../protocol/gen";
 import { useViewChoice } from "./view-choice";
 import { PlayIcon, WorkItemPanel, type LiveRef, type PanelNode } from "./WorkItemPanel";
@@ -149,6 +150,8 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   const now = useNow();
   const startSession = useStartSession();
   const [docsError, setDocsError] = useState<string | null>(null);
+  // Lista dos `.md` da pasta de docs (#167): `null` fechada; `epic` = a do épico.
+  const [docsList, setDocsList] = useState<{ epic?: number } | null>(null);
   const [ui, setUi] = useProjectUi(p.uiKey);
   const [viewMode, setViewMode] = useViewChoice();
   const [menu, setMenu] = useState<{ x: number; y: number; n: T; origin: HTMLElement } | null>(null);
@@ -217,6 +220,8 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
       .then((d) => api.openFolder(docs.env, d.path))
       .catch((e) => setDocsError(`Não foi possível abrir a pasta de docs: ${e instanceof Error ? e.message : String(e)}`));
   };
+  // Arquivos da pasta de docs (#167): qualquer ambiente conectado, também na web.
+  const docsFiles = p.docs ? docsFilesState(p.docs, infos) : null;
   const baseBranch = p.project?.base_branch;
   // Provedor do projeto: chave do Jira e MR do GitLab no lugar de #n e PR (#352).
   const prov = p.project;
@@ -404,6 +409,15 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
         sprints={sprints}
         sprintsUnread={sprintsUnread}
       />
+      {docsList && docsFiles?.enabled && (
+        <DocsFilesDialog
+          env={docsFiles.env}
+          projectId={docsFiles.projectId}
+          epic={docsList.epic}
+          title={docsList.epic !== undefined ? `Arquivos .md do épico ${ref(docsList.epic)}` : "Arquivos .md da pasta de docs"}
+          onClose={() => setDocsList(null)}
+        />
+      )}
       {docsError && (
         <p role="alert" className="pj-empty start-error">
           {docsError}
@@ -447,6 +461,15 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
           ? [{ label: "Iniciar sessão", run: () => start(menu.n.issue.gh_number, menu.origin) }]
           : []),
         { label: `Abrir no ${trackerLabel(prov)}`, run: () => openUrl(menu.n.issue.url) },
+        ...(docsFiles && menu.n.children.length > 0
+          ? [
+              {
+                label: "Arquivos .md do épico",
+                run: () => setDocsList({ epic: menu.n.issue.gh_number }),
+                ...(docsFiles.enabled ? {} : { disabled: true, title: docsFiles.reason }),
+              },
+            ]
+          : []),
         ...(docs && menu.n.children.length > 0
           ? [
               {
@@ -634,6 +657,17 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
               onClick={() => openDocs()}
             >
               Abrir pasta de docs
+            </button>
+          )}
+          {docsFiles && (
+            <button
+              type="button"
+              className="btn"
+              disabled={!docsFiles.enabled}
+              title={docsFiles.enabled ? "Lista os .md da pasta de docs do projeto e abre no visualizador" : docsFiles.reason}
+              onClick={() => setDocsList({})}
+            >
+              Arquivos de docs
             </button>
           )}
           {p.canStart && (

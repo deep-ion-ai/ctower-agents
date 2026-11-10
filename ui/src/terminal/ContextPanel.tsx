@@ -1,6 +1,6 @@
 // Painel de contexto ao lado do console (#426; spec da #87, §3): como a barra
 // lateral secundária do VS Code, à direita, com o contexto da sessão que tem
-// o foco. Seções: Sessão (uso, #110), Work item (status, branch, worktree, sessões anteriores),
+// o foco. Seções: Sessão (uso, #110), Arquivos (compartilhados pelo agente, #167), Work item (status, branch, worktree, sessões anteriores),
 // PR (ou "Criar PR"), Decisões e Eventos. Os dados vêm ao montar (abrir o
 // painel ou trocar de sessão: a tela monta com `key` por sessão) e voltam a
 // ser lidos por push do mesmo work item, com debounce de 1 s.
@@ -22,6 +22,7 @@ import { ago, duration } from "../util/time";
 import { prUrl } from "./actions";
 import type { TabInfo } from "./SessionTree";
 import { SessionUsageSection } from "./SessionUsageSection";
+import { SharedFiles } from "../files/SharedFiles";
 
 /** Debounce da recarga por push (§3.1). */
 export const CONTEXT_RELOAD_MS = 1000;
@@ -303,6 +304,8 @@ export function ContextPanel({ tab, info, onClose }: { tab: Tab; info: TabInfo; 
         )}
 
         <SessionUsageSection api={api} env={env} session={tab.session} s={s} live={live.has(tab.session)} now={now} />
+
+        {!gestor && <SharedFiles env={env} session={tab.session} now={now} />}
 
         {!gestor && wi && (
           <section className="sec" aria-label="Work item">

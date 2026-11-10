@@ -1,4 +1,4 @@
-import { isOpenClick, linkActivator, safeUrl } from "./links";
+import { isOpenClick, linkActivator, mdLinkTarget, mdPathsIn, safeUrl } from "./links";
 
 const ctrl = { ctrlKey: true, metaKey: false, button: 0 };
 const plain = { ctrlKey: false, metaKey: false, button: 0 };
@@ -42,4 +42,26 @@ test("falha ao abrir vai para onError", async () => {
   await Promise.resolve();
   await Promise.resolve();
   expect(errors).toEqual(["bloqueado"]);
+});
+
+describe("caminhos .md no console (#167)", () => {
+  test("acha absolutos, ./ e relativos; nunca dentro de URL", () => {
+    const line = "Gravei /w/acme/docs/plano.md e ./notas.md, veja specs/a.MD; https://example.com/x/README.md";
+    expect(mdPathsIn(line).map((m) => m.path)).toEqual(["/w/acme/docs/plano.md", "./notas.md", "specs/a.MD"]);
+    const m = mdPathsIn("ok: docs/b.md")[0];
+    expect("ok: docs/b.md".slice(m.start, m.end)).toBe("docs/b.md");
+    expect(mdPathsIn("nada.mdx arquivo.md5 a.md.bak")).toEqual([]);
+  });
+
+  test("só dentro das pastas da sessão viram link; relativo é da pasta da sessão", () => {
+    const roots = ["/w/acme/feat__1", "/srv/docs/"];
+    expect(mdLinkTarget("/w/acme/feat__1/a.md", roots)).toBe("/w/acme/feat__1/a.md");
+    expect(mdLinkTarget("/srv/docs/acme__web/_projeto/x.md", roots)).toBe("/srv/docs/acme__web/_projeto/x.md");
+    expect(mdLinkTarget("./b.md", roots)).toBe("/w/acme/feat__1/b.md");
+    expect(mdLinkTarget("specs/c.md", roots)).toBe("/w/acme/feat__1/specs/c.md");
+    expect(mdLinkTarget("/w/acme/feat__10/a.md", roots)).toBeNull();
+    expect(mdLinkTarget("/etc/a.md", roots)).toBeNull();
+    expect(mdLinkTarget("../a.md", roots)).toBeNull();
+    expect(mdLinkTarget("a.md", [])).toBeNull();
+  });
 });

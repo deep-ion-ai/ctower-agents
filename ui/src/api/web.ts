@@ -25,7 +25,9 @@ export const HUB_PROTOCOL_MAJOR = 1;
 /**
  * Métodos do ambiente que a web chama pelo hub (`hub.env.call`): a lista do
  * canal reverso (`ct_http::sync::CHANNEL_METHODS`, spec §5.2). O hub confere
- * de novo; aqui só evita a ida.
+ * de novo; aqui só evita a ida. `file.read`, `files.shared` e `docs.list`:
+ * visualizador de markdown (#167). Sem comentários dentro da lista: o teste
+ * do `cthubd` a compara com a do canal.
  */
 export const ENV_METHODS: ReadonlySet<string> = new Set([
   "env.info",
@@ -53,6 +55,9 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "tracker.issue_body",
   "tracker.add_issue",
   "logs.tail",
+  "file.read",
+  "files.shared",
+  "docs.list",
 ]);
 
 /** O método do ambiente existe na web? */

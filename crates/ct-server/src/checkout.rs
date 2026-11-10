@@ -175,7 +175,7 @@ mod tests {
         for (i, url) in [
             "git@gitlab.example.com:grupo/projeto/outro.git",
             "https://gitlab.com/grupo/projeto/app.git",
-            "https://github.com/pje/app.git",
+            "https://github.com/acme/app.git",
         ]
         .iter()
         .enumerate()

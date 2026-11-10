@@ -89,3 +89,40 @@ export function docsFolderState(
     reason: `docs_root ${i.docs.root} inacessível no ambiente ${c.name}: confira a montagem do compartilhamento.`,
   };
 }
+
+/** Protocolo do ambiente com `docs.list` e `file.read` (#167). */
+export const DOCS_FILES_PROTOCOL = "2.14";
+
+/**
+ * Onde listar os `.md` da pasta de docs (#167), ou por que não dá. Ao
+ * contrário de abrir a pasta, vale qualquer ambiente conectado (o
+ * conteúdo vem pelo daemon, também na web): o primeiro em condições.
+ */
+export function docsFilesState(candidates: DocsCandidate[], infos: Record<string, EnvInfo>): DocsFolderState {
+  if (candidates.length === 0) return { enabled: false, reason: "Nenhum ambiente conectado tem este projeto." };
+  const on = candidates.filter((c) => c.project.docs?.enabled);
+  if (on.length === 0) {
+    return { enabled: false, reason: "Docs desligados neste projeto: ligue em Hub › Projetos › Editar." };
+  }
+  const ok = on.find((c) => {
+    const i = infos[c.env];
+    return !!i && atLeast(i.protocol, DOCS_FILES_PROTOCOL) && !!i.docs?.root && i.docs.reachable;
+  });
+  if (ok) return { enabled: true, env: ok.env, projectId: ok.project.id };
+  const c = on[0];
+  const i = infos[c.env];
+  if (!i) return { enabled: false, reason: `Lendo o estado do ambiente ${c.name}…` };
+  if (!atLeast(i.protocol, DOCS_FILES_PROTOCOL)) {
+    return {
+      enabled: false,
+      reason: `Atualize o ambiente ${c.name} (protocolo ${i.protocol}; a lista de arquivos pede ${DOCS_FILES_PROTOCOL} ou maior).`,
+    };
+  }
+  if (!i.docs?.root) {
+    return { enabled: false, reason: `docs_root não configurado no ambiente ${c.name} (config.toml do ctowerd).` };
+  }
+  return {
+    enabled: false,
+    reason: `docs_root ${i.docs.root} inacessível no ambiente ${c.name}: confira a montagem do compartilhamento.`,
+  };
+}

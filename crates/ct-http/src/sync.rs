@@ -126,6 +126,11 @@ pub const CHANNEL_METHODS: &[&str] = &[
     // Tela Logs na web (#65): só as últimas linhas, já mascaradas; o modo
     // seguir é por conexão e fica no app desktop.
     "logs.tail",
+    // Visualizador de markdown (#167): só leitura de `.md` dentro das pastas
+    // da sessão ou da pasta de docs do projeto, validado no ambiente.
+    "file.read",
+    "files.shared",
+    "docs.list",
 ];
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:
@@ -141,6 +146,8 @@ pub const CHANNEL_PUSHES: &[&str] = &[
     "work_item_status",
     "projects_changed",
     "alert",
+    // Arquivo compartilhado pelo agente (`share_file`, #167).
+    "session_files",
 ];
 
 /// Erro de método fora de [`CHANNEL_METHODS`], nos dois lados do canal.
