@@ -16,6 +16,7 @@
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
+#[derive(Clone)]
 struct Rule {
     value: Zeroizing<Vec<u8>>,
     replacement: Vec<u8>,
@@ -51,6 +52,23 @@ impl MaskSet {
 
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
+    }
+
+    /// Conjunto com os valores deste e os de `other` (#165: quando um
+    /// secret muda durante a sessão, o valor antigo continua mascarado,
+    /// porque a saída anterior ainda pode trazê-lo). Valor repetido fica
+    /// com o nome deste conjunto.
+    pub fn union(&self, other: &MaskSet) -> MaskSet {
+        if other.is_empty() {
+            return self.clone();
+        }
+        if self.is_empty() {
+            return other.clone();
+        }
+        MaskSet::new(self.rules.iter().chain(other.rules.iter()).map(|r| {
+            let name = r.replacement[3..r.replacement.len() - 3].to_vec();
+            (String::from_utf8(name).unwrap_or_default(), r.value.clone())
+        }))
     }
 
     /// Mascara um bloco completo (ex.: a cópia de um arquivo).
@@ -146,6 +164,14 @@ impl Masker {
         let mut out = Vec::with_capacity(data.len());
         self.set.scan(&data, true, &mut out);
         out
+    }
+
+    /// Troca o conjunto no meio do fluxo, mantendo a cauda pendente (#165).
+    /// Pensado para um conjunto que contém o anterior ([`MaskSet::union`]):
+    /// a cauda segurada continua sendo prefixo de algum valor e se completa
+    /// (ou sai) no próximo bloco.
+    pub fn set_mask(&mut self, set: MaskSet) {
+        self.set = set;
     }
 
     /// Há bytes segurados à espera do próximo bloco.
