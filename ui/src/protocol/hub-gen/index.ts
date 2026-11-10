@@ -103,6 +103,7 @@ export type { SecretsList } from "./SecretsList";
 export type { SecretsStatus } from "./SecretsStatus";
 export type { SessionMode } from "./SessionMode";
 export type { SessionState } from "./SessionState";
+export type { SessionTemplates } from "./SessionTemplates";
 export type { Severity } from "./Severity";
 export type { Sprint } from "./Sprint";
 export type { SprintState } from "./SprintState";

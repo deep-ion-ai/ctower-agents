@@ -91,7 +91,7 @@ export function docsFolderState(
 }
 
 /** Protocolo do ambiente com `docs.list` e `file.read` (#167). */
-export const DOCS_FILES_PROTOCOL = "2.13";
+export const DOCS_FILES_PROTOCOL = "2.14";
 
 /**
  * Onde listar os `.md` da pasta de docs (#167), ou por que não dá. Ao

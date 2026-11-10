@@ -11,7 +11,7 @@
 use crate::projects::{row_to_project, COLS, COLS_LEN};
 use crate::sync::project_key;
 use crate::{ConfigRules, Ledger, LocationState, Project, Result};
-use ct_core::{now_ms, DocsConfig, ForgeConfig, TrackerConfig};
+use ct_core::{now_ms, DocsConfig, ForgeConfig, SessionTemplates, TrackerConfig};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -53,6 +53,10 @@ pub struct ConfigProject {
     /// anterior: desligada.
     #[serde(default)]
     pub docs: DocsConfig,
+    /// Templates do prompt inicial do projeto (#166). Ausentes num hub
+    /// anterior: nenhum override.
+    #[serde(default, skip_serializing_if = "SessionTemplates::is_empty")]
+    pub session_templates: SessionTemplates,
 }
 
 fn attribution_default() -> bool {
@@ -325,7 +329,7 @@ impl Ledger {
         self.conn.execute(
             "UPDATE project SET tracker_kind = ?2, tracker_config = ?3, forge_kind = ?4,
                     forge_config = ?5, branch_pattern = ?6, attribution = ?7, sync_role = ?8,
-                    docs_config = ?9
+                    docs_config = ?9, session_templates = ?10
              WHERE id = ?1",
             params![
                 id,
@@ -336,7 +340,8 @@ impl Ledger {
                 p.branch_pattern,
                 p.attribution,
                 p.sync,
-                p.docs.config_json()
+                p.docs.config_json(),
+                p.session_templates.config_json()
             ],
         )?;
         Ok(())
@@ -396,6 +401,7 @@ impl Ledger {
                 sync: p.sync_role,
                 rules: Default::default(),
                 docs: p.docs.clone(),
+                session_templates: p.session_templates.clone(),
             });
             if path != p.repo_path {
                 self.conn.execute(
@@ -491,6 +497,7 @@ mod tests {
     fn cp(repo: &str, rev: i64) -> ConfigProject {
         ConfigProject {
             docs: Default::default(),
+            session_templates: Default::default(),
             owner: "deep-ion-ai".into(),
             repo: repo.into(),
             name: repo.into(),
@@ -853,6 +860,52 @@ mod tests {
         assert_eq!(demo.tracker, TrackerConfig::Github);
         assert_eq!(demo.effective_branch_pattern(), "{prefix}/{n}-{slug}");
         assert_eq!(demo.item_ref(7), "deep-ion-ai/demo#7");
+    }
+
+    /// Templates do prompt inicial (#166): vêm no pull e mudam com ele
+    /// (inclusive voltando ao global); um hub anterior (sem o campo) dá
+    /// nenhum override, e o JSON sem override não leva o campo.
+    #[test]
+    fn pull_com_e_sem_templates_de_sessao() {
+        let l = Ledger::open_in_memory().unwrap();
+        let t = SessionTemplates {
+            issue: "Issue {{key}}".into(),
+            ..Default::default()
+        };
+        let p = ConfigProject {
+            session_templates: t.clone(),
+            ..cp("demo", 1)
+        };
+        l.apply_hub_config(&resp(1, vec![p.clone()]), path).unwrap();
+        assert_eq!(l.list_projects().unwrap()[0].session_templates, t);
+        assert_eq!(
+            serde_json::to_value(&p).unwrap()["session_templates"]["issue"],
+            "Issue {{key}}"
+        );
+
+        // Voltou ao global no hub.
+        let p2 = ConfigProject {
+            session_templates: SessionTemplates::default(),
+            rev: 2,
+            ..p.clone()
+        };
+        let r = l
+            .apply_hub_config(&resp(2, vec![p2.clone()]), path)
+            .unwrap();
+        assert_eq!(r.updated, vec!["deep-ion-ai/demo"]);
+        assert!(l.list_projects().unwrap()[0].session_templates.is_empty());
+        assert!(serde_json::to_value(&p2)
+            .unwrap()
+            .get("session_templates")
+            .is_none());
+
+        // Hub anterior à #166: sem o campo.
+        let v = serde_json::json!({
+            "owner": "deep-ion-ai", "repo": "demo", "name": "demo", "base_branch": "develop",
+            "protected_branches": [], "repo_path": "", "rev": 3
+        });
+        let antigo: ConfigProject = serde_json::from_value(v).unwrap();
+        assert!(antigo.session_templates.is_empty());
     }
 
     /// Docs do projeto (#440): vêm no pull e mudam com ele; um hub anterior

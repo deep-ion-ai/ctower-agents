@@ -618,6 +618,12 @@ ALTER TABLE env ADD COLUMN plan_report TEXT;
 ALTER TABLE issue_cache ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE sync_state ADD COLUMN me TEXT;
 "#,
+    // 30: templates do prompt inicial do projeto (#166): JSON de
+    // `SessionTemplates` (`issue`, `epic`, `project`). `{}` = sem override
+    // (o template global do rastreador).
+    r#"
+ALTER TABLE project ADD COLUMN session_templates TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -816,6 +822,10 @@ pub struct HubProject {
     /// anterior: desligada.
     #[serde(default)]
     pub docs: ct_core::DocsConfig,
+    /// Templates do prompt inicial do projeto (#166); vazio = o global do
+    /// rastreador. Ausente num hub anterior: nenhum override.
+    #[serde(default)]
+    pub session_templates: ct_core::SessionTemplates,
 }
 
 fn attribution_default() -> bool {
@@ -948,7 +958,7 @@ pub struct CleanupSummary {
 const PROJECT_COLS: &str =
     "id, gh_owner, gh_repo, name, base_branch, protected_branches, created_at, rank, \
      tracker_kind, tracker_config, forge_kind, forge_config, branch_pattern, attribution, \
-     sync_env_id, docs_config";
+     sync_env_id, docs_config, session_templates";
 const WORK_ITEM_COLS: &str =
     "id, project_id, gh_number, kind, status, branch, created_at, closed_at, priority, rank";
 const SESSION_COLS: &str = "id, env_id, work_item_id, tool, tool_session_id, cwd, state, \
@@ -975,6 +985,7 @@ fn row_to_project(r: &Row) -> rusqlite::Result<HubProject> {
         attribution: r.get(13)?,
         sync_env_id: r.get(14)?,
         docs: json_col(r, 15)?,
+        session_templates: json_col(r, 16)?,
     })
 }
 
@@ -4494,6 +4505,107 @@ mod tests {
 
     // --- pull da configuração (#177) ------------------------------------
 
+    /// Templates do prompt inicial do projeto (#166): o cadastro e a edição
+    /// aceitam o override, a edição muda o `config_rev`, o override chega ao
+    /// ambiente pelo pull e a chave vazia ("Voltar ao global") o remove.
+    #[test]
+    fn templates_de_sessao_no_cadastro_na_edicao_e_no_pull() {
+        let hub = Hub::open_in_memory().unwrap();
+        let added = hub
+            .add_project_with(
+                &novo("deep-ion-ai", "demo"),
+                &ProjectProvider {
+                    session_templates: ct_core::SessionTemplates {
+                        epic: " \n ".into(),
+                        project: "Planeje {{forge_path}}".into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // Só espaços = herdar.
+        assert_eq!(added.project.session_templates.epic, "");
+        assert_eq!(
+            added.project.session_templates.project,
+            "Planeje {{forge_path}}"
+        );
+        hub.ingest("env-a", "a", &[]).unwrap();
+        hub.add_assignment("deep-ion-ai", "demo", "env-a", None)
+            .unwrap();
+        let ep = Some(hub.config_epoch().unwrap());
+
+        let rev = hub.config_rev().unwrap();
+        let issue = "Issue {{key}}: {{title}}";
+        let p = hub
+            .update_project(
+                "deep-ion-ai",
+                "demo",
+                &HubProjectPatch {
+                    session_templates: Some(ct_core::SessionTemplates {
+                        issue: issue.into(),
+                        ..added.project.session_templates.clone()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(p.session_templates.issue, issue);
+        assert!(hub.config_rev().unwrap() > rev);
+        let c = hub.env_config("env-a", Some(rev), ep).unwrap();
+        assert!(c.changed);
+        let t = &c.projects.unwrap()[0].session_templates;
+        assert_eq!((t.issue.as_str(), t.epic.as_str()), (issue, ""));
+        assert_eq!(t.project, "Planeje {{forge_path}}");
+
+        // Outra edição não mexe nos templates.
+        let p = hub
+            .update_project(
+                "deep-ion-ai",
+                "demo",
+                &HubProjectPatch {
+                    name: Some("Demo".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(p.session_templates.issue, issue);
+
+        // "Voltar ao global": a chave vazia remove o override.
+        let p = hub
+            .update_project(
+                "deep-ion-ai",
+                "demo",
+                &HubProjectPatch {
+                    session_templates: Some(ct_core::SessionTemplates {
+                        issue: String::new(),
+                        ..p.session_templates.clone()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(p.session_templates.issue, "");
+        assert_eq!(p.session_templates.project, "Planeje {{forge_path}}");
+
+        // Grande demais é recusado.
+        let err = hub
+            .update_project(
+                "deep-ion-ai",
+                "demo",
+                &HubProjectPatch {
+                    session_templates: Some(ct_core::SessionTemplates {
+                        issue: "x"
+                            .repeat(ct_core::session_templates::MAX_SESSION_TEMPLATE_BYTES + 1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("session_templates.issue"), "{err}");
+    }
+
     /// Docs do projeto (#440): o cadastro e a edição aceitam o modelo, a
     /// edição muda o `config_rev` e o modelo chega ao ambiente pelo pull.
     #[test]
@@ -4683,7 +4795,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 29);
+        assert_eq!(v, 30);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

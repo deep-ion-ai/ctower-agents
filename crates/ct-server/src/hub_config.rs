@@ -9,7 +9,11 @@
 //! o cache nunca põe fotografia de projeto no outbox; só o relato sobe.
 //!
 //! - roda no boot, a cada `config_pull_interval_secs` e sob demanda
-//!   (`hub.sync.now`, `ctower hub sync`), com o mesmo backoff do envio;
+//!   (`hub.sync.now`, `ctower hub sync`), com o mesmo backoff do envio. O
+//!   hub também avisa pelo canal (`hub.config.changed`, #165) quando um
+//!   secret ou variável muda, e o laço puxa na hora;
+//! - quando a entrega de secrets regrava o cache, o mascaramento das sessões
+//!   vivas ganha os valores novos (`Sessions::refresh_masks`, #165);
 //! - o pull só grava o cache (rápido, limitado pelo timeout do HTTP). A
 //!   aplicação (clone, que pode demorar) roda à parte, numa thread
 //!   disparada depois do pull, uma por vez: nem o pull seguinte nem o envio
@@ -176,6 +180,9 @@ impl HubSender {
         let mut out = ConfigPullResult::default();
         match self.fetch_and_cache() {
             Ok(Some((cfg, applied, secrets))) => {
+                if secrets.is_some() {
+                    self.sessions.refresh_masks();
+                }
                 out.ok = true;
                 out.secrets = secrets;
                 out.changed = cfg.changed;
@@ -428,6 +435,12 @@ impl HubSender {
         reports
     }
 
+    /// Faz o laço do pull rodar já (`hub.config.changed`). Vários avisos
+    /// antes do pull viram um só.
+    pub fn wake_pull(&self) {
+        self.pull_wake.notify_one();
+    }
+
     /// Espera até o próximo pull: `pull_every` com o hub no ar, dobrando a
     /// cada falha seguida até `MAX_BACKOFF` (ou `pull_every`, se maior).
     pub fn next_pull_delay(&self) -> Duration {
@@ -465,7 +478,12 @@ pub fn spawn_puller(sender: Arc<HubSender>) {
                 Ok(Ok(())) => {}
             }
             sender.spawn_apply();
-            tokio::time::sleep(sender.next_pull_delay()).await;
+            tokio::select! {
+                _ = tokio::time::sleep(sender.next_pull_delay()) => {}
+                _ = sender.pull_wake.notified() => {
+                    tracing::info!("hub: configuração mudou; pull antecipado");
+                }
+            }
         }
     });
 }
@@ -1020,6 +1038,7 @@ mod tests {
     fn caminho_padrao_e_repos_root() {
         let p = ConfigProject {
             docs: Default::default(),
+            session_templates: Default::default(),
             owner: "o".into(),
             repo: "r".into(),
             name: "r".into(),

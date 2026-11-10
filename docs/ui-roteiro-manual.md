@@ -349,9 +349,21 @@ Pré-requisito: um projeto Jira com o ambiente de sync escolhido e conectado (hu
 8. Com o hub fora (visão local), no ambiente do projeto. **Esperado:** o mesmo botão e o mesmo diálogo, chamando o próprio ambiente. Na web (PWA), igual à visão do hub.
 9. Sem iniciar sessão na issue adicionada, espere a próxima reconciliação com poda do sync. **Esperado:** a issue some da árvore (com work item, ela fica).
 
-## 23. Visualizador de markdown (#167)
+## 23. Templates de sessão por projeto (#166)
 
-Pré-requisito: um ambiente 2.13 ou maior com uma sessão de issue rodando num projeto com docs ligados e `docs_root` acessível. Para o caso entre máquinas, a UI numa máquina (por exemplo, o app no macOS) e o ambiente em outra (Linux), registrado como remoto.
+Pré-requisito: hub 1.13 e ambiente 2.13 ou maiores, com um projeto GitHub e um projeto Jira atribuídos ao ambiente.
+
+1. Abra o projeto GitHub › **Configurações › Templates de sessão**. **Esperado:** três linhas (Issue e sub-issue, Épico, Sessão do projeto), todas "herdando o template global", cada uma com **Personalizar**.
+2. Inicie uma sessão de issue antes de mudar nada. **Esperado:** o prompt é o mesmo de antes, e o rótulo mostra "template global". Repita no projeto Jira (template `jira_issue`).
+3. **Personalizar** em Issue e sub-issue. **Esperado:** o editor abre com o template global de issue do rastreador (no projeto Jira, o `jira_issue`). Troque o texto (por exemplo, `Issue {{key}}: {{title}} em {{branch}}`) e **Salvar template**. **Esperado:** a linha passa a "template do projeto", com **Editar** e **Voltar ao global**.
+4. Inicie uma sessão de issue. **Esperado:** o prompt vem do override, com as variáveis trocadas, e o rótulo diz "template do projeto". **Editar template ›** abre Configurações do projeto › Templates de sessão. Num épico e na sessão do projeto, o prompt e o rótulo continuam no global, e **Editar template ›** abre a aba do template global.
+5. Num segundo ambiente atribuído ao mesmo projeto, depois do próximo pull. **Esperado:** a mesma sessão de issue usa o override.
+6. **Voltar ao global** na linha de issue. **Esperado:** a linha volta a "herdando o template global" e a sessão de issue volta ao prompt de antes.
+7. Com um hub anterior à 1.13. **Esperado:** a seção mostra só o aviso para atualizar o hub, sem ações. Na web (PWA), as linhas aparecem sem as ações de mudar.
+
+## 24. Visualizador de markdown (#167)
+
+Pré-requisito: um ambiente 2.14 ou maior com uma sessão de issue rodando num projeto com docs ligados e `docs_root` acessível. Para o caso entre máquinas, a UI numa máquina (por exemplo, o app no macOS) e o ambiente em outra (Linux), registrado como remoto.
 
 1. Na sessão, peça ao agente: "crie `docs/plano.md` com um título, uma lista e um diagrama ` ```mermaid graph TD; A-->B ``` ` e compartilhe com `share_file`". **Esperado:** no painel de contexto da sessão (**Contexto**), a seção **Arquivos** mostra o arquivo (com o título dado, se houver) assim que o agente chama a ferramenta, sem recarregar.
 2. Clique no arquivo. **Esperado:** abre uma aba com o nome do arquivo, o caminho completo no ambiente e o nome do ambiente no cabeçalho; o markdown formatado e o diagrama desenhado. Troque o tema da UI (claro/escuro): o diagrama é redesenhado, legível nos dois.
@@ -359,6 +371,5 @@ Pré-requisito: um ambiente 2.13 ou maior com uma sessão de issue rodando num p
 4. Peça ao agente para acrescentar um bloco ` ```mermaid ` inválido no fim e clique **Recarregar**. **Esperado:** o bloco inválido mostra "Diagrama Mermaid inválido: …" e o código; o resto do documento (inclusive o primeiro diagrama) continua normal.
 5. Peça ao agente para chamar `share_file` com `/etc/hosts`, com um `.md` fora da worktree (por exemplo, no clone principal) e com `../x.md`. **Esperado:** as três chamadas voltam com erro da ferramenta, e nada novo aparece em **Arquivos**.
 6. No console da sessão, com o caminho de um `.md` da worktree impresso (por exemplo, `ls docs/*.md` num shell ou a saída do agente), passe o mouse e dê Ctrl+clique (Cmd+clique no macOS). **Esperado:** o caminho fica sublinhado e abre no visualizador. Um caminho `.md` fora da worktree e da pasta de docs não vira link.
-7. Na tela **Projeto**, clique **Arquivos de docs**. **Esperado:** o diálogo lista os `.md` da pasta de docs do projeto (com tamanho e data), com filtro por nome; um clique abre no visualizador. No menu de contexto de um épico, **Arquivos .md do épico** lista só a pasta do épico. Com docs desligados, ambiente anterior à 2.13 ou `docs_root` inacessível, o botão fica desabilitado com o motivo na dica.
+7. Na tela **Projeto**, clique **Arquivos de docs**. **Esperado:** o diálogo lista os `.md` da pasta de docs do projeto (com tamanho e data), com filtro por nome; um clique abre no visualizador. No menu de contexto de um épico, **Arquivos .md do épico** lista só a pasta do épico. Com docs desligados, ambiente anterior à 2.14 ou `docs_root` inacessível, o botão fica desabilitado com o motivo na dica.
 8. Na PWA (celular), abra a sessão pela Sala de controle. **Esperado:** a seção **Arquivos** no painel da sessão; tocar num arquivo abre o mesmo visualizador, com Formatado/Raw e o diagrama. **Arquivos de docs** também funciona na tela Projeto.
-

@@ -71,6 +71,7 @@ export type { Review } from "./Review";
 export type { Session } from "./Session";
 export type { SessionMode } from "./SessionMode";
 export type { SessionState } from "./SessionState";
+export type { SessionTemplates } from "./SessionTemplates";
 export type { SessionUsage } from "./SessionUsage";
 export type { SharedFile } from "./SharedFile";
 export type { Shell } from "./Shell";

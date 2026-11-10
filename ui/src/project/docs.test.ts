@@ -95,7 +95,7 @@ test("ctowerd local do macOS (remoto com URL de loopback) abre a pasta; remoto d
 
 describe("lista dos .md da pasta de docs (#167)", () => {
   test("qualquer ambiente conectado em condições, também remoto", () => {
-    expect(docsFilesState([cand("mac", ON, 9)], { mac: envInfo({ protocol: "2.13", docs: UP }) })).toEqual({
+    expect(docsFilesState([cand("mac", ON, 9)], { mac: envInfo({ protocol: "2.14", docs: UP }) })).toEqual({
       enabled: true,
       env: "mac",
       projectId: 9,
@@ -109,13 +109,13 @@ describe("lista dos .md da pasta de docs (#167)", () => {
     {
       caso: "ambiente anterior à #167",
       c: [cand("mac")],
-      infos: { mac: envInfo({ protocol: "2.12", docs: UP }) },
-      motivo: /Atualize o ambiente mac \(protocolo 2\.12; a lista de arquivos pede 2\.13/,
+      infos: { mac: envInfo({ protocol: "2.13", docs: UP }) },
+      motivo: /Atualize o ambiente mac \(protocolo 2\.13; a lista de arquivos pede 2\.14/,
     },
     {
       caso: "docs_root inacessível",
       c: [cand("mac")],
-      infos: { mac: envInfo({ protocol: "2.13", docs: { root: "/mnt/d", reachable: false } }) },
+      infos: { mac: envInfo({ protocol: "2.14", docs: { root: "/mnt/d", reachable: false } }) },
       motivo: /inacessível/,
     },
   ])("$caso", ({ c, infos, motivo }) => {

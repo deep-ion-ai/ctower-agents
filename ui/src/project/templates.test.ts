@@ -1,5 +1,5 @@
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
-import { renderTemplate, templateFor, templateKeyFor } from "./templates";
+import { renderTemplate, resolveTemplate, sessionTemplateKind, templateFor, templateKeyFor } from "./templates";
 
 const vars = {
   kind: "issue" as const,
@@ -111,4 +111,62 @@ test("variáveis novas: chave neutra e prefixos com JIRA_CONFIG_FILE e caminho c
   const cfg = { ...exemplo, tracker: { ...jira, config_file: "/home/u/meu jira.yml" } };
   expect(renderTemplate("{{jira}}", cfg)).toBe(`JIRA_CONFIG_FILE='/home/u/meu jira.yml' ${JIRA}`);
   expect(renderTemplate("{{jira_url}} {{jira_project}}", exemplo)).toBe("https://jira.example.com PROJ");
+});
+
+// Templates por projeto (#166): projeto > global do rastreador > padrão de fábrica.
+describe("resolveTemplate", () => {
+  const t = DEFAULT_UI_CONFIG.templates;
+  const none = { issue: "", epic: "", project: "" };
+
+  test("sem override: idêntico ao de hoje, no GitHub e no Jira", () => {
+    for (const ov of [undefined, null, none]) {
+      for (const kind of ["issue", "epic", "project"] as const) {
+        for (const tr of ["github", "jira"] as const) {
+          const r = resolveTemplate(t, kind, tr, ov);
+          expect(r).toEqual({ text: templateFor(t, kind, tr), source: "global", key: templateKeyFor(kind, tr) });
+        }
+      }
+    }
+    // O prompt renderizado não muda.
+    expect(renderTemplate(resolveTemplate(t, "issue", "jira", none).text, exemplo)).toBe(
+      renderTemplate(t.jira_issue, exemplo),
+    );
+  });
+
+  test("override de issue: só a issue usa; épico e sessão do projeto ficam no global", () => {
+    const ov = { ...none, issue: "Projeto: {{key}} {{title}}" };
+    expect(resolveTemplate(t, "issue", "github", ov)).toEqual({ text: ov.issue, source: "project", key: "issue" });
+    expect(resolveTemplate(t, "issue", "jira", ov)).toEqual({ text: ov.issue, source: "project", key: "jira_issue" });
+    expect(resolveTemplate(t, "epic", "github", ov).source).toBe("global");
+    expect(resolveTemplate(t, "project", "jira", ov)).toMatchObject({ text: t.jira_project, source: "global" });
+    expect(renderTemplate(resolveTemplate(t, "issue", "jira", ov).text, exemplo)).toBe("Projeto: PROJ-5450 Portar o plugin");
+  });
+
+  test("override só com espaços herda; global vazio cai no padrão de fábrica", () => {
+    expect(resolveTemplate(t, "epic", "github", { ...none, epic: "  \n" }).source).toBe("global");
+    const vazio = { ...t, epic: "", jira_project: " " };
+    expect(resolveTemplate(vazio, "epic")).toEqual({ text: DEFAULT_UI_CONFIG.templates.epic, source: "default", key: "epic" });
+    expect(resolveTemplate(vazio, "project", "jira").source).toBe("default");
+    // O override vence até o padrão de fábrica.
+    expect(resolveTemplate(vazio, "epic", "github", { ...none, epic: "E" }).text).toBe("E");
+  });
+
+  test("todas as variáveis de hoje renderizam no override", () => {
+    const ov = {
+      ...none,
+      issue:
+        "{{kind}}|{{number}}|{{owner}}|{{repo}}|{{branch}}|{{protected}}|{{key}}|{{title}}|{{base}}|{{jira_url}}|{{jira_project}}|{{forge_path}}",
+    };
+    expect(renderTemplate(resolveTemplate(t, "issue", "jira", ov).text, exemplo)).toBe(
+      "issue|5450|grupo/projeto|app|PROJ-5450|develop, main|PROJ-5450|Portar o plugin|develop|https://jira.example.com|PROJ|grupo/projeto/app",
+    );
+    const cli = renderTemplate(resolveTemplate(t, "issue", "jira", { ...none, issue: "{{jira}} / {{glab}}" }).text, exemplo);
+    expect(cli).toBe(`${JIRA} / ${GLAB}`);
+  });
+
+  test("sub-issue e sub-tarefa usam o override de issue", () => {
+    expect(sessionTemplateKind("issue")).toBe("issue");
+    expect(sessionTemplateKind("epic")).toBe("epic");
+    expect(sessionTemplateKind("project")).toBe("project");
+  });
 });

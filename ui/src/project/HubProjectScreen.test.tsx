@@ -103,6 +103,7 @@ const HUB_PROJECT: HubProject = {
   attribution: true,
   sync_env_id: null,
   docs: { enabled: false, project_dirs: [], epic_dirs: [] },
+  session_templates: { issue: "", epic: "", project: "" },
 };
 
 function hubItem(n: number, p: Partial<HubWorkItem> = {}): HubWorkItem {
@@ -822,6 +823,7 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
     "Repositório e rastreador",
     "Ambientes e atribuições",
     "Regras do agente",
+    "Templates de sessão",
     "Secrets e variáveis",
     "Docs",
     "Limpeza",
@@ -848,6 +850,74 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
   expect(screen.getByRole("tab", { name: "Manutenção · Limpeza" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByLabelText("Projeto da limpeza")).toHaveValue("deep-ion-ai/ctower-agents");
   expect(screen.getByLabelText("Ambiente da manutenção")).toHaveValue("wsl");
+});
+
+test("Templates de sessão (#166): Personalizar parte do global, salva o objeto inteiro e Voltar ao global remove", async () => {
+  const api = setupTabs()
+    .onHub("hub.projects.update", null)
+    .onHub("hub.projects.list", [
+      {
+        project: { ...HUB_PROJECT, session_templates: { issue: "", epic: "Épico do projeto {{key}}", project: "" } },
+        assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
+        locations: [],
+        sync: sync({ project_id: 7, last_ok_at: NOW }),
+        tracker_status: null,
+      },
+    ]);
+  render(
+    <App
+      api={api}
+      initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "settings", section: "templates" }}
+    />,
+  );
+  const user = userEvent.setup();
+  const card = await screen.findByRole("group", { name: "Templates de sessão" });
+  expect(card).toHaveTextContent(/Issue e sub-issue\s*herdando o template global/);
+  expect(card).toHaveTextContent(/Épico\s*template do projeto/);
+  expect(within(card).queryByRole("button", { name: "Voltar ao global Issue e sub-issue" })).toBeNull();
+
+  // Personalizar: o editor abre com o template global de issue.
+  await user.click(within(card).getByRole("button", { name: "Personalizar Issue e sub-issue" }));
+  const area = within(card).getByLabelText("Template");
+  expect((area as HTMLTextAreaElement).value).toContain("Trabalhe na {{kind}} #{{number}}");
+  await user.clear(area);
+  fireEvent.change(area, { target: { value: "Só a issue {{key}}" } });
+  await user.click(within(card).getByRole("button", { name: "Salvar template" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.projects.update")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    session_templates: { issue: "Só a issue {{key}}", epic: "Épico do projeto {{key}}", project: "" },
+  });
+
+  // Voltar ao global: a chave vazia, o resto igual.
+  await user.click(within(card).getByRole("button", { name: "Voltar ao global Épico" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(2));
+  expect(api.hubCallsTo("hub.projects.update")[1].params).toMatchObject({
+    session_templates: { issue: "", epic: "", project: "" },
+  });
+});
+
+test("Templates de sessão (#166): hub anterior à 1.13 mostra o aviso, sem as ações", async () => {
+  const { session_templates: _omit, ...antigo } = HUB_PROJECT;
+  const api = setupTabs().onHub("hub.projects.list", [
+    {
+      project: antigo as HubProject,
+      assignments: [],
+      locations: [],
+      sync: null,
+      tracker_status: null,
+    },
+  ]);
+  render(
+    <App
+      api={api}
+      initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "settings", section: "templates" }}
+    />,
+  );
+  const card = await screen.findByRole("group", { name: "Templates de sessão" });
+  expect(card).toHaveTextContent(/anterior ao protocolo 1\.13/);
+  expect(within(card).queryByRole("button")).toBeNull();
 });
 
 test("projeto local (hub fora, #17): Sessões pelo ambiente e Configurações apontam para o hub", async () => {

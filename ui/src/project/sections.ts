@@ -16,10 +16,19 @@ export type ProjectPage = "overview" | "items" | "sessions" | "settings";
  * `project/settings` (épico #12): Geral = `RepositoryCard`; Rastreador e
  * sync = `SyncEnvCard` (Jira) ou o sync do hub (GitHub); Ambientes =
  * `AssignmentsCard`; Regras = `AgentRules`; Secrets = `ProjectSecretsCard`;
- * Docs = `DocsForm`; Limpeza = `CleanupCard` (o atalho para Manutenção ›
+ * Docs = `DocsForm`; Templates de sessão = `SessionTemplatesCard` (#166); Limpeza = `CleanupCard` (o atalho para Manutenção ›
  * Limpeza filtrada pelo projeto, #22); Zona de perigo = `DangerZone`.
  */
-export type ProjectSettingsSection = "general" | "tracker" | "envs" | "rules" | "secrets" | "docs" | "cleanup" | "danger";
+export type ProjectSettingsSection =
+  | "general"
+  | "tracker"
+  | "envs"
+  | "rules"
+  | "templates"
+  | "secrets"
+  | "docs"
+  | "cleanup"
+  | "danger";
 
 /** Na ordem da faixa de abas. */
 export const PROJECT_PAGES: ProjectPage[] = ["overview", "items", "sessions", "settings"];
@@ -37,6 +46,7 @@ export const PROJECT_SECTIONS: ProjectSettingsSection[] = [
   "tracker",
   "envs",
   "rules",
+  "templates",
   "secrets",
   "docs",
   "cleanup",
@@ -48,6 +58,7 @@ export const PROJECT_SECTION_LABEL: Record<ProjectSettingsSection, string> = {
   tracker: "Repositório e rastreador",
   envs: "Ambientes e atribuições",
   rules: "Regras do agente",
+  templates: "Templates de sessão",
   secrets: "Secrets e variáveis",
   docs: "Docs",
   cleanup: "Limpeza",

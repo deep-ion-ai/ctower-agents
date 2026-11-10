@@ -413,6 +413,8 @@ impl Sessions {
         } = spec;
         let cfg = self.config().clone();
         let gestor = project.kind == ProjectKind::Gestor;
+        // Antes de criar a sessão no ledger: sem token, nada a desfazer.
+        let session_token = crate::secrets::new_session_token()?;
         // Pastas de docs do projeto e do épico (o próprio ou o pai da
         // sub-issue; #440, #441), recalculadas a cada início e retomada. O
         // gestor não tem docs; a sessão de planejamento (#0) só a do projeto.
@@ -488,7 +490,18 @@ impl Sessions {
                     .join("\n\n"),
             ),
         };
-        let docs_line = docs.instruction();
+        // Secrets e variáveis do hub (só no ambiente do processo, nunca no
+        // `launch_cmd` nem no ledger), resolvidos antes dos args: a
+        // instrução ao agente cita os nomes (#165).
+        let secrets = self.session_secrets(project, &session.id);
+        let docs_line = [
+            docs.instruction(),
+            crate::secrets::agent_instruction(&secrets.names()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let docs_line = (!docs_line.is_empty()).then(|| docs_line.join("\n\n"));
         args.extend(agent.args(gestor, rules.as_deref(), docs_line.as_deref()));
         if !prompt.is_empty() {
             // Os comandos de credencial deste ambiente no lugar dos do
@@ -506,10 +519,8 @@ impl Sessions {
         self.ledger()
             .set_session_launch(&session.id, &argv, Some(tool_session_id))?;
 
-        // Secrets e variáveis do hub primeiro (só no ambiente do processo,
-        // nunca no `launch_cmd` nem no ledger); as `CTOWER_*` vêm depois e
-        // sempre vencem.
-        let secrets = self.session_secrets(project, &session.id);
+        // Secrets e variáveis do hub primeiro; as `CTOWER_*` vêm depois e
+        // sempre vencem. O token da sessão (#165) só vive em memória.
         let pty_mask = secrets.mask.pty.clone();
         self.set_mask(&session.id, secrets.mask);
         let mut env = secrets.env;
@@ -520,6 +531,10 @@ impl Sessions {
                 format!("http://127.0.0.1:{}", cfg.port),
             ),
             ("CTOWER_TOKEN".to_string(), cfg.hook_token.clone()),
+            (
+                crate::secrets::SESSION_TOKEN_ENV.to_string(),
+                session_token.clone(),
+            ),
             (
                 "CTOWER_PROTECTED".to_string(),
                 project.protected_branches.join(","),
@@ -541,6 +556,7 @@ impl Sessions {
         if let Some(reason) = &epic_unresolved {
             self.epic_unresolved(project, wi, &session.id, reason)?;
         }
+        self.set_session_token(&session_token, &session.id);
         let spawned = PtySession::spawn(
             SpawnSpec {
                 program: cfg.claude_bin.clone(),
@@ -558,6 +574,7 @@ impl Sessions {
             Ok(p) => p,
             Err(e) => {
                 self.forget_mask(&session.id);
+                self.forget_session_token(&session.id);
                 let l = self.ledger();
                 l.transition_session(&session.id, SessionState::Exited, None)?;
                 l.append_event(NewEvent {
@@ -696,6 +713,7 @@ impl Sessions {
     /// na recuperação (#283).
     fn on_process_exit(&self, project_id: i64, wi_id: i64, sid: &str, code: Option<i32>) {
         self.inner.live.lock().unwrap().remove(sid);
+        self.forget_session_token(sid);
         let killed = self.inner.killed.lock().unwrap().remove(sid);
         let clean = code == Some(0) || killed;
         let to = if clean {
@@ -877,6 +895,7 @@ mod tests {
                 changed: true,
                 projects: Some(vec![ct_ledger::ConfigProject {
                     docs: Default::default(),
+                    session_templates: Default::default(),
                     owner: p.gh_owner.clone(),
                     repo: p.gh_repo.clone(),
                     name: p.name.clone(),
@@ -2181,7 +2200,7 @@ mod tests {
         let s = env.sessions.start(env.request(22, "Sem cache")).unwrap();
         let out = env.wait_fake_output(&s.id);
         assert!(out.contains("CTOWER_TOKEN=hook-secreto"), "{out}");
-        assert!(!out.contains("T_"), "{out}");
+        assert!(!out.lines().any(|l| l.starts_with("T_")), "{out}");
         assert!(!env
             .notices()
             .iter()

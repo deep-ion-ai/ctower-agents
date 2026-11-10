@@ -1059,6 +1059,14 @@ impl Conn {
                 }
                 Ok(json!({}))
             }
+            // Aviso do hub (#165): a configuração mudou; o pull roda já, sem
+            // esperar o intervalo. Responde na hora; o pull segue à parte.
+            "hub.config.changed" => {
+                if let Some(s) = &self.st.hub_sender {
+                    s.wake_pull();
+                }
+                Ok(json!({}))
+            }
             // Envio deste ambiente ao hub: vale em qualquer daemon que envie.
             "hub.sync.now" => crate::hub_sync::run_sync_now(self.st.hub_sender.clone())
                 .await
@@ -2356,6 +2364,7 @@ mod tests {
                     changed: true,
                     projects: Some(vec![ct_ledger::ConfigProject {
                         docs: Default::default(),
+                        session_templates: Default::default(),
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),

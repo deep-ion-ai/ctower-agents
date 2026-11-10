@@ -378,6 +378,7 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
       at("tracker", "Rastreador", "repositório rastreador jira gitlab github sync ambiente de sync", "settings", "tracker"),
       at("envs", "Ambientes", "ambientes atribuições clone", "settings", "envs"),
       at("rules", "Regras", "regras agentes instruções", "settings", "rules"),
+      at("templates", "Templates de sessão", "templates prompt inicial sessão override", "settings", "templates"),
       at("docs", "Docs", "docs pasta documentação", "settings", "docs"),
     );
     // Só no projeto Jira (#150); também na web (o hub repassa ao ambiente de sync).

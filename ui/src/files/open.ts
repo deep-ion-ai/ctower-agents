@@ -6,7 +6,7 @@ import type { OpenTab, Screen } from "../state/nav";
 export type FileScreen = Extract<Screen, { name: "file" }>;
 
 /** Protocolo do ambiente com `file.read`, `files.shared` e `docs.list`. */
-export const FILES_PROTOCOL = "2.13";
+export const FILES_PROTOCOL = "2.14";
 
 /** De onde o arquivo foi aberto: a sessão (worktree e docs) ou o projeto (só docs). */
 export type FileScope = { session: string } | { projectId: number };

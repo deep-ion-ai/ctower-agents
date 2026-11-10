@@ -851,3 +851,45 @@
     white-space: normal;
   }
 }
+
+/* Templates de sessão do projeto (#166): uma linha por tipo, com o editor embaixo. */
+.hub-tpl-list {
+  margin: 0;
+  padding: 0 14px 14px;
+}
+
+.hub-tpl-list > div {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.hub-tpl-list dt {
+  font-weight: 600;
+}
+
+.hub-tpl-list dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.hub-tpl-state {
+  color: var(--muted);
+}
+
+.hub-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.hub-tpl-list .hub-card-form {
+  flex-basis: 100%;
+}
+
+.hub-tpl-list textarea {
+  width: 100%;
+  font-size: 12px;
+}

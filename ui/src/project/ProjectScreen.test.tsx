@@ -645,6 +645,47 @@ test("Editar template na modal abre a aba do template usado e fecha a modal; no 
   expect(screen.getByRole("heading", { name: "Template: Épico" })).toBeInTheDocument();
 });
 
+test("template do projeto (#166): override de issue na issue; épico no global; Editar abre as Configurações do projeto", async () => {
+  const api = new FakeDaemonApi()
+    .on(
+      "dashboard.get",
+      dashboard(
+        {
+          projects: [
+            {
+              project: project({ session_templates: { issue: "Override {{key}}: {{title}} em {{branch}}", epic: "", project: "" } }),
+              work_items: [WI28, WI30],
+            },
+          ],
+          live_sessions: [LIVE],
+          sync: [sync({ last_ok_at: NOW })],
+        },
+      ),
+    )
+    .on("session.peek", { data: "" })
+    .on("tree.get", TREE)
+    .on("env.info", { protocol: "2.13", version: "0.1.0", hostname: "ct", worktrees_root: "/home/user/worktrees" });
+  render(<App api={api} initial={LOCAL} />);
+  const user = userEvent.setup();
+  await screen.findByText("ui: Projeto, Recuperação e Revisão");
+
+  await user.click(play(33));
+  const prompt = () => within(dialog()).getByLabelText(/Prompt inicial/) as HTMLTextAreaElement;
+  expect(prompt().value).toBe("Override #33: ui: Projeto, Recuperação e Revisão em feat/33-ui-projeto-recuperacao-e-revisao");
+  expect(within(dialog()).getByLabelText("Origem do template")).toHaveTextContent("template do projeto");
+  await user.click(within(dialog()).getByRole("button", { name: "Cancelar" }));
+
+  await user.click(play(27));
+  expect(prompt().value).toMatch(/^Trabalhe no épico #27/);
+  expect(within(dialog()).getByLabelText("Origem do template")).toHaveTextContent("template global");
+  await user.click(within(dialog()).getByRole("button", { name: "Cancelar" }));
+
+  await user.click(play(33));
+  await user.click(within(dialog()).getByRole("button", { name: "Editar template ›" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /Configurações › Templates de sessão/, selected: true })).toBeInTheDocument();
+});
+
 describe("Só minhas (#151)", () => {
   afterEach(() => window.sessionStorage.clear());
   /** A árvore com o "eu" do sync (se houver) e a filha #30 atribuída a ele. */

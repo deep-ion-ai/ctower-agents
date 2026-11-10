@@ -112,6 +112,10 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "session.archive",
     "session.remote_control.enable",
     "hub.sync.now",
+    // Aviso do hub de que a configuração mudou (#165: um secret renovado):
+    // só acorda o pull, que segue com o token de sync e o `since` de
+    // sempre. Sem parâmetros e sem nada na resposta.
+    "hub.config.changed",
     // "Ver issue" de projeto Jira (#434): o hub não alcança o Jira e lê a
     // descrição pelo ambiente de sync, sem gravar.
     "tracker.issue_body",
@@ -208,6 +212,7 @@ mod tests {
         // Issue do Jira pelo ID (#148), pedida pelo hub ao ambiente de sync.
         assert!(channel_method_allowed("tracker.add_issue"));
         assert!(channel_method_allowed("session.start"));
+        assert!(channel_method_allowed("hub.config.changed"));
         // Linha do tempo do work item (#422): só leitura, vai para a web.
         assert!(channel_method_allowed("events.list"));
         assert!(!channel_push_allowed("permission_request"));
