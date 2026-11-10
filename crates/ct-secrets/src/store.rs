@@ -145,8 +145,8 @@ pub const RESERVED_NAMES: &[&str] = &[
 ];
 
 /// Prefixos reservados: `CTOWER_` (o que o `ctowerd` exporta para a sessão:
-/// `CTOWER_SESSION`, `CTOWER_URL`, `CTOWER_TOKEN`, `CTOWER_PROTECTED`,
-/// `CTOWER_SPOOL_DIR` e os que vierem), `LC_` (locale) e `LD_`/`DYLD_`
+/// `CTOWER_SESSION`, `CTOWER_URL`, `CTOWER_TOKEN`, `CTOWER_SESSION_TOKEN`,
+/// `CTOWER_PROTECTED`, `CTOWER_SPOOL_DIR` e os que vierem), `LC_` (locale) e `LD_`/`DYLD_`
 /// (carregador dinâmico: `LD_PRELOAD` e afins).
 pub const RESERVED_PREFIXES: &[&str] = &["CTOWER_", "CTHUB_", "LC_", "LD_", "DYLD_"];
 
