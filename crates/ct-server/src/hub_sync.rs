@@ -180,6 +180,8 @@ pub struct HubSender {
     pub(crate) config: crate::hub_config::ConfigOptions,
     pub(crate) pull: Mutex<crate::hub_config::PullState>,
     pub(crate) pull_lock: Mutex<()>,
+    /// Acorda o laço do pull antes do intervalo (`hub.config.changed`, #165).
+    pub(crate) pull_wake: tokio::sync::Notify,
     /// Uma aplicação de atribuições (clone) por vez, fora do `pull_lock`.
     pub(crate) apply_lock: Mutex<()>,
     /// Chave do ambiente e cache dos secrets entregues pelo hub (#184).
@@ -233,6 +235,7 @@ impl HubSender {
             config: Default::default(),
             pull: Mutex::default(),
             pull_lock: Mutex::new(()),
+            pull_wake: tokio::sync::Notify::new(),
             apply_lock: Mutex::new(()),
             env_cache,
             retention_days: DEFAULT_RETENTION_DAYS,

@@ -37,6 +37,7 @@ pub use recovery::{
     recoverable_sessions, work_item_concluded, ArchivedItem, RecoveryItem, RESUME_PROMPT,
 };
 pub use remote::{RemoteControlEnable, RemoteControlStatus};
+pub use secrets::{SecretGetError, SESSION_TOKEN_ENV};
 pub use shell::{Shell, SHELL_LIMIT};
 pub use tracker_sync::{JiraGitlabSync, TrackerSyncConfig};
 pub use transcript_view::{ContextUsage, TranscriptEntry, TranscriptSource, TranscriptTail};
@@ -119,6 +120,8 @@ struct Inner {
     killed: Mutex<HashSet<String>>,
     /// Mascaramento dos secrets de cada sessão (#167), só em memória.
     masks: Mutex<HashMap<String, secrets::SessionMask>>,
+    /// Token de cada sessão viva (#165) → id da sessão, só em memória.
+    session_tokens: Mutex<HashMap<String, String>>,
     /// Shells livres vivos (#428), só em memória.
     shells: Mutex<HashMap<String, shell::LiveShell>>,
     notify: Notifier,
@@ -139,6 +142,7 @@ impl Sessions {
                 live: Mutex::new(HashMap::new()),
                 killed: Mutex::new(HashSet::new()),
                 masks: Mutex::new(HashMap::new()),
+                session_tokens: Mutex::new(HashMap::new()),
                 shells: Mutex::new(HashMap::new()),
                 notify,
             }),

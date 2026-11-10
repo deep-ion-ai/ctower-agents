@@ -49,6 +49,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "session.archive",
   "session.remote_control.enable",
   "hub.sync.now",
+  "hub.config.changed",
   "tracker.issue_body",
   "tracker.add_issue",
   "logs.tail",

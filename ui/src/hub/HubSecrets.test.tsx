@@ -150,7 +150,7 @@ test("escopo global: lista sem valor de secret, cria, edita e remove", async () 
     }),
   );
   expect(await within(sec).findByText(/DB_URL gravado \(configuração rev 14\)/)).toHaveTextContent(
-    "Vale a partir do próximo spawn ou resume, depois que o ambiente receber a configuração; sessões em andamento não mudam.",
+    "os ambientes conectados recebem em poucos segundos (os demais, no próximo pull). A variável de ambiente da sessão vale a partir do próximo spawn ou resume; sessões em andamento leem o valor novo com ctower secret get.",
   );
   expect(within(sec).getByText("DB_URL", { selector: "td" })).toBeInTheDocument();
   expect(document.body.textContent).not.toContain("postgres://senha");
@@ -188,7 +188,7 @@ test("escopo global: lista sem valor de secret, cria, edita e remove", async () 
     expect(api.hubCallsTo("hub.secrets.delete")[0].params).toEqual({ scope: "global", name: "RUST_LOG" }),
   );
   await waitFor(() => expect(within(sec).queryByText("RUST_LOG", { selector: "td" })).not.toBeInTheDocument());
-  expect(within(sec).getByRole("status")).toHaveTextContent(/RUST_LOG removido .*sessões em andamento não mudam/);
+  expect(within(sec).getByRole("status")).toHaveTextContent(/RUST_LOG removido .*sessões em andamento leem o valor novo com ctower secret get/);
 });
 
 test("erro do hub ao gravar aparece no formulário", async () => {

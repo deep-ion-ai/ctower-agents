@@ -1,6 +1,7 @@
 //! Servidor HTTP do daemon (spec §8, §9, §11): `/hooks`, `/hooks/permission` e `/mcp` com o token
 //! de hook, `/ws`, `/hub/sync`, `/cleanup/plan`, `/cleanup/run` e
-//! `/secrets/rotate-env-key` com o token de UI,
+//! `/secrets/rotate-env-key` com o token de UI, `/session/secret` com o
+//! token da sessão (#165),
 //! `/healthz` sem autenticação. Com hub ligado, o daemon também mantém o
 //! canal reverso com ele (`hub_channel`, `/sync/channel`). O hub é outro
 //! binário (`cthubd`); a base HTTP/WS comum aos dois fica em `ct-http`.
@@ -57,6 +58,8 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// sync do projeto). 2.12 (#148): `tracker.add_issue` (issue do Jira pelo
 /// ID, também pelo canal do hub). 2.13 (#166): `session_templates` em
 /// `Project` (templates do prompt inicial do projeto, vindos do hub).
+/// ID, também pelo canal do hub). 2.13 (#165): `hub.config.changed` (o hub
+/// avisa pelo canal que a configuração mudou, e o pull roda na hora).
 pub const PROTOCOL_VERSION: &str = "2.13";
 
 #[derive(Clone)]
@@ -117,6 +120,7 @@ pub fn router(state: AppState) -> Router {
             "/secrets/rotate-env-key",
             post(env_secrets::rotate_env_key_http),
         )
+        .route("/session/secret", post(env_secrets::session_secret_http))
         .with_state(state)
 }
 
