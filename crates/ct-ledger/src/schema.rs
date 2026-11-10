@@ -336,6 +336,19 @@ ALTER TABLE sync_state ADD COLUMN failing_since INTEGER;
 ALTER TABLE issue_cache ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE sync_state ADD COLUMN me TEXT;
 "#,
+    // 19: arquivos `.md` que o agente compartilhou na sessão (`share_file`
+    // do MCP, #167). Só deste ambiente: nada vai ao outbox (a UI web lê pelo
+    // canal do hub). Some com a sessão.
+    r#"
+CREATE TABLE shared_file (
+  id         INTEGER PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  path       TEXT NOT NULL,
+  title      TEXT,
+  shared_at  INTEGER NOT NULL,
+  UNIQUE (session_id, path)
+);
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo

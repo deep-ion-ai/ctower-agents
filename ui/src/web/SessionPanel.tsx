@@ -4,6 +4,7 @@
 // **Abrir no Remote Control** (`claude.ai/code/<rc_session_id>`, #197).
 // Fase 2 (#343), com o ambiente online: **Ligar Remote Control** (e abrir o
 // link quando o id chegar), **Encerrar** e **Retomar**, pelo canal reverso.
+// Com o ambiente online, os arquivos que o agente compartilhou (#167).
 import "./web.css";
 import { useEffect, useRef, useState } from "react";
 import { useNow } from "../App";
@@ -17,6 +18,7 @@ import { useTower } from "../state/tower";
 import { RC_CONNECT_MS, rcView } from "../terminal/remote";
 import { ago, duration } from "../util/time";
 import { RESUME_PROMPT } from "../recovery/RecoveryScreen";
+import { SharedFiles } from "../files/SharedFiles";
 import { OFFLINE_ACTIONS, rcDone, rcRequested, useEnvOnline, useEnvSession, useRcRequest } from "./envActions";
 
 const ENDED: Partial<Record<Session["state"], string>> = {
@@ -287,6 +289,11 @@ export function SessionPanel({ tab }: { tab: Tab }) {
             ? "Para responder daqui, ligue o Remote Control e continue no app Claude."
             : "Remote Control desligado nesta sessão."}
         </p>
+      )}
+      {online && !gestor && (
+        <div className="web-files">
+          <SharedFiles env={tab.env} session={s.id} now={now} heading="h2" />
+        </div>
       )}
       {error && (
         <p role="alert" className="web-error">

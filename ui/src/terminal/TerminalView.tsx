@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTower } from "../state/tower";
+import { mdLinkTarget } from "./links";
 import { shellEndText, TerminalAdapter, type PtyKind, type TermState } from "./adapter";
 import { effectiveSize, termPrefs, useTermPrefs, zoom } from "./prefs";
 import { SearchBar } from "./SearchBar";
@@ -37,6 +38,7 @@ export function TerminalView({
   column,
   searchSignal = 0,
   focusSignal = 0,
+  onOpenFile,
 }: {
   env: string;
   /** Id do PTY: o da sessão ou o do shell. */
@@ -48,8 +50,10 @@ export function TerminalView({
   column?: 1 | 2;
   searchSignal?: number;
   focusSignal?: number;
+  /** Abre um `.md` da sessão no visualizador (Ctrl/Cmd+clique no caminho, #167). */
+  onOpenFile?: (path: string) => void;
 }) {
-  const { api } = useTower();
+  const { api, dashboards, infos } = useTower();
   const pane = useRef<HTMLDivElement>(null);
   const el = useRef<HTMLDivElement>(null);
   const mounted = useRef<ReturnType<typeof mountTerminal> | null>(null);
@@ -67,12 +71,29 @@ export function TerminalView({
   stateCb.current = onState;
   const closeCb = useRef(onClose);
   closeCb.current = onClose;
+  // Pastas da sessão para os links de `.md` (#167): a pasta da sessão, a
+  // worktree e o `docs_root` do ambiente (o daemon restringe ao projeto).
+  const mdRoots = useRef<string[]>([]);
+  const d = dashboards[env];
+  const sess = kind === "session" && d ? [...d.live_sessions, ...d.interrupted_sessions, ...d.failed_sessions].find((x) => x.id === pty) : undefined;
+  const wt = sess ? d?.projects.flatMap((p) => p.work_items).find((w) => w.id === sess.work_item_id)?.worktree_path : undefined;
+  const docsRoot = infos[env]?.docs?.reachable ? infos[env].docs.root : null;
+  mdRoots.current = sess ? [sess.cwd, ...(wt && wt !== sess.cwd ? [wt] : []), ...(docsRoot ? [docsRoot] : [])] : [];
+  const openFileRef = useRef(onOpenFile);
+  openFileRef.current = onOpenFile;
 
   useEffect(() => {
     const m = mountTerminal(el.current!, {
       font: fontRef.current,
       openUrl: (url) => api.openUrl(url),
       clipboard: { read: () => api.readClipboard(), write: (text) => api.writeClipboard(text) },
+      mdLinks:
+        kind === "session"
+          ? {
+              resolve: (path) => (openFileRef.current ? mdLinkTarget(path, mdRoots.current) : null),
+              open: (path) => openFileRef.current?.(path),
+            }
+          : undefined,
       onUiAction: (a) => {
         if (a === "search") setSearching(true);
         // O zoom vale para todas as abas (preferência comum).

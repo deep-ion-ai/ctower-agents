@@ -7,6 +7,7 @@ pub mod cleanup_sessions;
 pub mod cleanup_worktree;
 pub mod config;
 pub mod docs;
+pub mod files;
 pub mod github;
 pub mod gitlab;
 mod hooks;

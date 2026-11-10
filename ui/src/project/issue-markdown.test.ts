@@ -1,6 +1,6 @@
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { ProviderProject } from "../util/item";
-import { linkedIssue, renderIssueMarkdown } from "./issue-markdown";
+import { linkedIssue, renderFileMarkdown, renderIssueMarkdown } from "./issue-markdown";
 
 const GH: ProviderProject = { gh_owner: "deep-ion-ai", gh_repo: "ctower-agents", tracker: { kind: "github" } };
 const JIRA = {
@@ -86,4 +86,39 @@ test("linkedIssue: URL da issue do mesmo repositório abre no app; outra, não",
   expect(linkedIssue(a("https://github.com/deep-ion-ai/ctower-agents/issues/40x"), GH)).toBeNull();
   expect(linkedIssue(a("https://github.com/outro/repo/issues/40"), GH)).toBeNull();
   expect(linkedIssue(a("https://jira.x/browse/PROJ-9"), JIRA)).toBe(9);
+});
+
+describe("arquivo .md da sessão (#167)", () => {
+  test("blocos mermaid viram marcadores com o código escapado; o resto passa pela mesma sanitização", () => {
+    const md = [
+      "# Doc",
+      "<img src=x onerror=alert(1)><script>alert(2)</script>",
+      "```mermaid",
+      'graph TD; A["<img src=x onerror=alert(3)>"]-->B',
+      "```",
+      "```ts",
+      "const a = 1;",
+      "```",
+      "```Mermaid",
+      "sequenceDiagram",
+      "```",
+    ].join("\n");
+    const r = renderFileMarkdown(md);
+    expect(r.diagrams).toEqual(['graph TD; A["<img src=x onerror=alert(3)>"]-->B', "sequenceDiagram"]);
+    const div = document.createElement("div");
+    div.innerHTML = r.html;
+    expect(div.querySelector("script")).toBeNull();
+    expect(div.querySelector("[onerror]")).toBeNull();
+    const marks = div.querySelectorAll<HTMLElement>(".md-mermaid[data-mermaid]");
+    expect([...marks].map((m) => m.dataset.mermaid)).toEqual(["0", "1"]);
+    expect(marks[0].querySelector("code")?.textContent).toBe(r.diagrams[0]);
+    expect(marks[0].querySelector("img")).toBeNull();
+    // Outra linguagem segue como bloco de código comum.
+    expect(div.querySelector("pre code.language-ts")?.textContent).toContain("const a = 1;");
+  });
+
+  test("sem projeto, #12 fica texto; com projeto, vira referência", () => {
+    expect(renderFileMarkdown("ver #12").html).not.toContain("data-issue");
+    expect(renderFileMarkdown("ver #12", GH).html).toContain('data-issue="12"');
+  });
 });

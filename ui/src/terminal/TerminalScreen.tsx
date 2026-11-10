@@ -70,6 +70,7 @@ import {
   useOpenShell,
   useShellStore,
 } from "./shells";
+import { fileTab } from "../files/open";
 import { TerminalView } from "./TerminalView";
 
 function findSession(d: Dashboard | undefined, id: string): Session | undefined {
@@ -480,6 +481,7 @@ export function TerminalScreen() {
                 focusSignal={focus[keyOf(t)]}
                 onState={(s) => setStates((all) => ({ ...all, [keyOf(t)]: s }))}
                 onClose={isShell(t) ? undefined : () => nav.closeTab(t)}
+                onOpenFile={isShell(t) ? undefined : (path) => nav.openTab(fileTab(t.env, path, { session: t.session }))}
               />
             );
           })}

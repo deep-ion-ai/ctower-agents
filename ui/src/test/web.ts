@@ -74,9 +74,14 @@ export function webApi(d: Partial<HubDashboard> = {}, items: HubDashboardWorkIte
     .onHub("hub.proposals.list", NO_PROPOSALS)
     .onHub("hub.health.get", NO_HEALTH)
     .onHub("hub.tree.get", { project, roots: [], sync: null })
-    .onHub("hub.web.sessions.list", [] as HubWebSession[]);
+    .onHub("hub.web.sessions.list", [] as HubWebSession[])
+    // Arquivos compartilhados do painel da sessão (#167), pelo canal.
+    .on("files.shared", []);
 }
 
-/** Nenhuma chamada a ambiente: na fase 1 tudo vem do hub. */
-export const envCalls = (api: FakeDaemonApi) => api.calls.filter((c) => c.env !== HUB);
+/**
+ * Chamadas a ambiente: na fase 1 tudo vem do hub. Fora a lista dos
+ * arquivos compartilhados do painel da sessão (#167), que só o ambiente tem.
+ */
+export const envCalls = (api: FakeDaemonApi) => api.calls.filter((c) => c.env !== HUB && c.method !== "files.shared");
 

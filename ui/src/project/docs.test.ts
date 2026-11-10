@@ -1,9 +1,9 @@
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { FakeDaemonApi } from "../api/fake";
 import type { EnvView } from "../api/types";
 import type { EnvInfo } from "../protocol/gen";
 import { envInfo, project } from "../test/fixtures";
-import { docsFolderState, isLoopbackUrl, type DocsCandidate } from "./docs";
+import { docsFilesState, docsFolderState, isLoopbackUrl, type DocsCandidate } from "./docs";
 
 const wsl = FakeDaemonApi.wslEnv();
 const remote: EnvView = { id: "mac", name: "mac", url: "ws://mac:7878/ws", kind: "remote", distro: null, has_token: true };
@@ -91,4 +91,36 @@ test("ctowerd local do macOS (remoto com URL de loopback) abre a pasta; remoto d
   for (const u of ["ws://192.168.0.10:7878/ws", "ws://mac-mini:7878/ws", "ws://localhost.example.com/ws", "ws://[::2]/ws", "lixo"]) {
     expect(isLoopbackUrl(u)).toBe(false);
   }
+});
+
+describe("lista dos .md da pasta de docs (#167)", () => {
+  test("qualquer ambiente conectado em condições, também remoto", () => {
+    expect(docsFilesState([cand("mac", ON, 9)], { mac: envInfo({ protocol: "2.13", docs: UP }) })).toEqual({
+      enabled: true,
+      env: "mac",
+      projectId: 9,
+    });
+  });
+
+  test.each([
+    { caso: "sem ambiente", c: [], infos: {}, motivo: /Nenhum ambiente conectado/ },
+    { caso: "docs desligados", c: [cand("mac", { ...ON, enabled: false })], infos: {}, motivo: /Docs desligados/ },
+    { caso: "env.info não lido", c: [cand("mac")], infos: {}, motivo: /Lendo o estado/ },
+    {
+      caso: "ambiente anterior à #167",
+      c: [cand("mac")],
+      infos: { mac: envInfo({ protocol: "2.12", docs: UP }) },
+      motivo: /Atualize o ambiente mac \(protocolo 2\.12; a lista de arquivos pede 2\.13/,
+    },
+    {
+      caso: "docs_root inacessível",
+      c: [cand("mac")],
+      infos: { mac: envInfo({ protocol: "2.13", docs: { root: "/mnt/d", reachable: false } }) },
+      motivo: /inacessível/,
+    },
+  ])("$caso", ({ c, infos, motivo }) => {
+    const s = docsFilesState(c, infos as Record<string, EnvInfo>);
+    expect(s.enabled).toBe(false);
+    if (!s.enabled) expect(s.reason).toMatch(motivo);
+  });
 });

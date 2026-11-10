@@ -13,6 +13,7 @@ mod prune;
 mod rules;
 mod schema;
 mod sessions;
+mod shared_files;
 mod sync;
 mod tracker_mirror;
 mod tree;
@@ -73,6 +74,7 @@ pub use rules::{
     RULES_MAX_BYTES, RULES_REASON_MAX, RULES_WARN_BYTES,
 };
 pub use sessions::{NewSession, Session};
+pub use shared_files::SharedFile;
 pub use sync::{
     new_uid, project_key, work_item_key, DecisionChange, EventChange, IssueMirrorChange,
     LocationState, MirrorPr, OutboxEntry, OutboxStats, PrMirrorChange, ProjectChange,
