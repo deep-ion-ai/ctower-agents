@@ -1,12 +1,12 @@
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { ProviderProject } from "../util/item";
-import { linkedIssue, renderIssueMarkdown } from "./issue-markdown";
+import { linkedIssue, renderFileMarkdown, renderIssueMarkdown } from "./issue-markdown";
 
 const GH: ProviderProject = { gh_owner: "deep-ion-ai", gh_repo: "ctower-agents", tracker: { kind: "github" } };
 const JIRA = {
-  gh_owner: "pje",
+  gh_owner: "acme",
   gh_repo: "app",
-  tracker: { kind: "jira", url: "https://jira.x", project_key: "PROJ" },
+  tracker: { kind: "jira", url: "https://jira.example.com", project_key: "PROJ" },
 } as unknown as ProviderProject;
 
 const dom = (html: string) => {
@@ -73,7 +73,7 @@ test("chave do Jira do projeto vira link; de outro projeto, não", () => {
   const d = dom(renderIssueMarkdown("PROJ-5450 e OUTRO-1 e XPROJ-2", JIRA));
   const refs = [...d.querySelectorAll("a[data-issue]")].map((a) => a.textContent);
   expect(refs).toEqual(["PROJ-5450"]);
-  expect(d.querySelector("a")?.getAttribute("href")).toBe("https://jira.x/browse/PROJ-5450");
+  expect(d.querySelector("a")?.getAttribute("href")).toBe("https://jira.example.com/browse/PROJ-5450");
 });
 
 test("linkedIssue: URL da issue do mesmo repositório abre no app; outra, não", () => {
@@ -85,5 +85,40 @@ test("linkedIssue: URL da issue do mesmo repositório abre no app; outra, não",
   expect(linkedIssue(a("https://github.com/deep-ion-ai/ctower-agents/issues/40#issuecomment-1"), GH)).toBe(40);
   expect(linkedIssue(a("https://github.com/deep-ion-ai/ctower-agents/issues/40x"), GH)).toBeNull();
   expect(linkedIssue(a("https://github.com/outro/repo/issues/40"), GH)).toBeNull();
-  expect(linkedIssue(a("https://jira.x/browse/PROJ-9"), JIRA)).toBe(9);
+  expect(linkedIssue(a("https://jira.example.com/browse/PROJ-9"), JIRA)).toBe(9);
+});
+
+describe("arquivo .md da sessão (#167)", () => {
+  test("blocos mermaid viram marcadores com o código escapado; o resto passa pela mesma sanitização", () => {
+    const md = [
+      "# Doc",
+      "<img src=x onerror=alert(1)><script>alert(2)</script>",
+      "```mermaid",
+      'graph TD; A["<img src=x onerror=alert(3)>"]-->B',
+      "```",
+      "```ts",
+      "const a = 1;",
+      "```",
+      "```Mermaid",
+      "sequenceDiagram",
+      "```",
+    ].join("\n");
+    const r = renderFileMarkdown(md);
+    expect(r.diagrams).toEqual(['graph TD; A["<img src=x onerror=alert(3)>"]-->B', "sequenceDiagram"]);
+    const div = document.createElement("div");
+    div.innerHTML = r.html;
+    expect(div.querySelector("script")).toBeNull();
+    expect(div.querySelector("[onerror]")).toBeNull();
+    const marks = div.querySelectorAll<HTMLElement>(".md-mermaid[data-mermaid]");
+    expect([...marks].map((m) => m.dataset.mermaid)).toEqual(["0", "1"]);
+    expect(marks[0].querySelector("code")?.textContent).toBe(r.diagrams[0]);
+    expect(marks[0].querySelector("img")).toBeNull();
+    // Outra linguagem segue como bloco de código comum.
+    expect(div.querySelector("pre code.language-ts")?.textContent).toContain("const a = 1;");
+  });
+
+  test("sem projeto, #12 fica texto; com projeto, vira referência", () => {
+    expect(renderFileMarkdown("ver #12").html).not.toContain("data-issue");
+    expect(renderFileMarkdown("ver #12", GH).html).toContain('data-issue="12"');
+  });
 });

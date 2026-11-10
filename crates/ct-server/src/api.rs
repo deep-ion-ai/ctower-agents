@@ -157,6 +157,10 @@ mod export {
         ct_sessions::RemoteControlEnable::export_all_to(&dir).unwrap();
         ct_sessions::Shell::export_all_to(&dir).unwrap();
         ct_sessions::docs::DocsDir::export_all_to(&dir).unwrap();
+        // Visualizador de markdown (#167).
+        ct_sessions::files::MdFile::export_all_to(&dir).unwrap();
+        ct_sessions::files::DocsFiles::export_all_to(&dir).unwrap();
+        ct_ledger::SharedFile::export_all_to(&dir).unwrap();
         ct_gh::TokenStatus::export_all_to(&dir).unwrap();
         ct_gh::PrComment::export_all_to(&dir).unwrap();
         // Rastreador e forja (#347): os tipos soltos, além dos de `Project`.

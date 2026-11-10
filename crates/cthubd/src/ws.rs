@@ -721,10 +721,17 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         m if m.starts_with("hub.secrets.") => {
             // Fora de `hub_call`: o `HubSecrets` pega o lock do store e
             // depois o do hub, que `hub_call` já seguraria.
-            let (st, method) = (st.clone(), method.to_string());
-            tokio::task::spawn_blocking(move || secrets_call(&st, &method, &p))
+            let changed = matches!(method, "hub.secrets.set" | "hub.secrets.delete")
+                .then(|| scope_param(&p).ok())
+                .flatten();
+            let (st2, method) = (st.clone(), method.to_string());
+            let r = tokio::task::spawn_blocking(move || secrets_call(&st2, &method, &p))
                 .await
-                .map_err(|e| (-32603, e.to_string()))?
+                .map_err(|e| (-32603, e.to_string()))?;
+            if let (Ok(_), Some(scope)) = (&r, changed) {
+                notify_config_changed(st, &scope).await;
+            }
+            r
         }
         m if m.starts_with("hub.push.") => {
             // `hub.push.test` vai à rede: fora do `hub_call`, que segura o hub.
@@ -1401,6 +1408,20 @@ fn docs_param(p: &Value) -> Result<Option<ct_core::DocsConfig>, (i64, String)> {
     }
 }
 
+/// `session_templates` (#166): `{ issue, epic, project }`, chave ausente ou
+/// vazia = o template global; o objeto inteiro substitui o anterior.
+fn templates_param(p: &Value) -> Result<Option<ct_core::SessionTemplates>, (i64, String)> {
+    match p.get("session_templates") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|e| invalid(format!("session_templates inválido: {e}"))),
+        Some(_) => Err(invalid(
+            "session_templates deve ser um objeto { issue, epic, project }",
+        )),
+    }
+}
+
 fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(None),
@@ -1436,6 +1457,7 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             branch_pattern: pattern_param(p)?.filter(|s| !s.is_empty()),
             attribution: bool_param(p, "attribution")?.unwrap_or(true),
             docs: docs_param(p)?.unwrap_or_default().normalized(),
+            session_templates: templates_param(p)?.unwrap_or_default().normalized(),
         };
         provider.validate().map_err(invalid)?;
         let base_branch = opt_str(p, "base_branch").unwrap_or_else(|| "develop".into());
@@ -1501,11 +1523,12 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         attribution: bool_param(p, "attribution")?,
         sync_env: opt_str(p, "sync_env"),
         docs: docs_param(p)?,
+        session_templates: templates_param(p)?,
     };
     if patch.is_empty() {
         return Err(invalid(
             "nada a mudar: informe name, base_branch, protected_branches, tracker, forge, \
-             branch_pattern, attribution, sync_env ou docs",
+             branch_pattern, attribution, sync_env, docs ou session_templates",
         ));
     }
     let cur = st
@@ -1551,6 +1574,50 @@ fn scope_param(p: &Value) -> Result<Scope, (i64, String)> {
         }
         None => Err(invalid("parâmetro obrigatório: scope")),
         _ => Err(bad()),
+    }
+}
+
+/// Avisa pelo canal os ambientes que recebem `scope` (#165): no global,
+/// todos com canal aberto; no de projeto, os com canal aberto e atribuição
+/// ativa dele. O ambiente só antecipa o pull; ninguém espera a resposta, e
+/// um ambiente antigo (sem o método) segue pelo intervalo de sempre.
+async fn notify_config_changed(st: &HubState, scope: &Scope) {
+    let online = st.channels.online_envs();
+    if online.is_empty() {
+        return;
+    }
+    let targets: Vec<String> = match scope {
+        Scope::Global => online.into_iter().collect(),
+        Scope::Project(key) => {
+            let (owner, repo) = key.rsplit_once('/').unwrap_or_default();
+            let f = ct_ledger::AssignmentFilter {
+                env: None,
+                owner: Some(owner.to_string()),
+                repo: Some(repo.to_string()),
+            };
+            let hub = st.hub.clone();
+            let assigned = tokio::task::spawn_blocking(move || hub.lock().list_assignments(&f))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+            let mut envs: Vec<String> = assigned
+                .into_iter()
+                .map(|a| a.env_id)
+                .filter(|e| online.contains(e))
+                .collect();
+            envs.sort();
+            envs.dedup();
+            envs
+        }
+    };
+    for env in targets {
+        let ch = std::sync::Arc::clone(&st.channels);
+        tokio::spawn(async move {
+            if let Err((code, msg)) = ch.call(&env, "hub.config.changed", json!({})).await {
+                tracing::debug!("aviso de configuração a {env} falhou ({code}): {msg}");
+            }
+        });
     }
 }
 
@@ -2572,6 +2639,46 @@ pub(crate) mod tests {
             .call(
                 "hub.projects.update",
                 json!({ "owner": "deep-ion-ai", "repo": "demo", "docs": true }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// Templates do prompt inicial do projeto (#166) pela edição: o objeto
+    /// inteiro substitui, a chave vazia volta ao global e outro tipo é
+    /// recusado.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn templates_de_sessao_pela_edicao() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let rev = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo",
+                        "session_templates": { "issue": "Issue {{key}}", "epic": "  " } }),
+            )
+            .await;
+        let t = &v["result"]["session_templates"];
+        assert_eq!(
+            t,
+            &json!({ "issue": "Issue {{key}}", "epic": "", "project": "" }),
+            "{v}"
+        );
+        let novo = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();
+        assert!(novo.as_i64() > rev.as_i64(), "{rev} → {novo}");
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "session_templates": {} }),
+            )
+            .await;
+        assert_eq!(v["result"]["session_templates"]["issue"], "", "{v}");
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "session_templates": "x" }),
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
@@ -3924,6 +4031,130 @@ pub(crate) mod tests {
         assert_eq!(v["result"], json!({}));
     }
 
+    /// Ambiente falso no canal que só registra os métodos recebidos e
+    /// responde `{}`.
+    async fn recording_env(
+        st: &HubState,
+        url: &str,
+        env_id: &str,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let tok = {
+            let h = st.hub.lock();
+            let t = h.issue_env_token_with_env_id(env_id, env_id).unwrap().token;
+            h.ingest(env_id, env_id, &[]).unwrap();
+            t
+        };
+        let mut req = url
+            .replace("/ws", ct_http::sync::CHANNEL_PATH)
+            .into_client_request()
+            .unwrap();
+        let h = req.headers_mut();
+        h.insert("authorization", format!("Bearer {tok}").parse().unwrap());
+        h.insert(ct_http::sync::ENV_ID_HEADER, env_id.parse().unwrap());
+        let (ws, _) = connect_async(req).await.unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = std::sync::Arc::clone(&seen);
+        let task = tokio::spawn(async move {
+            let (mut tx, mut rx) = ws.split();
+            while let Some(Ok(m)) = rx.next().await {
+                let WsMsg::Text(t) = m else { continue };
+                let v: Value = serde_json::from_str(&t).unwrap();
+                log.lock()
+                    .unwrap()
+                    .push(v["method"].as_str().unwrap_or("").to_string());
+                let r = json!({ "id": v["id"], "result": {} });
+                if tx.send(WsMsg::Text(r.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let ch = std::sync::Arc::clone(&st.channels);
+        let id = env_id.to_string();
+        tokio::time::timeout(T, async move {
+            while !ch.is_online(&id) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("canal de pé");
+        (task, seen)
+    }
+
+    /// #165: gravar ou remover um secret avisa pelo canal os ambientes que o
+    /// recebem (`hub.config.changed`): no global, todos; no de projeto, só
+    /// os atribuídos. Recusa não avisa ninguém.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn secrets_avisam_os_ambientes_do_escopo_pelo_canal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = hub_com_secrets(tmp.path());
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let (_a, seen_a) = recording_env(&st, &url, "env-a").await;
+        let (_b, seen_b) = recording_env(&st, &url, "env-b").await;
+        st.hub
+            .lock()
+            .add_assignment("deep-ion-ai", "demo", "env-a", None)
+            .unwrap();
+        let avisos = |seen: &std::sync::Arc<std::sync::Mutex<Vec<String>>>| {
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|m| *m == "hub.config.changed")
+                .count()
+        };
+        let espera = |a: usize, b: usize| {
+            let (sa, sb) = (seen_a.clone(), seen_b.clone());
+            async move {
+                tokio::time::timeout(T, async {
+                    while avisos(&sa) < a || avisos(&sb) < b {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("aviso não chegou");
+                // Nada além do esperado.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert_eq!((avisos(&sa), avisos(&sb)), (a, b));
+            }
+        };
+        let set = |scope: Value| json!({ "scope": scope, "name": "API_JWT", "kind": "secret", "value": SEGREDO });
+        let demo = json!({ "project": "deep-ion-ai/demo" });
+
+        let v = ui.call("hub.secrets.set", set(demo.clone())).await;
+        assert!(v["result"]["rev"].is_i64(), "{v}");
+        espera(1, 0).await;
+        let v = ui.call("hub.secrets.set", set(json!("global"))).await;
+        assert!(v["result"]["rev"].is_i64(), "{v}");
+        espera(2, 1).await;
+        let v = ui
+            .call(
+                "hub.secrets.delete",
+                json!({ "scope": demo, "name": "API_JWT" }),
+            )
+            .await;
+        assert!(v["result"]["rev"].is_i64(), "{v}");
+        espera(3, 1).await;
+        // Recusa (nome reservado) e remoção inexistente: sem aviso.
+        let v = ui
+            .call(
+                "hub.secrets.set",
+                json!({ "scope": "global", "name": "CTOWER_TOKEN", "kind": "secret", "value": SEGREDO }),
+            )
+            .await;
+        assert!(v["error"].is_object(), "{v}");
+        let v = ui
+            .call(
+                "hub.secrets.delete",
+                json!({ "scope": "global", "name": "NAO_EXISTE" }),
+            )
+            .await;
+        assert!(v["error"].is_object(), "{v}");
+        espera(3, 1).await;
+    }
+
     // ---- hub.env.call e env.push (#343) ----
 
     /// Ambiente falso no canal reverso de `env_id` ("x"): responde cada
@@ -4227,13 +4458,13 @@ pub(crate) mod tests {
                     "tracker": { "kind": "jira", "url": "https://jira.x", "project_key": "PROJ",
                                  "jql": "", "active_sprint_only": true,
                                  "credential_cmd": "pass show jira" },
-                    "forge": { "kind": "gitlab", "clone_url": "git@git.x:pje/app.git",
+                    "forge": { "kind": "gitlab", "clone_url": "git@git.x:acme/app.git",
                                "credential_cmd": "pass show gitlab" }
                 }),
             )
             .await;
         assert!(v["result"].is_object(), "{v}");
-        let p = |n: i64| json!({ "owner": "pje", "repo": "app", "number": n });
+        let p = |n: i64| json!({ "owner": "acme", "repo": "app", "number": n });
 
         let v = ui.call("hub.workitem.body", p(7)).await;
         assert!(
@@ -4247,7 +4478,7 @@ pub(crate) mod tests {
         let v = ui
             .call(
                 "hub.assignments.add",
-                json!({ "owner": "pje", "repo": "app", "env": "env-x" }),
+                json!({ "owner": "acme", "repo": "app", "env": "env-x" }),
             )
             .await;
         assert_eq!(v["result"]["sync_env"], true, "{v}");

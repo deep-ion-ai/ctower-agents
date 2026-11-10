@@ -81,6 +81,22 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SecretsCmd,
     },
+    /// Dentro de uma sessão: lê um secret ou variável do hub.
+    Secret {
+        #[command(subcommand)]
+        cmd: SecretCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretCmd {
+    /// Imprime o valor atual de NOME para o projeto da sessão (o do projeto
+    /// sobrepõe o global), sem quebra de linha. Use dentro do comando, como
+    /// `$(ctower secret get NOME)`, e nunca imprima o valor.
+    Get {
+        /// Nome do secret ou da variável.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -129,6 +145,11 @@ fn main() {
             if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
                 e.exit();
             }
+            // `secret get` não é hook: quem o chama dentro de `$(...)` precisa
+            // ver a falha (#165).
+            if std::env::args().nth(1).as_deref() == Some("secret") {
+                e.exit();
+            }
             let _ = e.print();
             std::process::exit(0);
         }
@@ -172,6 +193,9 @@ fn main() {
         },
         Cmd::Secrets { cmd } => match cmd {
             SecretsCmd::RotateEnvKey => secrets::rotate_env_key(),
+        },
+        Cmd::Secret { cmd } => match cmd {
+            SecretCmd::Get { name } => secrets::get(&name),
         },
     };
     std::process::exit(code);

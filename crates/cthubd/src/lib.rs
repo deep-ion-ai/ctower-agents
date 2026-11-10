@@ -61,8 +61,10 @@ use tokio::sync::broadcast;
 /// `hub.workitem.body` (descrição da issue lida no rastreador, sem gravar).
 /// 1.11 (#90): `failures` e `failing_since` no `SyncState` (falhas seguidas
 /// do sync do projeto). 1.12 (#148): `hub.tracker.add_issue` (issue do
-/// Jira pelo ID, pelo ambiente de sync).
-pub const PROTOCOL_VERSION: &str = "1.12";
+/// Jira pelo ID, pelo ambiente de sync). 1.13 (#166): `session_templates`
+/// em `HubProject` e em `hub.projects.add|update` (templates do prompt
+/// inicial do projeto).
+pub const PROTOCOL_VERSION: &str = "1.13";
 
 #[derive(Clone)]
 pub struct HubState {

@@ -115,7 +115,6 @@ impl PtySession {
 
         let reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
         let writer = pair.master.take_writer().map_err(io::Error::other)?;
-        let masked = !spec.mask.is_empty();
         let inner = Arc::new(Inner {
             pid: child.process_id(),
             killer: Mutex::new(child.clone_killer()),
@@ -139,10 +138,9 @@ impl PtySession {
             read_loop(reader, &reading);
             let _ = drained_tx.send(());
         });
-        if masked {
-            let flushing = Arc::clone(&inner);
-            std::thread::spawn(move || flush_loop(&flushing));
-        }
+        // Sempre: o conjunto pode ganhar valores com a sessão no ar (#165).
+        let flushing = Arc::clone(&inner);
+        std::thread::spawn(move || flush_loop(&flushing));
 
         let waiting = Arc::clone(&inner);
         std::thread::spawn(move || {
@@ -221,6 +219,14 @@ impl PtySession {
             out.subs.push(tx);
         }
         (snap, rx)
+    }
+
+    /// Troca o conjunto mascarado com o processo no ar (#165: um secret
+    /// renovado no hub). Vale da próxima leitura em diante; o scrollback já
+    /// emitido não muda. Passe a união com o conjunto anterior
+    /// ([`MaskSet::union`]) para continuar mascarando os valores antigos.
+    pub fn set_mask(&self, set: MaskSet) {
+        self.inner.out.lock().unwrap().masker.set_mask(set);
     }
 
     pub fn snapshot(&self) -> Vec<u8> {
@@ -523,6 +529,52 @@ mod tests {
         let p = PtySession::spawn(masked("printf 'fim=sk-abc'"), 1024).unwrap();
         assert_eq!(p.wait(), Some(0));
         assert!(String::from_utf8_lossy(&p.snapshot()).contains("fim=sk-abc"));
+    }
+
+    #[test]
+    fn conjunto_trocado_no_ar_mascara_o_valor_novo_e_o_antigo() {
+        let p = PtySession::spawn(
+            masked("read x; printf 'a=sk-abc123456\\n'; read y; printf 'b=sk-novo987654 c=sk-abc123456\\n'; read z"),
+            DEFAULT_SCROLLBACK,
+        )
+        .unwrap();
+        let (snap, rx) = p.attach();
+        p.write(b"\n").unwrap();
+        let live = read_until(&rx, snap, "a=***API_TOKEN***");
+        assert!(!live.contains("sk-abc"), "{live}");
+        let novo = MaskSet::new([(
+            "API_TOKEN".to_string(),
+            Zeroizing::new(b"sk-novo987654".to_vec()),
+        )]);
+        let antigo = MaskSet::new([(
+            "API_TOKEN".to_string(),
+            Zeroizing::new(b"sk-abc123456".to_vec()),
+        )]);
+        p.set_mask(antigo.union(&novo));
+        p.write(b"\n").unwrap();
+        let live = read_until(&rx, Vec::new(), "c=***API_TOKEN***");
+        assert!(
+            live.contains("b=***API_TOKEN*** c=***API_TOKEN***"),
+            "{live}"
+        );
+        p.write(b"\n").unwrap();
+        assert_eq!(p.wait(), Some(0));
+        let out = String::from_utf8_lossy(&p.snapshot()).to_string();
+        assert!(!out.contains("sk-novo") && !out.contains("sk-abc"), "{out}");
+    }
+
+    #[test]
+    fn sessao_sem_conjunto_passa_a_mascarar() {
+        let p = PtySession::spawn(sh("read x; printf 'v=sk-abc123456\\n'"), 1024).unwrap();
+        let (snap, rx) = p.attach();
+        p.set_mask(MaskSet::new([(
+            "API_TOKEN".to_string(),
+            Zeroizing::new(b"sk-abc123456".to_vec()),
+        )]));
+        p.write(b"\n").unwrap();
+        let live = read_until(&rx, snap, "v=***API_TOKEN***");
+        assert!(!live.contains("sk-abc"), "{live}");
+        assert_eq!(p.wait(), Some(0));
     }
 
     #[test]

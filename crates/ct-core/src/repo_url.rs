@@ -210,11 +210,11 @@ mod tests {
             "",
             "https://gitlab.example.com/",
             "https://gitlab.example.com/app",
-            "https://gitlab.example.com/pje/../x",
-            "https://gitlab.example.com/pje/a b",
-            "ftp://gitlab.example.com/pje/x",
+            "https://gitlab.example.com/acme/../x",
+            "https://gitlab.example.com/acme/a b",
+            "ftp://gitlab.example.com/acme/x",
             "grupo/projeto",
-            "git@:pje/x",
+            "git@:acme/x",
         ] {
             assert_eq!(repo_from_url(url), None, "{url}");
         }

@@ -59,9 +59,13 @@ export function isTooShortToMask(value: string): boolean {
   return value !== "" && new TextEncoder().encode(value).length < MIN_MASK_LEN;
 }
 
-/** Quando uma mudança chega às sessões (issue #166). */
+/** Quando uma mudança chega às sessões (issues #166 e #165). */
 export const APPLIES_NOTE =
-  "Vale a partir do próximo spawn ou resume, depois que o ambiente receber a configuração; sessões em andamento não mudam.";
+  "A variável de ambiente da sessão vale a partir do próximo spawn ou resume; sessões em andamento leem o valor novo com ctower secret get.";
+
+/** Quando a mudança chega aos ambientes (#165: aviso pelo canal). */
+export const DELIVERY_NOTE =
+  "os ambientes conectados recebem em poucos segundos (os demais, no próximo pull).";
 
 const KIND_TEXT: Record<SecretKind, string> = { secret: "secret", variable: "variável" };
 
@@ -159,7 +163,7 @@ export function HubSecrets({ project }: { project?: { owner: string; repo: strin
         kind: form.kind,
         value: form.value,
       });
-      setDone(`${form.name} gravado (configuração rev ${r.rev}); os ambientes recebem no próximo pull. ${APPLIES_NOTE}`);
+      setDone(`${form.name} gravado (configuração rev ${r.rev}); ${DELIVERY_NOTE} ${APPLIES_NOTE}`);
       setForm(null);
       await load();
     } catch (e) {
@@ -175,7 +179,7 @@ export function HubSecrets({ project }: { project?: { owner: string; repo: strin
     setDone(null);
     try {
       const r = await api.hubCall<SecretChanged>("hub.secrets.delete", { scope, name });
-      setDone(`${name} removido (configuração rev ${r.rev}); os ambientes recebem no próximo pull. ${APPLIES_NOTE}`);
+      setDone(`${name} removido (configuração rev ${r.rev}); ${DELIVERY_NOTE} ${APPLIES_NOTE}`);
       setConfirm(null);
       await load();
     } catch (e) {

@@ -82,6 +82,7 @@ function base(api = new FakeDaemonApi()) {
       p.work_item_id === 40 ? review({ work_item: WI2, decisions: [] }) : review(),
     )
     .on("events.list", eventsList)
+    .on("files.shared", [])
     .on("recovery.list", []);
 }
 

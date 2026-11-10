@@ -112,7 +112,14 @@ export type Screen =
    * mostrar (cada pedido, objeto novo, rola até ela) e, com `template`, o
    * editor de um template em aba própria (`templateTab`).
    */
-  | { name: "settings"; scope?: SettingsScope; env?: string; section?: SettingsSection; template?: TemplateKey };
+  | { name: "settings"; scope?: SettingsScope; env?: string; section?: SettingsSection; template?: TemplateKey }
+  /**
+   * Visualizador de markdown (#167): um `.md` do ambiente `env`, lido pelo
+   * `file.read` com o escopo da sessão (`session`: worktree e pasta de
+   * docs) ou do projeto (`projectId`: só a pasta de docs). Aba própria por
+   * arquivo: monte com `fileTab` (files/open.ts).
+   */
+  | { name: "file"; env: string; path: string; session?: string; projectId?: number; title?: string };
 
 /** Aba de terminal: uma sessão do agente de um ambiente. */
 export interface Tab {

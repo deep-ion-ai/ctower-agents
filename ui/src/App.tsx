@@ -18,6 +18,7 @@ import { MaintenanceScreen } from "./maintenance/MaintenanceScreen";
 import { EnvScreen } from "./env/EnvScreen";
 import { maintenanceTab } from "./maintenance/sections";
 import { settingsTab } from "./settings/sections";
+import { FileViewer } from "./files/FileViewer";
 import { WebLogsScreen } from "./logs/LogsScreen";
 import { SessionScreen } from "./web/SessionPanel";
 import { WebRecovery, WebReview } from "./web/WebScreens";
@@ -205,6 +206,8 @@ function Current({ screen }: { screen: Screen }) {
       return <MaintenanceScreen screen={screen} />;
     case "env":
       return <EnvScreen screen={screen} />;
+    case "file":
+      return <FileViewer key={`${screen.env}:${screen.path}`} screen={screen} />;
   }
 }
 

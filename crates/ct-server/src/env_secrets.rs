@@ -10,6 +10,9 @@
 //! - o "registro" do ambiente é só o `cthubd add-env` no hub (token): a chave
 //!   pública vai ao hub no pull, que roda no boot do `ctowerd`.
 //!
+//! `POST /session/secret` (#165): o valor atual de um secret para a sessão
+//! dona do token (`CTOWER_SESSION_TOKEN`), lido por `ctower secret get`.
+//!
 //! A injeção no spawn e no resume (#166) fica no `ct-sessions`
 //! (`Sessions::session_secrets`), que lê o mesmo cache e resolve por projeto
 //! com `EnvSecrets::resolve(Some("owner/repo"))` (projeto sobrepõe global).
@@ -21,7 +24,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use ct_secrets::{EnvCache, EnvSecrets, SecretsError};
-use ct_sessions::Dirs;
+use ct_sessions::{Dirs, SecretGetError};
 use serde::{Deserialize, Serialize};
 
 /// Chave e cache de secrets do ambiente em `dirs`.
@@ -96,6 +99,58 @@ pub(crate) async fn rotate_env_key_http(
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+/// Corpo de `POST /session/secret`.
+#[derive(Debug, Deserialize)]
+pub struct SecretGetRequest {
+    pub name: String,
+}
+
+/// `POST /session/secret` com `Authorization: Bearer <token da sessão>`
+/// (#165). Responde o valor em texto puro (`200`), sem quebra de linha. A
+/// sessão vem só do token; `X-Ctower-Session` é ignorado. Erros, sem valor:
+/// `401` token ausente ou inválido, `400` nome inválido, `404` nome que não
+/// vale para o projeto da sessão (inexistente, de outro projeto ou
+/// reservado), `503` sem cache ou cache ilegível.
+pub(crate) async fn session_secret_http(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(token) = ct_http::bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "token de sessão ausente").into_response();
+    };
+    let Ok(req) = serde_json::from_slice::<SecretGetRequest>(&body) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "corpo esperado: {\"name\": \"NOME\"}",
+        )
+            .into_response();
+    };
+    let sessions = st.sessions.clone();
+    let r = tokio::task::spawn_blocking(move || sessions.session_secret(&token, &req.name)).await;
+    let (code, msg) = match r {
+        Ok(Ok(value)) => {
+            let mut resp = value.into_response();
+            resp.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            );
+            return resp;
+        }
+        Ok(Err(e)) => (
+            match e {
+                SecretGetError::Unauthorized => StatusCode::UNAUTHORIZED,
+                SecretGetError::Invalid(_) => StatusCode::BAD_REQUEST,
+                SecretGetError::NotFound(_) => StatusCode::NOT_FOUND,
+                SecretGetError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            },
+            e.to_string(),
+        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    (code, msg).into_response()
 }
 
 #[cfg(test)]
@@ -436,6 +491,262 @@ mod tests {
         let s = sender(&a, &url2, &tok);
         let r = blocking(move || s.pull_config()).await;
         assert_eq!((r.changed, r.secrets), (false, None));
+    }
+
+    /// `POST /session/secret` direto no router: (status, corpo em texto).
+    async fn get_secret(
+        srv: &Srv,
+        token: Option<&str>,
+        header_session: Option<&str>,
+        body: &str,
+    ) -> (StatusCode, String) {
+        use axum::body::Body;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let mut req =
+            axum::http::Request::post("/session/secret").header("content-type", "application/json");
+        if let Some(t) = token {
+            req = req.header("authorization", format!("Bearer {t}"));
+        }
+        if let Some(s) = header_session {
+            req = req.header("x-ctower-session", s);
+        }
+        let resp = crate::router(srv.state.clone())
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    /// Token da sessão, do registro do `claude` falso.
+    fn token_of(srv: &Srv, session_id: &str) -> String {
+        srv.env
+            .wait_fake_output(session_id)
+            .lines()
+            .find_map(|l| l.strip_prefix("CTOWER_SESSION_TOKEN="))
+            .expect("sessão sem token")
+            .to_string()
+    }
+
+    fn name(n: &str) -> String {
+        serde_json::json!({ "name": n }).to_string()
+    }
+
+    /// A rota identifica a sessão só pelo token: trocar `X-Ctower-Session`
+    /// não dá acesso ao escopo de outra sessão.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rota_do_valor_atual_pelo_token_da_sessao() {
+        let srv = Srv::new(FakeClaude::sleep(30));
+        let projeto = srv.env.sessions.start(srv.env.request(41, "Rota")).unwrap();
+        let gestor = srv
+            .env
+            .sessions
+            .start_gestor(
+                &ct_sessions::GestorScope::Portfolio,
+                "",
+                None,
+                &ct_sessions::AgentOptions::default(),
+            )
+            .unwrap();
+        let (tp, tg) = (token_of(&srv, &projeto.id), token_of(&srv, &gestor.id));
+        // Sem cache ainda: 503, sem valor.
+        let (s, b) = get_secret(&srv, Some(&tp), None, &name("API_JWT")).await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{b}");
+        srv.env.write_secrets_cache(&[
+            (None, "API_JWT", "jwt-global-aaaaaaaa"),
+            (Some(DEMO), "API_JWT", "jwt-do-projeto-bbbbbbbb"),
+            (Some("acme/acme-web"), "SO_OUTRO", "valor-de-outro-projeto"),
+        ]);
+        let (s, b) = get_secret(&srv, Some(&tp), None, &name("API_JWT")).await;
+        assert_eq!((s, b.as_str()), (StatusCode::OK, "jwt-do-projeto-bbbbbbbb"));
+        // O gestor, mesmo com o cabeçalho da sessão de projeto, fica com o
+        // escopo dele (só globais).
+        let (s, b) = get_secret(&srv, Some(&tg), Some(&projeto.id), &name("API_JWT")).await;
+        assert_eq!((s, b.as_str()), (StatusCode::OK, "jwt-global-aaaaaaaa"));
+        // Token ausente, de UI, de hook ou inventado: 401.
+        for t in [None, Some(UI), Some(crate::test_util::HOOK), Some("x")] {
+            let (s, b) = get_secret(&srv, t, Some(&projeto.id), &name("API_JWT")).await;
+            assert_eq!(s, StatusCode::UNAUTHORIZED, "{t:?}");
+            assert!(!b.contains("jwt-"), "{b}");
+        }
+        // Outro projeto, inexistente e reservado: 404, sem valor.
+        for n in ["SO_OUTRO", "NAO_EXISTE", "CTOWER_TOKEN"] {
+            let (s, b) = get_secret(&srv, Some(&tp), None, &name(n)).await;
+            assert_eq!(s, StatusCode::NOT_FOUND, "{n}: {b}");
+            assert!(!b.contains("valor") && !b.contains("jwt-"), "{b}");
+        }
+        let (s, _) = get_secret(&srv, Some(&tp), None, "nada").await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        srv.env.sessions.kill(&projeto.id).unwrap();
+        srv.env.sessions.kill(&gestor.id).unwrap();
+    }
+
+    /// `/ws` do hub com o token de UI: uma chamada e a resposta.
+    async fn hub_ws_call(url: &str, method: &str, params: serde_json::Value) -> serde_json::Value {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::Message;
+        let mut req = format!("{}/ws", url.replacen("http://", "ws://", 1))
+            .into_client_request()
+            .unwrap();
+        req.headers_mut()
+            .insert("authorization", "Bearer ui-do-hub".parse().unwrap());
+        let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+        let msg = serde_json::json!({ "id": 7, "method": method, "params": params });
+        ws.send(Message::Text(msg.to_string().into()))
+            .await
+            .unwrap();
+        loop {
+            let Some(Ok(Message::Text(t))) = ws.next().await else {
+                panic!("hub fechou o /ws");
+            };
+            let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+            if v["id"] == 7 {
+                return v;
+            }
+        }
+    }
+
+    /// Critério da #165, ponta a ponta com o `cthubd` de verdade: com a
+    /// sessão aberta, trocar o secret no hub faz o valor novo chegar ao
+    /// `POST /session/secret` em poucos segundos (o hub avisa pelo canal e
+    /// o pull roda na hora, sem esperar o intervalo de 1 h do teste), e o
+    /// valor novo sai mascarado no PTY, junto com o antigo.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn secret_renovado_no_hub_chega_a_sessao_aberta() {
+        let d = tempfile::tempdir().unwrap();
+        let hub_dirs = cthubd::config::Dirs {
+            config: d.path().join("config"),
+            data: d.path().join("data"),
+        };
+        hub_dirs.ensure().unwrap();
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        hub.lock()
+            .add_project(&ct_ledger::NewHubProject {
+                owner: "deep-ion-ai".into(),
+                repo: "demo".into(),
+                name: "demo".into(),
+                base_branch: "develop".into(),
+                protected_branches: vec![],
+            })
+            .unwrap();
+        let secrets = cthubd::secrets::HubSecrets::open(&hub_dirs, hub.clone()).unwrap();
+        secrets
+            .set(
+                Scope::parse_project(DEMO).unwrap(),
+                "API_JWT",
+                Kind::Secret,
+                SecretValue::new("jwt-antigo-aaaaaaaa"),
+            )
+            .unwrap();
+        let mut st = cthubd::HubState::new(hub.clone(), "ui-do-hub", "hub", "hub-id");
+        st.secrets = Some(Arc::new(secrets));
+        let channels = Arc::clone(&st.channels);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        serve_hub_state(st, listener).await;
+
+        let mut a = Srv::new(FakeClaude::script(
+            "while read l; do echo \"saida=$l\"; done",
+        ));
+        let env_a = a.env.sessions.ledger().env_id().to_string();
+        let tok = hub
+            .lock()
+            .issue_env_token_with_env_id("a", &env_a)
+            .unwrap()
+            .token;
+        hub.lock()
+            .add_assignment(
+                "deep-ion-ai",
+                "demo",
+                &env_a,
+                Some(&a.env.repo.display().to_string()),
+            )
+            .unwrap();
+        let up = Arc::new(
+            HubSender::new(
+                a.env.sessions.clone(),
+                HubTarget {
+                    url: url.clone(),
+                    token: tok,
+                },
+                Duration::from_secs(5),
+            )
+            .with_config(crate::hub_config::ConfigOptions {
+                pull_every: Duration::from_secs(3600),
+                ..Default::default()
+            }),
+        );
+        a.state.hub_sender = Some(Arc::clone(&up));
+        // Primeiro pull feito à mão: cache com o valor antigo.
+        let s = Arc::clone(&up);
+        assert_eq!(blocking(move || s.pull_config()).await.secrets, Some(1));
+        let sess = a.env.sessions.start(a.env.request(42, "JWT")).unwrap();
+        let token = token_of(&a, &sess.id);
+        let (s, b) = get_secret(&a, Some(&token), None, &name("API_JWT")).await;
+        assert_eq!((s, b.as_str()), (StatusCode::OK, "jwt-antigo-aaaaaaaa"));
+
+        // Laço do pull (o do boot já passou: o próximo seria em 1 h) e canal.
+        crate::hub_config::spawn_puller(Arc::clone(&up));
+        let canal = crate::hub_channel::spawn(
+            a.state.clone(),
+            crate::hub_channel::ChannelOptions {
+                base_delay: Duration::from_millis(20),
+                max_backoff: Duration::from_millis(200),
+                idle_timeout: Duration::from_secs(5),
+            },
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !channels.is_online(&env_a) {
+            assert!(std::time::Instant::now() < deadline, "canal não abriu");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Deixa o pull do boot do laço terminar antes de trocar o valor.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let r = hub_ws_call(
+            &url,
+            "hub.secrets.set",
+            serde_json::json!({ "scope": { "project": DEMO }, "name": "API_JWT",
+                                "kind": "secret", "value": "jwt-renovado-bbbbbbbb" }),
+        )
+        .await;
+        assert!(r["result"]["rev"].is_i64(), "{r}");
+        let t0 = std::time::Instant::now();
+        loop {
+            let (s, b) = get_secret(&a, Some(&token), None, &name("API_JWT")).await;
+            assert_eq!(s, StatusCode::OK, "{b}");
+            if b == "jwt-renovado-bbbbbbbb" {
+                break;
+            }
+            assert!(
+                t0.elapsed() < Duration::from_secs(5),
+                "valor novo não chegou"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // O valor novo e o antigo saem mascarados na saída do PTY.
+        let pty = a.env.sessions.pty(&sess.id).unwrap();
+        pty.write(b"jwt-renovado-bbbbbbbb jwt-antigo-aaaaaaaa\n")
+            .unwrap();
+        let t0 = std::time::Instant::now();
+        let out = loop {
+            let out = String::from_utf8_lossy(&pty.snapshot()).to_string();
+            if out.contains("saida=***API_JWT*** ***API_JWT***") {
+                break out;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(5), "{out}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(
+            !out.contains("jwt-renovado") && !out.contains("jwt-antigo"),
+            "{out}"
+        );
+        canal.abort();
+        a.env.sessions.kill(&sess.id).unwrap();
     }
 
     /// `POST /secrets/rotate-env-key`: token de UI; sem hub, só local.

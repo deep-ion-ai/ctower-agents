@@ -13,6 +13,7 @@ import {
   DocsCard,
   ProjectSecretsCard,
   RepositoryCard,
+  SessionTemplatesCard,
   SyncEnvCard,
   keyOf,
   projectSecretsOf,
@@ -153,6 +154,9 @@ export function ProjectSettings({
       break;
     case "rules":
       body = <AgentRules owner={pr.gh_owner} repo={pr.gh_repo} epic={0} label={pr.name} now={now} className="hub-card" />;
+      break;
+    case "templates":
+      body = <SessionTemplatesCard project={p} settings={settings} readOnly={web} />;
       break;
     case "secrets":
       body = <ProjectSecretsCard project={pr} secrets={secrets} />;

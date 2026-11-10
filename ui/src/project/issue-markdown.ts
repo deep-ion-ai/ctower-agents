@@ -36,15 +36,49 @@ function issueRefs(project: ProviderProject): TokenizerAndRendererExtension {
   };
 }
 
-/** Markdown (GFM) → HTML sanitizado: sem script, estilo, formulário nem evento. */
-export function renderIssueMarkdown(md: string, project: ProviderProject): string {
-  const marked = new Marked({ gfm: true, async: false });
-  marked.use({ extensions: [issueRefs(project)] });
-  const html = marked.parse(md) as string;
+/** Sanitização do HTML do marked: sem script, estilo, formulário nem evento. */
+export function sanitizeMarkdownHtml(html: string): string {
   return DOMPurify.sanitize(html, {
     FORBID_TAGS: ["style", "form", "button", "textarea", "select", "iframe", "object", "embed"],
     FORBID_ATTR: ["style"],
   });
+}
+
+/** Markdown (GFM) → HTML sanitizado: sem script, estilo, formulário nem evento. */
+export function renderIssueMarkdown(md: string, project: ProviderProject): string {
+  const marked = new Marked({ gfm: true, async: false });
+  marked.use({ extensions: [issueRefs(project)] });
+  return sanitizeMarkdownHtml(marked.parse(md) as string);
+}
+
+/** Markdown de arquivo (#167), com os blocos `mermaid` à parte. */
+export interface FileMarkdown {
+  /** HTML sanitizado; cada diagrama é um `div.md-mermaid[data-mermaid=i]` com o código. */
+  html: string;
+  /** Código de cada bloco `mermaid`, na ordem (`data-mermaid` é o índice). */
+  diagrams: string[];
+}
+
+/**
+ * Arquivo `.md` da sessão (#167): o mesmo pipeline do corpo da issue (marked
+ * + a sanitização acima, e as referências do projeto, se houver). Cada bloco
+ * ` ```mermaid ` vira um marcador com o código (que fica visível até o
+ * diagrama ser desenhado, ou se der erro); quem mostra desenha por cima.
+ */
+export function renderFileMarkdown(md: string, project?: ProviderProject): FileMarkdown {
+  const diagrams: string[] = [];
+  const marked = new Marked({ gfm: true, async: false });
+  if (project) marked.use({ extensions: [issueRefs(project)] });
+  marked.use({
+    renderer: {
+      code(token) {
+        if ((token.lang ?? "").trim().toLowerCase() !== "mermaid") return false;
+        const i = diagrams.push(token.text) - 1;
+        return `<div class="md-mermaid" data-mermaid="${i}"><pre><code>${escapeAttr(token.text).replace(/>/g, "&gt;")}</code></pre></div>\n`;
+      },
+    },
+  });
+  return { html: sanitizeMarkdownHtml(marked.parse(md) as string), diagrams };
 }
 
 /**

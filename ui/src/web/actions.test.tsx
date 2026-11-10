@@ -283,6 +283,7 @@ describe("Revisão: marcar decisões como revisadas", () => {
             attribution: true,
             sync_role: false,
             docs: { enabled: false, project_dirs: [], epic_dirs: [] },
+            session_templates: { issue: "", epic: "", project: "" },
           },
           work_items: [
             {

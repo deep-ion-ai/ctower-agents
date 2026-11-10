@@ -24,7 +24,9 @@ você decidiu sozinho (decisões autônomas são revisadas no PR, ou MR no GitLa
 Cite issues pelo ref de ledger_get_context (owner/repo#n no GitHub, a chave no Jira). \
 As regras do projeto e do épico já estão no seu system prompt; releia as vigentes com rules_get. \
 Para mudá-las, proponha o texto completo novo com rules_propose: a proposta fica pendente até o \
-usuário aprovar, então nunca diga que as regras mudaram antes disso.";
+usuário aprovar, então nunca diga que as regras mudaram antes disso. \
+Quando criar um .md para o usuário ler (análise, especificação, plano, relatório), compartilhe-o \
+com share_file: ele abre no visualizador do Control Tower, em qualquer máquina.";
 
 pub(crate) async fn method_not_allowed() -> StatusCode {
     StatusCode::METHOD_NOT_ALLOWED
@@ -104,6 +106,12 @@ fn dispatch(
                 sessions, &session, scope, sc, hub,
             )));
         }
+    }
+    // `share_file` (#167) valida pelas pastas da sessão (`Sessions`, que
+    // também trava o ledger): fora do `call_tool`.
+    if method == "tools/call" && params.get("name").and_then(Value::as_str) == Some("share_file") {
+        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        return Ok(tool_result(share_file(sessions, &session, &args)));
     }
     let l = sessions.ledger();
     match method {
@@ -268,6 +276,24 @@ fn decisions_via_hub(
     }
 }
 
+/// `share_file`: o `.md` aparece na sessão na UI, que abre no visualizador.
+fn share_file(sessions: &Sessions, s: &Session, args: &Value) -> Result<Value, String> {
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty())
+        .ok_or("parâmetro obrigatório: path")?;
+    let title = args.get("title").and_then(Value::as_str);
+    let f = sessions
+        .share_file(&s.id, path, title)
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "path": f.path,
+        "title": f.title,
+        "message": "Arquivo compartilhado: aparece em \"Arquivos\" no painel da sessão do Control Tower.",
+    }))
+}
+
 /// Ferramentas da sessão; `epic` = a sessão é de um épico e ganha
 /// `ledger_start_sub_issue` (#458).
 fn tools(epic: bool) -> Value {
@@ -331,6 +357,18 @@ fn tools(epic: bool) -> Value {
                     "reason": { "type": "string", "description": "Por que mudar: o que aconteceu nesta sessão." }
                 },
                 "required": ["scope", "content", "reason"]
+            }
+        },
+        {
+            "name": "share_file",
+            "description": "Compartilha um arquivo .md com o usuário: ele aparece no painel da sessão na UI do Control Tower e abre num visualizador (formatado, com diagramas Mermaid, ou texto), em qualquer máquina. Use para análises, especificações, planos e relatórios que o usuário deve ler. Só .md dentro da pasta da sessão (worktree) ou da pasta de docs do projeto ($CT_DOCS_DIR); até 1 MiB.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Caminho do .md: absoluto ou relativo à pasta da sessão." },
+                    "title": { "type": "string", "description": "Título a mostrar no lugar do nome do arquivo." }
+                },
+                "required": ["path"]
             }
         }
     ]);
@@ -606,7 +644,8 @@ mod tests {
                 "ledger_set_status",
                 "ledger_get_context",
                 "rules_get",
-                "rules_propose"
+                "rules_propose",
+                "share_file"
             ]
         );
         let (st, _) = srv
@@ -620,6 +659,41 @@ mod tests {
         assert_eq!(st, StatusCode::ACCEPTED);
         let v = rpc(&srv, &s.id, "inventado", json!({})).await;
         assert_eq!(v["error"]["code"], -32601);
+        srv.env.sessions.kill(&s.id).unwrap();
+    }
+
+    /// `share_file` (#167): o `.md` da worktree entra na sessão (e o push
+    /// sai); fora da worktree, sem `.md` ou sem `path`, erro da ferramenta.
+    #[tokio::test]
+    async fn share_file_registra_e_recusa_fora_das_pastas() {
+        let srv = Srv::new(FakeClaude::sleep(30));
+        let s = srv.env.sessions.start(srv.env.request(1, "A")).unwrap();
+        std::fs::write(std::path::Path::new(&s.cwd).join("plano.md"), "# Plano").unwrap();
+        let r = call(
+            &srv,
+            &s.id,
+            "share_file",
+            json!({ "path": "plano.md", "title": "Plano" }),
+        )
+        .await;
+        assert_eq!(r["isError"], false, "{r}");
+        assert!(r["structuredContent"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("/plano.md"));
+        assert_eq!(srv.env.sessions.shared_files(&s.id).unwrap().len(), 1);
+        let fora = srv.env.repo.join("fora.md");
+        std::fs::write(&fora, "x").unwrap();
+        for args in [
+            json!({ "path": fora.to_str().unwrap() }),
+            json!({ "path": "Cargo.toml" }),
+            json!({ "path": "../fora.md" }),
+            json!({}),
+        ] {
+            let r = call(&srv, &s.id, "share_file", args.clone()).await;
+            assert_eq!(r["isError"], true, "{args} {r}");
+        }
+        assert_eq!(srv.env.sessions.shared_files(&s.id).unwrap().len(), 1);
         srv.env.sessions.kill(&s.id).unwrap();
     }
 

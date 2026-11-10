@@ -112,6 +112,10 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "session.archive",
     "session.remote_control.enable",
     "hub.sync.now",
+    // Aviso do hub de que a configuração mudou (#165: um secret renovado):
+    // só acorda o pull, que segue com o token de sync e o `since` de
+    // sempre. Sem parâmetros e sem nada na resposta.
+    "hub.config.changed",
     // "Ver issue" de projeto Jira (#434): o hub não alcança o Jira e lê a
     // descrição pelo ambiente de sync, sem gravar.
     "tracker.issue_body",
@@ -122,6 +126,11 @@ pub const CHANNEL_METHODS: &[&str] = &[
     // Tela Logs na web (#65): só as últimas linhas, já mascaradas; o modo
     // seguir é por conexão e fica no app desktop.
     "logs.tail",
+    // Visualizador de markdown (#167): só leitura de `.md` dentro das pastas
+    // da sessão ou da pasta de docs do projeto, validado no ambiente.
+    "file.read",
+    "files.shared",
+    "docs.list",
 ];
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:
@@ -137,6 +146,8 @@ pub const CHANNEL_PUSHES: &[&str] = &[
     "work_item_status",
     "projects_changed",
     "alert",
+    // Arquivo compartilhado pelo agente (`share_file`, #167).
+    "session_files",
 ];
 
 /// Erro de método fora de [`CHANNEL_METHODS`], nos dois lados do canal.
@@ -201,6 +212,7 @@ mod tests {
         // Issue do Jira pelo ID (#148), pedida pelo hub ao ambiente de sync.
         assert!(channel_method_allowed("tracker.add_issue"));
         assert!(channel_method_allowed("session.start"));
+        assert!(channel_method_allowed("hub.config.changed"));
         // Linha do tempo do work item (#422): só leitura, vai para a web.
         assert!(channel_method_allowed("events.list"));
         assert!(!channel_push_allowed("permission_request"));

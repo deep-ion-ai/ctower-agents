@@ -7,7 +7,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { TermLike } from "./adapter";
 import { contextAction, keyAction, runAction, type Clipboard, type UiAction } from "./keys";
-import { linkActivator } from "./links";
+import { isOpenClick, linkActivator, mdPathsIn } from "./links";
 import { loadWebgl } from "./renderer";
 import { SEARCH_DECORATIONS, TERM_THEME } from "./theme";
 
@@ -45,6 +45,12 @@ export interface MountOptions {
   clipboard: Clipboard;
   /** Atalho que mexe na tela, como Ctrl+F e o zoom. */
   onUiAction(a: UiAction): void;
+  /**
+   * Caminhos `.md` clicáveis (#167): `resolve` diz o caminho absoluto a
+   * abrir (ou `null`, que não vira link) e `open` abre no visualizador.
+   * Ctrl+clique (Cmd no macOS), como as URLs.
+   */
+  mdLinks?: { resolve(path: string): string | null; open(path: string): void };
 }
 
 export function mountTerminal(el: HTMLElement, opts: MountOptions): MountedTerm {
@@ -77,6 +83,28 @@ export function mountTerminal(el: HTMLElement, opts: MountOptions): MountedTerm 
   const search = new SearchAddon();
   term.loadAddon(search);
   term.loadAddon(new WebLinksAddon((e, uri) => activate(e, uri), { hover, leave }));
+  const md = opts.mdLinks;
+  if (md) {
+    term.registerLinkProvider({
+      provideLinks(y, cb) {
+        const line = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+        const links = mdPathsIn(line).flatMap((m) => {
+          const target = md.resolve(m.path);
+          if (!target) return [];
+          return [
+            {
+              range: { start: { x: m.start + 1, y }, end: { x: m.end, y } },
+              text: m.path,
+              activate: (e: MouseEvent) => {
+                if (isOpenClick(e)) md.open(target);
+              },
+            },
+          ];
+        });
+        cb(links.length ? links : undefined);
+      },
+    });
+  }
   term.attachCustomKeyEventHandler((e) => {
     const a = keyAction(e, term.hasSelection());
     if (!a) return true;
