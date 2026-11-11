@@ -3,6 +3,7 @@ import { GESTOR_LABEL, gestorLabel, lookup } from "../control-room/attention";
 import { tileState } from "../control-room/TileGrid";
 import { ENV_SECTION_LABEL } from "../env/sections";
 import { basename } from "../files/open";
+import { diffTitle } from "../diff/diff";
 import { hubTitle } from "../hub/sections";
 import { maintenanceTitle } from "../maintenance/sections";
 import { pageSuffix } from "../project/sections";
@@ -26,6 +27,7 @@ export const SCREEN_LABEL: Record<Screen["name"], string> = {
   settings: "Configurações",
   env: "Ambientes",
   file: "Arquivo",
+  diff: "Diff",
 };
 
 function screenTitle(s: Screen, dashboards: Record<string, Dashboard>): string {
@@ -66,6 +68,8 @@ function screenTitle(s: Screen, dashboards: Record<string, Dashboard>): string {
       return hubTitle(s.section);
     case "file":
       return s.title || basename(s.path);
+    case "diff":
+      return diffTitle(s);
     case "maintenance":
       return maintenanceTitle(s.section);
     case "env":

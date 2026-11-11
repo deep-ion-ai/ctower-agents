@@ -60,6 +60,25 @@
   --mono: "IBM Plex Mono", "Cascadia Mono", Consolas, "Segoe UI Symbol", "DejaVu Sans Mono", ui-monospace, monospace;
   --sans: "IBM Plex Sans", system-ui, sans-serif;
   color-scheme: dark;
+
+  /* Visualizador de diff (#168): linhas e realce de sintaxe. */
+  --dv-add-bg: #13291f;
+  --dv-add-no: #173323;
+  --dv-add-fg: #6fd0a2;
+  --dv-del-bg: #2d1717;
+  --dv-del-no: #371b1b;
+  --dv-del-fg: #f08a7a;
+  --dv-hunk-bg: #16213a;
+  --dv-hunk-fg: #8ab8ff;
+  --dv-empty-bg: #13161c;
+  --hl-keyword: #c792ea;
+  --hl-string: #a5d6a7;
+  --hl-number: #f6b26b;
+  --hl-comment: #7f8899;
+  --hl-title: #82aaff;
+  --hl-type: #ffcb6b;
+  --hl-attr: #89ddff;
+  --hl-meta: #f07178;
 }
 
 /* Tema claro (#290): data-theme no <html>, posto antes do primeiro quadro
@@ -107,6 +126,25 @@
   --shadow: #10182829;
   --scrim: #1b1f27;
   color-scheme: light;
+
+  /* Visualizador de diff (#168): linhas e realce de sintaxe. */
+  --dv-add-bg: #e6f6ec;
+  --dv-add-no: #d3efdd;
+  --dv-add-fg: #1a7f4b;
+  --dv-del-bg: #fcebea;
+  --dv-del-no: #f7d8d5;
+  --dv-del-fg: #b3261e;
+  --dv-hunk-bg: #e8effc;
+  --dv-hunk-fg: #2856a8;
+  --dv-empty-bg: #f0f2f5;
+  --hl-keyword: #8b2fc9;
+  --hl-string: #1d7a36;
+  --hl-number: #a65a00;
+  --hl-comment: #6a7280;
+  --hl-title: #1f5bc4;
+  --hl-type: #8a5a00;
+  --hl-attr: #0a6c8a;
+  --hl-meta: #b3261e;
 }
 
 * {

@@ -4,7 +4,8 @@
 // **Abrir no Remote Control** (`claude.ai/code/<rc_session_id>`, #197).
 // Fase 2 (#343), com o ambiente online: **Ligar Remote Control** (e abrir o
 // link quando o id chegar), **Encerrar** e **Retomar**, pelo canal reverso.
-// Com o ambiente online, os arquivos que o agente compartilhou (#167).
+// Com o ambiente online, os arquivos que o agente compartilhou (#167) e
+// **Ver diff** do código da worktree (#168).
 import "./web.css";
 import { useEffect, useRef, useState } from "react";
 import { useNow } from "../App";
@@ -19,6 +20,8 @@ import { RC_CONNECT_MS, rcView } from "../terminal/remote";
 import { ago, duration } from "../util/time";
 import { RESUME_PROMPT } from "../recovery/RecoveryScreen";
 import { SharedFiles } from "../files/SharedFiles";
+import { diffTab } from "../diff/diff";
+import { itemShort, PROJECT_ITEM } from "../util/item";
 import { OFFLINE_ACTIONS, rcDone, rcRequested, useEnvOnline, useEnvSession, useRcRequest } from "./envActions";
 
 const ENDED: Partial<Record<Session["state"], string>> = {
@@ -276,6 +279,12 @@ export function SessionPanel({ tab }: { tab: Tab }) {
                 Encerrar
               </button>
             ))}
+          {/* Diff do código da worktree (#168), calculado pelo ambiente. */}
+          {!gestor && wi?.worktree_path && wi.gh_number !== PROJECT_ITEM && (
+            <button type="button" className="btn" onClick={() => nav.openTab(diffTab(tab.env, wi.id, itemShort(project, wi.gh_number)))}>
+              Ver diff
+            </button>
+          )}
         </section>
       ) : (
         <p className="muted">

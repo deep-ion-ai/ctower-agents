@@ -179,6 +179,23 @@ fn file_scope(p: &Value) -> Result<ct_sessions::files::FileScope, (i64, String)>
     }
 }
 
+/// Texto opcional (ausente ou `null` = `None`).
+fn opt_str(p: &Value, k: &str) -> Result<Option<String>, (i64, String)> {
+    match p.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(v)) => Ok(Some(v.clone())),
+        Some(_) => Err(invalid(format!("{k} inválido"))),
+    }
+}
+
+/// Modo do `git.diff` e do `git.diff_file` (#168).
+fn diff_request(p: &Value) -> Result<ct_sessions::diff::DiffRequest, (i64, String)> {
+    let mode = str_param(p, "mode")?;
+    let commit = opt_str(p, "commit")?;
+    ct_sessions::diff::DiffRequest::parse(mode, commit.as_deref())
+        .map_err(|e| invalid(e.to_string()))
+}
+
 /// `remote_control` (bool, opcional; padrão `false`).
 fn remote_control_param(p: &Value) -> Result<bool, (i64, String)> {
     match p.get("remote_control") {
@@ -863,6 +880,30 @@ impl Conn {
                 let v = blocking(&sessions, move |s| s.docs_files(id, epic)).await?;
                 Ok(json!(v))
             }
+            // Visualizador de diff (#168): só a worktree do work item, com
+            // o modo `branch`, `uncommitted` ou `commit` (+ `commit`).
+            "git.diff" => {
+                let id = i64_param(p, "work_item_id")?;
+                let req = diff_request(p)?;
+                let v = blocking(&sessions, move |s| s.git_diff(id, &req)).await?;
+                Ok(json!(v))
+            }
+            "git.diff_file" => {
+                let id = i64_param(p, "work_item_id")?;
+                let req = diff_request(p)?;
+                let path = str_param(p, "path")?.to_string();
+                let old = opt_str(p, "old_path")?;
+                let v = blocking(&sessions, move |s| {
+                    s.git_diff_file(id, &req, &path, old.as_deref())
+                })
+                .await?;
+                Ok(json!(v))
+            }
+            "git.commits" => {
+                let id = i64_param(p, "work_item_id")?;
+                let v = blocking(&sessions, move |s| s.git_commits(id)).await?;
+                Ok(json!(v))
+            }
             "review.get" => {
                 let id = i64_param(p, "work_item_id")?;
                 blocking(&sessions, move |s| review_get(s, id)).await
@@ -1452,6 +1493,53 @@ mod tests {
                 .contains("docs desligados"),
             "{v}"
         );
+        srv.env.sessions.kill(&s.id).unwrap();
+    }
+
+    /// `git.diff`, `git.diff_file` e `git.commits` (#168): modo obrigatório
+    /// e válido, diff da worktree do work item; a validação completa está
+    /// nos testes do `ct-git::diff` e do `ct-sessions::diff`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn diff_da_worktree() {
+        let srv = Srv::new(FakeClaude::sleep(30));
+        let s = srv.env.sessions.start(srv.env.request(1, "A")).unwrap();
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        std::fs::write(std::path::Path::new(&s.cwd).join("n.txt"), "oi\n").unwrap();
+        let wi = s.work_item_id;
+        for p in [
+            json!({ "work_item_id": wi }),
+            json!({ "work_item_id": wi, "mode": "tudo" }),
+            json!({ "work_item_id": wi, "mode": "commit" }),
+            json!({ "work_item_id": wi, "mode": "branch", "commit": 3 }),
+        ] {
+            let v = ui.call("git.diff", p.clone()).await;
+            assert_eq!(v["error"]["code"], -32602, "{p} {v}");
+        }
+        let v = ui
+            .call("git.diff", json!({ "work_item_id": wi, "mode": "branch" }))
+            .await;
+        assert_eq!(v["result"]["files"][0]["path"], "n.txt", "{v}");
+        assert_eq!(v["result"]["files"][0]["untracked"], true, "{v}");
+        let v = ui
+            .call(
+                "git.diff_file",
+                json!({ "work_item_id": wi, "mode": "uncommitted", "path": "n.txt" }),
+            )
+            .await;
+        assert!(
+            v["result"]["patch"].as_str().unwrap().contains("+oi"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "git.diff",
+                json!({ "work_item_id": wi, "mode": "commit", "commit": "abcdef12" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32000, "{v}");
+        let v = ui.call("git.commits", json!({ "work_item_id": wi })).await;
+        assert_eq!(v["result"]["base_ref"], "develop", "{v}");
         srv.env.sessions.kill(&s.id).unwrap();
     }
 

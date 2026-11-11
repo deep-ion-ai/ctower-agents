@@ -9,6 +9,7 @@ import { useTower } from "../state/tower";
 import { Icon } from "../shell/icons";
 import { SideContent, SideGroup, SidePanel, SideRow } from "../shell/SidePanel";
 import { prUrl } from "../terminal/TerminalScreen";
+import { diffBlocked, diffTab } from "../diff/diff";
 import { reviewKey, useReviewUi, useReviews, type ReviewFilter } from "./ui-store";
 import { entryName, markPr, markReviewed, openPr, projectEntries, useReviewEntries, type ReviewEntry } from "./entries";
 
@@ -119,7 +120,8 @@ const FILTERS: { id: ReviewFilter; label: string }[] = [
 ];
 
 function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) {
-  const { api, dashboards, hub } = useTower();
+  const { api, dashboards, hub, infos, status, envs } = useTower();
+  const nav = useNav();
   const [review, setReview] = useState<Review | null>(null);
   const [history, setHistory] = useState<HubHistory | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -169,6 +171,7 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
   }, [loadHistory]);
 
   const pr = markPr(review ?? undefined);
+  const diffOff = diffBlocked(dwi, infos[env], status[env]?.connected !== false, envs.find((e) => e.id === env)?.name ?? env);
   const pending = review?.decisions ?? [];
   const n = pending.length;
   const guided = history?.decisions.filter((d) => d.origin === "orientada") ?? [];
@@ -246,6 +249,18 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
           )}
         </h1>
         <span className="review-spacer" />
+        {/* Diff do código ao lado das decisões (#168): o item com PR aberto. */}
+        {!gestor && pr?.state === "open" && dwi && (
+          <button
+            type="button"
+            className="btn"
+            disabled={diffOff !== null}
+            title={diffOff ?? "Ver o diff do código da worktree"}
+            onClick={() => nav.openTab(diffTab(env, workItemId, itemShort(project, dwi.gh_number)))}
+          >
+            Ver diff
+          </button>
+        )}
         {!gestor && (
           <button type="button" className="btn" onClick={() => void open(url)} disabled={!url}>
             {pr ? `Abrir ${changeRef(project, pr.number)}` : `Abrir ${change} no ${forge}`}

@@ -19,6 +19,7 @@ import { EnvScreen } from "./env/EnvScreen";
 import { maintenanceTab } from "./maintenance/sections";
 import { settingsTab } from "./settings/sections";
 import { FileViewer } from "./files/FileViewer";
+import { DiffViewer } from "./diff/DiffViewer";
 import { WebLogsScreen } from "./logs/LogsScreen";
 import { SessionScreen } from "./web/SessionPanel";
 import { WebRecovery, WebReview } from "./web/WebScreens";
@@ -208,6 +209,8 @@ function Current({ screen }: { screen: Screen }) {
       return <EnvScreen screen={screen} />;
     case "file":
       return <FileViewer key={`${screen.env}:${screen.path}`} screen={screen} />;
+    case "diff":
+      return <DiffViewer key={`${screen.env}:${screen.workItem}`} screen={screen} />;
   }
 }
 

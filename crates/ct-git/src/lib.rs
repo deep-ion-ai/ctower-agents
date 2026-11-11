@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub mod diff;
+
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
     #[error("git {args} falhou: {stderr}")]
@@ -43,11 +45,21 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_env(dir, args, &[])
+}
+
+/// Como [`run`], com variáveis de ambiente a mais.
+fn run_env<I, S>(dir: &Path, args: I, envs: &[(&str, OsString)]) -> Result<String, GitError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let args: Vec<OsString> = args.into_iter().map(|a| a.as_ref().to_owned()).collect();
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(&args)
+        .envs(envs.iter().map(|(k, v)| (k, v)))
         .output()?;
     if !out.status.success() {
         return Err(GitError::Failed {

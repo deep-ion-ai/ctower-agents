@@ -682,6 +682,11 @@ button.rc-chip:hover {
   width: auto;
 }
 
+/* "Ver diff" no Work item (#168). */
+.ctx-diff {
+  margin: 8px 0 0;
+}
+
 .ctx-sub {
   margin: 4px 0 0;
   font-size: 11px;

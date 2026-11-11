@@ -166,6 +166,10 @@ mod export {
         ct_sessions::files::MdFile::export_all_to(&dir).unwrap();
         ct_sessions::files::DocsFiles::export_all_to(&dir).unwrap();
         ct_ledger::SharedFile::export_all_to(&dir).unwrap();
+        // Visualizador de diff (#168).
+        ct_git::diff::DiffSummary::export_all_to(&dir).unwrap();
+        ct_git::diff::DiffPatch::export_all_to(&dir).unwrap();
+        ct_git::diff::BranchCommits::export_all_to(&dir).unwrap();
         ct_gh::TokenStatus::export_all_to(&dir).unwrap();
         ct_gh::PrComment::export_all_to(&dir).unwrap();
         // Rastreador e forja (#347): os tipos soltos, além dos de `Project`.

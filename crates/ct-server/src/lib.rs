@@ -61,8 +61,10 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// `hub.config.changed` (o hub avisa pelo canal que a configuração mudou, e
 /// o pull roda na hora). 2.14 (#167): `file.read`, `files.shared`,
 /// `docs.list` e o push `session_files` (visualizador de markdown, também
-/// pelo canal do hub).
-pub const PROTOCOL_VERSION: &str = "2.14";
+/// pelo canal do hub). 2.15 (#168): `git.diff`, `git.diff_file` e
+/// `git.commits` (visualizador de diff da worktree do work item, também pelo
+/// canal do hub).
+pub const PROTOCOL_VERSION: &str = "2.15";
 
 #[derive(Clone)]
 pub struct AppState {
