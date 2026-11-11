@@ -22,6 +22,7 @@
 
 mod agent;
 mod assignments;
+mod autopilot;
 mod config;
 mod env_keys;
 mod health;
@@ -623,6 +624,16 @@ ALTER TABLE sync_state ADD COLUMN me TEXT;
     // (o template global do rastreador).
     r#"
 ALTER TABLE project ADD COLUMN session_templates TEXT NOT NULL DEFAULT '{}';
+"#,
+    // 31: política de orçamento do piloto automático por conta do Claude
+    // Code (#180, épico #178): JSON de `ct_core::plan::budget::BudgetPolicy`.
+    // Sem linha = piloto automático desligado para a conta.
+    r#"
+CREATE TABLE autopilot_policy (
+  account_key TEXT PRIMARY KEY,
+  policy      TEXT NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
 "#,
 ];
 
@@ -4795,7 +4806,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 30);
+        assert_eq!(v, 31);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

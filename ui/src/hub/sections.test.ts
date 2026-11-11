@@ -13,9 +13,9 @@ const q = (project_key: string, env_id = "e1") => ({
 
 test("grupos e seções: todas aparecem uma vez, na ordem do painel", () => {
   // Backup e snapshots ficam em Manutenção (#338): o Hub não tem mais o grupo.
-  expect(HUB_GROUPS.map((g) => g.label)).toEqual(["Operação", "Cadastro", "Segurança", "Acesso"]);
+  expect(HUB_GROUPS.map((g) => g.label)).toEqual(["Operação", "Cadastro", "Segurança", "Acesso", "Piloto automático"]);
   expect(new Set(HUB_SECTIONS).size).toBe(HUB_SECTIONS.length);
-  expect(HUB_SECTIONS).toHaveLength(10);
+  expect(HUB_SECTIONS).toHaveLength(11);
   expect(HUB_SECTIONS).not.toContain("backup");
   // Projetos e atribuições saiu do Hub (#18): o Cadastro fica só com Ambientes.
   expect(HUB_GROUPS.find((g) => g.label === "Cadastro")?.sections).toEqual(["envs"]);

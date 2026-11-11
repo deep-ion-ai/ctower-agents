@@ -36,6 +36,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Hub › Token do GitHub",
     "Hub › Sessões web",
     "Hub › Dispositivos",
+    "Hub › Orçamento do plano",
     // Seções da Manutenção (#335).
     "Manutenção › Visão geral",
     "Manutenção › Atualizações › Este app",
