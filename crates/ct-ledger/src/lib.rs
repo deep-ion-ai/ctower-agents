@@ -41,6 +41,10 @@ pub use hub::{
     ProjectProvider, QuarantineGroup,
 };
 pub use hub::{
+    AutopilotEvent, AutopilotSession, AutopilotSettings, ParkedSession, AUTOPILOT_EVENT_TTL_MS,
+    AUTOPILOT_MAX_PER_ENV_CEILING, AUTOPILOT_MAX_PER_ENV_DEFAULT,
+};
+pub use hub::{
     ChannelStates, HubPushDevice, NewPushSubscription, PushEvent, PushNotice, PushTarget,
     CHANNEL_STALE_MS, PUSH_FAILURES_MAX, PUSH_SUBSCRIPTIONS_MAX,
 };

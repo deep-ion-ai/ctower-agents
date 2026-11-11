@@ -74,8 +74,11 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// recusa `APPROVAL_REQUIRED` (-32052) da issue sem o rótulo exigido. 2.19
 /// (#191): `prompt` opcional no `session.start` com `autonomous: true` (o
 /// ambiente monta com `session_templates.autonomous` ou o template padrão)
-/// e `autonomous` em `SessionTemplates`.
-pub const PROTOCOL_VERSION: &str = "2.19";
+/// e `autonomous` em `SessionTemplates`. 2.20 (#183): `session.continue`
+/// (também pelo canal do hub), que escreve um texto fixo na sessão viva
+/// parada pelo limite real do plano, para o agendador do piloto automático
+/// retomá-la depois do reset.
+pub const PROTOCOL_VERSION: &str = "2.20";
 
 #[derive(Clone)]
 pub struct AppState {

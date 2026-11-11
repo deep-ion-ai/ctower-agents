@@ -1033,6 +1033,14 @@ impl Conn {
                 let v = blocking(&sessions, move |s| s.resume(&id, prompt.as_deref(), rc)).await?;
                 Ok(json!(v))
             }
+            // Sessão parada pelo limite real do plano (#183): o agendador do
+            // hub a retoma depois do reset escrevendo um texto fixo no PTY
+            // (nunca entrada livre, por isso pode vir pelo canal).
+            "session.continue" => {
+                let id = str_param(p, "session_id")?.to_string();
+                blocking(&sessions, move |s| s.continue_session(&id)).await?;
+                Ok(json!({ "continued": true }))
+            }
             // Liga o Remote Control numa sessão em andamento (#197): escreve
             // `/remote-control <nome>` no PTY; o id chega depois pelo push
             // `session_remote_control`.

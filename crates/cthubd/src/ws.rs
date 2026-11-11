@@ -405,7 +405,7 @@ fn issue_agent_param(p: &Value) -> Result<ct_ledger::IssueAgent, (i64, String)> 
 
 /// Chamada ao ambiente `env` pelo canal reverso, com o erro de ambiente
 /// desconhecido ou offline.
-async fn call_env(st: &HubState, env: String, method: &str, params: Value) -> RpcResult {
+pub(crate) async fn call_env(st: &HubState, env: String, method: &str, params: Value) -> RpcResult {
     // `session.start`: primeiro o limite de trabalho em andamento (#126),
     // que recusa o início automático num projeto no limite antes de
     // qualquer efeito (nem a checagem do canal); depois o modelo e o
@@ -766,6 +766,15 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         "github.status" | "github.set_token" | "github.clear_token" => github(st, method, &p).await,
         "hub.env.call" => env_call(st, p).await,
         "hub.plan.accounts" => plan_accounts(st, web_session.is_some()),
+        // Agendador do piloto automático (#183): o painel (#185) lê o estado
+        // e os eventos e pausa; na web, sem as chaves de conta.
+        "hub.autopilot.status"
+        | "hub.autopilot.events"
+        | "hub.autopilot.pause"
+        | "hub.autopilot.resume"
+        | "hub.autopilot.set" => {
+            crate::autopilot::runner::call(st, method, p, web_session.is_some()).await
+        }
         // Política de orçamento do piloto automático por conta (#180).
         m if m.starts_with("hub.autopilot.") => {
             let (st, method) = (st.clone(), method.to_string());
@@ -2113,6 +2122,8 @@ mod export {
         HubInfo::export_all_to(&dir).unwrap();
         HubPlanAccounts::export_all_to(&dir).unwrap();
         crate::autopilot::AutopilotPolicyView::export_all_to(&dir).unwrap();
+        crate::autopilot::AutopilotStatus::export_all_to(&dir).unwrap();
+        ct_ledger::AutopilotEvent::export_all_to(&dir).unwrap();
         ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();

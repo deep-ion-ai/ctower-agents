@@ -48,6 +48,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "session.start_project",
   "session.start_gestor",
   "session.resume",
+  "session.continue",
   "session.kill",
   "session.archive",
   "session.remote_control.enable",

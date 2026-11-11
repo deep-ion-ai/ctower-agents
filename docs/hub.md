@@ -542,7 +542,7 @@ O modo autônomo (#181, épico #178; hub 1.15 e ambiente 2.16) dá ao projeto um
 - **Ao ligar:** o modo chega aos ambientes pelo `GET /sync/config` (`ConfigProject.autonomy`; só o do modo recebe `autonomy_runner: true`). Na aplicação, o ambiente do modo cria a branch a partir da base, se faltar, e abre o PR rascunho `wip/autonoma → <base>`.
 - **Relato e aviso:** o ambiente do modo manda o estado da branch na fotografia do projeto (`ProjectChange.autonomy`, opcional), e o hub mostra o do ambiente do modo em `HubProject.autonomy_report` (`state` = `ok`, `conflict` ou `error`, a mensagem, os arquivos em conflito e o link do PR). Com `conflict`, a Visão geral e a seção do modo mostram o aviso "wip/autonoma em conflito com a base", e nenhuma issue autônoma começa até alguém resolver (uma sessão do projeto, iniciada pela pessoa, que traz a base para a branch).
 - **Status das issues:** o PR de uma issue para a branch de integração, aberto, leva a issue a `em_revisao`, como sempre; mesclado, ela **continua** em `em_revisao` (causa `autonomy_pr_merged`). Quando o PR da branch para a base é mesclado, as issues que tinham entrado nela vão a `concluido` (causa `autonomy_merged`). O hub e os ambientes aplicam a mesma regra no sync do GitHub; um ambiente anterior à 2.16 não conhece a branch e conclui a issue no merge para ela.
-- **Para o agendador (#183):** a sessão autônoma é o `session.start` de sempre, pelo canal reverso, com `autonomous: true`, no ambiente do modo (`HubProject.autonomy.env_id`). Antes de iniciar, o ambiente alinha a branch com a base; em conflito, responde o erro `-32050` (`AUTONOMY_CONFLICT`) e a issue não começa. `autonomy.align { owner, repo }` (também pelo canal) só alinha e devolve o relato. O agendador chama **sem `prompt`** (`{ project_id, gh_number, autonomous: true }`, ambiente 2.19, #191): o ambiente monta o prompt com o template autônomo do projeto ou o padrão (veja "Modo autônomo" em docs/ambiente.md).
+- **Para o agendador (#183):** a sessão autônoma é o `session.start` de sempre, pelo canal reverso, com `autonomous: true`, no ambiente do modo (`HubProject.autonomy.env_id`). Antes de iniciar, o ambiente alinha a branch com a base; em conflito, responde o erro `-32050` (`AUTONOMY_CONFLICT`) e a issue não começa. `autonomy.align { owner, repo }` (também pelo canal) só alinha e devolve o relato. O agendador chama **sem `prompt`** (`{ owner, repo, gh_number, autonomous: true }`, ambiente 2.19, #191; `owner` e `repo` porque o limite de trabalho em andamento do hub confere o projeto por eles): o ambiente monta o prompt com o template autônomo do projeto ou o padrão (veja "Modo autônomo" em docs/ambiente.md).
 - **Template da sessão autônoma (#191):** `session_templates.autonomous` no `hub.projects.update` (o objeto `session_templates` inteiro, como nos outros templates; até 64 KiB; vazio ou só com espaços = o padrão do `ct-core`), editável em **Configurações do projeto › Modo autônomo**, com o padrão como placeholder. Só o ambiente renderiza esse template. Um hub sem o campo no `HubProject.session_templates` (anterior à #191) descarta a chave, e a UI não mostra o campo.
 
 ## 3. Ligar um ambiente ao hub
@@ -768,6 +768,45 @@ Métodos (só no `/ws` do desktop; `account` é a chave de `hub.plan.accounts`):
 - `hub.autopilot.policy.preview { account, policy }` → `BudgetDecision` da política sem gravar.
 
 `BudgetDecision` traz `can_start`, `reasons` (`band_closed`, `no_band`, `after_cutoff`, `five_hour_over_cap`, `weekly_over_limit`, `no_reading`), a faixa atual e o teto da 5h, o uso considerado das duas janelas, `weekly` (reset, `W`, `d`, limite da reserva, ritmo e o limite efetivo) e `next_open_at` (quando o horário volta a permitir iniciar; `now` se já permite). No código, o agendador chama `cthubd::autopilot::account_decision(hub, account, now)` (`None` = conta sem política) e a regra pura é `ct_core::plan::budget::evaluate(policy, plan_view, now)`.
+
+### Agendador do piloto automático (`hub.autopilot.*`)
+
+Hub 1.19 e ambiente 2.20 (#183, épico #178). O laço roda **dentro do `cthubd`**, como tarefa em segundo plano: não depende do app nem da PWA abertos. A UI só configura (política, modo autônomo, modelo), observa e pausa. Roda 20 s depois de o hub subir, a cada minuto e logo depois de cada push de ambiente que traz leitura do plano.
+
+A cada ciclo (decisão pura em `cthubd::autopilot::plan::decide`, efeitos em `cthubd::autopilot::runner::tick`):
+
+1. **Estacionadas:** retoma as sessões estacionadas cujo reset já passou (veja abaixo).
+2. **Limite real do plano:** numa conta com política e com a janela de 5h ou a semanal em 100% (ou mais) antes do reset, as sessões **ociosas** (`idle`) dos ambientes autônomos dessa conta são estacionadas até o `resets_at` da janela esgotada (a de reset mais tarde, se as duas), mais 1 minuto de folga. Enquanto há sessão estacionada na conta, nenhuma sessão nova começa nela: a estacionada é retomada antes de qualquer outra.
+3. **Inícios:** só se o piloto não está pausado. Para cada projeto com o modo autônomo ligado, na **ordem dos projetos do hub** (`project.rank`, a mesma de Hub › Projetos e do ranking), confere nesta ordem: ambiente do modo online; conta do Claude Code do ambiente conhecida (pela leitura do plano); conta com política (sem política = piloto desligado nela); nenhuma sessão estacionada na conta; a política permite iniciar agora (`BudgetDecision.can_start`); branch de integração sem conflito (`autonomy_report.state != conflict`); vaga no ambiente (padrão: **uma sessão autônoma por vez em cada ambiente**, `hub.autopilot.set`); vaga no limite de trabalho em andamento do projeto (#126). Uma conta inicia no máximo uma sessão por ciclo (a decisão do orçamento é de antes do início; o ciclo seguinte reavalia).
+4. **Item:** o primeiro elegível do projeto, por prioridade, depois pela ordem do item na classe e pelo número. Elegível = issue (não épico) no espelho, em `backlog`, com o rótulo de aprovação do projeto (rótulo desligado = nenhum item aprovado), com prioridade, com modelo (#182) e sem sessão viva em nenhum ambiente.
+5. **Início:** `session.start { owner, repo, gh_number, autonomous: true }` pelo canal reverso, no ambiente do modo, pelo mesmo `call_env` do `hub.env.call`: o hub completa o modelo e o esforço da issue e recusa no limite de trabalho em andamento. **Sem `prompt`** (o ambiente monta o prompt autônomo, #191) e **nunca** com `override_approval`. Um início que o ambiente ainda não sincronizou conta como sessão viva por 10 minutos, para o ciclo seguinte não iniciar outra no mesmo ambiente.
+
+O agendador **nunca encerra sessão**: nem por orçamento, nem por faixa, nem por corte de início, nem pausado. Só deixa de iniciar issues novas.
+
+**Retomada da sessão estacionada:** depois do reset, com o ambiente online, a sessão viva recebe `session.continue { session_id }` (ambiente 2.20): o ambiente escreve no PTY um texto fixo ("O limite do plano renovou. Continue a issue de onde parou, sem perguntar.") e Enter, e grava o evento `session_continued`. É só texto fixo, nunca entrada livre, por isso está na lista do canal. Sessão que encerrou nesse meio-tempo é retomada com `session.resume { session_id, prompt }` (o mesmo texto). Se a leitura nova mostra outra janela esgotada, a sessão estaciona de novo até o reset dela. Sessão que sumiu, foi arquivada ou voltou a rodar antes do reset sai do estacionamento (`unparked`). Pausado, o agendador ainda estaciona e retoma: a sessão em andamento termina a issue.
+
+**Pausa:** `hub.autopilot.pause` e `hub.autopilot.resume` suspendem e retomam o agendador na hora (o estado fica no `hub.db` e sobrevive a reinícios); a sessão em andamento continua. Devolvem `AutopilotSettings { paused, paused_at, max_sessions_per_env }`.
+
+**Eventos** (tabela `autopilot_event`, migração 36; guardados por 90 dias), para o painel e o resumo da manhã (#185). Cada um traz `at`, `kind`, `scope`, `reason` (código estável), `message` (pt-BR, sem nada da conversa do agente) e o contexto (`account_key`, `env_id`, `owner`, `repo`, `gh_number`, `session_id`):
+
+| `kind` | Quando | `scope` | `reason` |
+|---|---|---|---|
+| `started` | sessão iniciada (com o `session_id` devolvido) | `project:<owner/repo>` | — |
+| `start_failed` | o hub ou o ambiente recusou o início | `item:<owner/repo#n>` | `conflict` (-32050), `wip_limit` (-32051), `approval_required` (-32052), `env_offline`, `timeout`, `invalid_params` (ambiente < 2.19), `env_error` |
+| `refused` | o projeto ou a conta não pode iniciar agora | `project:<owner/repo>` ou `account:<chave>` | `env_offline`, `unknown_account`, `no_policy`, `budget:<motivos>` (ex.: `budget:after_cutoff+band_closed`), `conflict`, `wip_limit`, `no_eligible` |
+| `parked` / `resumed` / `resume_failed` / `unparked` | estacionamento pelo limite real | `item:<owner/repo#n>` | a janela (`five_hour`, `seven_day`) |
+| `paused` / `unpaused` | pausa e retomada | `hub` | — |
+
+`refused` e `start_failed` só são gravados de novo quando o `reason` muda no mesmo escopo (o laço roda a cada minuto). Situações normais (ambiente ocupado, pausado, vez de outra conta) não viram evento; aparecem no status. Cada evento novo manda o push `hub.autopilot.changed` (sem dados) às UIs, também à web.
+
+**Métodos:**
+
+- `hub.autopilot.status` → `AutopilotStatus`: `settings`, `last_tick_at`, `now`, `accounts` (as contas com política: `decision` e a janela esgotada, se houver), `projects` (cada projeto autônomo na ordem do agendador: ambiente e se está online, conta, `blocked`/`blocked_message` — `paused`, `env_offline`, `unknown_account`, `no_policy`, `parked`, `budget:…`, `conflict`, `env_busy`, `wip_limit`, `account_turn` ou `no_eligible` —, `next` e a fila com o `skip` de cada item: `epic`, `status`, `not_in_mirror`, `not_approved`, `no_priority`, `no_model` ou `live_session`), `sessions` (as vivas nos ambientes autônomos), `parked` e os 50 eventos mais recentes. Não tem efeito: é a decisão do ciclo calculada agora.
+- `hub.autopilot.events { limit?, before? }` → eventos do mais novo ao mais velho (`limit` até 500; `before` = id, para paginar).
+- `hub.autopilot.pause` / `hub.autopilot.resume` → `AutopilotSettings`.
+- `hub.autopilot.set { max_sessions_per_env }` (1 a 8) → `AutopilotSettings`; só no desktop.
+
+Na web (`/web/ws`) entram `status`, `events`, `pause` e `resume`; as chaves de conta viram `conta-N` (como em `hub.plan.accounts`). A política (`hub.autopilot.policy.*`) e o `set` continuam só no desktop.
 
 ### Hub fora do ar
 
