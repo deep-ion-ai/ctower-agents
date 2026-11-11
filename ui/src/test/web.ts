@@ -31,6 +31,8 @@ export function hubItem(w: Partial<HubDashboardWorkItem> = {}): HubDashboardWork
     closed_at: null,
     priority: null,
     rank: null,
+    model: null,
+    effort: null,
     ...w,
   };
 }

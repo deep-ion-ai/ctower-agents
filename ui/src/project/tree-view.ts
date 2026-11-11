@@ -24,7 +24,13 @@ export const STATUS_ORDER: WorkItemStatus[] = [
  */
 export interface ViewNode {
   issue: { gh_number: number; title: string; state: string; assignees?: readonly string[] } & SprintIssue;
-  work_item: { status: WorkItemStatus; priority?: Priority | null; rank?: number | null } | null;
+  work_item: {
+    status: WorkItemStatus;
+    priority?: Priority | null;
+    rank?: number | null;
+    /** Modelo do agente na issue (#182), só no hub. */
+    model?: string | null;
+  } | null;
   summary: { last_activity_at: number | null };
   children: ViewNode[];
 }

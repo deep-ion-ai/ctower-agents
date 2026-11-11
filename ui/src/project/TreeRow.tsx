@@ -27,6 +27,28 @@ export const MERGED_OPEN_TEXT = "PR mesclado, issue aberta";
 /** O aviso acima com o nome da mudança na forja do projeto (`MR mesclado` no GitLab). */
 export const mergedOpenText = (p?: ProviderProject | null) => `${changeLabel(p)} mesclado, issue aberta`;
 
+/**
+ * Projeto no modo autônomo (piloto automático, #181). Ponto de extensão: lê
+ * o campo opcional `autonomous` do projeto do hub, que a #181 acrescenta; sem
+ * ele (hub anterior, projeto local ou antes da #181), o projeto não é
+ * autônomo e o selo de modelo faltando não aparece.
+ */
+export const isAutonomous = (p: unknown): boolean =>
+  typeof p === "object" && p !== null && (p as { autonomous?: unknown }).autonomous === true;
+
+export const MISSING_MODEL_TEXT = "sem modelo";
+
+/**
+ * Falta o modelo do agente (#182): issue aberta, que não é épico, sem modelo
+ * no hub, num projeto autônomo. O agendador (#183) só inicia issue com modelo.
+ */
+export const missingModel = (n: ViewNode & { issue: { has_sub_issues?: boolean } }, project: unknown): boolean =>
+  isAutonomous(project) &&
+  n.issue.state === "open" &&
+  !n.issue.has_sub_issues &&
+  statusKey(n) !== "concluido" &&
+  !n.work_item?.model;
+
 /** Texto do contador de decisões: `◆3`, ou `◆3!` com autônomas pendentes de revisão. */
 export const decisionsText = (d: WorkItemSummary["decisions"]) =>
   `◆${d.total}${d.pending_autonomous > 0 ? "!" : ""}`;
@@ -49,6 +71,7 @@ export function rowLabel(node: RowNode, now: number, base?: string, project?: Pr
   if (sprint) parts.push(`sprint ${sprint.name}`);
   if (pr) parts.push(`${changeRef(project, pr.number)} ${PR_TEXT[pr.state]}`);
   if (mergedOpen(node, base)) parts.push(mergedOpenText(project));
+  if (missingModel(node, project)) parts.push(`${MISSING_MODEL_TEXT} (o piloto automático não a inicia)`);
   if (decisions.total > 0) parts.push(decisionsTitle(decisions));
   parts.push(last_activity_at !== null ? `última atividade ${ago(last_activity_at, now)}` : "sem atividade");
   return parts.join(", ");

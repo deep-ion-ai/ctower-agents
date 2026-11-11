@@ -9,7 +9,14 @@ import type {
   WorkItemSummary,
 } from "../protocol/gen";
 import type { HubDecision, HubHistory, HubRanking, HubSession, Priority } from "../protocol/hub-gen";
-import { agentLabel } from "../settings/session-options";
+import {
+  agentLabel,
+  CLAUDE_EFFORTS,
+  CLAUDE_MODELS,
+  DEFAULT_EFFORT_VALUE,
+  DEFAULT_MODEL_VALUE,
+  issueAgentLabel,
+} from "../settings/session-options";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 import { useOpenShell } from "../terminal/shells";
@@ -52,7 +59,14 @@ export const WORKITEM_BODY_PROTOCOL = "1.10";
 /** Nó da árvore (hub ou local) que o painel mostra. Prioridade só no hub. */
 export interface PanelNode {
   issue: IssueRow;
-  work_item: { status: WorkItemStatus; branch: string | null; priority?: Priority | null } | null;
+  work_item: {
+    status: WorkItemStatus;
+    branch: string | null;
+    priority?: Priority | null;
+    /** Modelo e esforço do agente na issue (#182), só no hub. */
+    model?: string | null;
+    effort?: string | null;
+  } | null;
   summary: WorkItemSummary;
 }
 
@@ -195,12 +209,18 @@ export function WorkItemPanel({
   // 0 é o espelho sem data: sem subtítulo.
   const updatedAt = node.issue.updated_at || null;
   const priority: Priority | null = (hubUp ? hubItem?.priority : undefined) ?? node.work_item?.priority ?? null;
+  // Modelo e esforço do agente (#182): do hub (ausentes num hub anterior).
+  const agentSrc = hubUp && hubItem && hubItem.model !== undefined ? hubItem : node.work_item;
+  const agent = { model: agentSrc?.model ?? null, effort: agentSrc?.effort ?? null };
 
   const [history, setHistory] = useState<HubHistory | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [pages, setPages] = useState(1);
   const [prioMenu, setPrioMenu] = useState(false);
+  const [modelMenu, setModelMenu] = useState(false);
+  const [modelDraft, setModelDraft] = useState(agent.model ?? DEFAULT_MODEL_VALUE);
+  const [effortDraft, setEffortDraft] = useState(agent.effort ?? DEFAULT_EFFORT_VALUE);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [viewing, setViewing] = useState(false);
@@ -279,6 +299,7 @@ export function WorkItemPanel({
     try {
       await api.hubCall(method, { owner, repo, number: n, ...params });
       setPrioMenu(false);
+      setModelMenu(false);
       setTick((t) => t + 1);
       onStatusChanged?.();
     } catch (e) {
@@ -294,6 +315,24 @@ export function WorkItemPanel({
       return;
     }
     void hubChange("hub.workitem.set_priority", { priority: p });
+  };
+
+  /** Abre o editor do modelo com o valor atual. */
+  const toggleModelMenu = () => {
+    setModelDraft(agent.model ?? DEFAULT_MODEL_VALUE);
+    setEffortDraft(agent.effort ?? DEFAULT_EFFORT_VALUE);
+    setModelMenu((m) => !m);
+  };
+
+  /** Grava o modelo e o esforço (`hub.workitem.set_model`); sem modelo, limpa os dois. */
+  const saveModel = () => {
+    const model = modelDraft || null;
+    const effort = model ? effortDraft || null : null;
+    if (model === agent.model && effort === agent.effort) {
+      setModelMenu(false);
+      return;
+    }
+    void hubChange("hub.workitem.set_model", { model, effort });
   };
 
   /** Sobe ou desce uma posição dentro da classe (vizinho pelo `hub.ranking.get` do projeto). */
@@ -496,6 +535,11 @@ export function WorkItemPanel({
                 {priority}
               </span>
             )}
+            {agent.model && (
+              <span className="iv-chip" title="Modelo e esforço do agente nesta issue">
+                {issueAgentLabel(agent)}
+              </span>
+            )}
             {warn && (
               <span
                 className="badge"
@@ -623,6 +667,52 @@ export function WorkItemPanel({
                     note="Reordenar fica no app desktop"
                   />
                 )}
+              </div>
+            )}
+          </div>
+          <div className="status-menu">
+            <button
+              type="button"
+              className="btn"
+              aria-controls="model-pop"
+              aria-expanded={modelMenu}
+              disabled={!hubUp}
+              title="Modelo e esforço com que a sessão desta issue inicia"
+              onClick={toggleModelMenu}
+            >
+              Modelo: {issueAgentLabel(agent)} ▾
+            </button>
+            {modelMenu && hubUp && (
+              <div id="model-pop" className="status-pop" role="group" aria-label="Mudar modelo e esforço">
+                <label className="opt">
+                  <span>Modelo</span>
+                  <select value={modelDraft} disabled={busy} onChange={(e) => setModelDraft(e.target.value)}>
+                    <option value={DEFAULT_MODEL_VALUE}>sem modelo</option>
+                    {CLAUDE_MODELS.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="opt">
+                  <span>Esforço</span>
+                  <select
+                    value={effortDraft}
+                    disabled={busy || !modelDraft}
+                    onChange={(e) => setEffortDraft(e.target.value)}
+                  >
+                    <option value={DEFAULT_EFFORT_VALUE}>padrão</option>
+                    {CLAUDE_EFFORTS.map((x) => (
+                      <option key={x.value} value={x.value}>
+                        {x.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button type="button" className="opt" disabled={busy} onClick={saveModel}>
+                  Salvar
+                </button>
               </div>
             )}
           </div>

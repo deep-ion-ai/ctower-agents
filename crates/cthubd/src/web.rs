@@ -48,6 +48,9 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.tracker.add_issue",
     "hub.workitem.set_status",
     "hub.workitem.set_priority",
+    // Modelo e esforço do agente na issue (#182): a mesma classe de escrita
+    // da prioridade, que a tela da issue da web também muda.
+    "hub.workitem.set_model",
     "hub.ranking.get",
     "hub.health.get",
     "hub.proposals.list",

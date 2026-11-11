@@ -13,13 +13,13 @@ ref: string,
  */
 title: string | null, 
 /**
- * Valor do alvo lido pelo hub ao criar: `{ "priority": .. }` ou
- * `{ "status": .. }`.
+ * Valor do alvo lido pelo hub ao criar: `{ "priority": .. }`,
+ * `{ "status": .. }` ou `{ "model": .., "effort": .. }`.
  */
 current: unknown, 
 /**
- * `{ "priority": "P1" | null, "before"?: n, "after"?: n }` ou
- * `{ "status": .. }`.
+ * `{ "priority": "P1" | null, "before"?: n, "after"?: n }`,
+ * `{ "status": .. }` ou `{ "model": "opus", "effort": "high" | null }`.
  */
 proposed: unknown, justification: string, state: ProposalState, env_id: string, 
 /**
@@ -33,4 +33,9 @@ decision_note: string | null,
 /**
  * Evento que aplicou a mudança (aprovada com algo a mudar).
  */
-applied_event_uid: string | null, };
+applied_event_uid: string | null, 
+/**
+ * Valor que o usuário aprovou no lugar do proposto (só `model`, #182);
+ * nulo = aprovada como proposta. Ausente em hubs anteriores.
+ */
+chosen: unknown, };

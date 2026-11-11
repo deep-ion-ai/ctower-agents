@@ -5,7 +5,8 @@ use crate::paths::{private_dir, write_private};
 use crate::{Result, Sessions, SessionsError};
 use ct_core::branch::{branch_from_pattern, worktree_dir_name};
 use ct_core::{
-    ProjectKind, SessionMode, SessionState, Tool, WorkItemKind, WorkItemTrigger, CLAUDE_MODELS,
+    ProjectKind, SessionMode, SessionState, Tool, WorkItemKind, WorkItemTrigger, CLAUDE_EFFORTS,
+    CLAUDE_MODELS,
 };
 use ct_git::{ensure_worktree, WorktreeSpec};
 use ct_ledger::{Ledger, NewEvent, NewSession, Project, Session, WorkItem};
@@ -32,6 +33,9 @@ pub struct StartRequest {
 pub struct AgentOptions {
     /// Alias de [`CLAUDE_MODELS`]; `None` = padrão do Claude Code.
     pub model: Option<String>,
+    /// Nível de [`CLAUDE_EFFORTS`] (`--effort`, issue #182); `None` = padrão
+    /// do Claude Code.
+    pub effort: Option<String>,
     pub mode: SessionMode,
     /// Liga o Remote Control do Claude Code (`--remote-control "<nome>"`,
     /// issue #197). Recusado se o ambiente efetivo da sessão o impede.
@@ -42,9 +46,18 @@ impl AgentOptions {
     fn validate(&self) -> Result<()> {
         match &self.model {
             Some(m) if !CLAUDE_MODELS.contains(&m.as_str()) => {
-                Err(SessionsError::Invalid(format!(
+                return Err(SessionsError::Invalid(format!(
                     "modelo não suportado: {m} (aceitos: {})",
                     CLAUDE_MODELS.join(", ")
+                )))
+            }
+            _ => {}
+        }
+        match &self.effort {
+            Some(e) if !CLAUDE_EFFORTS.contains(&e.as_str()) => {
+                Err(SessionsError::Invalid(format!(
+                    "esforço não suportado: {e} (aceitos: {})",
+                    CLAUDE_EFFORTS.join(", ")
                 )))
             }
             _ => Ok(()),
@@ -60,6 +73,9 @@ impl AgentOptions {
         let mut args = Vec::new();
         if let Some(m) = &self.model {
             args.extend(["--model".to_string(), m.clone()]);
+        }
+        if let Some(e) = &self.effort {
+            args.extend(["--effort".to_string(), e.clone()]);
         }
         let mut append = Vec::new();
         if gestor {
@@ -81,6 +97,15 @@ impl AgentOptions {
     }
 }
 
+/// Esforço (`--effort`) do argv de uma sessão já lançada, para a retomada
+/// seguir com ele (#182): o ledger guarda o modelo, não o esforço.
+pub(crate) fn effort_from_argv(argv: &[String]) -> Option<String> {
+    argv.windows(2)
+        .find(|w| w[0] == "--effort")
+        .map(|w| w[1].clone())
+        .filter(|e| CLAUDE_EFFORTS.contains(&e.as_str()))
+}
+
 /// Instrução do modo `subagents`, somada ao system prompt do Claude Code.
 const SUBAGENTS_PROMPT: &str = "Modo subagents (Control Tower): delegue cada tarefa do trabalho \
 a um subagente (ferramenta Agent), com contexto suficiente para executá-la sozinho, em paralelo \
@@ -94,9 +119,10 @@ pub const GESTOR_LIMITS: &str = "Gestor de projetos (Control Tower): limites fix
 1. Leia o hub só pelas ferramentas portfolio_*. Não leia arquivos de token nem de \
 secrets (~/.config/ctower/*.token, ~/.config/ctower/env.key, secrets-cache.age, ~/.config/cthub/, \
 snapshots secrets-*.age) nem chame o hub ou o ambiente por HTTP.
-2. Prioridade e status mudam só por portfolio_propose, que cria uma proposta pendente; o usuário \
-aprova na tela Hub. Nunca diga que uma mudança foi aplicada antes da aprovação; confira com \
-portfolio_list_proposals.
+2. Prioridade, status e o modelo e esforço do agente na issue mudam só por portfolio_propose, que \
+cria uma proposta pendente; o usuário aprova na tela Hub. Nunca diga que uma mudança foi aplicada \
+antes da aprovação; confira com portfolio_list_proposals. Ao criar uma issue, sugira o modelo e o \
+esforço dela (kind model), justificando pelo tamanho, pelo risco e pelas áreas tocadas.
 3. Crie issue (gh issue create -R owner/repo; nos projetos Jira, jira issue create) só depois do \
 ok explícito do usuário nesta conversa. Não edite, feche, reabra, comente nem mude o status de \
 issues (no Jira, nada de jira issue move, edit ou comment); não crie, edite, revise nem mescle PRs \
@@ -1341,6 +1367,7 @@ mod tests {
         let mut req = env.request(16, "Modelo");
         req.agent = AgentOptions {
             model: Some("opus".into()),
+            effort: Some("high".into()),
             mode: SessionMode::Subagents,
             ..AgentOptions::default()
         };
@@ -1349,6 +1376,8 @@ mod tests {
         let tail = [
             "--model".to_string(),
             "opus".into(),
+            "--effort".into(),
+            "high".into(),
             "--append-system-prompt".into(),
             SUBAGENTS_PROMPT.into(),
             "prompt inicial".into(),
@@ -1368,8 +1397,10 @@ mod tests {
         assert!(!p
             .launch_cmd
             .iter()
-            .any(|a| a == "--model" || a == "--append-system-prompt"));
+            .any(|a| a == "--model" || a == "--effort" || a == "--append-system-prompt"));
         assert_eq!((p.model, p.mode), (None, SessionMode::Native));
+        assert_eq!(effort_from_argv(&s.launch_cmd).as_deref(), Some("high"));
+        assert_eq!(effort_from_argv(&p.launch_cmd), None);
     }
 
     fn rules(project: Option<(i64, &str)>, epics: &[(i64, i64, &str)]) -> ct_ledger::ConfigRules {
@@ -1924,6 +1955,15 @@ mod tests {
             env.sessions
                 .start_project(env.project_id, "planejar", None, &bad),
             Err(SessionsError::Invalid(_))
+        ));
+        let effort = AgentOptions {
+            effort: Some("turbo".into()),
+            ..AgentOptions::default()
+        };
+        assert!(matches!(
+            env.sessions
+                .start_project(env.project_id, "planejar", None, &effort),
+            Err(SessionsError::Invalid(m)) if m.contains("turbo")
         ));
         assert!(
             !env.cfg.worktrees_root.join("demo").exists(),

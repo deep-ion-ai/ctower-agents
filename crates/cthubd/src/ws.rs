@@ -359,7 +359,56 @@ async fn env_call(st: &HubState, p: Value) -> RpcResult {
             format!("método indisponível pelo hub: {}", req.method),
         ));
     }
+    let params = if req.method == "session.start" {
+        let hub = st.hub.clone();
+        tokio::task::spawn_blocking(move || with_issue_agent(&hub.lock(), params))
+            .await
+            .map_err(|e| (-32603, e.to_string()))?
+    } else {
+        params
+    };
     call_env(st, env, &req.method, params).await
+}
+
+/// `session.start` de uma issue pelo hub (#182): sem `model` (ou `effort`)
+/// nos parâmetros, vale o da issue no hub, para a sessão iniciada à mão
+/// pela web, e pelo agendador (#183), usar o modelo decidido. Só com
+/// `owner`, `repo` e `gh_number`; o que veio nos parâmetros vence.
+pub(crate) fn with_issue_agent(hub: &ct_ledger::Hub, mut params: Value) -> Value {
+    let (Some(owner), Some(repo), Some(n)) = (
+        params.get("owner").and_then(Value::as_str),
+        params.get("repo").and_then(Value::as_str),
+        params.get("gh_number").and_then(Value::as_i64),
+    ) else {
+        return params;
+    };
+    let Ok(Some(agent)) = hub.issue_agent(owner, repo, n) else {
+        return params;
+    };
+    let absent = |p: &Value, k: &str| p.get(k).is_none_or(Value::is_null);
+    if let Some(m) = agent.model.filter(|_| absent(&params, "model")) {
+        params["model"] = json!(m);
+        if let Some(e) = agent.effort.filter(|_| absent(&params, "effort")) {
+            params["effort"] = json!(e);
+        }
+    }
+    params
+}
+
+/// `{ model, effort }` de `hub.workitem.set_model` (nulos ou ausentes =
+/// limpar).
+fn issue_agent_param(p: &Value) -> Result<ct_ledger::IssueAgent, (i64, String)> {
+    let field = |k: &str| match p.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(v)) if !v.trim().is_empty() => Ok(Some(v.trim().to_string())),
+        Some(_) => Err(invalid(format!("{k} deve ser texto ou null"))),
+    };
+    let agent = ct_ledger::IssueAgent {
+        model: field("model")?,
+        effort: field("effort")?,
+    };
+    agent.validate().map_err(invalid)?;
+    Ok(agent)
 }
 
 /// Chamada ao ambiente `env` pelo canal reverso, com o erro de ambiente
@@ -806,6 +855,7 @@ fn hub_call(st: &HubState, method: &str, p: &Value) -> RpcResult {
         method,
         "hub.workitem.set_status"
             | "hub.workitem.set_priority"
+            | "hub.workitem.set_model"
             | "hub.workitem.move"
             | "hub.proposals.decide"
     );
@@ -1064,6 +1114,16 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 .map(|w| json!(w))
                 .map_err(e)
         }
+        // Modelo e esforço do agente na issue (#182): `model` null limpa.
+        "hub.workitem.set_model" => {
+            let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
+            let number = i64_param(p, "number")?;
+            let agent = issue_agent_param(p)?;
+            let reason = p.get("reason").and_then(Value::as_str);
+            h.set_model(owner, repo, number, &agent, reason, None, &st.hub_id)
+                .map(|w| json!(w))
+                .map_err(e)
+        }
         "hub.workitem.move" => {
             let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
             let number = i64_param(p, "number")?;
@@ -1156,10 +1216,19 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 .and_then(Value::as_bool)
                 .ok_or_else(|| invalid("parâmetro obrigatório: approve (true ou false)"))?;
             let note = p.get("note").and_then(Value::as_str);
+            // Proposta `model` aprovada com outro valor (#182): `value`, só
+            // com `id`.
+            let value = p.get("value").filter(|v| !v.is_null());
             let decide =
                 |id: i64| h.decide_proposal(id, approve, note, &st.hub_id, ct_core::now_ms());
             match (p.get("id").and_then(Value::as_i64), p.get("ids")) {
-                (Some(id), None) => decide(id).map(|v| json!(v)).map_err(e),
+                (Some(id), None) => h
+                    .decide_proposal_with(id, approve, value, note, &st.hub_id, ct_core::now_ms())
+                    .map(|v| json!(v))
+                    .map_err(e),
+                (None, Some(_)) if value.is_some() => {
+                    Err(invalid("value só vale com id (uma proposta)"))
+                }
                 // Em lote: cada uma na sua transação; uma recusada não
                 // impede as outras.
                 (None, Some(ids)) => {
@@ -2375,6 +2444,121 @@ pub(crate) mod tests {
             )
             .await;
         assert_eq!(v["result"]["priority"], Value::Null);
+    }
+
+    /// #182: a tela da issue define o modelo e o esforço, a proposta
+    /// `model` é aprovada com outro valor, e o `session.start` pelo hub
+    /// recebe o modelo da issue quando não traz um.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn modelo_da_issue_definir_aprovar_alterado_e_inicio_pelo_hub() {
+        let (st, cookie) = hub_web();
+        let env_id = st.hub.lock().list_envs().unwrap()[0].env_id.clone();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let d = |extra: Value| {
+            let mut v = json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 5 });
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let v = ui
+            .call(
+                "hub.workitem.set_model",
+                d(json!({ "model": "sonnet", "effort": "medium", "reason": "pequena" })),
+            )
+            .await;
+        assert_eq!(v["result"]["model"], "sonnet", "{v}");
+        assert_eq!(v["result"]["effort"], "medium", "{v}");
+        for bad in [
+            json!({ "model": "gpt-4" }),
+            json!({ "model": "opus", "effort": "turbo" }),
+            json!({ "effort": "high" }),
+            json!({ "model": 3 }),
+        ] {
+            let v = ui.call("hub.workitem.set_model", d(bad.clone())).await;
+            assert_eq!(v["error"]["code"], -32602, "{bad}: {v}");
+        }
+
+        // Proposta do gestor aprovada com outro valor: grava o escolhido.
+        let id = st
+            .hub
+            .lock()
+            .create_proposal(
+                &ct_ledger::NewProposal {
+                    kind: ct_core::ProposalKind::Model,
+                    owner: "deep-ion-ai".into(),
+                    repo: "demo".into(),
+                    number: 5,
+                    proposed: json!({ "model": "opus", "effort": "high" }),
+                    justification: "toca autenticação".into(),
+                },
+                &env_id,
+                Some("s-gestor"),
+                ct_core::now_ms(),
+            )
+            .unwrap()
+            .id;
+        let v = ui
+            .call(
+                "hub.proposals.decide",
+                json!({ "ids": [id], "approve": true, "value": { "model": "haiku" } }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        let v = ui
+            .call(
+                "hub.proposals.decide",
+                json!({ "id": id, "approve": true,
+                        "value": { "model": "opus", "effort": "max" } }),
+            )
+            .await;
+        assert_eq!(v["result"]["state"], "aprovada", "{v}");
+        assert_eq!(
+            v["result"]["chosen"],
+            json!({ "model": "opus", "effort": "max" })
+        );
+        let v = ui
+            .call(
+                "hub.workitem.history",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 5 }),
+            )
+            .await;
+        let wi = &v["result"]["work_item"];
+        assert_eq!(
+            (wi["model"].clone(), wi["effort"].clone()),
+            (json!("opus"), json!("max"))
+        );
+
+        // Início pelo hub: sem modelo nos parâmetros, vale o da issue; com
+        // modelo, o escolhido na hora.
+        let mut web = web_ui(&url, &cookie).await;
+        let _env = fake_env(&st, &url, "env-x").await;
+        let start = |extra: Value| {
+            let mut p = json!({ "owner": "deep-ion-ai", "repo": "demo", "gh_number": 5,
+                                "prompt": "vai" });
+            p.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            json!({ "env": "env-x", "method": "session.start", "params": p })
+        };
+        let v = web.call("hub.env.call", start(json!({}))).await;
+        assert_eq!(v["result"]["params"]["model"], "opus", "{v}");
+        assert_eq!(v["result"]["params"]["effort"], "max", "{v}");
+        let v = web
+            .call("hub.env.call", start(json!({ "model": null })))
+            .await;
+        assert_eq!(v["result"]["params"]["model"], "opus", "{v}");
+        let v = web
+            .call("hub.env.call", start(json!({ "model": "haiku" })))
+            .await;
+        assert_eq!(v["result"]["params"]["model"], "haiku", "{v}");
+        assert!(v["result"]["params"].get("effort").is_none(), "{v}");
+        // Issue sem work item no hub: segue como veio.
+        let mut p = start(json!({}));
+        p["params"]["gh_number"] = json!(77);
+        let v = web.call("hub.env.call", p).await;
+        assert!(v["result"]["params"].get("model").is_none(), "{v}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

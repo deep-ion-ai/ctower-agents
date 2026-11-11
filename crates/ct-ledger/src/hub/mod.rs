@@ -28,6 +28,7 @@ mod config;
 mod env_keys;
 mod health;
 mod legacy;
+mod model;
 mod priority;
 mod proposals;
 mod push;
@@ -50,6 +51,7 @@ pub use health::{
     HealthCounts, HealthFilter, HealthKind, HealthSignal, HealthThresholds, HubHealth, Severity,
 };
 pub use legacy::LegacyAdoption;
+pub use model::IssueAgent;
 pub use priority::{
     HubRanking, HubRankingItem, Placement, RankingFilter, RANKING_LIMIT, RANKING_MAX,
 };
@@ -645,6 +647,54 @@ ALTER TABLE env ADD COLUMN autonomous INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE project ADD COLUMN autonomy_config TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE project_location ADD COLUMN autonomy TEXT;
 "#,
+    // 33: modelo e esforço do agente por work item (#182), colunas só do
+    // hub como a prioridade (a ingestão nunca as escreve; histórico no
+    // evento `model_set`). A proposta ganha o tipo `model` e o valor que o
+    // usuário aprovou quando o alterou (`decided_value`; nulo = o proposto):
+    // o CHECK do `kind` só muda recriando a tabela, com os mesmos índices e
+    // gatilhos da migração 13.
+    r#"
+ALTER TABLE work_item ADD COLUMN model TEXT;
+ALTER TABLE work_item ADD COLUMN effort TEXT;
+
+CREATE TABLE proposal_new (
+  id                INTEGER PRIMARY KEY,
+  uid               TEXT NOT NULL UNIQUE,
+  kind              TEXT NOT NULL CHECK (kind IN ('priority', 'status', 'model')),
+  project_id        INTEGER NOT NULL REFERENCES project(id),
+  gh_number         INTEGER NOT NULL,
+  current_value     TEXT NOT NULL,
+  proposed_value    TEXT NOT NULL,
+  justification     TEXT NOT NULL,
+  state             TEXT NOT NULL DEFAULT 'pendente'
+                    CHECK (state IN ('pendente', 'aprovada', 'rejeitada', 'obsoleta')),
+  env_id            TEXT NOT NULL,
+  session_id        TEXT,
+  created_at        INTEGER NOT NULL,
+  decided_at        INTEGER,
+  decision_note     TEXT,
+  applied_event_uid TEXT,
+  decided_value     TEXT
+);
+INSERT INTO proposal_new (id, uid, kind, project_id, gh_number, current_value, proposed_value,
+                          justification, state, env_id, session_id, created_at, decided_at,
+                          decision_note, applied_event_uid)
+SELECT id, uid, kind, project_id, gh_number, current_value, proposed_value, justification,
+       state, env_id, session_id, created_at, decided_at, decision_note, applied_event_uid
+FROM proposal;
+DROP TABLE proposal;
+ALTER TABLE proposal_new RENAME TO proposal;
+CREATE INDEX proposal_target_idx ON proposal(project_id, gh_number, kind, state);
+CREATE INDEX proposal_state_idx ON proposal(state, created_at);
+CREATE TRIGGER proposal_immutable
+BEFORE UPDATE OF id, uid, kind, project_id, gh_number, current_value, proposed_value,
+  justification, env_id, session_id, created_at ON proposal
+BEGIN SELECT RAISE(ABORT, 'proposta só pode ter a decisão alterada'); END;
+CREATE TRIGGER proposal_decided_once
+BEFORE UPDATE OF state ON proposal
+WHEN OLD.state <> 'pendente'
+BEGIN SELECT RAISE(ABORT, 'proposta já decidida'); END;
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -891,6 +941,14 @@ pub struct HubWorkItem {
     /// Posição dentro de (projeto, prioridade); nulo = fim da classe.
     #[serde(default)]
     pub rank: Option<i64>,
+    /// Modelo do agente para a sessão da issue (#182): alias de
+    /// `ct_core::CLAUDE_MODELS`; nulo = não definido. Só do hub; ausente
+    /// em hubs anteriores.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Esforço (`ct_core::CLAUDE_EFFORTS`); nulo = padrão do Claude Code.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -994,8 +1052,8 @@ const PROJECT_COLS: &str =
      sync_env_id, docs_config, session_templates, autonomy_config, \
      (SELECT l.autonomy FROM project_location l WHERE l.project_id = project.id \
         AND l.env_id = json_extract(project.autonomy_config, '$.env_id'))";
-const WORK_ITEM_COLS: &str =
-    "id, project_id, gh_number, kind, status, branch, created_at, closed_at, priority, rank";
+const WORK_ITEM_COLS: &str = "id, project_id, gh_number, kind, status, branch, created_at, \
+                              closed_at, priority, rank, model, effort";
 const SESSION_COLS: &str = "id, env_id, work_item_id, tool, tool_session_id, cwd, state, \
                             exit_code, started_at, last_event_at, ended_at, model, mode, \
                             rc_session_id";
@@ -1040,6 +1098,8 @@ fn row_to_work_item(r: &Row) -> rusqlite::Result<HubWorkItem> {
         closed_at: r.get(7)?,
         priority: opt_parse_col(r, 8)?,
         rank: r.get(9)?,
+        model: r.get(10)?,
+        effort: r.get(11)?,
     })
 }
 
@@ -4873,7 +4933,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 32);
+        assert_eq!(v, 33);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
@@ -4897,6 +4957,66 @@ mod tests {
         assert_eq!(contar(&hub, "agent_token"), 0);
         assert!(hub.env_pubkey("env-nb").unwrap().is_none());
         assert_eq!(contar(&hub, "env_token"), 0);
+    }
+
+    /// Migração 33 (#182) num `hub.db` da migração 32: as propostas
+    /// existentes ficam como estavam (com os gatilhos), o tipo `model` passa
+    /// a valer e os work items ficam sem modelo.
+    #[test]
+    fn migracao_33_mantem_as_propostas_e_aceita_o_tipo_model() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("hub.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            for m in &HUB_MIGRATIONS[..32] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.execute_batch(
+                "PRAGMA user_version = 32;
+                 INSERT INTO project (key, gh_owner, gh_repo, name, created_at, rev)
+                   VALUES ('acme/acme-web', 'acme', 'acme-web', 'acme-web', 1, 1);
+                 INSERT INTO work_item (project_id, gh_number, kind, status, created_at)
+                   SELECT id, 7, 'issue', 'backlog', 1 FROM project WHERE key = 'acme/acme-web';
+                 INSERT INTO proposal (uid, kind, project_id, gh_number, current_value,
+                                       proposed_value, justification, state, env_id, created_at,
+                                       decided_at)
+                   SELECT 'p-1', 'priority', id, 7, '{\"priority\":null}', '{\"priority\":\"P1\"}',
+                          'urgente', 'aprovada', 'env-a', 1, 2
+                   FROM project WHERE key = 'acme/acme-web';",
+            )
+            .unwrap();
+        }
+        let hub = Hub::open(&db).unwrap();
+        let p = hub.proposal(1).unwrap().unwrap();
+        assert_eq!(
+            (p.uid.as_str(), p.state, p.chosen),
+            ("p-1", ct_core::ProposalState::Aprovada, None)
+        );
+        let w = hub.find_work_item("acme", "acme-web", 7).unwrap().unwrap();
+        assert_eq!((w.model, w.effort), (None, None));
+        hub.conn
+            .execute(
+                "INSERT INTO proposal (uid, kind, project_id, gh_number, current_value,
+                                       proposed_value, justification, env_id, created_at)
+                 VALUES ('p-2', 'model', ?1, 7, '{}', '{}', 'j', 'env-a', 3)",
+                [w.project_id],
+            )
+            .unwrap();
+        // Gatilhos recriados.
+        assert!(hub
+            .conn
+            .execute(
+                "UPDATE proposal SET state = 'pendente' WHERE uid = 'p-1'",
+                []
+            )
+            .is_err());
+        assert!(hub
+            .conn
+            .execute(
+                "UPDATE proposal SET justification = 'x' WHERE uid = 'p-2'",
+                []
+            )
+            .is_err());
     }
 
     /// Migração 24 num `hub.db` da migração 23: as issues já espelhadas

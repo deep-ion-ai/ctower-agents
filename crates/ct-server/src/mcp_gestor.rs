@@ -16,7 +16,8 @@ pub(crate) fn instructions() -> String {
         "{}\n\nFerramentas: portfolio_overview, portfolio_project, portfolio_work_item, \
          portfolio_ranking, portfolio_health, portfolio_list_decisions e \
          portfolio_list_proposals leem o hub inteiro; portfolio_propose cria uma proposta \
-         pendente de prioridade ou de status, com justificativa. ledger_record_decision e \
+         pendente de prioridade, de status ou de modelo e esforço do agente na issue, com \
+         justificativa. ledger_record_decision e \
          ledger_list_decisions tratam das decisões deste gestor; ao registrar uma decisão sobre \
          um projeto ou issue, cite o alvo no texto pelo ref (owner/repo#n no GitHub, PROJ-n \
          no Jira). Cada projeto de portfolio_overview traz tracker e issue_view, o comando para \
@@ -140,9 +141,9 @@ pub(crate) fn tools() -> Value {
         ),
         tool(
             "portfolio_propose",
-            "Propõe uma mudança de prioridade ({\"priority\": \"P1\" | null, \"before\"?: n, \"after\"?: n}) ou de status ({\"status\": \"backlog\" | \"bloqueado\" | \"pausado\" | \"concluido\"}). Fica pendente até o usuário aprovar na tela Hub; nada é aplicado agora.",
+            "Propõe uma mudança de prioridade ({\"priority\": \"P1\" | null, \"before\"?: n, \"after\"?: n}), de status ({\"status\": \"backlog\" | \"bloqueado\" | \"pausado\" | \"concluido\"}) ou do modelo e esforço do agente na issue ({\"model\": \"fable\" | \"opus\" | \"sonnet\" | \"haiku\", \"effort\"?: \"low\" | \"medium\" | \"high\" | \"xhigh\" | \"max\"}; justifique pelo tamanho, risco e áreas tocadas). Fica pendente até o usuário aprovar na tela Hub; nada é aplicado agora.",
             with(owner_repo(), json!({
-                "kind": { "type": "string", "enum": ["priority", "status"] },
+                "kind": { "type": "string", "enum": ["priority", "status", "model"] },
                 "number": { "type": "integer" },
                 "proposed": { "type": "object" },
                 "justification": { "type": "string", "maxLength": 2000 }

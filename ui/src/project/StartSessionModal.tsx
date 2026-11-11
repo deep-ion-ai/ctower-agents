@@ -19,7 +19,14 @@ import type {
   WorkItemStatus,
 } from "../protocol/gen";
 import type { HubTree } from "../protocol/hub-gen";
-import { CLAUDE_MODELS, DEFAULT_MODEL_VALUE, SESSION_MODES } from "../settings/session-options";
+import {
+  CLAUDE_EFFORTS,
+  CLAUDE_MODELS,
+  DEFAULT_EFFORT_VALUE,
+  DEFAULT_MODEL_VALUE,
+  issueAgentLabel,
+  SESSION_MODES,
+} from "../settings/session-options";
 import { templateTab } from "../settings/sections";
 import { shortcutLabel } from "../shell/layout";
 import { sessionReadiness } from "../hub/tracker";
@@ -51,7 +58,13 @@ const STATE_TEXT: Record<string, string> = {
 /** Nó da árvore (local ou do hub) no que a modal precisa. */
 interface StartNode {
   issue: IssueRow;
-  work_item: { status: WorkItemStatus; branch: string | null } | null;
+  work_item: {
+    status: WorkItemStatus;
+    branch: string | null;
+    /** Modelo e esforço do agente na issue (#182), só na árvore do hub. */
+    model?: string | null;
+    effort?: string | null;
+  } | null;
   children: StartNode[];
 }
 
@@ -222,6 +235,10 @@ function ItemStartModal({
     (target.model !== undefined ? target.model : config.session.model) ?? DEFAULT_MODEL_VALUE,
   );
   const [mode, setMode] = useState<SessionMode>(target.mode ?? config.session.mode);
+  const [effort, setEffort] = useState(DEFAULT_EFFORT_VALUE);
+  // Modelo e esforço da issue (#182) preenchem a modal até a pessoa mexer
+  // neles (o Reiniciar já traz o modelo da sessão anterior).
+  const [agentTouched, setAgentTouched] = useState(target.model !== undefined);
   // Web (fase 2): sempre marcado, porque pelo celular não há outro jeito de
   // conversar com a sessão (spec do épico #205 §6.2).
   const [remote, setRemote] = useState(web || config.session.remote_control);
@@ -257,6 +274,13 @@ function ItemStartModal({
         }
       : null);
   const planning = gh === undefined;
+  const issueModel = node?.work_item?.model ?? null;
+  const issueEffort = node?.work_item?.effort ?? null;
+  useEffect(() => {
+    if (agentTouched || !issueModel) return;
+    setModel(issueModel);
+    setEffort(issueEffort ?? DEFAULT_EFFORT_VALUE);
+  }, [agentTouched, issueModel, issueEffort]);
   const clone =
     clones.find((c) => c.env === envChoice) ?? clones.find((c) => c.env === target.env) ?? clones[0] ?? null;
   const project = clone?.project ?? null;
@@ -405,7 +429,12 @@ function ItemStartModal({
     // O PTY já nasce no tamanho da área do terminal (sem ele, 120×40).
     const size = lastTermSize() ?? {};
     // Sem `model`, o daemon não passa `--model` (padrão do Claude Code).
-    const agent = { ...(model ? { model } : {}), mode, ...(withRemote ? { remote_control: true } : {}) };
+    const agent = {
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
+      mode,
+      ...(withRemote ? { remote_control: true } : {}),
+    };
     try {
       await killReplaced(tower, target);
       const s = issue
@@ -589,11 +618,37 @@ function ItemStartModal({
             {field(
               "sm-model",
               "Modelo",
-              <select id="sm-model" value={model} onChange={(e) => setModel(e.target.value)}>
+              <select
+                id="sm-model"
+                value={model}
+                onChange={(e) => {
+                  setAgentTouched(true);
+                  setModel(e.target.value);
+                }}
+              >
                 <option value={DEFAULT_MODEL_VALUE}>Padrão do Claude Code</option>
                 {CLAUDE_MODELS.map((m) => (
                   <option key={m.value} value={m.value}>
                     {m.label}
+                  </option>
+                ))}
+              </select>,
+            )}
+            {field(
+              "sm-effort",
+              "Esforço",
+              <select
+                id="sm-effort"
+                value={effort}
+                onChange={(e) => {
+                  setAgentTouched(true);
+                  setEffort(e.target.value);
+                }}
+              >
+                <option value={DEFAULT_EFFORT_VALUE}>Padrão do Claude Code</option>
+                {CLAUDE_EFFORTS.map((x) => (
+                  <option key={x.value} value={x.value}>
+                    {x.label}
                   </option>
                 ))}
               </select>,
@@ -610,6 +665,13 @@ function ItemStartModal({
               </select>,
             )}
           </div>
+
+          {issueModel && (
+            <p className="muted small" role="note">
+              Definido na issue: {issueAgentLabel({ model: issueModel, effort: issueEffort })}
+              {agentTouched ? " (alterado aqui só para esta sessão)" : ""}.
+            </p>
+          )}
 
           <PlanEnvChoices
             envs={clones.map((c) => ({ env: c.env, name: c.name }))}

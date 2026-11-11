@@ -268,6 +268,7 @@ export function hubProposal(p: Partial<HubProposal> = {}): HubProposal {
     decided_at: null,
     decision_note: null,
     applied_event_uid: null,
+    chosen: null,
     ...p,
   };
 }

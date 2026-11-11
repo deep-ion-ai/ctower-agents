@@ -23,7 +23,7 @@ import { itemTab } from "./tabs";
 import { DEFAULT_PAGE, PROJECT_PAGES, PROJECT_PAGE_LABEL, projectAt, type ProjectPage, type ProjectSettingsSection } from "./sections";
 import { TreeControls } from "./TreeControls";
 import { ProviderIcon } from "./ProviderIcon";
-import { decisionsTitle, mergedOpen, mergedOpenText, rowLabel } from "./TreeRow";
+import { decisionsTitle, MISSING_MODEL_TEXT, mergedOpen, mergedOpenText, missingModel, rowLabel } from "./TreeRow";
 import {
   ACTIVE_SPRINT,
   ALL_SPRINTS,
@@ -256,6 +256,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     const prio = priorityOf(n);
     const sprint = jira ? currentSprint(n.issue) : null;
     const warn = mergedOpen(n, baseBranch);
+    const noModel = !epic && missingModel(n, prov);
     const change = changeRef(prov, n.summary.pr?.number ?? 0);
     const base = epic
       ? [
@@ -312,6 +313,15 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
               title={`${mergedOpenText(prov)}: o ${change} não fechou a issue (faltou Closes ${ref(gh)})`}
             >
               !
+            </span>
+          )}
+          {noModel && (
+            <span
+              className="pj-nomodel"
+              aria-hidden="true"
+              title="Projeto autônomo: defina o modelo e o esforço da issue para o piloto automático iniciá-la"
+            >
+              {MISSING_MODEL_TEXT}
             </span>
           )}
           {live && <span className="pj-live" aria-hidden="true" title={`sessão viva em ${live}`} />}
