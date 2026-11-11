@@ -166,6 +166,13 @@ pub enum WorkItemTrigger {
     SubIssuePrMerged,
     /// PR do épico mesclado na base: conclui a sub-issue que o aguardava.
     EpicMerged,
+    /// PR da issue mesclado na branch de integração do modo autônomo
+    /// (`wip/autonoma`, #181): a issue fica em revisão até a branch chegar
+    /// na base.
+    AutonomyPrMerged,
+    /// PR da branch de integração mesclado na base: conclui as issues que
+    /// tinham sido mescladas nela.
+    AutonomyMerged,
 }
 
 impl WorkItemTrigger {
@@ -178,6 +185,8 @@ impl WorkItemTrigger {
             Self::PrMerged => "pr_merged",
             Self::SubIssuePrMerged => "sub_issue_pr_merged",
             Self::EpicMerged => "epic_merged",
+            Self::AutonomyPrMerged => "autonomy_pr_merged",
+            Self::AutonomyMerged => "autonomy_merged",
         }
     }
 }
@@ -199,6 +208,8 @@ pub fn next_status(current: WorkItemStatus, trigger: WorkItemTrigger) -> Option<
         T::PrMerged => S::Concluido,
         T::SubIssuePrMerged => S::AguardandoEpico,
         T::EpicMerged => S::Concluido,
+        T::AutonomyPrMerged => S::EmRevisao,
+        T::AutonomyMerged => S::Concluido,
     };
     let aceito = match current {
         S::Concluido => trigger == T::SessionActive,

@@ -243,7 +243,8 @@ pub fn gh_issue_gone_uid(owner: &str, repo: &str, number: i64) -> String {
 }
 
 /// `uid` do `status_changed` que conclui a sub-issue `sub` no merge do PR do
-/// épico (`gh:pr:<owner>/<repo>#<pr do épico>:merged:sub:<n>`, #454): igual
+/// épico (e a issue `sub` no merge da branch de integração do modo
+/// autônomo, #181) (`gh:pr:<owner>/<repo>#<pr do épico>:merged:sub:<n>`, #454): igual
 /// no ambiente e no hub, que percebem o mesmo merge.
 pub fn gh_epic_merged_uid(owner: &str, repo: &str, epic_pr: i64, sub: i64) -> String {
     format!(
@@ -259,6 +260,16 @@ pub(crate) fn sub_issue_pr_trigger(prev: Option<PrState>, new: PrState) -> Optio
         .then_some(WorkItemTrigger::SubIssuePrMerged)
 }
 
+/// Gatilho do PR de uma issue para a branch de integração do modo autônomo
+/// (#181): aberto vai para revisão como sempre; mesclado continua em revisão
+/// ([`WorkItemTrigger::AutonomyPrMerged`]) até a branch chegar na base.
+pub(crate) fn autonomy_pr_trigger(prev: Option<PrState>, new: PrState) -> Option<WorkItemTrigger> {
+    pr_trigger(prev, new).map(|t| match t {
+        WorkItemTrigger::PrMerged => WorkItemTrigger::AutonomyPrMerged,
+        t => t,
+    })
+}
+
 /// Caminho de um PR do sync.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PrRoute {
@@ -269,6 +280,12 @@ pub(crate) enum PrRoute {
     /// PR para a branch do épico que não é de uma sub-issue dele (head sem
     /// número, ou de outra issue): não grava nem muda nada.
     Ignorado,
+    /// PR de uma issue para a branch de integração do modo autônomo (#181).
+    Autonomia,
+    /// PR da branch de integração para a base do modo (#181): não é de work
+    /// item nenhum e não entra no cache; mesclado, conclui as issues que
+    /// tinham entrado na branch.
+    Integracao,
 }
 
 /// Espelho do GitHub numa conexão: as mesmas tabelas (`issue_cache`,
@@ -382,6 +399,14 @@ impl GhMirror<'_> {
         pr: &PrRow,
         issues: &[IssueRow],
     ) -> Result<PrRoute> {
+        if let Some((branch, base)) = self.autonomy_branches(project_id)? {
+            if pr.head == branch && pr.base == base {
+                return Ok(PrRoute::Integracao);
+            }
+            if pr.base == branch {
+                return Ok(PrRoute::Autonomia);
+            }
+        }
         // Só no GitHub: Jira e GitLab ficam como estão.
         let epic: Option<i64> = self
             .0
@@ -428,6 +453,59 @@ impl GhMirror<'_> {
         )?;
         let rows = stmt.query_map(
             params![project_id, epic, WorkItemStatus::AguardandoEpico.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// `(branch de integração, base)` do modo autônomo do projeto (#181),
+    /// se o modo já foi configurado (ligado ou não: as issues que entraram
+    /// na branch ainda concluem quando ela chega na base). A coluna existe
+    /// no `ledger.db` e no `hub.db`.
+    pub(crate) fn autonomy_branches(&self, project_id: i64) -> Result<Option<(String, String)>> {
+        let row: Option<(String, String)> = self
+            .0
+            .query_row(
+                "SELECT autonomy_config, base_branch FROM project WHERE id = ?1",
+                [project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((json, project_base)) = row else {
+            return Ok(None);
+        };
+        let cfg: ct_core::AutonomyConfig = serde_json::from_str(&json).unwrap_or_default();
+        if cfg.is_default() {
+            return Ok(None);
+        }
+        let branch = cfg.branch().to_string();
+        let base = cfg.base(&project_base).to_string();
+        Ok(Some((branch, base)))
+    }
+
+    /// Work items não concluídos com PR mesclado em `branch` até `until`
+    /// (o `updated_at` do PR da branch de integração mesclado): `(id,
+    /// número)`.
+    pub(crate) fn merged_into(
+        &self,
+        project_id: i64,
+        branch: &str,
+        until: i64,
+    ) -> Result<Vec<(i64, i64)>> {
+        let mut stmt = self.0.prepare(
+            "SELECT DISTINCT w.id, w.gh_number FROM pr_cache p
+             JOIN work_item w ON w.id = p.work_item_id
+             WHERE p.project_id = ?1 AND p.base = ?2 AND p.state = 'merged'
+               AND p.updated_at <= ?3 AND w.status != ?4
+             ORDER BY w.gh_number",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                project_id,
+                branch,
+                until,
+                WorkItemStatus::Concluido.as_str()
+            ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -614,13 +692,20 @@ impl Ledger {
         // `(work item, PR)` dos PRs mesclados nesta rodada: se o work item é
         // um épico, as sub-issues que o aguardam concluem no fim (#454).
         let mut merged = Vec::new();
+        // PRs da branch de integração do modo autônomo (#181), tratados
+        // depois dos PRs das issues.
+        let mut integration = Vec::new();
         for pr in &s.prs {
             // PR para a branch de um épico: é da sub-issue, nunca do épico
             // (nem em revisão nem concluído pelos gatilhos comuns).
             let route = self.gh().route_pr(s.project_id, pr, &s.issues)?;
             let pr = &match route {
-                PrRoute::Comum => pr.clone(),
+                PrRoute::Comum | PrRoute::Autonomia => pr.clone(),
                 PrRoute::Ignorado => continue,
+                PrRoute::Integracao => {
+                    integration.push(pr);
+                    continue;
+                }
                 PrRoute::SubIssue { sub } => {
                     let wi = self.ensure_work_item(s.project_id, sub, WorkItemKind::Issue)?;
                     self.set_branch_if_missing(wi.id, &pr.head)?;
@@ -642,6 +727,7 @@ impl Ledger {
             }
             let trigger = match route {
                 PrRoute::SubIssue { .. } => sub_issue_pr_trigger(prev, pr.state),
+                PrRoute::Autonomia => autonomy_pr_trigger(prev, pr.state),
                 _ => pr_trigger(prev, pr.state),
             };
             let Some(trigger) = trigger else {
@@ -697,6 +783,26 @@ impl Ledger {
                 let from = self.get_work_item(id)?.status;
                 if let Some(status) = next_status(from, trigger) {
                     let uid = gh_epic_merged_uid(&owner, &repo, epic_pr, sub);
+                    self.set_status_tx_uid(id, status, trigger.as_str(), Some(&uid))?;
+                    out.status_changes.push((id, status));
+                }
+            }
+        }
+
+        // Branch de integração mesclada na base (#181): concluem as issues
+        // que tinham entrado nela.
+        for pr in integration {
+            if pr.state != PrState::Merged {
+                continue;
+            }
+            for (id, n) in self
+                .gh()
+                .merged_into(s.project_id, &pr.head, pr.updated_at)?
+            {
+                let trigger = WorkItemTrigger::AutonomyMerged;
+                let from = self.get_work_item(id)?.status;
+                if let Some(status) = next_status(from, trigger) {
+                    let uid = gh_epic_merged_uid(&owner, &repo, pr.number, n);
                     self.set_status_tx_uid(id, status, trigger.as_str(), Some(&uid))?;
                     out.status_changes.push((id, status));
                 }
@@ -1034,6 +1140,101 @@ mod tests {
             l.prs_for_work_item(wi.id).unwrap()[0].state,
             PrState::Merged
         );
+    }
+
+    /// Modo autônomo (#181): o PR da issue mesclado na branch de integração
+    /// deixa a issue em revisão; o PR da branch mesclado na base conclui as
+    /// que entraram nela até ali. Sem o modo configurado, nada muda.
+    #[test]
+    fn issue_mesclada_na_wip_fica_em_revisao_ate_a_base() {
+        let (l, p) = ledger_with_project();
+        let w7 = l.ensure_work_item(p.id, 7, WorkItemKind::Issue).unwrap();
+        let wip = |n, wi, head: &str, state, at| PrRow {
+            updated_at: at,
+            ..pr_para(n, wi, head, "wip/autonoma", state)
+        };
+        // Sem o modo: o merge na wip conclui, como antes.
+        let r = l
+            .apply_github(&snap(
+                p.id,
+                vec![],
+                vec![wip(60, w7.id, "feat/7-a", PrState::Merged, 10)],
+            ))
+            .unwrap();
+        assert_eq!(r.status_changes, vec![(w7.id, WorkItemStatus::Concluido)]);
+
+        let (l, p) = ledger_with_project();
+        l.conn
+            .execute(
+                "UPDATE project SET autonomy_config = ?2 WHERE id = ?1",
+                params![
+                    p.id,
+                    ct_core::AutonomyConfig {
+                        enabled: true,
+                        env_id: Some("env-auto".into()),
+                        ..Default::default()
+                    }
+                    .config_json()
+                ],
+            )
+            .unwrap();
+        let w7 = l.ensure_work_item(p.id, 7, WorkItemKind::Issue).unwrap();
+        let w8 = l.ensure_work_item(p.id, 8, WorkItemKind::Issue).unwrap();
+        l.set_work_item_status(w7.id, WorkItemStatus::EmExecucao, "manual")
+            .unwrap();
+        let r = l
+            .apply_github(&snap(
+                p.id,
+                vec![],
+                vec![
+                    wip(60, w7.id, "feat/7-a", PrState::Merged, 10),
+                    wip(61, w8.id, "feat/8-b", PrState::Open, 10),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(
+            r.status_changes,
+            vec![
+                (w7.id, WorkItemStatus::EmRevisao),
+                (w8.id, WorkItemStatus::EmRevisao)
+            ]
+        );
+        assert_eq!(
+            l.list_events(w7.id, 1).unwrap()[0].payload["cause"],
+            "autonomy_pr_merged"
+        );
+        // O PR da wip para a base, aberto: nada muda, e ele não entra no
+        // cache (não é de work item).
+        let integ = |state, at| PrRow {
+            updated_at: at,
+            ..pr_para(5, 0, "wip/autonoma", "develop", state)
+        };
+        let r = l
+            .apply_github(&snap(p.id, vec![], vec![integ(PrState::Open, 20)]))
+            .unwrap();
+        assert!(r.status_changes.is_empty());
+        assert!(l.gh().get_pr(p.id, 5).unwrap().is_none());
+        // A 8 entra na wip depois do merge da wip na base: fica em revisão.
+        let r = l
+            .apply_github(&snap(
+                p.id,
+                vec![],
+                vec![
+                    integ(PrState::Merged, 20),
+                    wip(61, w8.id, "feat/8-b", PrState::Merged, 30),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(r.status_changes, vec![(w7.id, WorkItemStatus::Concluido)]);
+        assert_eq!(status(&l, p.id, 8), Some(WorkItemStatus::EmRevisao));
+        let ev = &l.list_events(w7.id, 1).unwrap()[0];
+        assert_eq!(ev.payload["cause"], "autonomy_merged");
+        assert_eq!(ev.uid, "gh:pr:deep-ion-ai/demo#5:merged:sub:7");
+        // De novo: nada muda.
+        let r = l
+            .apply_github(&snap(p.id, vec![], vec![integ(PrState::Merged, 20)]))
+            .unwrap();
+        assert!(r.status_changes.is_empty());
     }
 
     /// PR `head → base` de um work item.

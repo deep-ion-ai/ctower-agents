@@ -98,6 +98,17 @@ Para trabalhar numa issue do Jira fora do JQL, `tracker.add_issue { project_id |
 
 O repositório dos projetos Jira fica no GitLab (self-hosted, HTTPS ou SSH). O clone é um `git clone` da URL do cadastro com a credencial do git do ambiente (credential helper, como o `osxkeychain`, ou a chave SSH), sem pedir senha (`GIT_TERMINAL_PROMPT=0`); se a credencial não responder a partir do daemon, o relato da atribuição sai com erro e o comando para clonar à mão. Um clone existente vale se o `origin` for o mesmo host e caminho, em HTTPS ou SSH. No mesmo ciclo do Jira, o daemon roda o comando de credencial do GitLab e chama o [glab](https://gitlab.com/gitlab-org/cli) com `GITLAB_HOST` do cadastro e `GITLAB_TOKEN` só no ambiente do processo, sem ler nem alterar a configuração global do glab: `glab version` e `glab api version` na prontidão (`env.info.trackers[].gitlab`) e `glab mr list -R <caminho> --all -s <branch> -F json` para cada work item em andamento. MR aberto leva a `em_revisao` e mesclado a `concluido`, como o PR; a limpeza apaga a branch remota no GitLab (`glab api -X DELETE`) só se a ponta for o último commit do MR. O guarda-corpo bloqueia sempre o `glab mr merge` e o merge pelo `glab api`.
 
+### Modo autônomo (branch `wip/autonoma`)
+
+Quando o hub liga o modo autônomo de um projeto neste ambiente (`Project.autonomy_runner`, #181; veja "Modo autônomo e a branch `wip/autonoma`" em docs/hub.md), o ambiente cuida da branch de integração no clone do projeto, sem mexer na árvore de trabalho dele:
+
+- **Ao aplicar a configuração:** cria a branch (padrão `wip/autonoma`) no `origin` a partir da base, se faltar, e abre o PR rascunho `branch → base` pela API do GitHub, com o token do ambiente. Sem integração com o GitHub, a branch sai e o relato avisa para abrir o PR à mão.
+- **Sessão autônoma** (`session.start` com `autonomous: true`, ou "Sessão autônoma" na modal de início): antes de criar a worktree, o ambiente traz a base para a branch, num worktree temporário: `merge` (commit de merge, push sem força) ou `rebase` (push com `--force-with-lease`), conforme o projeto. Sem conflito, a worktree da issue sai da branch de integração, e o system prompt instrui o agente a abrir o PR contra ela (`gh pr create --base wip/autonoma`). A instrução vale também na retomada e nas sessões seguintes da mesma issue (evento `autonomy_session` no work item).
+- **Conflito:** nada é enviado ao `origin`, a sessão não começa (erro `-32050`, `AUTONOMY_CONFLICT`), o relato `conflict` sobe ao hub com os arquivos em conflito e sai o alerta `autonomy_conflict` (com um evento no work item do projeto). Resolva numa sessão do projeto, trazendo a base para a branch; o próximo alinhamento volta o relato para `ok`.
+- **Alinhar sem iniciar:** `autonomy.align { project_id | owner+repo }` (também pelo canal do hub) faz só o alinhamento e devolve o relato.
+
+Num projeto com o modo desligado, ou em outro ambiente, `session.start` com `autonomous: true` é recusado, e as sessões comuns seguem como sempre.
+
 ### Uso do plano (statusline do Claude Code)
 
 O provisionamento registra `ctower statusline --v <n>` como `statusLine` no `settings.json` da pasta de configuração do Claude Code do ambiente (`CLAUDE_CONFIG_DIR` ou `~/.claude`). Para instalar ou atualizar à mão: `ctower statusline install`. Rodar de novo não muda nada; se já havia um `statusLine` de outra origem, ele passa a rodar dentro do nosso (fica em `~/.config/ctower/statusline-chain.json`) e a saída dele continua aparecendo.

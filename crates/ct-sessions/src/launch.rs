@@ -311,6 +311,18 @@ impl Sessions {
 
     /// Inicia uma sessão nova para o work item, criando worktree e branch se preciso.
     pub fn start(&self, req: StartRequest) -> Result<Session> {
+        self.start_with_base(req, None)
+    }
+
+    /// [`Sessions::start`] com outra base para a worktree: `Some((branch,
+    /// base))` = sessão autônoma (#181), que sai da branch de integração
+    /// `branch` (já alinhada com `base`) e grava o evento
+    /// [`crate::autonomy::AUTONOMY_SESSION`] no work item.
+    pub(crate) fn start_with_base(
+        &self,
+        req: StartRequest,
+        autonomy: Option<(&str, &str)>,
+    ) -> Result<Session> {
         if req.gh_number <= PROJECT_WORK_ITEM {
             return Err(SessionsError::Invalid(format!(
                 "número de issue inválido: {} (sessão sem issue: start_project)",
@@ -365,9 +377,18 @@ impl Sessions {
         ensure_worktree(&WorktreeSpec {
             repo_path: Path::new(&project.repo_path),
             branch: &branch,
-            base: &project.base_branch,
+            base: autonomy.map_or(project.base_branch.as_str(), |(b, _)| b),
             worktree_path: &worktree,
         })?;
+        if let Some((integration, base)) = autonomy {
+            self.ledger().append_event(NewEvent {
+                project_id: project.id,
+                work_item_id: Some(wi.id),
+                session_id: None,
+                kind: crate::autonomy::AUTONOMY_SESSION,
+                payload: json!({ "branch": integration, "base": base }),
+            })?;
+        }
         let worktree_str = worktree.to_string_lossy().to_string();
         if wi.branch.as_deref() != Some(&branch)
             || wi.worktree_path.as_deref() != Some(&worktree_str)
@@ -475,10 +496,22 @@ impl Sessions {
         // e retomada (spec do Jira e GitLab §10.1).
         // Issue fora do espelho (#143): o épico é desconhecido; a sessão sobe
         // com o aviso, para o agente parar e perguntar.
-        let (rules, epic_unresolved) = {
+        let (rules, epic_unresolved, autonomy) = {
             let l = self.ledger();
             let rules = l.session_rules(project, wi)?.system_prompt(project);
-            (rules, l.epic_resolution(project, wi)?)
+            // Sessão autônoma da issue (#181): a instrução da base do PR
+            // vale também na retomada e nas sessões seguintes da issue.
+            let autonomy = l
+                .list_events_of_kind(wi.id, crate::autonomy::AUTONOMY_SESSION)?
+                .into_iter()
+                .next()
+                .and_then(|e| {
+                    Some(crate::autonomy::agent_instruction(
+                        e.payload["branch"].as_str()?,
+                        e.payload["base"].as_str()?,
+                    ))
+                });
+            (rules, l.epic_resolution(project, wi)?, autonomy)
         };
         let rules = match &epic_unresolved {
             None => rules,
@@ -497,6 +530,7 @@ impl Sessions {
         let docs_line = [
             docs.instruction(),
             crate::secrets::agent_instruction(&secrets.names()),
+            autonomy,
         ]
         .into_iter()
         .flatten()
@@ -896,6 +930,8 @@ mod tests {
                 projects: Some(vec![ct_ledger::ConfigProject {
                     docs: Default::default(),
                     session_templates: Default::default(),
+                    autonomy: Default::default(),
+                    autonomy_runner: false,
                     owner: p.gh_owner.clone(),
                     repo: p.gh_repo.clone(),
                     name: p.name.clone(),

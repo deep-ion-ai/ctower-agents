@@ -8,6 +8,7 @@ import { hubClones, liveSessions } from "./clones";
 import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
+import { autonomyWarning } from "../hub/autonomy";
 import { ProjectGestorCard, ProjectHealthCard, ProjectProposalsCard, ProjectReviewsCard, ProjectSyncCard } from "./OverviewCards";
 import { projectSyncInfo } from "./sync-now";
 import { ProjectSessions } from "./ProjectSessions";
@@ -143,6 +144,19 @@ export function HubProjectScreen({
               onPage={goPage}
               extra={
                 <>
+                  {hp && autonomyWarning(hp) && (
+                    <section className="hub-card" aria-labelledby="pj-ov-auto">
+                      <div className="hub-card-head">
+                        <h2 id="pj-ov-auto">Modo autônomo</h2>
+                        <button type="button" className="btn btn-sm" onClick={() => goPage("settings", "autonomy")}>
+                          Ver modo autônomo
+                        </button>
+                      </div>
+                      <p role="alert" className="start-error">
+                        {autonomyWarning(hp)}: nenhuma issue autônoma começa até alguém resolver.
+                      </p>
+                    </section>
+                  )}
                   <ProjectHealthCard owner={ref.owner} repo={ref.repo} project={hp ?? p} />
                   <ProjectSyncCard info={syncInfo} />
                   <ProjectGestorCard owner={ref.owner} repo={ref.repo} />

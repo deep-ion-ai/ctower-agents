@@ -82,6 +82,10 @@ function project(p: HubProject): Project {
     docs: p.docs ?? { enabled: false, project_dirs: [], epic_dirs: [] },
     // Templates de sessão do cadastro (#166): a web inicia com o override; hub anterior não manda.
     session_templates: p.session_templates ?? { issue: "", epic: "", project: "" },
+    // Modo autônomo (#181): o do cadastro; a web não sabe qual ambiente o roda.
+    autonomy: p.autonomy ?? { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+    autonomy_runner: false,
+    autonomy_report: null,
   };
 }
 

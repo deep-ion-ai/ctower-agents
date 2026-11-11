@@ -66,6 +66,9 @@ export function project(p: Partial<Project> = {}): Project {
     sync_role: false,
     docs: { enabled: false, project_dirs: [], epic_dirs: [] },
     session_templates: { issue: "", epic: "", project: "" },
+    autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+    autonomy_runner: false,
+    autonomy_report: null,
     ...p,
   };
 }
@@ -327,6 +330,8 @@ export function hubProject(p: Partial<HubProject> = {}): HubProject {
     sync_env_id: null,
     docs: { enabled: false, project_dirs: [], epic_dirs: [] },
     session_templates: { issue: "", epic: "", project: "" },
+    autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+    autonomy_report: null,
     ...p,
   };
 }
@@ -387,7 +392,7 @@ export function hubProjectView(project: HubProject, assignments: HubAssignment[]
 }
 
 export function hubEnv(e: Partial<HubEnv> = {}): HubEnv {
-  return { env_id: "daemon-wsl", name: "wsl-pc", created_at: 0, last_seen_at: NOW - MIN, last_seq: 10, pending: 0, cleanup: null, online: false, ...e };
+  return { env_id: "daemon-wsl", name: "wsl-pc", created_at: 0, last_seen_at: NOW - MIN, last_seq: 10, pending: 0, cleanup: null, online: false, autonomous: false, ...e };
 }
 
 export const HUB_DASHBOARD: HubDashboard = {

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub mod diff;
+pub mod integration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
