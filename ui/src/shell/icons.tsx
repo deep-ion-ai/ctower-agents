@@ -93,6 +93,8 @@ const PATHS = {
   /** Lixeira: descartar sem retomar (#138). */
   trash: <path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6" />,
   code: <path d="M8 7l-5 5 5 5M16 7l5 5-5 5" />,
+  /** Diff (+/− num documento): visualizador de diff (#168). */
+  diff: <path d="M6 3h9l4 4v14H6zM12.5 8v6M9.5 11h6M9.5 17h6" />,
   pr: (
     <>
       <circle cx="6" cy="6" r="2" />

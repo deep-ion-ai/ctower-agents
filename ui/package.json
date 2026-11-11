@@ -26,6 +26,7 @@
     "@xterm/headless": "^5.5.0",
     "@xterm/xterm": "^5.5.0",
     "dompurify": "^3.2.6",
+    "highlight.js": "^11.11.1",
     "marked": "^15.0.12",
     "mermaid": "^11.17.2",
     "qrcode-generator": "^2.0.4",

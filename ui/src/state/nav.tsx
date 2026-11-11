@@ -119,7 +119,14 @@ export type Screen =
    * docs) ou do projeto (`projectId`: só a pasta de docs). Aba própria por
    * arquivo: monte com `fileTab` (files/open.ts).
    */
-  | { name: "file"; env: string; path: string; session?: string; projectId?: number; title?: string };
+  | { name: "file"; env: string; path: string; session?: string; projectId?: number; title?: string }
+  /**
+   * Visualizador de diff (#168): o código mudado na worktree do work item
+   * `workItem` (id no ledger do ambiente `env`), pelo `git.diff`. `title`:
+   * o rótulo curto do item (`#12`). Aba própria por work item: monte com
+   * `diffTab` (diff/diff.ts).
+   */
+  | { name: "diff"; env: string; workItem: number; title?: string };
 
 /** Aba de terminal: uma sessão do agente de um ambiente. */
 export interface Tab {

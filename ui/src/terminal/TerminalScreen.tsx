@@ -4,7 +4,8 @@
 // shell livre no worktree (#423) é uma aba do mesmo jeito, com cabeçalho
 // enxuto (`ShellBar`).
 import "./terminal.css";
-import { itemTitle, PROJECT_ITEM } from "../util/item";
+import { itemShort, itemTitle, PROJECT_ITEM } from "../util/item";
+import { diffBlocked, diffTab } from "../diff/diff";
 import { useEffect, useRef, useState } from "react";
 import { useNow } from "../App";
 import { ASK_FALLBACK, gestorLabel, lookup } from "../control-room/attention";
@@ -664,7 +665,7 @@ function PaneBar({
   context: { open: boolean; here: boolean; fromBar: () => void; toggle: () => void };
   split: SplitAction | null;
 }) {
-  const { envs, api, status, dashboards, config, permissions } = useTower();
+  const { envs, api, status, dashboards, config, permissions, infos } = useTower();
   const nav = useNav();
   const startSession = useStartSession();
   const now = useNow();
@@ -692,6 +693,7 @@ function PaneBar({
   const prompts = promptActions(config.prompts, promptBlocked(guard));
   const resumable = actions.some((a) => a.id === "resume");
   const title = gestor ? gestorLabel(scope) : wi ? itemTitle(wi, project) : "Sessão";
+  const diffOff = diffBlocked(wi, infos[tab.env], status[tab.env]?.connected !== false, env?.name ?? tab.env);
 
   const run = async (f: () => Promise<unknown>) => {
     setError(null);
@@ -868,6 +870,19 @@ function PaneBar({
         >
           <Icon name="context" size={15} />
         </button>
+        {/* Diff do código da worktree (#168): o daemon calcula, em qualquer ambiente. */}
+        {!gestor && (
+          <button
+            type="button"
+            className="ibtn"
+            aria-label="Ver diff"
+            title={diffOff ?? "Ver diff do código da worktree"}
+            disabled={!!diffOff}
+            onClick={() => wi && nav.openTab(diffTab(tab.env, wi.id, itemShort(project, wi.gh_number)))}
+          >
+            <Icon name="diff" size={15} />
+          </button>
+        )}
         {/* Sem pasta de item no gestor; o #0 abre no clone principal. */}
         {!gestor &&
           btn(

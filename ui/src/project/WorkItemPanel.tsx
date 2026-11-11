@@ -31,6 +31,7 @@ import { STATUS } from "./status";
 import { StatusMenu } from "./StatusMenu";
 import { mergedOpen, mergedOpenText } from "./TreeRow";
 import { DesktopOnly } from "../web/DesktopOnly";
+import { diffBlocked, diffTab } from "../diff/diff";
 import { DISCARD_LABEL, useDiscard } from "../recovery/discard";
 
 export const PR_TEXT: Record<PrState, string> = { open: "aberto", merged: "mesclado", closed: "fechado" };
@@ -147,7 +148,7 @@ export function WorkItemPanel({
   /** O status mudou no hub: a tela relê a árvore. */
   onStatusChanged?: () => void;
 }) {
-  const { api, hub, dashboards, web, envs, status } = useTower();
+  const { api, hub, dashboards, web, envs, status, infos } = useTower();
   const openShell = useOpenShell();
   const nav = useNav();
   const discard = useDiscard();
@@ -170,6 +171,16 @@ export function WorkItemPanel({
           ?.work_items.find((w) => w.gh_number === n);
         return wi?.worktree_path ? [{ env: e.id, name: e.name, workItemId: wi.id }] : [];
       });
+  // Diff do código (#168): nos ambientes online onde o item tem worktree,
+  // também na web (o daemon calcula, pelo hub).
+  const diffEnvs = envs.flatMap((e) => {
+    const wi = dashboards[e.id]?.projects
+      .find((p) => same(p.project.gh_owner, owner) && same(p.project.gh_repo, repo))
+      ?.work_items.find((w) => w.gh_number === n);
+    if (!wi?.worktree_path) return [];
+    const off = diffBlocked(wi, infos[e.id], status[e.id]?.connected !== false, e.name);
+    return [{ env: e.id, name: e.name, workItemId: wi.id, off }];
+  });
   // O que do hub diz respeito a este item: se mudar, o histórico é relido.
   const hubItem = hub.dashboard?.projects
     .find((p) => same(p.project.gh_owner, owner) && same(p.project.gh_repo, repo))
@@ -527,6 +538,18 @@ export function WorkItemPanel({
               onClick={() => void openShell(x.env, x.workItemId)}
             >
               {shellEnvs.length > 1 ? `Abrir shell no worktree · ${x.name}` : "Abrir shell no worktree"}
+            </button>
+          ))}
+          {diffEnvs.map((x) => (
+            <button
+              key={`diff:${x.env}`}
+              type="button"
+              className="btn"
+              disabled={x.off !== null}
+              title={x.off ?? `Ver o diff do código da worktree no ambiente ${x.name}`}
+              onClick={() => nav.openTab(diffTab(x.env, x.workItemId, ref(n)))}
+            >
+              {diffEnvs.length > 1 ? `Ver diff · ${x.name}` : "Ver diff"}
             </button>
           ))}
           <button type="button" className="btn" onClick={() => void open(node.issue.url)}>

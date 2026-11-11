@@ -1,6 +1,8 @@
 // Gerado por `cargo test -p ct-server --features ts export_ts`.
 export type { ArchivedItem } from "./ArchivedItem";
 export type { Available } from "./Available";
+export type { BranchCommit } from "./BranchCommit";
+export type { BranchCommits } from "./BranchCommits";
 export type { Build } from "./Build";
 export type { CleanupConfig } from "./CleanupConfig";
 export type { CleanupItem } from "./CleanupItem";
@@ -19,6 +21,10 @@ export type { DashboardWorkItem } from "./DashboardWorkItem";
 export type { Decision } from "./Decision";
 export type { DecisionCounts } from "./DecisionCounts";
 export type { DecisionOrigin } from "./DecisionOrigin";
+export type { DiffFile } from "./DiffFile";
+export type { DiffPatch } from "./DiffPatch";
+export type { DiffStatus } from "./DiffStatus";
+export type { DiffSummary } from "./DiffSummary";
 export type { DocsConfig } from "./DocsConfig";
 export type { DocsDir } from "./DocsDir";
 export type { DocsFile } from "./DocsFile";

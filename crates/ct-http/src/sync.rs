@@ -131,6 +131,10 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "file.read",
     "files.shared",
     "docs.list",
+    // Visualizador de diff (#168): só leitura da worktree do work item.
+    "git.diff",
+    "git.diff_file",
+    "git.commits",
 ];
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:
