@@ -53,6 +53,8 @@ export const STATE_TEXT = {
 } as const;
 /** Eventos por página da linha do tempo. */
 export const EVENTS_PAGE = 5;
+/** Protocolo do hub com `hub.workitem.set_model` (modelo e esforço por issue, #182). */
+export const ISSUE_MODEL_PROTOCOL = "1.16";
 /** Protocolo do hub com `hub.workitem.body` ("Ver issue", #434). */
 export const WORKITEM_BODY_PROTOCOL = "1.10";
 
@@ -273,6 +275,12 @@ export function WorkItemPanel({
     ? "A descrição é lida pelo hub, que está fora do ar"
     : hubProtocol && versionNewer(WORKITEM_BODY_PROTOCOL, hubProtocol)
       ? `Atualize o hub (protocolo ${hubProtocol}; ver a issue no app pede ${WORKITEM_BODY_PROTOCOL} ou maior)`
+      : null;
+
+  // Modelo e esforço (#182): hub anterior ao método, desabilitado com o motivo.
+  const modelBlocked =
+    hubProtocol && versionNewer(ISSUE_MODEL_PROTOCOL, hubProtocol)
+      ? `Atualize o hub (protocolo ${hubProtocol}; modelo e esforço por issue pedem ${ISSUE_MODEL_PROTOCOL} ou maior)`
       : null;
 
   const setStatus = async (status: WorkItemStatus, reason: string | undefined) => {
@@ -676,8 +684,8 @@ export function WorkItemPanel({
               className="btn"
               aria-controls="model-pop"
               aria-expanded={modelMenu}
-              disabled={!hubUp}
-              title="Modelo e esforço com que a sessão desta issue inicia"
+              disabled={!hubUp || modelBlocked !== null}
+              title={modelBlocked ?? "Modelo e esforço com que a sessão desta issue inicia"}
               onClick={toggleModelMenu}
             >
               Modelo: {issueAgentLabel(agent)} ▾

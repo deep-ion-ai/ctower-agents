@@ -527,12 +527,17 @@ mod tests {
             .unwrap();
         // A base andou: o alinhamento a traz para a wip antes de começar.
         commit_remoto(&env, &remote, "develop", "base.txt", "base\n");
-        let s = env
-            .sessions
-            .start_autonomous(env.request(123, "ACME-123 tela de login"), Some(&pr))
-            .unwrap();
+        // Modelo e esforço da issue (#182) valem também na sessão autônoma.
+        let mut req = env.request(123, "ACME-123 tela de login");
+        req.agent = crate::AgentOptions {
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            ..Default::default()
+        };
+        let s = env.sessions.start_autonomous(req, Some(&pr)).unwrap();
         let out = env.wait_fake_output(&s.id);
         assert!(out.contains("gh pr create --base wip/autonoma"), "{out}");
+        assert!(out.contains("--model\nopus\n--effort\nhigh\n"), "{out}");
         let wi = env
             .sessions
             .ledger()

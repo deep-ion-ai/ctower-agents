@@ -68,7 +68,10 @@ use tokio::sync::broadcast;
 /// (política de orçamento do piloto automático por conta). 1.15 (#181): modo
 /// autônomo — `autonomy` e `autonomy_report` em `HubProject`, `autonomy` em
 /// `hub.projects.update`, `HubEnv.autonomous` e `hub.envs.set_autonomous`.
-pub const PROTOCOL_VERSION: &str = "1.15";
+/// 1.16 (#182): modelo e esforço por issue — `model` e `effort` em
+/// `HubWorkItem`, `hub.workitem.set_model`, a proposta `model` e o `value`
+/// (com `chosen` na proposta) em `hub.proposals.decide`.
+pub const PROTOCOL_VERSION: &str = "1.16";
 
 #[derive(Clone)]
 pub struct HubState {

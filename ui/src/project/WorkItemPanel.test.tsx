@@ -343,6 +343,15 @@ test("modelo e esforço (#182): o menu grava com hub.workitem.set_model", async 
   });
 });
 
+test("modelo e esforço (#182): hub anterior ao 1.16 deixa o botão desabilitado com o motivo", async () => {
+  const api = build(true).onHub("hub.info", hubInfo({ protocol: "1.15" }));
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const panel = await openPanel(userEvent.setup(), "ui: painel de detalhe");
+  const b = await within(panel).findByRole("button", { name: "Modelo: sem modelo ▾" });
+  await waitFor(() => expect(b).toBeDisabled());
+  expect(b).toHaveAttribute("title", expect.stringContaining("1.16"));
+});
+
 test("modelo e esforço (#182): a modal de início vem com os da issue e os manda no session.start", async () => {
   const api = build(true);
   const tree = structuredClone(TREE);
