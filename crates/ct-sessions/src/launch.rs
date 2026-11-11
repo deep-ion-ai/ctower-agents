@@ -2425,8 +2425,13 @@ mod tests {
     #[test]
     fn secrets_impressos_saem_mascarados_no_scrollback_e_no_broadcast() {
         use ct_secrets::Kind;
+        // O valor sai partido em duas escritas. As metades vêm de builtins do
+        // bash (`${T_TOKEN:0:5}`), não de `| head`/`| tail`: o fork e o exec
+        // de dois pipelines num runner carregado passavam do `MASK_HOLD`
+        // (50ms), a cauda "token" saía como está e o teste esperava um
+        // `***T_TOKEN***` que nunca vinha.
         let env = TestEnv::new(FakeClaude::script(
-            "echo \"antes=$T_TOKEN\"; read x; printf 'depois=%s/%s/%s\\n' \"$T_TOKEN\" \"$T_CURTO\" \"$T_VAR\"; printf '%s' \"$T_TOKEN\" | head -c 5; sleep 0.01; printf '%s' \"$T_TOKEN\" | tail -c +6; echo; read y",
+            "echo \"antes=$T_TOKEN\"; read x; printf 'depois=%s/%s/%s\\n' \"$T_TOKEN\" \"$T_CURTO\" \"$T_VAR\"; printf '%s' \"${T_TOKEN:0:5}\"; sleep 0.01; printf '%s\\n' \"${T_TOKEN:5}\"; read y",
         ));
         env.write_secrets_cache_kinds(&[
             (None, "T_TOKEN", Kind::Secret, "token-muito-secreto"),
