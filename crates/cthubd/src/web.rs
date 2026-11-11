@@ -94,6 +94,10 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.autopilot.events",
     "hub.autopilot.pause",
     "hub.autopilot.resume",
+    // Resumo da manhã e branch de integração (#185): só leitura, sem a
+    // chave da conta.
+    "hub.autopilot.digest",
+    "hub.autopilot.wip",
 ];
 
 /// Sensíveis da decisão do épico #205: nunca na web, mesmo com sessão válida.

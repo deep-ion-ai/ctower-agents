@@ -29,6 +29,9 @@ pub use github::{
     GH_ISSUE_GONE_REASON,
 };
 pub use hub::IssueAgent;
+pub use hub::{
+    digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
+};
 pub use hub::{list_snapshots, rotate_snapshots, IssuedEnvToken, AGENT_TOKEN_PREFIX};
 pub use hub::{
     AgentAssignment, AgentDecision, AgentDecisionFilter, AgentDecisions, AgentEnv, AgentEvent,

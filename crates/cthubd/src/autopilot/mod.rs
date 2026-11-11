@@ -11,7 +11,11 @@
 //! O agendador (#183) mora em [`plan`] (a decisão, pura) e [`runner`] (o
 //! laço no processo do hub, os eventos e `hub.autopilot.status|events|
 //! pause|resume|set`).
+//!
+//! O resumo da manhã (#185) mora em [`digest`]: o mesmo laço o gera em todo
+//! dia útil, no horário da política.
 
+pub mod digest;
 pub mod plan;
 pub mod runner;
 

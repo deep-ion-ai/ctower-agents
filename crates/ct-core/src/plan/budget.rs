@@ -80,6 +80,19 @@ pub struct BudgetPolicy {
     /// Corte de início nos dias úteis, em minutos do dia; `None` = sem corte.
     #[serde(default)]
     pub workday_cutoff_min: Option<u16>,
+    /// Horário do resumo da manhã (#185), em minutos do dia no fuso da
+    /// política; sai em todo dia útil ([`BudgetPolicy::is_workday`]).
+    /// Ausente na política salva = o padrão, 09:00; `None` (nulo) = sem
+    /// resumo.
+    #[serde(default = "default_digest_at")]
+    pub digest_at_min: Option<u16>,
+}
+
+/// Horário padrão do resumo da manhã: 09:00.
+pub const DIGEST_AT_DEFAULT_MIN: u16 = 9 * 60;
+
+fn default_digest_at() -> Option<u16> {
+    Some(DIGEST_AT_DEFAULT_MIN)
 }
 
 impl Default for BudgetPolicy {
@@ -121,6 +134,7 @@ impl Default for BudgetPolicy {
             weekly_cap: 80.0,
             reserve_per_workday: 12.0,
             workday_cutoff_min: Some(4 * 60),
+            digest_at_min: default_digest_at(),
         }
     }
 }
@@ -142,6 +156,9 @@ impl BudgetPolicy {
         pct(self.reserve_per_workday, "reserva por dia útil")?;
         if self.workday_cutoff_min.is_some_and(|m| m >= DAY_MIN) {
             return Err("corte de início fora do dia (00:00 a 23:59)".into());
+        }
+        if self.digest_at_min.is_some_and(|m| m >= DAY_MIN) {
+            return Err("horário do resumo fora do dia (00:00 a 23:59)".into());
         }
         if self.bands.is_empty() {
             return Err("a política precisa de ao menos uma faixa".into());
@@ -170,13 +187,37 @@ impl BudgetPolicy {
         Ok(())
     }
 
-    fn local_day(&self, t: i64) -> i64 {
+    /// Dia local (dias desde 1970-01-01 no fuso da política) de `t`.
+    pub fn local_day(&self, t: i64) -> i64 {
         (t + i64::from(self.utc_offset_min) * MIN_MS).div_euclid(DAY_MS)
     }
 
     /// Início (UTC, ms) do dia local `day`.
     fn day_start(&self, day: i64) -> i64 {
         day * DAY_MS - i64::from(self.utc_offset_min) * MIN_MS
+    }
+
+    /// Dia útil: o dia local tem alguma faixa marcada `workday` **e** é de
+    /// segunda a sexta. O resumo da manhã (#185) nunca sai em fim de
+    /// semana, mesmo com uma faixa de dia útil no sábado ou no domingo.
+    pub fn is_workday(&self, day: i64) -> bool {
+        let wd = weekday(day);
+        wd < 5 && self.bands.iter().any(|b| b.workday && b.days.contains(&wd))
+    }
+
+    /// O resumo da manhã está devido em `now`? Devolve o dia local dele
+    /// quando: há horário, hoje (no fuso da política) é dia útil, já passou
+    /// do horário e o último resumo enviado (`last_day`, dia local) é de
+    /// antes de hoje. Uma vez por dia: depois de enviar hoje, `None` até o
+    /// próximo dia útil. Hub fora do ar no horário: sai quando voltar, no
+    /// mesmo dia.
+    pub fn digest_due(&self, now: i64, last_day: Option<i64>) -> Option<i64> {
+        let at = self.digest_at_min?;
+        let day = self.local_day(now);
+        if !self.is_workday(day) || last_day.is_some_and(|d| d >= day) {
+            return None;
+        }
+        (now >= self.day_start(day) + i64::from(at) * MIN_MS).then_some(day)
     }
 
     /// Intervalos (UTC) de cada faixa que começa no dia local `day`.
@@ -853,5 +894,84 @@ mod tests {
         );
         assert!(d.can_start, "{:?}", d.reasons);
         assert!((d.weekly.unwrap().effective - 80.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn resumo_no_horario_e_no_fuso_da_politica() {
+        let p = BudgetPolicy::default();
+        // Terça 08:59 em GMT-3: ainda não; 09:00: sai, com o dia local.
+        assert_eq!(p.digest_due(at(1, 8, 59), None), None);
+        let day = p.local_day(at(1, 9, 0));
+        assert_eq!(p.digest_due(at(1, 9, 0), None), Some(day));
+        // Hub fora do ar às 09:00: sai quando voltar, no mesmo dia.
+        assert_eq!(p.digest_due(at(1, 22, 30), None), Some(day));
+        // 09:00 em GMT-3 = 12:00 UTC; noutro fuso (UTC), 09:00 UTC é 06:00
+        // em GMT-3 e o resumo já está devido.
+        let utc = BudgetPolicy {
+            utc_offset_min: 0,
+            ..BudgetPolicy::default()
+        };
+        assert!(utc.digest_due(at(1, 6, 0), None).is_some());
+        assert!(utc.digest_due(at(1, 5, 59), None).is_none());
+        // Horário configurado: 07:30.
+        let cedo = BudgetPolicy {
+            digest_at_min: Some(7 * 60 + 30),
+            ..BudgetPolicy::default()
+        };
+        assert!(cedo.digest_due(at(1, 7, 29), None).is_none());
+        assert!(cedo.digest_due(at(1, 7, 30), None).is_some());
+        // Sem horário: sem resumo.
+        let sem = BudgetPolicy {
+            digest_at_min: None,
+            ..BudgetPolicy::default()
+        };
+        assert!(sem.digest_due(at(1, 12, 0), None).is_none());
+        let fora = BudgetPolicy {
+            digest_at_min: Some(DAY_MIN),
+            ..BudgetPolicy::default()
+        };
+        assert!(fora.validate().is_err());
+    }
+
+    #[test]
+    fn resumo_uma_vez_por_dia_util_e_nunca_no_fim_de_semana() {
+        let p = BudgetPolicy::default();
+        let seg = p.local_day(at(0, 9, 0));
+        assert_eq!(p.digest_due(at(0, 9, 0), None), Some(seg));
+        // Já enviado hoje: não repete.
+        assert_eq!(p.digest_due(at(0, 9, 1), Some(seg)), None);
+        assert_eq!(p.digest_due(at(0, 23, 59), Some(seg)), None);
+        // Terça: sai de novo.
+        assert_eq!(p.digest_due(at(1, 9, 0), Some(seg)), Some(seg + 1));
+        // Sábado e domingo: nunca.
+        for d in [5, 6] {
+            for h in [9, 12, 23] {
+                assert_eq!(p.digest_due(at(d, h, 0), Some(seg + 4)), None);
+            }
+        }
+        // Segunda seguinte: sai.
+        assert_eq!(p.digest_due(at(7, 9, 0), Some(seg + 4)), Some(seg + 7));
+        // Dia útil segue a política: sem faixa de dia útil na quarta, não sai.
+        let mut sem_quarta = BudgetPolicy::default();
+        sem_quarta.bands[0].days = vec![0, 1, 3, 4];
+        assert!(sem_quarta.is_workday(seg + 1));
+        assert!(!sem_quarta.is_workday(seg + 2));
+        assert_eq!(sem_quarta.digest_due(at(2, 9, 0), Some(seg + 1)), None);
+        // Faixa de dia útil no sábado: o resumo continua fora do fim de semana.
+        let mut sabado = BudgetPolicy::default();
+        sabado.bands[0].days = vec![0, 1, 2, 3, 4, 5];
+        assert!(!sabado.is_workday(seg + 5));
+        assert_eq!(sabado.digest_due(at(5, 9, 0), Some(seg + 4)), None);
+    }
+
+    #[test]
+    fn politica_salva_sem_o_horario_do_resumo_vale_09h() {
+        let mut v = serde_json::to_value(BudgetPolicy::default()).unwrap();
+        v.as_object_mut().unwrap().remove("digest_at_min");
+        let p: BudgetPolicy = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(p.digest_at_min, Some(DIGEST_AT_DEFAULT_MIN));
+        v["digest_at_min"] = serde_json::Value::Null;
+        let p: BudgetPolicy = serde_json::from_value(v).unwrap();
+        assert_eq!(p.digest_at_min, None);
     }
 }

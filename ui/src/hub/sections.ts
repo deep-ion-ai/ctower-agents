@@ -27,6 +27,8 @@ export type HubSection =
   | "web-sessions"
   /** Dispositivos da Web Push (#203): inscrever, eventos, testar e remover. */
   | "devices"
+  /** Painel do piloto automático (#185): estado, fila, sessões e "pausar tudo". */
+  | "autopilot-panel"
   /** Política de orçamento do piloto automático por conta (#180). */
   | "autopilot";
 
@@ -42,6 +44,7 @@ export const HUB_SECTION_LABEL: Record<HubSection, string> = {
   github: "Token do GitHub",
   "web-sessions": "Sessões web",
   devices: "Dispositivos",
+  "autopilot-panel": "Painel do piloto",
   autopilot: "Orçamento do plano",
 };
 
@@ -58,6 +61,7 @@ const KEYWORDS: Record<HubSection, string> = {
   github: "token gh login",
   "web-sessions": "navegador celular pwa cookie revogar sair acesso",
   devices: "notificações push celular pwa avisos alertas",
+  "autopilot-panel": "piloto automático autônomo fila pausar retomar sessões estacionadas resumo manhã",
   autopilot: "piloto automático autônomo orçamento cota plano faixas horário semanal reserva",
 };
 
@@ -75,8 +79,9 @@ export const HUB_GROUPS: HubGroup[] = [
   { label: "Segurança", sections: ["secrets", "recovery", "github"] },
   // Revogar só reduz acesso: fica no desktop e na web (spec §3.1).
   { label: "Acesso", sections: ["web-sessions", "devices"] },
-  // Piloto automático (épico #178): a política de orçamento por conta (#180).
-  { label: "Piloto automático", sections: ["autopilot"] },
+  // Piloto automático (épico #178): o painel (#185, também na web) e a
+  // política de orçamento por conta (#180, só no desktop).
+  { label: "Piloto automático", sections: ["autopilot-panel", "autopilot"] },
 ];
 
 export const HUB_SECTIONS: HubSection[] = HUB_GROUPS.flatMap((g) => g.sections);

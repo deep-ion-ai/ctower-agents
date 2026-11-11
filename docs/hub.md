@@ -156,9 +156,12 @@ Com `[web] enabled = true`, o hub serve a UI web embutida no binário (a mesma v
   | `session_error` | sessão saiu com código ≠ 0 | o item na PWA |
   | `proposal_new` | proposta nova do gestor | Hub › Propostas do gestor |
   | `env_stale` "Ambiente fora do ar" | ambiente com canal reverso: canal fechado há mais de 1 min (em tempo real); ambiente sem canal desde que o hub subiu (`ctowerd` antigo): sem enviar ao hub há mais de `env_stale_minutes` | Hub › Ambientes |
+  | `morning_digest` "Resumo da manhã do piloto automático" (hub 1.20, #185) | o hub gerou o resumo da manhã (dia útil, no horário da política) | Hub › Visão geral |
+
+  Inscrições feitas antes do hub 1.20 guardaram a lista de eventos daquela época: o `morning_digest` fica desligado nelas até alguém marcá-lo em Hub › Dispositivos. O corpo do `morning_digest` leva só o nome do projeto e as contagens ("acme-web: 2 mescladas na wip, 1 bloqueada, 3 decisões para revisar, 2 à frente da base"), sem título de issue, conta nem texto do agente.
 
   Sessão com Remote Control nunca gera "Aguardando você" pela Web Push: o app Claude já avisa ("Push when actions required" no `/config` do Claude Code). Tudo sai do que o sync já traz: o hub varre o `hub.db` a cada 30 s e logo depois de cada `/sync/push` e de cada proposta nova. Cada notificação sai uma vez só (deduplicação em `push_sent`); um `env_stale` só se repete depois que o ambiente voltar. A primeira varredura de um hub só marca o que já existia. O corpo leva só o projeto, o número, o título do item e o tipo do evento, nunca mensagem do agente nem comando; o serviço de push do navegador (Google, Apple, Mozilla) vê só o endpoint e o tamanho (RFC 8291, `aes128gcm`, TTL de 1 h).
-- **Deep link:** a notificação leva `/?go=item&project=<owner>/<repo>&n=<número>`, `/?go=hub:proposals` ou `/?go=hub:envs` (e `https://claude.ai/code/<id>` quando a sessão tem o Remote Control ligado). O service worker foca uma janela da PWA já aberta antes de abrir outra.
+- **Deep link:** a notificação leva `/?go=item&project=<owner>/<repo>&n=<número>`, `/?go=hub:proposals`, `/?go=hub:envs` ou `/?go=hub` (a Visão geral, do resumo da manhã; `/?go=hub:autopilot-panel` abre o Painel do piloto) (e `https://claude.ai/code/<id>` quando a sessão tem o Remote Control ligado). O service worker foca uma janela da PWA já aberta antes de abrir outra.
 - **Métodos:** `hub.push.vapid_key` (`{ key }`), `hub.push.subscribe { endpoint, keys: { p256dh, auth }, label?, events? }` (só no `/web/ws`: a inscrição fica presa à sessão web), `hub.push.list` (sem endpoint nem chaves; `current` = a inscrição da própria sessão web), `hub.push.update { id, events }`, `hub.push.remove { id }` e `hub.push.test { id }` (`{ delivered, status, removed, error }`). Com a Web Push desligada, `vapid_key`, `subscribe` e `test` respondem `-32030`.
 - **Tela:** Hub › Dispositivos (grupo Acesso), no desktop e na PWA: lista, eventos de cada aparelho, testar e remover. Na PWA, "Ativar notificações neste dispositivo" pede a permissão a partir do toque.
 - **iPhone e iPad:** a Web Push exige **iOS 16.4 ou mais novo**, a PWA **adicionada à tela de início** (Safari › Compartilhar › Adicionar à Tela de Início) e aberta pelo ícone, e o pedido de permissão feito por um toque (o botão "Ativar notificações neste dispositivo"). No Safari fora da tela de início a tela Hub › Dispositivos mostra essa instrução no lugar do botão. A permissão e a inscrição valem para o app instalado: remover o ícone da tela de início perde a inscrição no aparelho, e o hub a apaga quando o serviço de push responder `404`/`410`.
@@ -759,7 +762,8 @@ Hub 1.14 (#180, épico #178). Uma política por conta do Claude Code diz se uma 
 - **Corte de início:** num dia útil, do corte até o início da primeira faixa de dia útil que começa depois dele, nenhuma sessão nova inicia (no padrão, das 04:00 às 08:00).
 - **Limite da semanal:** `min(T, 100 − R × d, ritmo)`, com `d` os dias úteis cuja faixa de dia útil ainda não terminou até o reset e `W` os dias úteis da semana do reset (`resets_at − 7 dias` até `resets_at`). O **ritmo** é a trajetória esperada da semana: `R × (W − d) + max(0, T − R × W) × p`, onde `p` é a proporção das horas elegíveis (faixa aberta, fora do corte) da semana já passadas, contando a faixa atual até o fim. A reserva dos dias úteis já vencidos libera a parte da pessoa; a parte autônoma (`T − R × W`) cresce com as horas elegíveis, em vez de ir toda na primeira noite. No fim da semana o limite chega a T.
 - **Leitura:** vale a mais recente da conta (de qualquer ambiente), sem sonda. Janela renovada (`agora >= resets_at`) conta como 0%; o próximo reset da semanal é estimado somando semanas ao último conhecido. Janela sem nenhuma leitura bloqueia (`no_reading`).
-- **Padrão:** seg–sex 08:00–18:00 fechado (dia útil); seg–sex 00:00–08:00 e 18:00–24:00 com 5h até 60%; sáb–dom com 5h até 95%; T = 80%, R = 12%, corte às 04:00, GMT-3.
+- **Resumo da manhã** (`digest_at_min`, hub 1.20, #185): o horário do resumo, em minutos do dia no fuso da política. Política salva antes, sem o campo, vale 09:00; `null` desliga o resumo. Edita-se no mesmo formulário ("Resumo da manhã (dias úteis)"; vazio desliga). Veja "Painel do piloto e resumo da manhã" abaixo.
+- **Padrão:** seg–sex 08:00–18:00 fechado (dia útil); seg–sex 00:00–08:00 e 18:00–24:00 com 5h até 60%; sáb–dom com 5h até 95%; T = 80%, R = 12%, corte às 04:00, resumo às 09:00, GMT-3.
 
 Métodos (só no `/ws` do desktop; `account` é a chave de `hub.plan.accounts`):
 
@@ -806,7 +810,43 @@ O agendador **nunca encerra sessão**: nem por orçamento, nem por faixa, nem po
 - `hub.autopilot.pause` / `hub.autopilot.resume` → `AutopilotSettings`.
 - `hub.autopilot.set { max_sessions_per_env }` (1 a 8) → `AutopilotSettings`; só no desktop.
 
-Na web (`/web/ws`) entram `status`, `events`, `pause` e `resume`; as chaves de conta viram `conta-N` (como em `hub.plan.accounts`). A política (`hub.autopilot.policy.*`) e o `set` continuam só no desktop.
+Na web (`/web/ws`) entram `status`, `events`, `pause`, `resume`, `digest` e `wip`; as chaves de conta viram `conta-N` (como em `hub.plan.accounts`). A política (`hub.autopilot.policy.*`) e o `set` continuam só no desktop.
+
+### Painel do piloto e resumo da manhã (`hub.autopilot.digest|wip`)
+
+Hub 1.20 (#185, épico #178).
+
+**Painel:** **Hub › Piloto automático › Painel do piloto**, no desktop e na PWA (ao lado do Orçamento do plano, que fica só no desktop). Lê `hub.autopilot.status` e relê a cada push `hub.autopilot.changed`. Mostra:
+
+- o estado: **Pausado**; **Desligado** (nenhuma conta com política); **Ligado** (alguma conta pode iniciar agora); **Aguardando faixa** (o horário não permite: faixa fechada, fora das faixas ou depois do corte); ou **Aguardando orçamento** (o uso está no limite);
+- por conta, "agora pode usar até X% da semanal", os motivos de não iniciar, a próxima faixa elegível (no fuso do aparelho) e o limite real atingido;
+- a fila de cada projeto autônomo, com o motivo de cada item que ficou de fora (sem modelo, sem rótulo de aprovação, sem prioridade, fora do backlog, épico, fora do espelho, sessão em andamento), o motivo do projeto (ex.: limite de trabalho em andamento) e a branch de integração com as issues à frente da base e o link do PR;
+- as sessões autônomas vivas e as estacionadas (com quando retomam) e os eventos recentes;
+- o botão **Pausar tudo** (e **Retomar**), também na PWA.
+
+Na web, as contas chegam como `conta-N`.
+
+**Resumo da manhã:** gerado pelo **hub**, no mesmo laço do agendador (`cthubd::autopilot::digest::run`, a cada minuto), sem depender da UI aberta.
+
+- **Quando:** em todo dia útil, no horário da política (`digest_at_min`, padrão 09:00, no fuso dela). Dia útil é o dia com uma faixa marcada como dia útil **e** de segunda a sexta: nunca sai em fim de semana. Sai uma vez por dia: o resumo fica na tabela `autopilot_digest` (migração 37) com o dia local único. Com o hub fora do ar no horário, sai quando ele voltar, no mesmo dia.
+- **Qual política:** o resumo é um só para o hub. Vale a política da primeira conta com política (pela chave da conta). Sem política nenhuma (piloto desligado), sem horário (`digest_at_min: null`) ou sem projeto no modo autônomo, não há resumo.
+- **Conteúdo**, desde o resumo anterior (o primeiro cobre as últimas 24 h), por projeto autônomo:
+  - as issues com PR mesclado na branch de integração no período (pelo espelho `pr_cache`: `base` = a branch, `state = merged`, `updated_at` no período, a mesma hora de merge que a conclusão das issues usa);
+  - as issues em `bloqueado` agora;
+  - as decisões autônomas sem revisão (todas, e quantas são do período);
+  - as issues à frente da base;
+  - o link do PR `branch → base`, do relato do ambiente do modo (`autonomy_report.pr_url`, porque esse PR não é de work item e não entra no `pr_cache`), com o estado do CI que o espelho tiver. Enquanto o espelho não guarda os checks dos PRs (#129), o CI aparece como "sem dados no espelho" (`ci: null`).
+
+  E, por conta com política, o uso da semanal: o atual, o do resumo anterior e quanto subiu no período (com a semanal renovada no meio, o uso desde o reset).
+- **Sem texto do agente:** o resumo leva números, títulos das issues (do GitHub), contagens, uso e links; nunca a mensagem de uma decisão, evento ou sessão. A notificação da Web Push (`morning_digest`) leva só o nome do projeto, as contagens e o link para a Visão geral.
+- **Avisos:** o resumo novo manda o push `hub.autopilot.changed` às UIs e a Web Push `morning_digest`. Na **Visão geral** do Hub, o card "Resumo da manhã" mostra o último resumo (o card não aparece antes do primeiro).
+
+**Issues à frente da base:** as issues do projeto em `em_revisao` com um PR mesclado na branch de integração. Quando o PR da branch para a base é mesclado, elas vão a `concluido` e saem da conta. A **Visão geral do projeto** autônomo mostra o card "Modo autônomo" com a branch, o número de issues à frente da base, os números delas, o link do PR e o aviso de conflito, se houver.
+
+**Métodos:**
+
+- `hub.autopilot.digest { limit? }` → `MorningDigest[]`, do mais novo ao mais velho (padrão 1; o hub guarda os 60 últimos). Cada um traz `local_day`, `at`, `since`, `projects` (`DigestProject`: `branch`, `base`, `merged`, `blocked`, `decisions_pending`, `decisions_new`, `ahead`, `pr_url`, `ci`, `conflict`) e `usage` (`DigestUsage`: `account`, `weekly_used`, `resets_at`, `weekly_before`, `delta`). Na web, `account` vira `conta-N`.
+- `hub.autopilot.wip { owner?, repo? }` → `AutonomyWip[]`: a branch de integração de cada projeto autônomo (ou só do projeto pedido), com `ahead` (número e título das issues à frente da base), `pr_url`, `ci` e `conflict`. O `hub.autopilot.status` traz o mesmo em `wip`.
 
 ### Hub fora do ar
 

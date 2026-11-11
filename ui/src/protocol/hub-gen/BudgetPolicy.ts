@@ -20,4 +20,11 @@ reserve_per_workday: number,
 /**
  * Corte de início nos dias úteis, em minutos do dia; `None` = sem corte.
  */
-workday_cutoff_min: number | null, };
+workday_cutoff_min: number | null, 
+/**
+ * Horário do resumo da manhã (#185), em minutos do dia no fuso da
+ * política; sai em todo dia útil ([`BudgetPolicy::is_workday`]).
+ * Ausente na política salva = o padrão, 09:00; `None` (nulo) = sem
+ * resumo.
+ */
+digest_at_min: number | null, };

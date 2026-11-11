@@ -21,6 +21,7 @@ test("lugares da web: sem Terminal, Manutenção, Segurança do Hub nem as Confi
     "hub:envs",
     "hub:web-sessions",
     "hub:devices",
+    "hub:autopilot-panel",
   ]);
   expect(SETTINGS_PLACES.filter(placeOnWeb).map((p) => webPlaceLabel(p.label))).toEqual([
     "Configurações › Aparência",

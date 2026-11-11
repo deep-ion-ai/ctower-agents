@@ -224,6 +224,16 @@ export function HubAutopilot() {
               />
             </div>
             <div className="field">
+              <label htmlFor={`${id}-digest`}>Resumo da manhã (dias úteis)</label>
+              <input
+                id={`${id}-digest`}
+                type="time"
+                title="Vazio desliga o resumo. O hub usa a política da primeira conta com política."
+                value={draft.digest_at_min == null ? "" : minToHHMM(draft.digest_at_min)}
+                onChange={(e) => patch({ digest_at_min: e.target.value ? hhmmToMin(e.target.value) : null })}
+              />
+            </div>
+            <div className="field">
               <label htmlFor={`${id}-tz`}>Fuso</label>
               <select
                 id={`${id}-tz`}

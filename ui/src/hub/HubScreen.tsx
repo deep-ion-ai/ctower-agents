@@ -21,6 +21,7 @@ import { HubOverview } from "./HubOverview";
 import { HubWebSessions } from "./HubWebSessions";
 import { HubDevices } from "./HubDevices";
 import { HubAutopilot } from "./HubAutopilot";
+import { HubAutopilotPanel } from "./HubAutopilotPanel";
 import { hubSectionOnWeb } from "../web/mode";
 import { errText } from "./calls";
 import { settingsTab } from "../settings/sections";
@@ -200,6 +201,8 @@ function Section({
       return <HubSecrets />;
     case "recovery":
       return <HubRecovery />;
+    case "autopilot-panel":
+      return <HubAutopilotPanel now={now} />;
     case "autopilot":
       return <HubAutopilot />;
     case "github":
