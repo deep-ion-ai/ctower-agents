@@ -33,6 +33,9 @@ pub struct DaemonConfig {
     /// Hub (`cthubd`) para onde este ambiente envia as mudanças (vazio =
     /// não envia).
     pub hub_url: String,
+    /// Ambiente de teste (#176): o `env.info` leva `test_mode` e a UI marca
+    /// o ambiente como de teste. Só sinaliza; não muda nenhum comportamento.
+    pub test_mode: bool,
     /// O config ainda tem `hub = true` (papel de hub do #64): o `ctowerd`
     /// recusa subir com [`HUB_REMOVED`].
     #[serde(skip)]
@@ -156,6 +159,7 @@ impl Default for DaemonConfig {
             port: DEFAULT_PORT,
             bind: "127.0.0.1".into(),
             hub_url: String::new(),
+            test_mode: false,
             legacy_hub: false,
             config_pull_interval_secs: 60,
             secrets_max_age_hours: 24,
@@ -310,14 +314,16 @@ mod tests {
         let c = DaemonConfig::load(&dirs(d.path())).unwrap();
         assert_eq!((c.bind.as_str(), c.hub_url.as_str()), ("127.0.0.1", ""));
         assert!(!c.legacy_hub);
+        assert!(!c.test_mode);
         std::fs::write(
             d.path().join("config.toml"),
-            "bind = \"100.64.0.1\"\nhub_url = \"http://mac:7879\"\n",
+            "bind = \"100.64.0.1\"\nhub_url = \"http://mac:7879\"\ntest_mode = true\n",
         )
         .unwrap();
         let c = DaemonConfig::load(&dirs(d.path())).unwrap();
         assert_eq!(c.bind, "100.64.0.1");
         assert_eq!(c.hub_url, "http://mac:7879");
+        assert!(c.test_mode);
         assert_eq!(c.config_pull_interval_secs, 60);
         assert!(c.repos_root().ends_with("projetos"));
         assert_eq!(c.retention_days, 30);

@@ -94,6 +94,7 @@ impl Daemon {
             github: None,
             tracker: None,
             env_name: "teste".into(),
+            test_mode: false,
             // Ligado a um hub (que o teste nunca chama): sem hub o ambiente
             // não inicia sessões.
             hub_sender: Some(Arc::new(HubSender::new(

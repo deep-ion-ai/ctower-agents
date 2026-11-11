@@ -75,6 +75,11 @@ pub struct HubInfo {
     pub backup: BackupStatus,
     /// Pasta dos docs dos projetos (`docs_dir`, #440); `None` = desligada.
     pub docs_dir: Option<String>,
+    /// Hub de teste (`test_mode`, #176): a UI muda a cor da barra do topo.
+    /// Ausente = falso (hub anterior à #176).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<bool>", optional))]
+    pub test_mode: bool,
 }
 
 /// Resposta de `hub.status`: avisos para a faixa da UI.
@@ -838,6 +843,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
             config_rev: h.config_rev().map_err(e)?,
             backup: st.backups.status(),
             docs_dir: st.docs_dir.as_deref().map(str::to_string),
+            test_mode: st.test_mode,
         })),
         "hub.status" => {
             let quarantine = h.quarantine_summary().map_err(e)?;
@@ -2130,6 +2136,7 @@ pub(crate) mod tests {
         assert_eq!(r["name"], "mac-mini");
         assert_eq!(r["config_rev"], 1);
         assert_eq!(r["backup"]["interval_hours"], 0);
+        assert!(r.get("test_mode").is_none());
         let v = ui.call("hub.status", json!({})).await;
         assert_eq!(v["result"]["warnings"][0]["kind"], "backup_disabled");
         // O hub não é ambiente: nada de sessões nem env.info.

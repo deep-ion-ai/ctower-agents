@@ -40,6 +40,7 @@ config_pull_interval_secs = 60      # pull da configuração; 0 desliga o laço
 repos_root = "~/projetos"           # clone das atribuições sem repo_path
 retention_days = 30                 # poda dos work items inativos já no hub; 0 desliga
 secrets_max_age_hours = 24          # aviso de secrets de configuração velha no spawn; 0 desliga
+test_mode = false                   # ambiente de teste: a UI o marca (docker/test, #176)
 
 # Limpeza após a conclusão do work item (veja "Limpeza do ambiente" abaixo).
 # Tabela no fim do arquivo: as chaves acima ficam fora dela.

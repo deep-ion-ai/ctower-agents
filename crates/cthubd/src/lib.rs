@@ -95,6 +95,8 @@ pub struct HubState {
     pub updates: Option<Arc<update::HubUpdates>>,
     /// Pasta dos docs dos projetos (`docs_dir`, #440); `None` = desligada.
     pub docs_dir: Option<Arc<str>>,
+    /// Hub de teste (`test_mode`, #176).
+    pub test_mode: bool,
 }
 
 impl HubState {
@@ -122,6 +124,7 @@ impl HubState {
             )),
             updates: None,
             docs_dir: None,
+            test_mode: false,
         }
     }
 }

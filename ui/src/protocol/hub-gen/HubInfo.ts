@@ -20,4 +20,9 @@ config_rev: number, backup: BackupStatus,
 /**
  * Pasta dos docs dos projetos (`docs_dir`, #440); `None` = desligada.
  */
-docs_dir: string | null, };
+docs_dir: string | null, 
+/**
+ * Hub de teste (`test_mode`, #176): a UI muda a cor da barra do topo.
+ * Ausente = falso (hub anterior à #176).
+ */
+test_mode?: boolean, };

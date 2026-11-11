@@ -21,6 +21,7 @@ import { closeTargets, hasProjectKey, isPinnable, isShell, useNav, type CloseWhi
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { OpenTabsList } from "./OpenTabs";
 import { useTower } from "../state/tower";
+import { TEST_TITLE_PREFIX, testDescription, testTargets } from "./testMode";
 import { ago } from "../util/time";
 import { BottomPanel, useEventLog } from "./BottomPanel";
 import { CommandPalette } from "./CommandPalette";
@@ -137,6 +138,17 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
   const side = useSideSlot();
   const events = useEventLog(api, dashboards);
   const warns = warnings(tower, now);
+  const test = testTargets(tower);
+  const testText = test ? testDescription(test) : null;
+  // Aba do navegador e janela também dizem que é teste (#176).
+  useEffect(() => {
+    if (!test) return;
+    const base = document.title.startsWith(TEST_TITLE_PREFIX) ? document.title.slice(TEST_TITLE_PREFIX.length) : document.title;
+    document.title = TEST_TITLE_PREFIX + base;
+    return () => {
+      if (document.title.startsWith(TEST_TITLE_PREFIX)) document.title = document.title.slice(TEST_TITLE_PREFIX.length);
+    };
+  }, [!!test]);
   // Celular (§10.3 da spec do épico #205): só no modo web, abaixo de 768 px.
   const mobile = useMediaQuery(MOBILE_QUERY) && web;
   const [sheet, setSheet] = useState(false);
@@ -232,7 +244,7 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
         <StartSessionHost>
           <DiscardHost>
             <div className="shell" data-mobile={mobile ? "true" : undefined}>
-              <header className="titlebar">
+              <header className="titlebar" data-test={test ? "true" : undefined}>
                 {mobile ? (
                   <>
                     <button
@@ -251,6 +263,11 @@ export function Shell({ banners, now, children }: { banners: ReactNode; now: num
                     <Logo />
                     Control Tower
                   </div>
+                )}
+                {testText && (
+                  <span className="test-badge" role="status" title={testText} aria-label={testText}>
+                    {mobile ? "Teste" : "Ambiente de teste"}
+                  </span>
                 )}
                 <button
                   type="button"

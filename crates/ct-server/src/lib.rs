@@ -78,6 +78,8 @@ pub struct AppState {
     pub tracker: Option<Arc<JiraGitlabSync>>,
     /// Nome legível deste ambiente (`env_name`).
     pub env_name: Arc<str>,
+    /// Ambiente de teste (`test_mode`, #176).
+    pub test_mode: bool,
     /// Envio deste ambiente ao hub; `None` = não envia.
     pub hub_sender: Option<Arc<hub_sync::HubSender>>,
     /// Atualização do ambiente (`env.check_update`); `None` = desativada.
@@ -255,6 +257,7 @@ pub(crate) mod test_util {
                 github: None,
                 tracker: None,
                 env_name: "teste".into(),
+                test_mode: false,
                 hub_sender: None,
                 updates: None,
                 cleanup: None,

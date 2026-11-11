@@ -61,4 +61,9 @@ docs: DocsStatus,
  * Statusline do Claude Code no ambiente (#106): instalado, versão e se
  * encadeia um de terceiros. Ausente = ambiente anterior à #106.
  */
-statusline?: StatuslineHealth, };
+statusline?: StatuslineHealth, 
+/**
+ * Ambiente de teste (`test_mode`, #176): a UI marca o ambiente.
+ * Ausente = falso (ambiente anterior à #176).
+ */
+test_mode?: boolean, };
