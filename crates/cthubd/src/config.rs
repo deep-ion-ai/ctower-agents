@@ -130,6 +130,9 @@ pub struct HubConfig {
     /// Endereço de escuta além do loopback (ex.: IP Tailscale). Fora de
     /// `127.0.0.1` só com configuração explícita.
     pub bind: String,
+    /// Hub de teste (#176): o `hub.info` leva `test_mode` e a UI muda a cor
+    /// da barra do topo. Só sinaliza; não muda nenhum comportamento.
+    pub test_mode: bool,
     /// Intervalo do sync com o GitHub de todos os projetos; `0` desliga.
     pub gh_sync_interval_secs: u64,
     /// Raiz da API do GitHub.
@@ -291,6 +294,7 @@ impl Default for HubConfig {
             name: String::new(),
             port: DEFAULT_PORT,
             bind: "127.0.0.1".into(),
+            test_mode: false,
             gh_sync_interval_secs: 180,
             gh_api_url: "https://api.github.com".into(),
             gh_bin: "gh".into(),
@@ -436,7 +440,7 @@ mod tests {
             ds.config.join("config.toml"),
             "name = \"mac-mini\"\nbind = \"100.1.2.3\"\nbackup_dir = \"/Volumes/Backup/cthub\"\n\
              backup_interval_hours = 0\nbackup_keep = 3\ngh_sync_interval_secs = 60\n\
-             docs_dir = \"/srv/docs\"\ndocs_backup_keep = 3\n[health]\nstale_days = 5\n",
+             docs_dir = \"/srv/docs\"\ndocs_backup_keep = 3\ntest_mode = true\n[health]\nstale_days = 5\n",
         )
         .unwrap();
         let c = HubConfig::load(&ds).unwrap();
@@ -446,6 +450,7 @@ mod tests {
         );
         assert_eq!(c.backup_dir(&ds), PathBuf::from("/Volumes/Backup/cthub"));
         assert_eq!(c.docs_dir(), Some(PathBuf::from("/srv/docs")));
+        assert!(c.test_mode);
         assert_eq!((c.docs_backup_keep, c.docs_backup_interval_hours), (3, 24));
         // Sem secrets_snapshot_dir, os snapshots de secrets vão junto.
         assert_eq!(

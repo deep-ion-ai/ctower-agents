@@ -25,4 +25,5 @@ Um documento por linha, com quem deve ler. A visão geral do projeto está no [R
 | [`ci.md`](ci.md) | quem mexe no CI | workflows, matriz de jobs e runners |
 | [`release.md`](release.md) | quem mantém o repositório | como uma versão é publicada pelo release-please |
 | [`ui-roteiro-manual.md`](ui-roteiro-manual.md) | quem testa a UI à mão | roteiro de teste manual do app |
+| [`../docker/test/README.md`](../docker/test/README.md) | quem testa uma branch de ponta a ponta | hub e ambiente de teste em Docker, isolados do ambiente de uso diário |
 | `superpowers/specs/` e `superpowers/plans/` | quem quer entender o desenho | specs, planos e roadmap |

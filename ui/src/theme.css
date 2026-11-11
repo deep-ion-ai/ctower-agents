@@ -2,6 +2,11 @@
 :root {
   --bg: #0f1115;
   --bg-header: #13161c;
+  /* Hub ou ambiente de teste (#176): roxo, longe do âmbar de atenção. */
+  --bg-header-test: #2a1640;
+  --border-test: #6b3fa0;
+  --test-badge-bg: #8b3fd9;
+  --test-badge-fg: #ffffff;
   --bg-side: #12151b;
   --surface: #171a21;
   --surface-2: #181c24;
@@ -63,6 +68,10 @@
 :root[data-theme="light"] {
   --bg: #f6f7f9;
   --bg-header: #eceef2;
+  --bg-header-test: #efe3fb;
+  --border-test: #b48ae6;
+  --test-badge-bg: #7a2fc4;
+  --test-badge-fg: #ffffff;
   --bg-side: #f0f2f5;
   --surface: #ffffff;
   --surface-2: #fafbfc;

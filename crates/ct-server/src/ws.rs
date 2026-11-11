@@ -364,6 +364,7 @@ impl Conn {
                     remote_control,
                     docs,
                     statusline: Some(statusline),
+                    test_mode: self.st.test_mode,
                 }))
             }
             // `env.rollback` (#328): volta à versão anterior, com a mesma
@@ -1962,6 +1963,8 @@ mod tests {
             srv.env.sessions.ledger().env_id().to_string()
         );
         assert_eq!(v["result"]["env_name"], "teste");
+        // Fora do modo de teste (#176), o campo nem vai.
+        assert!(v["result"].get("test_mode").is_none());
         assert!(v["result"]["hub_sync"].is_null());
         let v = ui.call("hub.sync.now", json!({})).await;
         assert_eq!(v["error"]["code"], -32000);
