@@ -77,7 +77,10 @@ use tokio::sync::broadcast;
 /// `session.start` automático pelo canal (limite de trabalho em andamento).
 /// 1.18 (#124): `approval` em `HubProject` e em `hub.projects.add|update`
 /// (rótulo de aprovação do projeto, exigido ou não para iniciar sessão).
-pub const PROTOCOL_VERSION: &str = "1.18";
+/// 1.19 (#183): agendador do piloto automático —
+/// `hub.autopilot.status|events|pause|resume|set` e o push
+/// `hub.autopilot.changed`.
+pub const PROTOCOL_VERSION: &str = "1.19";
 
 #[derive(Clone)]
 pub struct HubState {
@@ -110,6 +113,9 @@ pub struct HubState {
     pub docs_dir: Option<Arc<str>>,
     /// Hub de teste (`test_mode`, #176).
     pub test_mode: bool,
+    /// Agendador do piloto automático (#183): o aviso de ciclo já e o
+    /// último ciclo. O laço só sobe com [`autopilot::spawn`].
+    pub autopilot: Arc<autopilot::Scheduler>,
 }
 
 impl HubState {
@@ -138,6 +144,7 @@ impl HubState {
             updates: None,
             docs_dir: None,
             test_mode: false,
+            autopilot: Arc::default(),
         }
     }
 }
@@ -157,6 +164,14 @@ impl HubState {
         if let Some(p) = &self.push {
             p.kick();
         }
+    }
+
+    /// Avisa as UIs que o piloto automático mudou (evento novo, pausa):
+    /// `hub.autopilot.changed`, sem dados (a UI relê `hub.autopilot.status`).
+    pub(crate) fn autopilot_changed(&self) {
+        let _ = self
+            .events
+            .send(json!({ "event": "hub.autopilot.changed", "data": {} }));
     }
 
     /// Avisa as UIs que regras do agente ou propostas de regras mudaram

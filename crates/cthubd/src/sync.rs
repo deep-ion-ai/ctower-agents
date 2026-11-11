@@ -46,6 +46,7 @@ pub(crate) async fn push(State(st): State<HubState>, headers: HeaderMap, body: B
         Err(e) => return (StatusCode::BAD_REQUEST, format!("lote inválido: {e}")).into_response(),
     };
     let hub = st.hub.clone();
+    let has_plan = req.plan.is_some();
     let r = tokio::task::spawn_blocking(move || -> Result<Option<IngestResult>, LedgerError> {
         let hub = hub.lock();
         let Some(env) = hub.authenticate(&token)? else {
@@ -100,6 +101,11 @@ pub(crate) async fn push(State(st): State<HubState>, headers: HeaderMap, body: B
     if matches!(r, Ok(Ok(Some(_)))) {
         // Sessões e eventos novos podem virar Web Push (#203).
         st.push_kick();
+        // Leitura nova do plano: o agendador do piloto automático (#183)
+        // decide já (pode ter esgotado ou renovado uma janela).
+        if has_plan {
+            st.autopilot.kick();
+        }
     }
     match r {
         Ok(Ok(Some(r))) => {

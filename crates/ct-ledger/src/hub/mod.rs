@@ -25,6 +25,7 @@ mod approval;
 mod assignments;
 mod autonomy;
 mod autopilot;
+mod autopilot_run;
 mod config;
 mod env_keys;
 mod health;
@@ -46,6 +47,10 @@ pub use agent::{
 };
 pub use approval::ApprovalStatus;
 pub use assignments::{AssignmentAdded, AssignmentFilter, AssignmentState, HubAssignment};
+pub use autopilot_run::{
+    AutopilotEvent, AutopilotSession, AutopilotSettings, ParkedSession, AUTOPILOT_EVENT_TTL_MS,
+    AUTOPILOT_MAX_PER_ENV_CEILING, AUTOPILOT_MAX_PER_ENV_DEFAULT,
+};
 pub use config::{
     DeleteImpact, HubProjectPatch, NewHubProject, ProjectAdded, ProjectProvider, QuarantineGroup,
 };
@@ -709,6 +714,46 @@ ALTER TABLE project ADD COLUMN wip_limits TEXT NOT NULL DEFAULT '{}';
     // padrão (`aprovada`), sem exigir.
     r#"
 ALTER TABLE project ADD COLUMN approval_config TEXT NOT NULL DEFAULT '{}';
+"#,
+    // 36: agendador do piloto automático (#183, épico #178): o estado
+    // (pausado, sessões autônomas por ambiente), os eventos que o painel
+    // (#185) lê e as sessões estacionadas pelo limite real do plano, que
+    // o agendador retoma depois do `resets_at`.
+    r#"
+CREATE TABLE autopilot_state (
+  id                   INTEGER PRIMARY KEY CHECK (id = 1),
+  paused               INTEGER NOT NULL DEFAULT 0,
+  paused_at            INTEGER,
+  max_sessions_per_env INTEGER NOT NULL DEFAULT 1,
+  updated_at           INTEGER NOT NULL
+);
+CREATE TABLE autopilot_event (
+  id          INTEGER PRIMARY KEY,
+  at          INTEGER NOT NULL,
+  kind        TEXT NOT NULL,
+  scope       TEXT NOT NULL,
+  reason      TEXT,
+  message     TEXT NOT NULL,
+  account_key TEXT,
+  env_id      TEXT,
+  owner       TEXT,
+  repo        TEXT,
+  gh_number   INTEGER,
+  session_id  TEXT
+);
+CREATE INDEX autopilot_event_scope_idx ON autopilot_event(scope, id);
+CREATE INDEX autopilot_event_at_idx ON autopilot_event(at);
+CREATE TABLE autopilot_parked (
+  session_id  TEXT PRIMARY KEY,
+  env_id      TEXT NOT NULL,
+  account_key TEXT NOT NULL,
+  owner       TEXT NOT NULL,
+  repo        TEXT NOT NULL,
+  gh_number   INTEGER NOT NULL,
+  window      TEXT NOT NULL,
+  resume_at   INTEGER NOT NULL,
+  parked_at   INTEGER NOT NULL
+);
 "#,
 ];
 
@@ -4959,7 +5004,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 35);
+        assert_eq!(v, 36);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

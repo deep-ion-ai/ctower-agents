@@ -108,6 +108,9 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "session.start_project",
     "session.start_gestor",
     "session.resume",
+    // Retomada da sessão parada pelo limite do plano (#183): só um texto
+    // fixo no PTY, para o agendador do piloto automático.
+    "session.continue",
     "session.kill",
     "session.archive",
     "session.remote_control.enable",

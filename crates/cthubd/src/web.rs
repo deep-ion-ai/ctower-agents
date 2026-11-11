@@ -87,6 +87,13 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.logs.tail",
     "hub.logs.follow",
     "hub.logs.unfollow",
+    // Piloto automático (#183, painel na PWA #185): o estado e os eventos
+    // (sem as chaves de conta) e o "pausar tudo", que só reduz o que o
+    // agendador faz; retomar volta ao que a política já permitia.
+    "hub.autopilot.status",
+    "hub.autopilot.events",
+    "hub.autopilot.pause",
+    "hub.autopilot.resume",
 ];
 
 /// Sensíveis da decisão do épico #205: nunca na web, mesmo com sessão válida.
@@ -110,6 +117,8 @@ pub const WEB_REFUSED: &[&str] = &[
     "hub.assignments.remove",
     // Marca de ambiente autônomo (#181): configuração, só no desktop.
     "hub.envs.set_autonomous",
+    // Sessões autônomas por ambiente (#183): configuração, só no desktop.
+    "hub.autopilot.set",
     "hub.quarantine.discard",
     "hub.workitem.move",
     "hub.rules.set",
@@ -138,6 +147,7 @@ pub const WEB_PUSHES: &[&str] = &[
     "env.online",
     "env.push",
     "hub.update.status",
+    "hub.autopilot.changed",
 ];
 
 /// Erro de método fora da lista do `/web/ws`.

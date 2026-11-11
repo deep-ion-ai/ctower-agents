@@ -958,6 +958,11 @@ pub async fn serve(dirs: Dirs) -> Result<(), Box<dyn std::error::Error>> {
     }
     state.updates = Some(updates);
 
+    // Agendador do piloto automático (#183): no processo do hub, sem
+    // depender da UI. Sem política de orçamento em nenhuma conta, não
+    // inicia nada.
+    crate::autopilot::spawn(state.clone());
+
     ct_http::serve(crate::router(state), &cfg.bind, cfg.port, "cthubd").await?;
     tracing::info!("cthubd encerrado");
     Ok(())

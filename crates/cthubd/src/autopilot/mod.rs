@@ -7,6 +7,15 @@
 //! política guardada (`autopilot_policy`) com a visão do plano da conta
 //! (`ct_core::plan::group_accounts`, a leitura mais recente de qualquer
 //! ambiente, com a regra do reset). Conta sem política = piloto desligado.
+//!
+//! O agendador (#183) mora em [`plan`] (a decisão, pura) e [`runner`] (o
+//! laço no processo do hub, os eventos e `hub.autopilot.status|events|
+//! pause|resume|set`).
+
+pub mod plan;
+pub mod runner;
+
+pub use runner::{spawn, AutopilotAccountStatus, AutopilotStatus, Scheduler};
 
 use crate::HubState;
 use ct_core::plan::budget::{evaluate, BudgetDecision, BudgetPolicy};
