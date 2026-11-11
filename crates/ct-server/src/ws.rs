@@ -13,7 +13,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
-use ct_core::{DecisionOrigin, SessionMode, WorkItemKind, CLAUDE_MODELS};
+use ct_core::{DecisionOrigin, SessionMode, WorkItemKind, CLAUDE_EFFORTS, CLAUDE_MODELS};
 use ct_http::rpc::{i64_param, invalid, str_param, RpcResult};
 use ct_ledger::{Decision, Ledger, Project};
 use ct_sessions::transcript_view::TAIL_MAX_ENTRIES;
@@ -225,7 +225,8 @@ fn size_param(p: &Value) -> Result<Option<PtySize>, (i64, String)> {
     }
 }
 
-/// Modelo e modo do agente: `model` (alias de [`CLAUDE_MODELS`]) e `mode`
+/// Modelo, esforço e modo do agente: `model` (alias de [`CLAUDE_MODELS`]),
+/// `effort` ([`CLAUDE_EFFORTS`], #182) e `mode`
 /// (`native` | `subagents`), opcionais. Ausentes: padrão do Claude Code e
 /// `native`. Mais o `remote_control` (#197).
 fn agent_param(p: &Value) -> Result<AgentOptions, (i64, String)> {
@@ -239,6 +240,16 @@ fn agent_param(p: &Value) -> Result<AgentOptions, (i64, String)> {
             )))
         }
     };
+    let effort = match p.get("effort") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(e)) if CLAUDE_EFFORTS.contains(&e.as_str()) => Some(e.clone()),
+        Some(e) => {
+            return Err(invalid(format!(
+                "effort inválido: {e} (aceitos: {})",
+                CLAUDE_EFFORTS.join(", ")
+            )))
+        }
+    };
     let mode = match p.get("mode") {
         None | Some(Value::Null) => SessionMode::default(),
         Some(m) => m
@@ -248,6 +259,7 @@ fn agent_param(p: &Value) -> Result<AgentOptions, (i64, String)> {
     };
     Ok(AgentOptions {
         model,
+        effort,
         mode,
         remote_control: remote_control_param(p)?,
     })
@@ -3267,7 +3279,7 @@ mod tests {
             .call(
                 "session.start",
                 json!({ "project_id": pid, "gh_number": 5, "title": "t", "prompt": "x",
-                        "model": "haiku", "mode": "subagents" }),
+                        "model": "haiku", "effort": "low", "mode": "subagents" }),
             )
             .await;
         assert_eq!(v["result"]["model"], "haiku", "{v}");
@@ -3275,7 +3287,7 @@ mod tests {
         let out = srv
             .env
             .wait_fake_output(v["result"]["id"].as_str().unwrap());
-        assert!(out.contains("--model\nhaiku\n"), "{out}");
+        assert!(out.contains("--model\nhaiku\n--effort\nlow\n"), "{out}");
         let v = ui
             .call(
                 "session.start_project",
@@ -3303,6 +3315,11 @@ mod tests {
             ),
             ("session.start_project", json!({ "model": 3 })),
             ("session.start_project", json!({ "mode": "" })),
+            ("session.start_project", json!({ "effort": "turbo" })),
+            (
+                "session.start",
+                json!({ "gh_number": 6, "title": "t", "effort": 2 }),
+            ),
         ] {
             let mut params = bad.clone();
             params["project_id"] = json!(pid);

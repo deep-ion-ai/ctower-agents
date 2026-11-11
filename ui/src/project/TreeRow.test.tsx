@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IssueRow, WorkItemSummary } from "../protocol/gen";
-import { decisionsText, decisionsTitle, mergedOpen, rowLabel, type RowNode } from "./TreeRow";
+import { decisionsText, decisionsTitle, isAutonomous, mergedOpen, missingModel, rowLabel, type RowNode } from "./TreeRow";
 
 const NOW = 1_000_000_000_000;
 
@@ -83,5 +83,33 @@ describe("PR mesclado com a issue aberta (#375)", () => {
     expect(rowLabel(node({ pr: pr("merged") }), NOW, "develop")).toBe(
       "#49 Linha enriquecida, em execução, PR #280 mesclado, PR mesclado, issue aberta, sem atividade",
     );
+  });
+});
+
+describe("modelo faltando num projeto autônomo (#182)", () => {
+  const auto = { gh_owner: "acme", gh_repo: "acme-web", autonomous: true };
+  const manual = { gh_owner: "acme", gh_repo: "acme-web" };
+  const withModel = (model: string | null, p: Partial<IssueRow> = {}): RowNode => ({
+    ...node(),
+    issue: { ...issue, ...p },
+    work_item: { status: "backlog", model },
+  });
+
+  it("o modo autônomo vem do campo opcional do projeto (#181)", () => {
+    expect(isAutonomous(auto)).toBe(true);
+    expect(isAutonomous(manual)).toBe(false);
+    expect(isAutonomous({ autonomous: "sim" })).toBe(false);
+    expect(isAutonomous(null)).toBe(false);
+  });
+
+  it("só a issue aberta, sem modelo e fora de épico, num projeto autônomo", () => {
+    expect(missingModel(withModel(null), auto)).toBe(true);
+    expect(missingModel({ ...withModel(null), work_item: null }, auto)).toBe(true);
+    expect(missingModel(withModel("opus"), auto)).toBe(false);
+    expect(missingModel(withModel(null), manual)).toBe(false);
+    expect(missingModel(withModel(null, { state: "closed" }), auto)).toBe(false);
+    expect(missingModel(withModel(null, { has_sub_issues: true }), auto)).toBe(false);
+    expect(rowLabel(withModel(null), NOW, "develop", auto)).toContain("sem modelo");
+    expect(rowLabel(withModel(null), NOW, "develop", manual)).not.toContain("sem modelo");
   });
 });

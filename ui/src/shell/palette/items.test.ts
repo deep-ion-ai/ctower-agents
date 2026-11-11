@@ -157,7 +157,7 @@ test("hub no ar: issues do hub completadas com o projeto local; projeto do gesto
     projects: [
       {
         project: hubProject({ gh_owner: "Deep-Ion-AI" }),
-        work_items: [{ ...workItem({ gh_number: 40, title: "Só no hub" }), priority: null, rank: null }],
+        work_items: [{ ...workItem({ gh_number: 40, title: "Só no hub" }), priority: null, rank: null, model: null, effort: null }],
       },
       { project: hubProject({ id: 2, gh_repo: "outro", name: "outro" }), work_items: [] },
     ],

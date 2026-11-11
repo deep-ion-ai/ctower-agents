@@ -43,6 +43,8 @@ const TREE: HubTree = {
         closed_at: null,
         priority: "P2",
         rank: 1,
+        model: null,
+        effort: null,
       },
       summary: { pr: null, decisions: { total: 0, pending_autonomous: 0 }, last_activity_at: now, live_envs: [] },
       children: [],

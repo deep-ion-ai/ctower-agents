@@ -140,7 +140,7 @@ export type OrderedProposal = { proposal: HubProposal; title: string | null };
 /**
  * Pendentes numa lista só (cartão da Visão geral do projeto, #100): as de
  * prioridade na ordem resultante do ranking (`placeProposals`), depois as de
- * status, da mais velha para a mais nova.
+ * status e as de modelo (#182), da mais velha para a mais nova.
  */
 export function pendingInOrder(
   proposals: HubProposal[],
@@ -149,7 +149,7 @@ export function pendingInOrder(
 ): OrderedProposal[] {
   const placed = placeProposals(proposals, ranking, projects).map((x) => ({ proposal: x.proposal, title: x.title }));
   const status = proposals
-    .filter((p) => p.kind === "status")
+    .filter((p) => p.kind === "status" || p.kind === "model")
     .sort((a, b) => a.created_at - b.created_at || a.id - b.id)
     .map((p) => ({ proposal: p, title: p.title }));
   return [...placed, ...status];

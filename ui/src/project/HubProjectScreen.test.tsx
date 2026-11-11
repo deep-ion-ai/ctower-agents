@@ -120,6 +120,8 @@ function hubItem(n: number, p: Partial<HubWorkItem> = {}): HubWorkItem {
     closed_at: null,
     priority: null,
     rank: null,
+    model: null,
+    effort: null,
     ...p,
   };
 }

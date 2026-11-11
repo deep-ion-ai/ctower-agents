@@ -12,4 +12,14 @@ priority: Priority | null,
 /**
  * Posição dentro de (projeto, prioridade); nulo = fim da classe.
  */
-rank: number | null, };
+rank: number | null, 
+/**
+ * Modelo do agente para a sessão da issue (#182): alias de
+ * `ct_core::CLAUDE_MODELS`; nulo = não definido. Só do hub; ausente
+ * em hubs anteriores.
+ */
+model: string | null, 
+/**
+ * Esforço (`ct_core::CLAUDE_EFFORTS`); nulo = padrão do Claude Code.
+ */
+effort: string | null, };

@@ -271,6 +271,56 @@ test("propostas: aprovar uma, rejeitar em lote com nota, histórico e push", asy
   expect(api.hubCallsTo("hub.proposals.list").length).toBeGreaterThan(before);
 });
 
+test("valor da proposta de modelo legível (#182)", () => {
+  expect(valueText("model", { model: "opus", effort: "high" })).toBe("Opus · esforço high");
+  expect(valueText("model", { model: "sonnet", effort: null })).toBe("Sonnet");
+  expect(valueText("model", { model: null, effort: null })).toBe("sem modelo");
+});
+
+test("proposta de modelo (#182): aprovar como veio e aprovar com valor alterado", async () => {
+  const model = (id: number, number: number) =>
+    hubProposal({
+      id,
+      kind: "model",
+      number,
+      current: { model: null, effort: null },
+      proposed: { model: "opus", effort: "high" },
+      justification: "toca autenticação",
+    });
+  let pending: HubProposal[] = [model(5, 50), model(6, 60)];
+  const { api, user } = setup({
+    proposals: () => ({ proposals: pending, truncated: false }),
+    section: "proposals",
+  });
+  api.onHub("hub.proposals.list", () => ({ proposals: pending, truncated: false }));
+  api.onHub("hub.proposals.decide", (p: { id: number; value?: unknown }) => {
+    const x = pending.find((y) => y.id === p.id)!;
+    pending = pending.filter((y) => y.id !== p.id);
+    return { ...x, state: "aprovada", decided_at: NOW, chosen: p.value ?? null };
+  });
+  const sec = await screen.findByRole("region", { name: /Propostas do gestor/ });
+  const table = await within(sec).findByRole("table", { name: "Propostas de modelo" });
+  const row5 = within(table).getByRole("row", { name: "Proposta #5" });
+  expect(row5).toHaveTextContent("sem modelo");
+  expect(within(row5).getByRole("combobox", { name: "Modelo da proposta #5" })).toHaveValue("opus");
+  expect(within(row5).getByRole("combobox", { name: "Esforço da proposta #5" })).toHaveValue("high");
+  await user.click(within(row5).getByRole("button", { name: "Aprovar a proposta #5" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.proposals.decide")[0].params).toEqual({ id: 5, approve: true });
+
+  const row6 = await within(sec).findByRole("row", { name: "Proposta #6" });
+  await user.selectOptions(within(row6).getByRole("combobox", { name: "Modelo da proposta #6" }), "sonnet");
+  await user.selectOptions(within(row6).getByRole("combobox", { name: "Esforço da proposta #6" }), "");
+  expect(row6).toHaveTextContent("proposto: Opus · esforço high");
+  await user.click(within(row6).getByRole("button", { name: "Aprovar a proposta #6" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.proposals.decide")).toHaveLength(2));
+  expect(api.hubCallsTo("hub.proposals.decide")[1].params).toEqual({
+    id: 6,
+    approve: true,
+    value: { model: "sonnet", effort: null },
+  });
+});
+
 test("proposta obsoleta na decisão: avisa o motivo", async () => {
   const p = hubProposal();
   const { api, user } = setup({ proposals: () => ({ proposals: [p], truncated: false }), section: "proposals" });

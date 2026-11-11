@@ -82,8 +82,13 @@ pub const GESTOR_REPO: &str = "gestor";
 str_enum!(Priority, "priority", { P0 => "P0", P1 => "P1", P2 => "P2", P3 => "P3" });
 
 // Proposta do gestor (spec do gestor §8): o que muda e em que pé está. Só o
-// hub marca `obsoleta`; `aprovada` e `rejeitada` vêm da UI do hub.
-str_enum!(ProposalKind, "proposal_kind", { Priority => "priority", Status => "status" });
+// hub marca `obsoleta`; `aprovada` e `rejeitada` vêm da UI do hub. `model`
+// (issue #182) = modelo e esforço do agente na issue.
+str_enum!(ProposalKind, "proposal_kind", {
+    Priority => "priority",
+    Status => "status",
+    Model => "model",
+});
 str_enum!(ProposalState, "proposal_state", {
     Pendente => "pendente",
     Aprovada => "aprovada",
@@ -126,6 +131,10 @@ impl Default for SessionMode {
 /// Modelos do Claude Code aceitos em `--model` (aliases da versão mais nova
 /// de cada família). Espelha `ui/src/settings/session-options.ts`.
 pub const CLAUDE_MODELS: &[&str] = &["fable", "opus", "sonnet", "haiku"];
+
+/// Níveis de esforço do Claude Code aceitos em `--effort` (issue #182), do
+/// menor para o maior. Espelha `ui/src/settings/session-options.ts`.
+pub const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 str_enum!(DecisionOrigin, "decision_origin", {
     Autonoma => "autonoma",

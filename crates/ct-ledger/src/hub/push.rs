@@ -568,10 +568,10 @@ impl Hub {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, kind, owner, repo, n, title, jira_key) in rows {
-            let what = if kind == "priority" {
-                "prioridade"
-            } else {
-                "status"
+            let what = match kind.as_str() {
+                "priority" => "prioridade",
+                "model" => "modelo",
+                _ => "status",
             };
             all.push(PushNotice {
                 key: format!("proposal_new:{id}"),

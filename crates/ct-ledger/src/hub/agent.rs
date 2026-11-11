@@ -175,6 +175,12 @@ pub struct AgentWorkItem {
     pub status: WorkItemStatus,
     pub priority: Option<Priority>,
     pub rank: Option<i64>,
+    /// Modelo e esforço do agente na issue (#182); nulos = não definidos.
+    /// Ausentes em hubs anteriores.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
     pub branch: Option<String>,
     pub labels: Vec<String>,
     pub parent: Option<AgentItemRef>,
@@ -569,6 +575,8 @@ impl Hub {
                 .unwrap_or(WorkItemStatus::Backlog),
             priority: wi.as_ref().and_then(|w| w.priority),
             rank: wi.as_ref().and_then(|w| w.rank),
+            model: wi.as_ref().and_then(|w| w.model.clone()),
+            effort: wi.as_ref().and_then(|w| w.effort.clone()),
             branch: wi.as_ref().and_then(|w| w.branch.clone()),
             labels: issue.map(|i| i.labels).unwrap_or_default(),
             parent,
