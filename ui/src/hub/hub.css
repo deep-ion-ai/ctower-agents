@@ -893,3 +893,27 @@
   width: 100%;
   font-size: 12px;
 }
+
+/* Orçamento do piloto automático (#180). */
+.autopilot-preview {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.autopilot-preview p {
+  margin: 4px 0;
+}
+.autopilot-band {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.autopilot-days {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}

@@ -17,8 +17,12 @@ import type { Screen } from "../state/nav";
  */
 export const WEB_HIDDEN_SCREENS: ReadonlySet<Screen["name"]> = new Set(["terminal", "maintenance"]);
 
-/** Seções do Hub fora da web: o grupo Segurança (secrets, chave de recuperação, token do GitHub). */
-export const WEB_HIDDEN_HUB: ReadonlySet<HubSection> = new Set(["secrets", "recovery", "github"]);
+/**
+ * Seções do Hub fora da web: o grupo Segurança (secrets, chave de
+ * recuperação, token do GitHub) e o orçamento do piloto automático (#180: a
+ * web não recebe a chave da conta).
+ */
+export const WEB_HIDDEN_HUB: ReadonlySet<HubSection> = new Set(["secrets", "recovery", "github", "autopilot"]);
 
 /**
  * Configurações na web: só as do navegador (tema) e o acesso web. Somem

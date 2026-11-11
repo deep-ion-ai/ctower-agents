@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod budget;
+
 /// Versão do registro do statusline no `settings.json` do Claude Code. Sobe
 /// quando o comando registrado muda de formato; ambiente com versão menor
 /// aparece como desatualizado.

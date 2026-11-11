@@ -26,7 +26,9 @@ export type HubSection =
   /** Sessões web (#200, #201): listar e revogar. */
   | "web-sessions"
   /** Dispositivos da Web Push (#203): inscrever, eventos, testar e remover. */
-  | "devices";
+  | "devices"
+  /** Política de orçamento do piloto automático por conta (#180). */
+  | "autopilot";
 
 export const HUB_SECTION_LABEL: Record<HubSection, string> = {
   overview: "Visão geral",
@@ -40,6 +42,7 @@ export const HUB_SECTION_LABEL: Record<HubSection, string> = {
   github: "Token do GitHub",
   "web-sessions": "Sessões web",
   devices: "Dispositivos",
+  autopilot: "Orçamento do plano",
 };
 
 /** Outros nomes pelos quais a paleta acha a seção. */
@@ -55,6 +58,7 @@ const KEYWORDS: Record<HubSection, string> = {
   github: "token gh login",
   "web-sessions": "navegador celular pwa cookie revogar sair acesso",
   devices: "notificações push celular pwa avisos alertas",
+  autopilot: "piloto automático autônomo orçamento cota plano faixas horário semanal reserva",
 };
 
 export interface HubGroup {
@@ -71,6 +75,8 @@ export const HUB_GROUPS: HubGroup[] = [
   { label: "Segurança", sections: ["secrets", "recovery", "github"] },
   // Revogar só reduz acesso: fica no desktop e na web (spec §3.1).
   { label: "Acesso", sections: ["web-sessions", "devices"] },
+  // Piloto automático (épico #178): a política de orçamento por conta (#180).
+  { label: "Piloto automático", sections: ["autopilot"] },
 ];
 
 export const HUB_SECTIONS: HubSection[] = HUB_GROUPS.flatMap((g) => g.sections);

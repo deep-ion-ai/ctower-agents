@@ -324,7 +324,8 @@ describe.each([360, 414])("celular, %i px", (width) => {
     const drawer = await screen.findByRole("region", { name: "Painel lateral" });
     // Segurança fica no índice, avisando que é do desktop (#26).
     expect(within(drawer).getByText("Segurança")).toBeInTheDocument();
-    expect(within(drawer).getAllByText("Só no app desktop")).toHaveLength(3);
+    // E o orçamento do piloto automático (#180).
+    expect(within(drawer).getAllByText("Só no app desktop")).toHaveLength(4);
     expect(within(drawer).getByText("Propostas do gestor")).toBeInTheDocument();
   });
 });

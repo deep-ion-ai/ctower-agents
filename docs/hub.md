@@ -712,6 +712,25 @@ Cópias fora do destino (histórico de versões da pasta sincronizada, cópias �
 
 Cada ambiente informa, no envio, a conta do Claude Code (`claude auth status`), a saúde do statusline e a leitura mais recente das janelas do plano (docs/ambiente.md, "Uso do plano"). O hub agrupa os ambientes pela conta (`orgId` com `email`): vários ambientes na mesma conta viram uma conta só, e a leitura mais recente de qualquer um deles vale para todos. Contas diferentes nunca se misturam; ambiente sem login fica em `unknown`, fora dos agregados. Ambiente com login por token (`CLAUDE_CODE_OAUTH_TOKEN`) informa a conta declarada em `CTOWER_CLAUDE_ORG_ID` e `CTOWER_CLAUDE_EMAIL` (docs/ambiente.md). `hub.plan.accounts` aplica a regra do reset no relógio do hub. Na UI web, a resposta não traz e-mail nem organização.
 
+### Orçamento do piloto automático (`hub.autopilot.policy.*`)
+
+Hub 1.14 (#180, épico #178). Uma política por conta do Claude Code diz se uma sessão **autônoma** nova pode começar agora. A cota é da conta, então a política limita até onde as sessões autônomas podem levar o uso da conta, não quanto elas gastam; ela só barra o início de issues novas, nunca interrompe a que está rodando. **Conta sem política = piloto automático desligado.** Edita-se no app desktop em **Hub › Piloto automático › Orçamento do plano**, com a prévia "agora pode usar até X%" (a seção não existe na web, que só vê a conta anonimizada).
+
+- **Faixas de horário:** dias da semana (0 = segunda … 6 = domingo), início e fim em minutos do dia, no fuso da política (deslocamento fixo do UTC, sem horário de verão). Fim menor que o início atravessa a meia-noite e pertence ao dia do início; fim 1440 = 24:00. Cada faixa é fechada ou tem um teto da janela de 5h. Faixas sobrepostas: vale a primeira da lista; fora de todas conta como fechado.
+- **Dias úteis:** os dias com uma faixa marcada como dia útil. No padrão, só o horário comercial é marcado.
+- **Corte de início:** num dia útil, do corte até o início da primeira faixa de dia útil que começa depois dele, nenhuma sessão nova inicia (no padrão, das 04:00 às 08:00).
+- **Limite da semanal:** `min(T, 100 − R × d, ritmo)`, com `d` os dias úteis cuja faixa de dia útil ainda não terminou até o reset e `W` os dias úteis da semana do reset (`resets_at − 7 dias` até `resets_at`). O **ritmo** é a trajetória esperada da semana: `R × (W − d) + max(0, T − R × W) × p`, onde `p` é a proporção das horas elegíveis (faixa aberta, fora do corte) da semana já passadas, contando a faixa atual até o fim. A reserva dos dias úteis já vencidos libera a parte da pessoa; a parte autônoma (`T − R × W`) cresce com as horas elegíveis, em vez de ir toda na primeira noite. No fim da semana o limite chega a T.
+- **Leitura:** vale a mais recente da conta (de qualquer ambiente), sem sonda. Janela renovada (`agora >= resets_at`) conta como 0%; o próximo reset da semanal é estimado somando semanas ao último conhecido. Janela sem nenhuma leitura bloqueia (`no_reading`).
+- **Padrão:** seg–sex 08:00–18:00 fechado (dia útil); seg–sex 00:00–08:00 e 18:00–24:00 com 5h até 60%; sáb–dom com 5h até 95%; T = 80%, R = 12%, corte às 04:00, GMT-3.
+
+Métodos (só no `/ws` do desktop; `account` é a chave de `hub.plan.accounts`):
+
+- `hub.autopilot.policy.get { account }` → `{ account, policy, default, decision }`: `policy` nula = desligado; `decision` é a avaliação agora (`BudgetDecision`).
+- `hub.autopilot.policy.set { account, policy }`: grava (validada) e devolve o mesmo formato; `policy: null` desliga.
+- `hub.autopilot.policy.preview { account, policy }` → `BudgetDecision` da política sem gravar.
+
+`BudgetDecision` traz `can_start`, `reasons` (`band_closed`, `no_band`, `after_cutoff`, `five_hour_over_cap`, `weekly_over_limit`, `no_reading`), a faixa atual e o teto da 5h, o uso considerado das duas janelas, `weekly` (reset, `W`, `d`, limite da reserva, ritmo e o limite efetivo) e `next_open_at` (quando o horário volta a permitir iniciar; `now` se já permite). No código, o agendador chama `cthubd::autopilot::account_decision(hub, account, now)` (`None` = conta sem política) e a regra pura é `ct_core::plan::budget::evaluate(policy, plan_view, now)`.
+
 ### Hub fora do ar
 
 Nada para: sessões, hooks e decisões gravam localmente e esperam no outbox, e o ambiente usa a última configuração em cache. Envio e pull tentam de novo com backoff até 5 min. `env.info` e a UI mostram as pendências, o `config_rev` local e a idade dele. O MCP `ledger_list_decisions` com escopo `epic`/`project` devolve as decisões locais com `partial: true` se o hub não responder.

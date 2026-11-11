@@ -17,6 +17,7 @@
 //! Não roda sessões, PTY, hooks nem MCP: esses são do `ctowerd`.
 
 mod agent;
+pub mod autopilot;
 pub mod backup;
 pub mod channel;
 pub mod cli;
@@ -63,8 +64,9 @@ use tokio::sync::broadcast;
 /// do sync do projeto). 1.12 (#148): `hub.tracker.add_issue` (issue do
 /// Jira pelo ID, pelo ambiente de sync). 1.13 (#166): `session_templates`
 /// em `HubProject` e em `hub.projects.add|update` (templates do prompt
-/// inicial do projeto).
-pub const PROTOCOL_VERSION: &str = "1.13";
+/// inicial do projeto). 1.14 (#180): `hub.autopilot.policy.get|set|preview`
+/// (política de orçamento do piloto automático por conta).
+pub const PROTOCOL_VERSION: &str = "1.14";
 
 #[derive(Clone)]
 pub struct HubState {

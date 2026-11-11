@@ -706,6 +706,13 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         "github.status" | "github.set_token" | "github.clear_token" => github(st, method, &p).await,
         "hub.env.call" => env_call(st, p).await,
         "hub.plan.accounts" => plan_accounts(st, web_session.is_some()),
+        // Política de orçamento do piloto automático por conta (#180).
+        m if m.starts_with("hub.autopilot.") => {
+            let (st, method) = (st.clone(), method.to_string());
+            tokio::task::spawn_blocking(move || crate::autopilot::call(&st, &method, &p))
+                .await
+                .map_err(|e| (-32603, e.to_string()))?
+        }
         // Log do hub (#65): as últimas linhas, mascaradas.
         "hub.logs.tail" => ct_http::logs::rpc_tail(ct_http::logs::global(), &p).await,
         "hub.workitem.body" => workitem_body(st, p).await,
@@ -1925,6 +1932,8 @@ mod export {
         let _ = fs::remove_dir_all(&dir);
         HubInfo::export_all_to(&dir).unwrap();
         HubPlanAccounts::export_all_to(&dir).unwrap();
+        crate::autopilot::AutopilotPolicyView::export_all_to(&dir).unwrap();
+        ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
         ProjectDeleted::export_all_to(&dir).unwrap();
