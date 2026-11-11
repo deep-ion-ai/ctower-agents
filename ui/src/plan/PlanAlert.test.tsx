@@ -12,6 +12,11 @@ import { PlanEnvChoices } from "./PlanStart";
 import { PlanProvider } from "./usePlan";
 import type { PlanPrefs } from "./thresholds";
 
+// Relógio fixo ao meio-dia local: o reset da janela de 5h (+2h) cai no mesmo
+// dia em qualquer fuso e horário em que a suíte rode ("libera às HH:MM").
+vi.setSystemTime(new Date(2026, 10, 11, 12, 0));
+afterAll(() => vi.useRealTimers());
+
 const NOW = Date.now();
 const MIN = 60_000;
 const SL: StatuslineHealth = { installed: true, version: 1, current: 1, chained: false, error: null };
