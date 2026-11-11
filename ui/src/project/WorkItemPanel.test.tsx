@@ -57,6 +57,8 @@ const HUB_PROJECT: HubProject = {
   sync_env_id: null,
   docs: { enabled: false, project_dirs: [], epic_dirs: [] },
   session_templates: { issue: "", epic: "", project: "" },
+  autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+  autonomy_report: null,
 };
 
 const hubItem = (n: number, p: Partial<HubWorkItem> = {}): HubWorkItem => ({

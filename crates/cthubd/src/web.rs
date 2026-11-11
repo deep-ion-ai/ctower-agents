@@ -105,6 +105,8 @@ pub const WEB_REFUSED: &[&str] = &[
     "hub.projects.move",
     "hub.assignments.add",
     "hub.assignments.remove",
+    // Marca de ambiente autônomo (#181): configuração, só no desktop.
+    "hub.envs.set_autonomous",
     "hub.quarantine.discard",
     "hub.workitem.move",
     "hub.rules.set",

@@ -65,8 +65,10 @@ use tokio::sync::broadcast;
 /// Jira pelo ID, pelo ambiente de sync). 1.13 (#166): `session_templates`
 /// em `HubProject` e em `hub.projects.add|update` (templates do prompt
 /// inicial do projeto). 1.14 (#180): `hub.autopilot.policy.get|set|preview`
-/// (política de orçamento do piloto automático por conta).
-pub const PROTOCOL_VERSION: &str = "1.14";
+/// (política de orçamento do piloto automático por conta). 1.15 (#181): modo
+/// autônomo — `autonomy` e `autonomy_report` em `HubProject`, `autonomy` em
+/// `hub.projects.update`, `HubEnv.autonomous` e `hub.envs.set_autonomous`.
+pub const PROTOCOL_VERSION: &str = "1.15";
 
 #[derive(Clone)]
 pub struct HubState {

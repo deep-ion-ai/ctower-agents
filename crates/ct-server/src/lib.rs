@@ -63,8 +63,12 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// `docs.list` e o push `session_files` (visualizador de markdown, também
 /// pelo canal do hub). 2.15 (#168): `git.diff`, `git.diff_file` e
 /// `git.commits` (visualizador de diff da worktree do work item, também pelo
-/// canal do hub).
-pub const PROTOCOL_VERSION: &str = "2.15";
+/// canal do hub). 2.16 (#181): modo autônomo — `autonomy`, `autonomy_runner`
+/// e `autonomy_report` em `Project`, `autonomous` no `session.start` (sessão
+/// autônoma, que sai da branch de integração), `autonomy.align` (também pelo
+/// canal do hub), o erro `AUTONOMY_CONFLICT` (-32050) e o alerta
+/// `autonomy_conflict`.
+pub const PROTOCOL_VERSION: &str = "2.16";
 
 #[derive(Clone)]
 pub struct AppState {

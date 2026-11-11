@@ -62,6 +62,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "git.diff",
   "git.diff_file",
   "git.commits",
+  "autonomy.align",
 ]);
 
 /** O método do ambiente existe na web? */

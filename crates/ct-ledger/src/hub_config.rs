@@ -11,7 +11,7 @@
 use crate::projects::{row_to_project, COLS, COLS_LEN};
 use crate::sync::project_key;
 use crate::{ConfigRules, Ledger, LocationState, Project, Result};
-use ct_core::{now_ms, DocsConfig, ForgeConfig, SessionTemplates, TrackerConfig};
+use ct_core::{now_ms, AutonomyConfig, DocsConfig, ForgeConfig, SessionTemplates, TrackerConfig};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -57,6 +57,14 @@ pub struct ConfigProject {
     /// anterior: nenhum override.
     #[serde(default, skip_serializing_if = "SessionTemplates::is_empty")]
     pub session_templates: SessionTemplates,
+    /// Modo autônomo do projeto (#181). Ausente num hub anterior, ou com
+    /// o modo nunca configurado: desligado.
+    #[serde(default, skip_serializing_if = "AutonomyConfig::is_default")]
+    pub autonomy: AutonomyConfig,
+    /// Este ambiente é o que roda as sessões autônomas do projeto (o
+    /// `autonomy.env_id`, com o modo ligado). Ausente = não é.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autonomy_runner: bool,
 }
 
 fn attribution_default() -> bool {
@@ -238,6 +246,9 @@ impl Ledger {
                             && cur.attribution == p.attribution
                             && cur.sync_role == p.sync
                             && cur.docs == p.docs
+                            && cur.session_templates == p.session_templates
+                            && cur.autonomy == p.autonomy
+                            && cur.autonomy_runner == p.autonomy_runner
                             && cur.unassigned_at.is_none()
                             && self.hub_repo_path(cur.id)?.as_deref() == Some(&p.repo_path);
                         if same {
@@ -329,7 +340,8 @@ impl Ledger {
         self.conn.execute(
             "UPDATE project SET tracker_kind = ?2, tracker_config = ?3, forge_kind = ?4,
                     forge_config = ?5, branch_pattern = ?6, attribution = ?7, sync_role = ?8,
-                    docs_config = ?9, session_templates = ?10
+                    docs_config = ?9, session_templates = ?10, autonomy_config = ?11,
+                    autonomy_runner = ?12
              WHERE id = ?1",
             params![
                 id,
@@ -341,7 +353,9 @@ impl Ledger {
                 p.attribution,
                 p.sync,
                 p.docs.config_json(),
-                p.session_templates.config_json()
+                p.session_templates.config_json(),
+                p.autonomy.config_json(),
+                p.autonomy_runner
             ],
         )?;
         Ok(())
@@ -402,6 +416,8 @@ impl Ledger {
                 rules: Default::default(),
                 docs: p.docs.clone(),
                 session_templates: p.session_templates.clone(),
+                autonomy: p.autonomy.clone(),
+                autonomy_runner: p.autonomy_runner,
             });
             if path != p.repo_path {
                 self.conn.execute(
@@ -486,6 +502,34 @@ impl Ledger {
             Ok(changed > 0)
         })
     }
+
+    /// Grava o relato da branch de integração do modo autônomo (#181) e,
+    /// se ele mudou (fora o horário), põe a fotografia do projeto no outbox
+    /// para o hub mostrar o estado (o aviso de conflito). Devolve se
+    /// enfileirou.
+    pub fn record_autonomy_report(
+        &self,
+        project_id: i64,
+        report: &ct_core::AutonomyReport,
+    ) -> Result<bool> {
+        self.atomic(|| {
+            let cur = self.get_project(project_id)?.autonomy_report;
+            let same = cur.as_ref().is_some_and(|c| {
+                let mut c = c.clone();
+                c.at = report.at;
+                &c == report
+            });
+            let json = serde_json::to_string(report).expect("AutonomyReport serializa");
+            self.conn.execute(
+                "UPDATE project SET autonomy_report = ?2 WHERE id = ?1",
+                params![project_id, json],
+            )?;
+            if !same {
+                self.enqueue_project(project_id)?;
+            }
+            Ok(!same)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -498,6 +542,8 @@ mod tests {
         ConfigProject {
             docs: Default::default(),
             session_templates: Default::default(),
+            autonomy: Default::default(),
+            autonomy_runner: false,
             owner: "deep-ion-ai".into(),
             repo: repo.into(),
             name: repo.into(),
@@ -886,6 +932,8 @@ mod tests {
         // Voltou ao global no hub.
         let p2 = ConfigProject {
             session_templates: SessionTemplates::default(),
+            autonomy: Default::default(),
+            autonomy_runner: false,
             rev: 2,
             ..p.clone()
         };

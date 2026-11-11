@@ -204,6 +204,9 @@ pub struct HubProjectPatch {
     /// Templates do prompt inicial (#166): o objeto inteiro substitui o
     /// anterior; chave vazia = volta ao global.
     pub session_templates: Option<ct_core::SessionTemplates>,
+    /// Modo autônomo (#181): o objeto inteiro substitui o anterior. O
+    /// ambiente vai por `env_id` ou nome.
+    pub autonomy: Option<ct_core::AutonomyConfig>,
 }
 
 impl HubProjectPatch {
@@ -218,6 +221,7 @@ impl HubProjectPatch {
             && self.sync_env.is_none()
             && self.docs.is_none()
             && self.session_templates.is_none()
+            && self.autonomy.is_none()
     }
 }
 
@@ -489,6 +493,25 @@ impl Hub {
             ));
         };
         let provider = self.patched_provider(&cur, patch)?;
+        // O modo autônomo é conferido contra a base e as protegidas que o
+        // projeto terá depois desta edição; sem mudar o modo, a edição da
+        // base ou das protegidas também o confere (se estiver ligado).
+        let base = patch.base_branch.as_deref().unwrap_or(&cur.base_branch);
+        let protected_after = patch
+            .protected_branches
+            .as_deref()
+            .unwrap_or(&cur.protected_branches);
+        let autonomy = match &patch.autonomy {
+            Some(a) => self.checked_autonomy(&cur, a, base, protected_after)?,
+            None => {
+                if cur.autonomy.enabled {
+                    cur.autonomy
+                        .validate(base, protected_after)
+                        .map_err(LedgerError::Conflict)?;
+                }
+                cur.autonomy.clone()
+            }
+        };
         let sync_env = match patch.sync_env.as_deref() {
             Some(e) => Some((self.resolve_env(e)?, e.trim().to_string())),
             None => None,
@@ -504,7 +527,8 @@ impl Hub {
                     base_branch = coalesce(?3, base_branch),
                     protected_branches = coalesce(?4, protected_branches), rev = ?5,
                     tracker_config = ?6, forge_config = ?7, branch_pattern = ?8,
-                    attribution = ?9, docs_config = ?10, session_templates = ?11
+                    attribution = ?9, docs_config = ?10, session_templates = ?11,
+                    autonomy_config = ?12
              WHERE key = ?1 AND deleted_at IS NULL",
             params![
                 key,
@@ -517,7 +541,8 @@ impl Hub {
                 provider.branch_pattern,
                 provider.attribution,
                 provider.docs.config_json(),
-                provider.session_templates.config_json()
+                provider.session_templates.config_json(),
+                autonomy.config_json()
             ],
         )?;
         if changed == 0 {

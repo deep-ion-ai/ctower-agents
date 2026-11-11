@@ -46,6 +46,11 @@ pub struct ProjectChange {
     pub branch_pattern: Option<String>,
     #[serde(default = "yes")]
     pub attribution: bool,
+    /// Último relato da branch de integração do modo autônomo (#181), só do
+    /// ambiente que roda as sessões autônomas. Ausente em ambientes
+    /// anteriores e nos outros: o hub mantém o relato que tinha.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy: Option<ct_core::AutonomyReport>,
 }
 
 fn yes() -> bool {
@@ -436,6 +441,7 @@ impl Ledger {
             forge: p.forge,
             branch_pattern: p.branch_pattern,
             attribution: p.attribution,
+            autonomy: p.autonomy_report.filter(|_| p.autonomy_runner),
         }))
     }
 

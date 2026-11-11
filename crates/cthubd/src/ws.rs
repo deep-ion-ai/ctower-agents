@@ -1201,6 +1201,21 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
             st.channels.mark_online(&mut envs);
             Ok(json!(envs))
         }
+        // Marca o ambiente como autônomo (#181): só os marcados rodam o modo
+        // autônomo de um projeto.
+        "hub.envs.set_autonomous" => {
+            let env = str_param(p, "env")?;
+            let on = bool_param(p, "autonomous")?
+                .ok_or_else(|| invalid("parâmetro obrigatório: autonomous"))?;
+            let id = h.set_env_autonomous(env, on).map_err(e)?;
+            tracing::info!(
+                "ambiente {id} {} como autônomo",
+                if on { "marcado" } else { "desmarcado" }
+            );
+            let mut envs = h.list_envs().map_err(e)?;
+            st.channels.mark_online(&mut envs);
+            Ok(json!(envs.into_iter().find(|x| x.env_id == id)))
+        }
         "hub.rules.get" => {
             let (owner, repo, epic) = rules_scope(p)?;
             Ok(json!(h.rules(owner, repo, epic).map_err(e)?))
@@ -1435,6 +1450,21 @@ fn templates_param(p: &Value) -> Result<Option<ct_core::SessionTemplates>, (i64,
     }
 }
 
+/// `autonomy` (#181): `{ enabled, env_id, branch, base_branch, strategy }`,
+/// campos ausentes = padrão; o objeto inteiro substitui o anterior. O
+/// `env_id` aceita também o nome do ambiente.
+fn autonomy_param(p: &Value) -> Result<Option<ct_core::AutonomyConfig>, (i64, String)> {
+    match p.get("autonomy") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|e| invalid(format!("autonomy inválido: {e}"))),
+        Some(_) => Err(invalid(
+            "autonomy deve ser um objeto { enabled, env_id, branch, base_branch, strategy }",
+        )),
+    }
+}
+
 fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(None),
@@ -1537,11 +1567,12 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         sync_env: opt_str(p, "sync_env"),
         docs: docs_param(p)?,
         session_templates: templates_param(p)?,
+        autonomy: autonomy_param(p)?,
     };
     if patch.is_empty() {
         return Err(invalid(
             "nada a mudar: informe name, base_branch, protected_branches, tracker, forge, \
-             branch_pattern, attribution, sync_env, docs ou session_templates",
+             branch_pattern, attribution, sync_env, docs, session_templates ou autonomy",
         ));
     }
     let cur = st
@@ -1561,11 +1592,34 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
+    // A base própria do modo autônomo (#181) precisa existir no GitHub.
+    if let Some(b) = patch
+        .autonomy
+        .as_ref()
+        .filter(|a| a.enabled)
+        .map(|a| a.base_branch.trim())
+        .filter(|b| !b.is_empty() && *b != cur.base_branch && cur.forge.gitlab().is_none())
+    {
+        github()?
+            .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+            .map_err(|m| (-32000, m))?;
+    }
     let updated = st
         .hub
         .lock()
         .update_project(owner, repo, &patch)
         .map_err(e)?;
+    if patch.autonomy.is_some() {
+        tracing::info!(
+            "modo autônomo de {owner}/{repo}: {} ({})",
+            if updated.autonomy.enabled {
+                "ligado"
+            } else {
+                "desligado"
+            },
+            updated.autonomy.env_id.as_deref().unwrap_or("-")
+        );
+    }
     if let Some(env) = &patch.sync_env {
         tracing::info!(
             "ambiente de sync de {owner}/{repo}: {env} (config_rev {})",
@@ -2695,6 +2749,63 @@ pub(crate) mod tests {
             .call(
                 "hub.projects.update",
                 json!({ "owner": "deep-ion-ai", "repo": "demo", "session_templates": "x" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// Modo autônomo (#181): marcar o ambiente, ligar o modo no projeto
+    /// (só com ambiente autônomo e atribuído) e desmarcar recusado em uso.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn modo_autonomo_pela_edicao() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let ligar = json!({ "owner": "deep-ion-ai", "repo": "demo",
+                            "autonomy": { "enabled": true, "env_id": "wsl" } });
+        let v = ui.call("hub.projects.update", ligar.clone()).await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("não está marcado como autônomo"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.envs.set_autonomous",
+                json!({ "env": "wsl", "autonomous": true }),
+            )
+            .await;
+        assert_eq!(v["result"]["autonomous"], true, "{v}");
+        let v = ui
+            .call(
+                "hub.assignments.add",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "env": "wsl" }),
+            )
+            .await;
+        assert!(v["error"].is_null(), "{v}");
+        let v = ui.call("hub.projects.update", ligar).await;
+        let a = &v["result"]["autonomy"];
+        assert_eq!(a["enabled"], true, "{v}");
+        assert!(a["env_id"].as_str().unwrap().len() > 3, "{v}");
+        let v = ui
+            .call(
+                "hub.envs.set_autonomous",
+                json!({ "env": "wsl", "autonomous": false }),
+            )
+            .await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("deep-ion-ai/demo"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "autonomy": "x" }),
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");

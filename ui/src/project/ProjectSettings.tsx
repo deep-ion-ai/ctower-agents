@@ -8,6 +8,7 @@ import { AgentRules } from "../hub/AgentRules";
 import { isJira } from "../hub/tracker";
 import {
   AssignmentsCard,
+  AutonomyCard,
   CleanupCard,
   DangerZone,
   DocsCard,
@@ -151,6 +152,9 @@ export function ProjectSettings({
           onRequestHandled={onAssignHandled}
         />
       );
+      break;
+    case "autonomy":
+      body = <AutonomyCard project={p} settings={settings} readOnly={web} />;
       break;
     case "rules":
       body = <AgentRules owner={pr.gh_owner} repo={pr.gh_repo} epic={0} label={pr.name} now={now} className="hub-card" />;

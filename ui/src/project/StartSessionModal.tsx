@@ -230,6 +230,8 @@ function ItemStartModal({
   const infos = web ? webInfos : tower.infos;
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [openTerm, setOpenTerm] = useState(true);
+  // Sessão autônoma (#181): só no ambiente do modo autônomo do projeto.
+  const [autonomous, setAutonomous] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Plano da conta (#108): no crítico, iniciar passa por um passo de confirmação.
@@ -284,6 +286,9 @@ function ItemStartModal({
       : project.base_branch
     : "";
   const cloneEnv = clone?.env;
+  // Modo autônomo ligado e este é o ambiente dele (daemon 2.16, #181).
+  const autonomy = project?.autonomy_runner && project.autonomy?.enabled ? project.autonomy : null;
+  const autonomyBranchName = autonomy ? autonomy.branch.trim() || "wip/autonoma" : null;
   // O ambiente define a conta: o alerta é o da conta dele.
   const now = Date.now();
   const plan = usePlanGate(cloneEnv, now);
@@ -412,6 +417,7 @@ function ItemStartModal({
             prompt,
             ...agent,
             ...size,
+            ...(autonomous && autonomy ? { autonomous: true } : {}),
           })
         : await api.call<Session>(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
       // Web: o painel da sessão espera o id do Remote Control e abre o link.
@@ -629,6 +635,18 @@ function ItemStartModal({
                     ? "Pelo navegador, a conversa com a sessão é pelo app Claude ou em claude.ai/code: o link abre ao conectar."
                     : "Continue a sessão pelo celular, no app Claude ou em claude.ai/code."
                   : rcStatus.reason}
+              </span>
+            </div>
+          )}
+
+          {autonomyBranchName && issue && (
+            <div className="sm-rc">
+              <label className="sm-check">
+                <input type="checkbox" checked={autonomous} onChange={(e) => setAutonomous(e.target.checked)} />
+                Sessão autônoma
+              </label>
+              <span className="muted small">
+                Alinha {autonomyBranchName} com a base, sai dela e abre o PR para ela. Em conflito com a base, a sessão não começa.
               </span>
             </div>
           )}

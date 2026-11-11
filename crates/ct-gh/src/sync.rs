@@ -79,6 +79,7 @@ impl SyncInput {
             base_branch: p.base_branch,
             protected_branches: p.protected_branches,
             created_at: p.created_at,
+            autonomy: p.autonomy,
             ..Project::default()
         };
         let work_items = hub
@@ -130,6 +131,8 @@ impl SyncInput {
         );
         // PRs para a branch de cada épico em andamento: os das sub-issues.
         paths.extend(epic_branches(&work_items).map(|(_, b)| pulls_base_path(o, r, b)));
+        // PR da branch de integração do modo autônomo para a base (#181).
+        paths.extend(autonomy_branch(&project).map(|(b, _)| pulls_path(o, r, &b)));
         let mut etags = HashMap::new();
         for p in paths {
             if let Some(e) = etag(&p)? {
@@ -178,6 +181,16 @@ pub fn pulls_path(owner: &str, repo: &str, branch: &str) -> String {
     )
 }
 
+/// PRs abertos `head → base` (o PR rascunho da branch de integração do modo
+/// autônomo, #181).
+pub fn open_pulls_path(owner: &str, repo: &str, head: &str, base: &str) -> String {
+    format!(
+        "/repos/{owner}/{repo}/pulls?state=open&head={}&base={}&per_page=100",
+        encode(&format!("{owner}:{head}")),
+        encode(base)
+    )
+}
+
 /// PRs (todos os estados) cuja base é `branch`: os das sub-issues para a
 /// branch do épico (#454).
 pub fn pulls_base_path(owner: &str, repo: &str, branch: &str) -> String {
@@ -185,6 +198,19 @@ pub fn pulls_base_path(owner: &str, repo: &str, branch: &str) -> String {
         "/repos/{owner}/{repo}/pulls?state=all&base={}&per_page=100",
         encode(branch)
     )
+}
+
+/// `(branch de integração, base)` do modo autônomo do projeto (#181), se o
+/// modo já foi configurado: o PR dela para a base conclui as issues que
+/// entraram nela.
+fn autonomy_branch(project: &Project) -> Option<(String, String)> {
+    let a = &project.autonomy;
+    (!a.is_default()).then(|| {
+        (
+            a.branch().to_string(),
+            a.base(&project.base_branch).to_string(),
+        )
+    })
 }
 
 /// Épicos com branch entre os work items observados: `(work item, branch)`.
@@ -505,6 +531,15 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
             if let Some(row) = pr_row(&v, epic.id)
                 .filter(|p| sub_issue_of_head(&p.head, epic.gh_number, &parents).is_some())
             {
+                prs.push(row);
+            }
+        }
+    }
+    // O PR da branch de integração para a base (#181): não é de work item
+    // (id 0, fica fora do cache); quem aplica conclui as issues dela.
+    if let Some((branch, base)) = autonomy_branch(&input.project) {
+        for v in get(pulls_path(o, r, &branch), true)?.unwrap_or_default() {
+            if let Some(row) = pr_row(&v, 0).filter(|p| p.base == base) {
                 prs.push(row);
             }
         }

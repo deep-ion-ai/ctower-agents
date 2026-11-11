@@ -104,6 +104,8 @@ const HUB_PROJECT: HubProject = {
   sync_env_id: null,
   docs: { enabled: false, project_dirs: [], epic_dirs: [] },
   session_templates: { issue: "", epic: "", project: "" },
+  autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+  autonomy_report: null,
 };
 
 function hubItem(n: number, p: Partial<HubWorkItem> = {}): HubWorkItem {
@@ -822,6 +824,7 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
     "Geral",
     "Repositório e rastreador",
     "Ambientes e atribuições",
+    "Modo autônomo",
     "Regras do agente",
     "Templates de sessão",
     "Secrets e variáveis",

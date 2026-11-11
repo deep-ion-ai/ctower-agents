@@ -1,5 +1,9 @@
 // Gerado por `cargo test -p ct-server --features ts export_ts`.
+export type { AlignStrategy } from "./AlignStrategy";
 export type { ArchivedItem } from "./ArchivedItem";
+export type { AutonomyConfig } from "./AutonomyConfig";
+export type { AutonomyReport } from "./AutonomyReport";
+export type { AutonomyState } from "./AutonomyState";
 export type { Available } from "./Available";
 export type { BranchCommit } from "./BranchCommit";
 export type { BranchCommits } from "./BranchCommits";

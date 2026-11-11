@@ -162,6 +162,7 @@ pub const REMOTE_CONTROL_UNAVAILABLE: i64 = -32032;
 fn from_sessions(e: SessionsError) -> (i64, String) {
     match e {
         SessionsError::RemoteControl(m) => (REMOTE_CONTROL_UNAVAILABLE, m),
+        SessionsError::AutonomyConflict(m) => (ct_http::sync::AUTONOMY_CONFLICT, m),
         e => (-32000, e.to_string()),
     }
 }
@@ -594,6 +595,11 @@ impl Conn {
             "session.start" => {
                 let project_id = project_param(&sessions, self.linked(), p).await?;
                 let gh_number = i64_param(p, "gh_number")?;
+                let autonomous = match p.get("autonomous") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err(invalid("autonomous deve ser true ou false")),
+                };
                 let prompt = str_param(p, "prompt")?.to_string();
                 let size = size_param(p)?;
                 let agent = agent_param(p)?;
@@ -656,7 +662,34 @@ impl Conn {
                     size,
                     agent,
                 };
-                let v = blocking(&sessions, move |s| s.start(req)).await?;
+                // Sessão autônoma (#181): alinha a branch de integração e sai
+                // dela; conflito = `AUTONOMY_CONFLICT`, e a issue não começa.
+                let v = if autonomous {
+                    let gh = self.st.github.clone();
+                    blocking(&sessions, move |s| {
+                        let pr = gh
+                            .as_deref()
+                            .map(|g| g as &dyn ct_sessions::autonomy::PrOpener);
+                        s.start_autonomous(req, pr)
+                    })
+                    .await?
+                } else {
+                    blocking(&sessions, move |s| s.start(req)).await?
+                };
+                Ok(json!(v))
+            }
+            // Alinha a branch de integração do modo autônomo com a base
+            // (#181) e devolve o relato; conflito = `AUTONOMY_CONFLICT`.
+            "autonomy.align" => {
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let gh = self.st.github.clone();
+                let v = blocking(&sessions, move |s| {
+                    let pr = gh
+                        .as_deref()
+                        .map(|g| g as &dyn ct_sessions::autonomy::PrOpener);
+                    s.autonomy_align(project_id, pr)
+                })
+                .await?;
                 Ok(json!(v))
             }
             "session.start_project" => {
@@ -2098,6 +2131,90 @@ mod tests {
         ui.call("env.info", json!({})).await["result"]["remote_control"].clone()
     }
 
+    /// Modo autônomo pelo `/ws` (#181): `autonomy.align` cria e alinha a
+    /// branch; com a branch em conflito, `autonomy.align` e o `session.start`
+    /// autônomo respondem `AUTONOMY_CONFLICT` e nada começa.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn modo_autonomo_pelo_ws() {
+        use ct_sessions::test_support::git_in;
+        let srv = Srv::linked(FakeClaude::exit(0));
+        let env = &srv.env;
+        let remote = env.tmp.path().join("acme-web.git");
+        git_in(
+            env.tmp.path(),
+            &["init", "-q", "--bare", remote.to_str().unwrap()],
+        );
+        env.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        env.git(&["push", "-q", "origin", "develop"]);
+        env.assign_config(2, |p| {
+            p.autonomy = ct_core::AutonomyConfig {
+                enabled: true,
+                env_id: Some("env-auto".into()),
+                ..Default::default()
+            };
+            p.autonomy_runner = true;
+        });
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let pid = env.project_id;
+        let v = ui
+            .call("autonomy.align", json!({ "project_id": pid }))
+            .await;
+        assert_eq!(v["result"]["state"], "ok", "{v}");
+        assert_eq!(v["result"]["branch"], "wip/autonoma", "{v}");
+        let v = ui
+            .call(
+                "session.start",
+                json!({ "project_id": pid, "gh_number": 1, "title": "ACME-123", "prompt": "oi",
+                        "autonomous": "sim" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+
+        // Conflito: a wip e a base mudam o mesmo arquivo.
+        let other = env.tmp.path().join("outro");
+        git_in(
+            env.tmp.path(),
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        git_in(&other, &["config", "user.email", "t@t"]);
+        git_in(&other, &["config", "user.name", "t"]);
+        for (branch, text) in [("wip/autonoma", "wip"), ("develop", "base")] {
+            git_in(
+                &other,
+                &["checkout", "-q", "-B", branch, &format!("origin/{branch}")],
+            );
+            std::fs::write(other.join("app.txt"), text).unwrap();
+            git_in(&other, &["add", "."]);
+            git_in(&other, &["commit", "-q", "-m", text]);
+            git_in(&other, &["push", "-q", "origin", branch]);
+        }
+        let v = ui
+            .call(
+                "session.start",
+                json!({ "project_id": pid, "gh_number": 1, "title": "ACME-123", "prompt": "oi",
+                        "autonomous": true }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], ct_http::sync::AUTONOMY_CONFLICT, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("wip/autonoma em conflito com a base"),
+            "{v}"
+        );
+        let v = ui
+            .call("autonomy.align", json!({ "project_id": pid }))
+            .await;
+        assert_eq!(v["error"]["code"], ct_http::sync::AUTONOMY_CONFLICT, "{v}");
+    }
+
     /// Remote Control pelo `/ws` (#197): a opção no início, a recusa com
     /// `-32032` por um secret do projeto, o `env.info` e o
     /// `session.remote_control.enable`.
@@ -2456,6 +2573,8 @@ mod tests {
                     projects: Some(vec![ct_ledger::ConfigProject {
                         docs: Default::default(),
                         session_templates: Default::default(),
+                        autonomy: Default::default(),
+                        autonomy_runner: false,
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),

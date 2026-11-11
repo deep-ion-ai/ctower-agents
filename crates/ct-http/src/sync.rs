@@ -135,6 +135,9 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "git.diff",
     "git.diff_file",
     "git.commits",
+    // Modo autônomo (#181): alinhar a branch de integração com a base
+    // (o agendador da #183 e o "Verificar agora" da tela do projeto).
+    "autonomy.align",
 ];
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:
@@ -153,6 +156,11 @@ pub const CHANNEL_PUSHES: &[&str] = &[
     // Arquivo compartilhado pelo agente (`share_file`, #167).
     "session_files",
 ];
+
+/// Erro do ambiente: a branch de integração do modo autônomo está em
+/// conflito com a base (#181), e a issue autônoma não começou
+/// (`session.start` com `autonomous`, `autonomy.align`).
+pub const AUTONOMY_CONFLICT: i64 = -32050;
 
 /// Erro de método fora de [`CHANNEL_METHODS`], nos dois lados do canal.
 pub const CHANNEL_METHOD_UNAVAILABLE: i64 = -32601;

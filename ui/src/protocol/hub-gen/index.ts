@@ -1,9 +1,13 @@
 // Gerado por `cargo test -p cthubd --features ts export_ts`.
 export type { AccountEnv } from "./AccountEnv";
 export type { AccountPlan } from "./AccountPlan";
+export type { AlignStrategy } from "./AlignStrategy";
 export type { AssignmentAdded } from "./AssignmentAdded";
 export type { AssignmentRemoved } from "./AssignmentRemoved";
 export type { AssignmentState } from "./AssignmentState";
+export type { AutonomyConfig } from "./AutonomyConfig";
+export type { AutonomyReport } from "./AutonomyReport";
+export type { AutonomyState } from "./AutonomyState";
 export type { AutopilotPolicyView } from "./AutopilotPolicyView";
 export type { Available } from "./Available";
 export type { BackupConfigView } from "./BackupConfigView";

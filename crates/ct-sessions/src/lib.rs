@@ -1,6 +1,7 @@
 //! Ciclo de vida das sessões: lançamento, hooks, backup de transcripts e
 //! recuperação. Síncrono; o servidor chama daqui via `spawn_blocking`.
 
+pub mod autonomy;
 pub mod cleanup;
 pub mod cleanup_branches;
 pub mod cleanup_sessions;
@@ -67,6 +68,10 @@ pub enum SessionsError {
     /// O ambiente efetivo da sessão impede o Remote Control (issue #197).
     #[error("{0}")]
     RemoteControl(String),
+    /// A branch de integração do modo autônomo não alinha com a base sem
+    /// conflito (#181): a issue autônoma não começa.
+    #[error("{0}")]
+    AutonomyConflict(String),
 }
 
 pub type Result<T> = std::result::Result<T, SessionsError>;

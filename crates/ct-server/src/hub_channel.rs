@@ -409,6 +409,8 @@ mod tests {
                     projects: Some(vec![ct_ledger::ConfigProject {
                         docs: Default::default(),
                         session_templates: Default::default(),
+                        autonomy: Default::default(),
+                        autonomy_runner: false,
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),
