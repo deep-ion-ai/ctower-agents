@@ -1,0 +1,54 @@
+# Hub e ambiente de teste (#176). Uso e cuidados: README.md nesta pasta.
+#
+#   docker compose -f docker/test/compose.yml up --build -d
+#   docker compose -f docker/test/compose.yml down -v   # apaga tudo
+#
+# Nada do HOME do host é montado: cada serviço tem seu volume de HOME.
+name: ct-test
+
+x-image: &image
+  image: ct-test:local
+  build:
+    context: ../..
+    dockerfile: docker/test/Dockerfile
+  restart: unless-stopped
+  init: false # o tini já é o PID 1
+
+services:
+  hub:
+    <<: *image
+    command: ["hub"]
+    hostname: ct-test-hub
+    environment:
+      CT_TEST_ENV_NAME: ${CT_TEST_ENV_NAME:-ct-test-env}
+      CT_TEST_HUB_PORT: ${CT_TEST_HUB_PORT:-17879}
+      # Opcional: token do GitHub para o hub validar repositórios e sincronizar
+      # as issues (o `gh auth token` dentro do container o devolve). Passe pelo
+      # shell na subida, nunca grave aqui.
+      GH_TOKEN: ${CT_TEST_GH_TOKEN:-}
+    ports:
+      - "127.0.0.1:${CT_TEST_HUB_PORT:-17879}:7879"
+    volumes:
+      - hub-home:/home/ct
+      - link:/link
+
+  env:
+    <<: *image
+    command: ["env"]
+    hostname: ct-test-env
+    depends_on: [hub]
+    environment:
+      CT_TEST_ENV_NAME: ${CT_TEST_ENV_NAME:-ct-test-env}
+      # Opcional: token de um repositório só de teste, lido pelo gh e pelo
+      # sync. Passe pelo shell na subida, nunca grave aqui.
+      GH_TOKEN: ${CT_TEST_GH_TOKEN:-}
+    ports:
+      - "127.0.0.1:${CT_TEST_ENV_PORT:-17878}:7878"
+    volumes:
+      - env-home:/home/ct
+      - link:/link
+
+volumes:
+  hub-home:
+  env-home:
+  link:

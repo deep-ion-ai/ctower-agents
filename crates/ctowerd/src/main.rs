@@ -76,6 +76,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let env_id = ensure_env_id(&dirs.env_id_file())?;
     let env_name = cfg.env_name();
     tracing::info!("ambiente {env_name} ({env_id})");
+    if cfg.test_mode {
+        tracing::info!("ambiente de teste (test_mode = true)");
+    }
     let ledger = Ledger::open(&dirs.ledger_db(), &env_id)?;
 
     // `[credentials]` (#143): editável pela UI, vale no próximo uso.
@@ -267,6 +270,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         github: Some(github),
         tracker: Some(tracker),
         env_name: env_name.into(),
+        test_mode: cfg.test_mode,
         hub_sender,
         updates: Some(updates),
         cleanup: Some(cleanup),

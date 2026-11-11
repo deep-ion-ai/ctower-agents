@@ -1342,3 +1342,22 @@ button.sb-item:hover {
   margin: 0;
   color: var(--text-2);
 }
+
+/* Hub ou ambiente de teste (issue 176): barra do topo em outra cor e um selo. */
+.titlebar[data-test="true"] {
+  background: var(--bg-header-test);
+  border-bottom-color: var(--border-test);
+}
+
+.test-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--test-badge-bg);
+  color: var(--test-badge-fg);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}

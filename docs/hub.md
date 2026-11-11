@@ -66,6 +66,7 @@ O `cthubd` tem config e dados próprios:
 name = "mac-mini"                    # vazio = nome da máquina
 port = 7879                          # padrão; CTHUB_PORT sobrepõe
 bind = "100.x.y.z"                   # IP Tailscale; 127.0.0.1 fica sempre no ar
+test_mode = false                    # hub de teste: barra do topo roxa na UI (docker/test, #176)
 gh_sync_interval_secs = 180          # 0 desliga o sync periódico com o GitHub
 backup_dir = "/Volumes/Backup/cthub" # vazio = ~/.local/share/cthub/backups
 backup_interval_hours = 6            # 0 desliga
