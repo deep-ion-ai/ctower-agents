@@ -2,6 +2,7 @@
 import type { PrState, WorkItemSummary } from "../protocol/gen";
 import { changeLabel, changeRef, itemShort, type ProviderProject } from "../util/item";
 import { ago } from "../util/time";
+import { AWAITING_APPROVAL_TEXT, awaitingApproval, type ApprovalProject } from "./approval";
 import { currentSprint } from "./sprints";
 import { STATUS } from "./status";
 import { priorityOf, statusKey, type ViewNode } from "./tree-view";
@@ -63,7 +64,12 @@ export function decisionsTitle(d: WorkItemSummary["decisions"]): string {
 }
 
 /** Nome acessível da linha: título, status, PR, decisões e última atividade (não só o título). */
-export function rowLabel(node: RowNode, now: number, base?: string, project?: ProviderProject | null): string {
+export function rowLabel(
+  node: RowNode,
+  now: number,
+  base?: string,
+  project?: (ProviderProject & ApprovalProject) | null,
+): string {
   const { pr, decisions, last_activity_at } = node.summary;
   const parts = [`${itemShort(project, node.issue.gh_number)} ${node.issue.title}`, STATUS[statusKey(node)].text];
   const p = priorityOf(node);
@@ -73,9 +79,25 @@ export function rowLabel(node: RowNode, now: number, base?: string, project?: Pr
   if (pr) parts.push(`${changeRef(project, pr.number)} ${PR_TEXT[pr.state]}`);
   if (mergedOpen(node, base)) parts.push(mergedOpenText(project));
   if (missingModel(node, project)) parts.push(`${MISSING_MODEL_TEXT} (o piloto automático não a inicia)`);
+  if (awaitingApproval(node, project)) parts.push(AWAITING_APPROVAL_TEXT);
   if (decisions.total > 0) parts.push(decisionsTitle(decisions));
   parts.push(last_activity_at !== null ? `última atividade ${ago(last_activity_at, now)}` : "sem atividade");
   return parts.join(", ");
+}
+
+/**
+ * Selo "aguardando aprovação" (#124): o projeto exige o rótulo para iniciar
+ * sessão e a issue aberta não o tem. Decorativo: o texto vai no nome
+ * acessível da linha (`rowLabel`).
+ */
+export function ApprovalBadge({ node, project }: { node: ViewNode; project?: ApprovalProject | null }) {
+  if (!awaitingApproval(node, project)) return null;
+  const label = project?.approval?.label.trim() ?? "";
+  return (
+    <span className="pj-approval" aria-hidden="true" title={`Sem o rótulo "${label}": o projeto o exige para iniciar sessão`}>
+      {AWAITING_APPROVAL_TEXT}
+    </span>
+  );
 }
 
 /** Selo `P0`–`P3` (nada para item não triado). */

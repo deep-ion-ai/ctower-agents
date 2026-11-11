@@ -285,6 +285,10 @@ impl Sessions {
         req: StartRequest,
         pr: Option<&dyn PrOpener>,
     ) -> Result<Session> {
+        // Rótulo de aprovação (#124) antes de alinhar a branch: a issue
+        // recusada não mexe na wip. O agendador nunca manda o "mesmo assim".
+        let project = self.ledger().get_project(req.project_id)?;
+        self.check_approval(&project, &req)?;
         let report = self.autonomy_align(req.project_id, pr)?;
         self.start_with_base(req, Some((&report.branch, &report.base)))
     }

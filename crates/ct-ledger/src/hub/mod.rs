@@ -21,6 +21,7 @@
 //! `push_quarantine`, reaplicada quando o projeto for cadastrado.
 
 mod agent;
+mod approval;
 mod assignments;
 mod autonomy;
 mod autopilot;
@@ -43,6 +44,7 @@ pub use agent::{
     AgentItemRef, AgentNode, AgentOverview, AgentPr, AgentProject, AgentProjectSummary,
     AgentSession, AgentWorkItem,
 };
+pub use approval::ApprovalStatus;
 pub use assignments::{AssignmentAdded, AssignmentFilter, AssignmentState, HubAssignment};
 pub use config::{
     DeleteImpact, HubProjectPatch, NewHubProject, ProjectAdded, ProjectProvider, QuarantineGroup,
@@ -702,6 +704,12 @@ BEGIN SELECT RAISE(ABORT, 'proposta já decidida'); END;
     r#"
 ALTER TABLE project ADD COLUMN wip_limits TEXT NOT NULL DEFAULT '{}';
 "#,
+    // 35: rótulo de aprovação do projeto (#124): JSON de
+    // `ct_core::ApprovalConfig` (`label`, `required`). `{}` = o rótulo
+    // padrão (`aprovada`), sem exigir.
+    r#"
+ALTER TABLE project ADD COLUMN approval_config TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -916,6 +924,10 @@ pub struct HubProject {
     /// num hub anterior: sem limite.
     #[serde(default)]
     pub wip_limits: ct_core::WipLimits,
+    /// Rótulo de aprovação do projeto (#124). Ausente num hub anterior: o
+    /// rótulo padrão, sem exigir.
+    #[serde(default)]
+    pub approval: ct_core::ApprovalConfig,
 }
 
 fn attribution_default() -> bool {
@@ -1063,7 +1075,7 @@ const PROJECT_COLS: &str =
      sync_env_id, docs_config, session_templates, autonomy_config, \
      (SELECT l.autonomy FROM project_location l WHERE l.project_id = project.id \
         AND l.env_id = json_extract(project.autonomy_config, '$.env_id')), \
-     wip_limits";
+     wip_limits, approval_config";
 const WORK_ITEM_COLS: &str = "id, project_id, gh_number, kind, status, branch, created_at, \
                               closed_at, priority, rank, model, effort";
 const SESSION_COLS: &str = "id, env_id, work_item_id, tool, tool_session_id, cwd, state, \
@@ -1096,6 +1108,7 @@ fn row_to_project(r: &Row) -> rusqlite::Result<HubProject> {
             .get::<_, Option<String>>(18)?
             .and_then(|s| serde_json::from_str(&s).ok()),
         wip_limits: json_col(r, 19)?,
+        approval: json_col(r, 20)?,
     })
 }
 
@@ -4946,7 +4959,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 34);
+        assert_eq!(v, 35);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

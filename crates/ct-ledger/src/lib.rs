@@ -36,8 +36,8 @@ pub use hub::{
     AgentSession, AgentWorkItem,
 };
 pub use hub::{
-    AssignmentAdded, AssignmentFilter, AssignmentState, DeleteImpact, HubAssignment,
-    HubProjectPatch, HubTrackerStatus, LegacyAdoption, NewHubProject, ProjectAdded,
+    ApprovalStatus, AssignmentAdded, AssignmentFilter, AssignmentState, DeleteImpact,
+    HubAssignment, HubProjectPatch, HubTrackerStatus, LegacyAdoption, NewHubProject, ProjectAdded,
     ProjectProvider, QuarantineGroup,
 };
 pub use hub::{

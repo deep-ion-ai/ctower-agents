@@ -287,6 +287,7 @@ describe("Revisão: marcar decisões como revisadas", () => {
             autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
             autonomy_runner: false,
             autonomy_report: null,
+            approval: { label: "aprovada", required: false },
           },
           work_items: [
             {

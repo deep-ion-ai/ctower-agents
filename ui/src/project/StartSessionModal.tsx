@@ -35,6 +35,7 @@ import { useNav, type OpenTab, type Tab } from "../state/nav";
 import { useTower, type Tower } from "../state/tower";
 import { lastTermSize } from "../terminal/size";
 import { changeLabel, itemKey, itemShort, PROJECT_ITEM } from "../util/item";
+import { awaitingApproval, isApprovalRefusal } from "./approval";
 import { branchFor, branchFromPattern, patternOf, worktreeDirName } from "./branch";
 import { STATE_SUFFIX, hubClones, liveSessions, localClone, type Clone } from "./clones";
 import { projectAt } from "./sections";
@@ -274,6 +275,14 @@ function ItemStartModal({
   const [confirming, setConfirming] = useState(false);
   // Limite de trabalho em andamento (#126): no limite, iniciar pede confirmação.
   const [wipConfirming, setWipConfirming] = useState(false);
+  // Rótulo de aprovação (#124): a recusa do ambiente e o "iniciar mesmo
+  // assim", confirmado pela pessoa (o gestor e as automações nunca o usam).
+  const [refused, setRefused] = useState<string | null>(null);
+  const [overrideApproval, setOverrideApproval] = useState(false);
+  useEffect(() => {
+    setRefused(null);
+    setOverrideApproval(false);
+  }, [gh]);
   const dialog = useRef<HTMLElement>(null);
 
   const all = useMemo(() => (roots ?? []).flatMap((r) => [r, ...r.children]), [roots]);
@@ -334,6 +343,16 @@ function ItemStartModal({
   // Modo autônomo ligado e este é o ambiente dele (daemon 2.16, #181).
   const autonomy = project?.autonomy_runner && project.autonomy?.enabled ? project.autonomy : null;
   const autonomyBranchName = autonomy ? autonomy.branch.trim() || "wip/autonoma" : null;
+  // Exigência do rótulo (#124): a do ambiente; ambiente anterior não manda, vale a do hub.
+  const approval =
+    project?.approval ??
+    tower.hub.projects.find(
+      (x) => same(x.project.gh_owner, project?.gh_owner ?? "") && same(x.project.gh_repo, project?.gh_repo ?? ""),
+    )?.project.approval ??
+    null;
+  // Só com os rótulos da árvore; fora dela, quem avisa é a recusa do ambiente.
+  const unapproved = (!planning && !!node && awaitingApproval(node, { approval })) || refused !== null;
+  const approvalLabel = approval?.label.trim() ?? "";
   // O ambiente define a conta: o alerta é o da conta dele.
   const now = Date.now();
   const plan = usePlanGate(cloneEnv, now);
@@ -449,6 +468,7 @@ function ItemStartModal({
 
   const start = async (wipOk = false) => {
     if (!clone || !project || busy || blocked || loading || !prompt.trim()) return;
+    if (unapproved && !overrideApproval) return;
     if (plan.alert?.level === "critical" && !confirming) {
       setConfirming(true);
       return;
@@ -481,13 +501,21 @@ function ItemStartModal({
             ...agent,
             ...size,
             ...(autonomous && autonomy ? { autonomous: true } : {}),
+            // Só depois da confirmação da pessoa (#124).
+            ...(unapproved && overrideApproval ? { override_approval: true } : {}),
           })
         : await api.call<Session>(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
       // Web: o painel da sessão espera o id do Remote Control e abre o link.
       if (web && withRemote) rcRequested(s.id);
       onStarted(s, clone.env, clone.name, planning ? "Sessão de planejamento" : `Sessão de ${ref(gh ?? 0)}`, openTerm);
     } catch (e) {
-      setError(String(e));
+      const m = e instanceof Error ? e.message : String(e);
+      if (issue && isApprovalRefusal(m)) {
+        setRefused(m.replace(/^Error:\s*/, ""));
+        setOverrideApproval(false);
+      } else {
+        setError(String(e));
+      }
       setBusy(false);
     }
   };
@@ -842,6 +870,28 @@ function ItemStartModal({
             </div>
           )}
 
+          {unapproved && issue && (
+            <div className="sm-note" role="alert" aria-label="Aguardando aprovação">
+              <span className="sp-dot" data-tone="attention" aria-hidden="true" />
+              <span className="sm-note-text">
+                {refused ?? (
+                  <>
+                    <strong>Aguardando aprovação:</strong> {ref(issue.gh_number)} não tem o rótulo{" "}
+                    <span className="mono">{approvalLabel}</span>, que o projeto exige para iniciar sessão.
+                  </>
+                )}
+                <label className="sm-check">
+                  <input
+                    type="checkbox"
+                    checked={overrideApproval}
+                    onChange={(e) => setOverrideApproval(e.target.checked)}
+                  />
+                  Iniciar mesmo assim (fica registrado como decisão orientada no item)
+                </label>
+              </span>
+            </div>
+          )}
+
           {plan.account && plan.alert && <PlanStartNote account={plan.account} alert={plan.alert} now={now} />}
 
           {wipFullText && (
@@ -879,10 +929,10 @@ function ItemStartModal({
                 type="button"
                 className="btn btn-primary"
                 aria-keyshortcuts="Meta+Enter Control+Enter"
-                disabled={busy || !!blocked || loading || !prompt.trim()}
+                disabled={busy || !!blocked || loading || !prompt.trim() || (unapproved && !overrideApproval)}
                 onClick={() => void start()}
               >
-                {busy ? "Iniciando…" : "Iniciar sessão"}
+                {busy ? "Iniciando…" : unapproved ? "Iniciar mesmo assim" : "Iniciar sessão"}
                 <kbd className="kbd sm-kbd" aria-hidden="true">
                   {shortcutLabel("↵")}
                 </kbd>

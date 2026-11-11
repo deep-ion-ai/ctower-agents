@@ -60,6 +60,7 @@ const HUB_PROJECT: HubProject = {
   autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
   autonomy_report: null,
   wip_limits: { max_sessions: null, max_prs: null },
+  approval: { label: "aprovada", required: false },
 };
 
 const hubItem = (n: number, p: Partial<HubWorkItem> = {}): HubWorkItem => ({

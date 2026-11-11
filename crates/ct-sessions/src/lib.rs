@@ -72,6 +72,11 @@ pub enum SessionsError {
     /// conflito (#181): a issue autônoma não começa.
     #[error("{0}")]
     AutonomyConflict(String),
+    /// A issue não tem o rótulo de aprovação que o projeto exige para
+    /// iniciar sessão (#124). A mensagem começa com
+    /// `ct_core::APPROVAL_REFUSAL_PREFIX`.
+    #[error("{0}")]
+    ApprovalRequired(String),
 }
 
 pub type Result<T> = std::result::Result<T, SessionsError>;

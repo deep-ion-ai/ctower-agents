@@ -69,6 +69,7 @@ export function project(p: Partial<Project> = {}): Project {
     autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
     autonomy_runner: false,
     autonomy_report: null,
+    approval: { label: "aprovada", required: false },
     ...p,
   };
 }
@@ -334,6 +335,7 @@ export function hubProject(p: Partial<HubProject> = {}): HubProject {
     autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
     autonomy_report: null,
     wip_limits: { max_sessions: null, max_prs: null },
+    approval: { label: "aprovada", required: false },
     ...p,
   };
 }

@@ -37,6 +37,7 @@ import { IssueBodyModal } from "./IssueBodyModal";
 import { STATUS } from "./status";
 import { StatusMenu } from "./StatusMenu";
 import { mergedOpen, mergedOpenText } from "./TreeRow";
+import { AWAITING_APPROVAL_TEXT, awaitingApproval, type ApprovalProject } from "./approval";
 import { DesktopOnly } from "../web/DesktopOnly";
 import { diffBlocked, diffTab } from "../diff/diff";
 import { DISCARD_LABEL, useDiscard } from "../recovery/discard";
@@ -144,7 +145,7 @@ export function WorkItemPanel({
 }: {
   node: PanelNode;
   /** O projeto do item: `owner`/`repo` e o provedor das referências (#352). */
-  project: ProviderProject;
+  project: ProviderProject & ApprovalProject;
   /** Base do projeto: PR mesclado nela com a issue aberta ganha aviso (#375). */
   baseBranch?: string;
   now: number;
@@ -555,6 +556,15 @@ export function WorkItemPanel({
                 title={`O ${change(pr?.number ?? 0)} foi mesclado em ${baseBranch} sem fechar a issue (faltou Closes ${ref(n)})`}
               >
                 {mergedOpenText(project)}
+              </span>
+            )}
+            {awaitingApproval(node, project) && (
+              <span
+                className="badge"
+                data-tone="attention"
+                title={`Sem o rótulo "${project.approval?.label.trim()}", que o projeto exige para iniciar sessão`}
+              >
+                {AWAITING_APPROVAL_TEXT}
               </span>
             )}
             {node.work_item?.branch && (

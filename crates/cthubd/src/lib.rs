@@ -75,7 +75,9 @@ use tokio::sync::broadcast;
 /// 1.17 (#126): `wip_limits` em `HubProject` e em `hub.projects.update`,
 /// `wip` em `HubProjectView` e o erro `WIP_LIMIT_REACHED` (-32051) no
 /// `session.start` automático pelo canal (limite de trabalho em andamento).
-pub const PROTOCOL_VERSION: &str = "1.17";
+/// 1.18 (#124): `approval` em `HubProject` e em `hub.projects.add|update`
+/// (rótulo de aprovação do projeto, exigido ou não para iniciar sessão).
+pub const PROTOCOL_VERSION: &str = "1.18";
 
 #[derive(Clone)]
 pub struct HubState {

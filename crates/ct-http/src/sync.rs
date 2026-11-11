@@ -169,6 +169,13 @@ pub const CHANNEL_ENV_OFFLINE: i64 = -32030;
 /// Erro do hub: o ambiente não respondeu no prazo.
 pub const CHANNEL_TIMEOUT: i64 = -32031;
 
+/// `session.start` recusado pelo ambiente (#124): a issue não tem o rótulo
+/// de aprovação que o projeto exige. A mensagem começa com
+/// `aguardando aprovação` e traz o rótulo; a UI oferece "iniciar mesmo
+/// assim" (`override_approval: true`), que o gestor e as automações nunca
+/// mandam.
+pub const APPROVAL_REQUIRED: i64 = -32052;
+
 /// O canal aceita `method`?
 pub fn channel_method_allowed(method: &str) -> bool {
     CHANNEL_METHODS.contains(&method)

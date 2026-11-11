@@ -312,6 +312,7 @@ mod tests {
                     session_templates: Default::default(),
                     autonomy: Default::default(),
                     autonomy_runner: false,
+                    approval: Default::default(),
                     owner: "deep-ion-ai".into(),
                     repo: "demo".into(),
                     name: "demo".into(),

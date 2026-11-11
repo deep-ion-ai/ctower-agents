@@ -2,6 +2,7 @@
 export type { AccountEnv } from "./AccountEnv";
 export type { AccountPlan } from "./AccountPlan";
 export type { AlignStrategy } from "./AlignStrategy";
+export type { ApprovalConfig } from "./ApprovalConfig";
 export type { AssignmentAdded } from "./AssignmentAdded";
 export type { AssignmentRemoved } from "./AssignmentRemoved";
 export type { AssignmentState } from "./AssignmentState";
