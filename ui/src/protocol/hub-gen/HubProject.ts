@@ -5,6 +5,7 @@ import type { DocsConfig } from "./DocsConfig";
 import type { ForgeConfig } from "./ForgeConfig";
 import type { SessionTemplates } from "./SessionTemplates";
 import type { TrackerConfig } from "./TrackerConfig";
+import type { WipLimits } from "./WipLimits";
 
 export type HubProject = { id: number, 
 /**
@@ -57,4 +58,9 @@ autonomy: AutonomyConfig,
  * (`autonomy.env_id`); `None` = ainda não relatou. Com `state:
  * "conflict"`, o projeto mostra o aviso e nenhuma issue autônoma começa.
  */
-autonomy_report: AutonomyReport | null, };
+autonomy_report: AutonomyReport | null, 
+/**
+ * Limite de trabalho em andamento (#126); vazio = sem limite. Ausente
+ * num hub anterior: sem limite.
+ */
+wip_limits: WipLimits, };

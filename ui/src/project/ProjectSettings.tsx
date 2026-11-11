@@ -16,6 +16,7 @@ import {
   RepositoryCard,
   SessionTemplatesCard,
   SyncEnvCard,
+  WipCard,
   keyOf,
   projectSecretsOf,
   syncText,
@@ -108,6 +109,13 @@ export function ProjectSettings({
           // aqui, só a posição.
           order={{ pos, total: hub.projects.length }}
         />
+      );
+      // Limite de trabalho em andamento (#126): no cadastro, junto do Geral.
+      body = (
+        <>
+          {body}
+          <WipCard project={p} settings={settings} readOnly={web} />
+        </>
       );
       break;
     case "tracker": {

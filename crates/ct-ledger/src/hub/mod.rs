@@ -36,6 +36,7 @@ mod rules;
 mod tracker;
 mod views;
 mod web_sessions;
+mod wip;
 
 pub use agent::{
     AgentAssignment, AgentDecision, AgentDecisionFilter, AgentDecisions, AgentEnv, AgentEvent,
@@ -695,6 +696,12 @@ BEFORE UPDATE OF state ON proposal
 WHEN OLD.state <> 'pendente'
 BEGIN SELECT RAISE(ABORT, 'proposta já decidida'); END;
 "#,
+    // 34: limite de trabalho em andamento do projeto (#126, épico #178):
+    // JSON de `ct_core::WipLimits` (`max_sessions`, `max_prs`). `{}` = sem
+    // limite.
+    r#"
+ALTER TABLE project ADD COLUMN wip_limits TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -905,6 +912,10 @@ pub struct HubProject {
     /// "conflict"`, o projeto mostra o aviso e nenhuma issue autônoma começa.
     #[serde(default)]
     pub autonomy_report: Option<ct_core::AutonomyReport>,
+    /// Limite de trabalho em andamento (#126); vazio = sem limite. Ausente
+    /// num hub anterior: sem limite.
+    #[serde(default)]
+    pub wip_limits: ct_core::WipLimits,
 }
 
 fn attribution_default() -> bool {
@@ -1051,7 +1062,8 @@ const PROJECT_COLS: &str =
      tracker_kind, tracker_config, forge_kind, forge_config, branch_pattern, attribution, \
      sync_env_id, docs_config, session_templates, autonomy_config, \
      (SELECT l.autonomy FROM project_location l WHERE l.project_id = project.id \
-        AND l.env_id = json_extract(project.autonomy_config, '$.env_id'))";
+        AND l.env_id = json_extract(project.autonomy_config, '$.env_id')), \
+     wip_limits";
 const WORK_ITEM_COLS: &str = "id, project_id, gh_number, kind, status, branch, created_at, \
                               closed_at, priority, rank, model, effort";
 const SESSION_COLS: &str = "id, env_id, work_item_id, tool, tool_session_id, cwd, state, \
@@ -1083,6 +1095,7 @@ fn row_to_project(r: &Row) -> rusqlite::Result<HubProject> {
         autonomy_report: r
             .get::<_, Option<String>>(18)?
             .and_then(|s| serde_json::from_str(&s).ok()),
+        wip_limits: json_col(r, 19)?,
     })
 }
 
@@ -4933,7 +4946,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 33);
+        assert_eq!(v, 34);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

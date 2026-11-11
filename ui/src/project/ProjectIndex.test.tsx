@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
-import type { HubDashboard, HubTree } from "../protocol/hub-gen";
+import type { HubDashboard, HubProjectView, HubTree } from "../protocol/hub-gen";
 import type { Screen } from "../state/nav";
 import {
   HUB_DASHBOARD,
@@ -38,14 +38,18 @@ const HUB_DASH: HubDashboard = {
 
 const TREE = (p = CT): HubTree => ({ project: p, sync: null, roots: [], untracked: [] });
 
-function hubSetup(initial: Screen = { name: "project" }) {
+function hubSetup(initial: Screen = { name: "project" }, wip: HubProjectView["wip"] = null) {
   const api = new FakeDaemonApi([{ ...FakeDaemonApi.wslEnv(), name: "WSL" }])
     .on("dashboard.get", dashboard({ projects: [] }))
     .withHub("ws://mac-mini:7879/ws", true)
     .onHub("hub.info", hubInfo())
     .onHub("hub.status", hubStatus())
     .onHub("hub.projects.list", [
-      hubProjectView(CT, [hubAssignment(), hubAssignment({ env_id: "daemon-mac", env_name: "mac-mini", state: "pending" })]),
+      hubProjectView(
+        CT,
+        [hubAssignment(), hubAssignment({ env_id: "daemon-mac", env_name: "mac-mini", state: "pending" })],
+        wip,
+      ),
       hubProjectView(DEMO),
     ])
     .onHub("hub.envs.list", [hubEnv()])
@@ -78,6 +82,18 @@ test("com o hub: linhas na ordem de prioridade com estado, sessões, atribuiçõ
   expect(demo).toHaveAccessibleDescription(/sem ambiente/);
   expect(demo).toHaveAccessibleDescription(/sem sessões/);
   expect(within(rows()[1]).getByText("#2")).toBeInTheDocument();
+});
+
+test("limite de trabalho em andamento (#126): N de M na linha e o selo no limite", async () => {
+  hubSetup({ name: "project" }, { sessions: 2, prs: 1, limits: { max_sessions: 2, max_prs: 5 } });
+  const ct = await screen.findByRole("button", { name: "ctower-agents" });
+  await waitFor(() => expect(ct).toHaveAccessibleDescription(/2 de 2 sessões · 1 de 5 PRs abertos/));
+  const selo = within(ct).getByText("limite de trabalho em andamento");
+  expect(selo).toHaveAttribute("title", "limite de trabalho em andamento (2 de 2 sessões)");
+  // Sem limite: nada.
+  const demo = screen.getByRole("button", { name: "demo" });
+  expect(within(demo).queryByText("limite de trabalho em andamento")).toBeNull();
+  expect(demo).not.toHaveAccessibleDescription(/ de .* sessões/);
 });
 
 test("abrir um projeto abre a aba dele; 'Projetos' (trilha ou atividade) volta ao índice sem fechar o projeto", async () => {

@@ -333,6 +333,7 @@ export function hubProject(p: Partial<HubProject> = {}): HubProject {
     session_templates: { issue: "", epic: "", project: "" },
     autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
     autonomy_report: null,
+    wip_limits: { max_sessions: null, max_prs: null },
     ...p,
   };
 }
@@ -388,8 +389,12 @@ export function hubAssignment(a: Partial<HubAssignment> = {}): HubAssignment {
   };
 }
 
-export function hubProjectView(project: HubProject, assignments: HubAssignment[] = []): HubProjectView {
-  return { project, assignments, locations: [], sync: null, tracker_status: null };
+export function hubProjectView(
+  project: HubProject,
+  assignments: HubAssignment[] = [],
+  wip: HubProjectView["wip"] = null,
+): HubProjectView {
+  return { project, assignments, locations: [], sync: null, tracker_status: null, wip };
 }
 
 export function hubEnv(e: Partial<HubEnv> = {}): HubEnv {

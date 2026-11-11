@@ -37,6 +37,10 @@ pub struct HubProjectView {
     /// ambiente de sync (#348). Nulo no GitHub e até o primeiro relato.
     #[serde(default)]
     pub tracker_status: Option<super::HubTrackerStatus>,
+    /// Trabalho em andamento (#126): sessões vivas e PRs abertos do projeto,
+    /// com os limites do cadastro. Ausente num hub anterior.
+    #[serde(default)]
+    pub wip: Option<ct_core::WipUsage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -192,6 +196,7 @@ impl Hub {
             out.push(HubProjectView {
                 sync: self.sync_state(project.id)?,
                 tracker_status: self.tracker_status(project.id)?,
+                wip: Some(self.project_wip(project.id)?),
                 assignments: self.project_assignments(project.id)?,
                 project,
                 locations,
