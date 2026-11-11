@@ -69,8 +69,10 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// canal do hub), o erro `AUTONOMY_CONFLICT` (-32050) e o alerta
 /// `autonomy_conflict`. 2.17 (#182): `effort` (`--effort`) em
 /// `session.start|start_project|start_gestor` e a ferramenta MCP
-/// `issue_propose_model`.
-pub const PROTOCOL_VERSION: &str = "2.17";
+/// `issue_propose_model`. 2.18 (#124): `approval` em `Project` (rótulo
+/// de aprovação, vindo do hub), `override_approval` no `session.start` e a
+/// recusa `APPROVAL_REQUIRED` (-32052) da issue sem o rótulo exigido.
+pub const PROTOCOL_VERSION: &str = "2.18";
 
 #[derive(Clone)]
 pub struct AppState {

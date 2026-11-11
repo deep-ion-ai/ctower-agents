@@ -107,6 +107,7 @@ const HUB_PROJECT: HubProject = {
   autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
   autonomy_report: null,
   wip_limits: { max_sessions: null, max_prs: null },
+  approval: { label: "aprovada", required: false },
 };
 
 function hubItem(n: number, p: Partial<HubWorkItem> = {}): HubWorkItem {
@@ -851,6 +852,7 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
     "Modo autônomo",
     "Regras do agente",
     "Templates de sessão",
+    "Aprovação",
     "Secrets e variáveis",
     "Docs",
     "Limpeza",
@@ -901,6 +903,43 @@ test("Trabalho em andamento (#126): N de M no Geral e o limite salvo inteiro, va
     owner: "deep-ion-ai",
     repo: "ctower-agents",
     wip_limits: { max_sessions: null, max_prs: 4 },
+  });
+});
+
+test("Aprovação (#124): edita o rótulo e a exigência e manda o objeto inteiro", async () => {
+  const api = setupTabs()
+    .onHub("hub.projects.update", null)
+    .onHub("hub.projects.list", [
+      {
+        project: HUB_PROJECT,
+        assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
+        locations: [],
+        sync: sync({ project_id: 7, last_ok_at: NOW }),
+        tracker_status: null,
+      },
+    ]);
+  render(
+    <App
+      api={api}
+      initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "settings", section: "approval" }}
+    />,
+  );
+  const user = userEvent.setup();
+  const card = await screen.findByRole("group", { name: "Aprovação" });
+  expect(card).toHaveTextContent(/sem exigir para iniciar sessão/);
+  await user.click(within(card).getByRole("button", { name: "Editar aprovação" }));
+  const form = within(card).getByRole("form", { name: "Editar rótulo de aprovação de ctower-agents" });
+  const input = within(form).getByLabelText("Rótulo de aprovação");
+  expect(input).toHaveValue("aprovada");
+  await user.clear(input);
+  await user.type(input, " pronta ");
+  await user.click(within(form).getByLabelText("Exigir para iniciar sessão"));
+  await user.click(within(form).getByRole("button", { name: "Salvar aprovação" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.projects.update")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    approval: { label: "pronta", required: true },
   });
 });
 

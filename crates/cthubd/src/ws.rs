@@ -1559,6 +1559,22 @@ fn wip_param(p: &Value) -> Result<Option<ct_core::WipLimits>, (i64, String)> {
     }
 }
 
+/// `approval` (#124): `{ label, required }`, campos ausentes = padrão
+/// (rótulo `aprovada`, sem exigir); o objeto inteiro substitui o anterior.
+/// Rótulo vazio desliga.
+fn approval_param(p: &Value) -> Result<Option<ct_core::ApprovalConfig>, (i64, String)> {
+    match p.get("approval") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => {
+            let a: ct_core::ApprovalConfig = serde_json::from_value(v.clone())
+                .map_err(|e| invalid(format!("approval inválido: {e}")))?;
+            a.validate().map_err(invalid)?;
+            Ok(Some(a))
+        }
+        Some(_) => Err(invalid("approval deve ser um objeto { label, required }")),
+    }
+}
+
 fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(None),
@@ -1595,6 +1611,7 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             attribution: bool_param(p, "attribution")?.unwrap_or(true),
             docs: docs_param(p)?.unwrap_or_default().normalized(),
             session_templates: templates_param(p)?.unwrap_or_default().normalized(),
+            approval: approval_param(p)?.unwrap_or_default().normalized(),
         };
         provider.validate().map_err(invalid)?;
         let base_branch = opt_str(p, "base_branch").unwrap_or_else(|| "develop".into());
@@ -1663,11 +1680,13 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         session_templates: templates_param(p)?,
         autonomy: autonomy_param(p)?,
         wip_limits: wip_param(p)?,
+        approval: approval_param(p)?,
     };
     if patch.is_empty() {
         return Err(invalid(
             "nada a mudar: informe name, base_branch, protected_branches, tracker, forge, \
-             branch_pattern, attribution, sync_env, docs, session_templates, autonomy ou wip_limits",
+             branch_pattern, attribution, sync_env, docs, session_templates, autonomy, wip_limits \
+             ou approval",
         ));
     }
     let cur = st
@@ -1704,6 +1723,18 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         .lock()
         .update_project(owner, repo, &patch)
         .map_err(e)?;
+    if patch.approval.is_some() {
+        let a = &updated.approval;
+        tracing::info!(
+            "rótulo de aprovação de {owner}/{repo}: {:?} ({})",
+            a.label,
+            if a.enforced() {
+                "exigido para iniciar sessão"
+            } else {
+                "não exigido"
+            }
+        );
+    }
     if patch.autonomy.is_some() {
         tracing::info!(
             "modo autônomo de {owner}/{repo}: {} ({})",
@@ -2929,6 +2960,50 @@ pub(crate) mod tests {
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// Rótulo de aprovação (#124) pela edição: o objeto inteiro substitui,
+    /// o rótulo sai sem espaços, campo ausente é o padrão e outro tipo ou
+    /// rótulo inválido é recusado.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rotulo_de_aprovacao_pela_edicao() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui.call("hub.projects.list", json!({})).await;
+        assert_eq!(
+            v["result"][0]["project"]["approval"],
+            json!({ "label": "aprovada", "required": false }),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo",
+                        "approval": { "label": " pronta ", "required": true } }),
+            )
+            .await;
+        assert_eq!(
+            v["result"]["approval"],
+            json!({ "label": "pronta", "required": true }),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "approval": { "required": true } }),
+            )
+            .await;
+        assert_eq!(v["result"]["approval"]["label"], "aprovada", "{v}");
+        for bad in [json!("x"), json!({ "label": "a\nb" })] {
+            let v = ui
+                .call(
+                    "hub.projects.update",
+                    json!({ "owner": "deep-ion-ai", "repo": "demo", "approval": bad }),
+                )
+                .await;
+            assert_eq!(v["error"]["code"], -32602, "{v}");
+        }
     }
 
     /// Templates do prompt inicial do projeto (#166) pela edição: o objeto

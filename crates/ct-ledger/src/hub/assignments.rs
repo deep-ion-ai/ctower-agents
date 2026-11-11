@@ -476,7 +476,7 @@ impl Hub {
                         a.repo_path, max(a.rev, p.rev), p.tracker_kind, p.tracker_config,
                         p.forge_kind, p.forge_config, p.branch_pattern, p.attribution,
                         p.sync_env_id IS ?1, p.id, p.docs_config, p.session_templates,
-                        p.autonomy_config
+                        p.autonomy_config, p.approval_config
                  FROM assignment a JOIN project p ON p.id = a.project_id
                  WHERE a.env_id = ?1 AND a.removed_at IS NULL AND p.deleted_at IS NULL
                  ORDER BY p.key",
@@ -501,6 +501,7 @@ impl Hub {
                     session_templates: crate::json_col(r, 16)?,
                     autonomy: crate::json_col(r, 17)?,
                     autonomy_runner: false,
+                    approval: crate::json_col(r, 18)?,
                 };
                 // O ambiente do modo, com ele ligado, é o que roda as
                 // sessões autônomas (#181); os outros só conhecem a branch

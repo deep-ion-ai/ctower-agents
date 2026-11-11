@@ -86,6 +86,8 @@ function project(p: HubProject): Project {
     autonomy: p.autonomy ?? { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
     autonomy_runner: false,
     autonomy_report: null,
+    // Rótulo de aprovação do cadastro (#124); hub anterior não manda (o padrão, sem exigir).
+    approval: p.approval ?? { label: "aprovada", required: false },
   };
 }
 

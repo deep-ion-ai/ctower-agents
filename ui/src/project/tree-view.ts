@@ -23,7 +23,14 @@ export const STATUS_ORDER: WorkItemStatus[] = [
  * (`HubTreeNode`). Prioridade e ordem só existem na visão do hub.
  */
 export interface ViewNode {
-  issue: { gh_number: number; title: string; state: string; assignees?: readonly string[] } & SprintIssue;
+  issue: {
+    gh_number: number;
+    title: string;
+    state: string;
+    assignees?: readonly string[];
+    /** Rótulos do espelho (o selo "aguardando aprovação", #124). */
+    labels?: readonly string[];
+  } & SprintIssue;
   work_item: {
     status: WorkItemStatus;
     priority?: Priority | null;

@@ -381,6 +381,7 @@ mod tests {
                 &ct_ledger::ProjectProvider {
                     docs: Default::default(),
                     session_templates: Default::default(),
+                    approval: Default::default(),
                     tracker: ct_core::TrackerConfig::Jira(jira.clone()),
                     forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
                         host: "gitlab.example.com".into(),
@@ -411,6 +412,7 @@ mod tests {
                         session_templates: Default::default(),
                         autonomy: Default::default(),
                         autonomy_runner: false,
+                        approval: Default::default(),
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),

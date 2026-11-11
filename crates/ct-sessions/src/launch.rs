@@ -26,6 +26,11 @@ pub struct StartRequest {
     /// Tamanho inicial do PTY; `None` = [`PtySize::DEFAULT`].
     pub size: Option<PtySize>,
     pub agent: AgentOptions,
+    /// "Iniciar mesmo assim" (#124): inicia a issue sem o rótulo de
+    /// aprovação exigido pelo projeto e grava uma decisão `orientada` no
+    /// work item. Só a UI manda, depois da confirmação da pessoa; o gestor e
+    /// as automações (o agendador do piloto automático, #183) nunca.
+    pub override_approval: bool,
 }
 
 /// Modelo e modo de execução do agente, escolhidos ao iniciar a sessão.
@@ -364,6 +369,7 @@ impl Sessions {
         if req.agent.remote_control {
             self.check_remote_control(&project)?;
         }
+        let unapproved = self.check_approval(&project, &req)?;
         let wi = self
             .ledger()
             .ensure_work_item(req.project_id, req.gh_number, req.kind)?;
@@ -430,7 +436,7 @@ impl Sessions {
             .agent
             .remote_control
             .then(|| self.remote_name(&project, &wi, Some(&req.title)));
-        self.launch(
+        let session = self.launch(
             &project,
             &wi,
             LaunchSpec {
@@ -442,7 +448,52 @@ impl Sessions {
                 remote_name,
                 title: &req.title,
             },
-        )
+        )?;
+        if let Some(label) = unapproved {
+            let item = ct_core::item_short(&project.tracker_ref(), req.gh_number);
+            self.ledger().record_decision(&ct_ledger::NewDecision {
+                work_item_id: wi.id,
+                session_id: Some(session.id.clone()),
+                origin: ct_core::DecisionOrigin::Orientada,
+                title: "Sessão iniciada sem o rótulo de aprovação".into(),
+                context: format!(
+                    "O projeto exige o rótulo \"{label}\" para iniciar sessão e {item} não o tem."
+                ),
+                decision: "A pessoa confirmou \"iniciar mesmo assim\" na UI.".into(),
+                consequences: None,
+            })?;
+        }
+        Ok(session)
+    }
+
+    /// Rótulo de aprovação (#124): com a exigência ligada no projeto e a
+    /// issue sem o rótulo, recusa com [`SessionsError::ApprovalRequired`],
+    /// a não ser com `override_approval` (aí devolve o rótulo, para a
+    /// decisão). Os rótulos são os do espelho; fora dele, os do pedido. O
+    /// item conta pelos próprios rótulos (o épico pelo dele, a sub-issue
+    /// pelo dela).
+    pub(crate) fn check_approval(
+        &self,
+        project: &Project,
+        req: &StartRequest,
+    ) -> Result<Option<String>> {
+        if !project.approval.enforced() {
+            return Ok(None);
+        }
+        let labels = match self.ledger().get_issue(project.id, req.gh_number)? {
+            Some(i) => i.labels,
+            None => req.labels.clone(),
+        };
+        if !project.approval.blocks_start(&labels) {
+            return Ok(None);
+        }
+        if !req.override_approval {
+            let item = ct_core::item_short(&project.tracker_ref(), req.gh_number);
+            return Err(SessionsError::ApprovalRequired(
+                project.approval.refusal(&item),
+            ));
+        }
+        Ok(Some(project.approval.label.trim().to_string()))
     }
 
     /// Cria a sessão no ledger e faz o spawn. Comum a iniciar e retomar.
@@ -961,6 +1012,7 @@ mod tests {
                     session_templates: Default::default(),
                     autonomy: Default::default(),
                     autonomy_runner: false,
+                    approval: Default::default(),
                     owner: p.gh_owner.clone(),
                     repo: p.gh_repo.clone(),
                     name: p.name.clone(),
@@ -2406,5 +2458,129 @@ mod tests {
         env.sessions.kill(&s.id).unwrap();
         env.wait_state(&s.id, SessionState::Exited);
         assert!(env.sessions.kill(&s.id).is_err());
+    }
+
+    /// Rótulo de aprovação (#124): com a exigência ligada, a issue sem o
+    /// rótulo é recusada sem deixar rastro; o "mesmo assim" inicia e grava a
+    /// decisão `orientada`; o épico conta pelo próprio rótulo e a sub-issue
+    /// pelo dela; a sessão de planejamento não passa pela regra.
+    #[test]
+    fn rotulo_de_aprovacao_exigido_para_iniciar() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        env.assign_config(2, |p| {
+            p.approval = ct_core::ApprovalConfig {
+                label: "aprovada".into(),
+                required: true,
+            };
+        });
+        let pid = env.project_id;
+        env.mirror_labeled(&[
+            (10, None, &["Aprovada"]),
+            (11, Some(10), &[]),
+            (123, None, &["bug"]),
+        ]);
+
+        // Sem o rótulo: recusa, sem work item. Os labels do pedido não
+        // valem com a issue no espelho.
+        let err = env
+            .sessions
+            .start(StartRequest {
+                labels: vec!["aprovada".into()],
+                ..env.request(123, "ACME-123")
+            })
+            .unwrap_err();
+        assert!(matches!(err, SessionsError::ApprovalRequired(_)), "{err}");
+        let msg = err.to_string();
+        assert!(msg.starts_with(ct_core::APPROVAL_REFUSAL_PREFIX), "{msg}");
+        assert!(
+            msg.contains("#123") && msg.contains("\"aprovada\""),
+            "{msg}"
+        );
+        assert!(env
+            .sessions
+            .ledger()
+            .find_work_item(pid, 123)
+            .unwrap()
+            .is_none());
+
+        // A sub-issue não herda o rótulo do épico.
+        let err = env.sessions.start(env.request(11, "ACME-11")).unwrap_err();
+        assert!(matches!(err, SessionsError::ApprovalRequired(_)), "{err}");
+
+        // O épico conta pelo próprio rótulo.
+        let s = env
+            .sessions
+            .start(StartRequest {
+                kind: WorkItemKind::Epic,
+                ..env.request(10, "ACME-10")
+            })
+            .unwrap();
+        let wi = env
+            .sessions
+            .ledger()
+            .find_work_item(pid, 10)
+            .unwrap()
+            .unwrap();
+        assert!(env
+            .sessions
+            .ledger()
+            .list_decisions(&[wi.id], false)
+            .unwrap()
+            .is_empty());
+        env.wait_state(&s.id, SessionState::Exited);
+
+        // "Iniciar mesmo assim": inicia e grava a decisão orientada.
+        let s = env
+            .sessions
+            .start(StartRequest {
+                override_approval: true,
+                ..env.request(123, "ACME-123")
+            })
+            .unwrap();
+        let wi = env
+            .sessions
+            .ledger()
+            .find_work_item(pid, 123)
+            .unwrap()
+            .unwrap();
+        let d = env
+            .sessions
+            .ledger()
+            .list_decisions(&[wi.id], false)
+            .unwrap();
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].origin, ct_core::DecisionOrigin::Orientada);
+        assert_eq!(d[0].session_id.as_deref(), Some(s.id.as_str()));
+        assert!(d[0].context.contains("\"aprovada\""), "{:?}", d[0]);
+        assert!(d[0].reviewed_at.is_some());
+        env.wait_state(&s.id, SessionState::Exited);
+
+        // Issue fora do espelho: valem os labels do pedido.
+        let s = env
+            .sessions
+            .start(StartRequest {
+                labels: vec!["aprovada".into()],
+                ..env.request(200, "ACME-200")
+            })
+            .unwrap();
+        env.wait_state(&s.id, SessionState::Exited);
+        assert!(env.sessions.start(env.request(201, "ACME-201")).is_err());
+
+        // Sessão de planejamento: sem issue, sem a regra.
+        let s = env
+            .sessions
+            .start_project(pid, "planejar", None, &AgentOptions::default())
+            .unwrap();
+        env.wait_state(&s.id, SessionState::Exited);
+
+        // Sem exigir: inicia sem o rótulo e sem decisão.
+        env.assign_config(3, |p| {
+            p.approval = ct_core::ApprovalConfig {
+                label: "aprovada".into(),
+                required: false,
+            };
+        });
+        let s = env.sessions.start(env.request(124, "ACME-124")).unwrap();
+        env.wait_state(&s.id, SessionState::Exited);
     }
 }

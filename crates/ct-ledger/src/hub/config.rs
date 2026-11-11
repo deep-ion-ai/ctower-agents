@@ -39,6 +39,8 @@ pub struct ProjectProvider {
     pub docs: ct_core::DocsConfig,
     /// Templates do prompt inicial do projeto (#166).
     pub session_templates: ct_core::SessionTemplates,
+    /// Rótulo de aprovação do projeto (#124).
+    pub approval: ct_core::ApprovalConfig,
 }
 
 impl Default for ProjectProvider {
@@ -50,6 +52,7 @@ impl Default for ProjectProvider {
             attribution: true,
             docs: ct_core::DocsConfig::default(),
             session_templates: ct_core::SessionTemplates::default(),
+            approval: ct_core::ApprovalConfig::default(),
         }
     }
 }
@@ -117,7 +120,8 @@ impl ProjectProvider {
             ct_core::branch::validate_branch_pattern(pat).map_err(|e| e.to_string())?;
         }
         self.docs.validate()?;
-        self.session_templates.validate()
+        self.session_templates.validate()?;
+        self.approval.validate()
     }
 }
 
@@ -210,6 +214,9 @@ pub struct HubProjectPatch {
     /// Limite de trabalho em andamento (#126): o objeto inteiro substitui o
     /// anterior; `{}` = sem limite.
     pub wip_limits: Option<ct_core::WipLimits>,
+    /// Rótulo de aprovação (#124): o objeto inteiro substitui o anterior;
+    /// rótulo vazio = desligado.
+    pub approval: Option<ct_core::ApprovalConfig>,
 }
 
 impl HubProjectPatch {
@@ -226,6 +233,7 @@ impl HubProjectPatch {
             && self.session_templates.is_none()
             && self.autonomy.is_none()
             && self.wip_limits.is_none()
+            && self.approval.is_none()
     }
 }
 
@@ -349,6 +357,7 @@ impl Hub {
         let pv = &ProjectProvider {
             docs: provider.docs.normalized(),
             session_templates: provider.session_templates.normalized(),
+            approval: provider.approval.normalized(),
             ..provider.clone()
         };
         pv.validate().map_err(LedgerError::Conflict)?;
@@ -382,7 +391,7 @@ impl Hub {
                             tracker_kind = ?9, tracker_config = ?10,
                             forge_kind = ?11, forge_config = ?12, branch_pattern = ?13,
                             attribution = ?14, sync_env_id = NULL, docs_config = ?15,
-                            session_templates = ?16
+                            session_templates = ?16, approval_config = ?17
                      WHERE key = ?1",
                     params![
                         key,
@@ -400,7 +409,8 @@ impl Hub {
                         pv.branch_pattern,
                         pv.attribution,
                         pv.docs.config_json(),
-                        pv.session_templates.config_json()
+                        pv.session_templates.config_json(),
+                        pv.approval.config_json()
                     ],
                 )?;
                 // A purga já apagou; garante o espelho zerado no recadastro
@@ -421,9 +431,9 @@ impl Hub {
                                           protected_branches, created_at, rev, tracker_kind,
                                           tracker_config, forge_kind, forge_config,
                                           branch_pattern, attribution, docs_config,
-                                          session_templates)
+                                          session_templates, approval_config)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                             ?16)",
+                             ?16, ?17)",
                     params![
                         key,
                         p.owner,
@@ -440,7 +450,8 @@ impl Hub {
                         pv.branch_pattern,
                         pv.attribution,
                         pv.docs.config_json(),
-                        pv.session_templates.config_json()
+                        pv.session_templates.config_json(),
+                        pv.approval.config_json()
                     ],
                 )?;
                 false
@@ -532,7 +543,7 @@ impl Hub {
                     protected_branches = coalesce(?4, protected_branches), rev = ?5,
                     tracker_config = ?6, forge_config = ?7, branch_pattern = ?8,
                     attribution = ?9, docs_config = ?10, session_templates = ?11,
-                    autonomy_config = ?12
+                    autonomy_config = ?12, approval_config = ?13
              WHERE key = ?1 AND deleted_at IS NULL",
             params![
                 key,
@@ -546,7 +557,8 @@ impl Hub {
                 provider.attribution,
                 provider.docs.config_json(),
                 provider.session_templates.config_json(),
-                autonomy.config_json()
+                autonomy.config_json(),
+                provider.approval.config_json()
             ],
         )?;
         if changed == 0 {
@@ -626,6 +638,10 @@ impl Hub {
             session_templates: match &patch.session_templates {
                 Some(t) => t.normalized(),
                 None => cur.session_templates.clone(),
+            },
+            approval: match &patch.approval {
+                Some(a) => a.normalized(),
+                None => cur.approval.clone(),
             },
         };
         // O filtro do Jira só é conferido quando a edição manda o rastreador.

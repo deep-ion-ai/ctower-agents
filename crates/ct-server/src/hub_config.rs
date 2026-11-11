@@ -1069,6 +1069,7 @@ mod tests {
             session_templates: Default::default(),
             autonomy: Default::default(),
             autonomy_runner: false,
+            approval: Default::default(),
             owner: "o".into(),
             repo: "r".into(),
             name: "r".into(),

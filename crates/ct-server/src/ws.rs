@@ -163,6 +163,7 @@ fn from_sessions(e: SessionsError) -> (i64, String) {
     match e {
         SessionsError::RemoteControl(m) => (REMOTE_CONTROL_UNAVAILABLE, m),
         SessionsError::AutonomyConflict(m) => (ct_http::sync::AUTONOMY_CONFLICT, m),
+        SessionsError::ApprovalRequired(m) => (ct_http::sync::APPROVAL_REQUIRED, m),
         e => (-32000, e.to_string()),
     }
 }
@@ -612,6 +613,13 @@ impl Conn {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(invalid("autonomous deve ser true ou false")),
                 };
+                // "Iniciar mesmo assim" (#124): só a UI manda, depois da
+                // confirmação; o gestor e as automações nunca.
+                let override_approval = match p.get("override_approval") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err(invalid("override_approval deve ser true ou false")),
+                };
                 let prompt = str_param(p, "prompt")?.to_string();
                 let size = size_param(p)?;
                 let agent = agent_param(p)?;
@@ -673,6 +681,7 @@ impl Conn {
                     prompt,
                     size,
                     agent,
+                    override_approval,
                 };
                 // Sessão autônoma (#181): alinha a branch de integração e sai
                 // dela; conflito = `AUTONOMY_CONFLICT`, e a issue não começa.
@@ -2227,6 +2236,68 @@ mod tests {
         assert_eq!(v["error"]["code"], ct_http::sync::AUTONOMY_CONFLICT, "{v}");
     }
 
+    /// Rótulo de aprovação pelo `/ws` (#124): a issue sem o rótulo exigido
+    /// é recusada com `APPROVAL_REQUIRED` e o motivo, também a autônoma
+    /// (antes de alinhar a branch); `override_approval` (o "iniciar mesmo
+    /// assim" da UI) inicia; outro tipo é inválido.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rotulo_de_aprovacao_pelo_ws() {
+        let srv = Srv::linked(FakeClaude::exit(0));
+        srv.env.assign_config(2, |p| {
+            p.approval = ct_core::ApprovalConfig {
+                label: "aprovada".into(),
+                required: true,
+            };
+            p.autonomy = ct_core::AutonomyConfig {
+                enabled: true,
+                env_id: Some("env-auto".into()),
+                ..Default::default()
+            };
+            p.autonomy_runner = true;
+        });
+        srv.env
+            .mirror_labeled(&[(123, None, &["bug"]), (124, None, &["aprovada"])]);
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let pid = srv.env.project_id;
+        let start = |n: i64, extra: Value| {
+            let mut p = json!({ "project_id": pid, "gh_number": n, "prompt": "oi" });
+            p.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            p
+        };
+        let v = ui.call("session.start", start(123, json!({}))).await;
+        assert_eq!(v["error"]["code"], ct_http::sync::APPROVAL_REQUIRED, "{v}");
+        let m = v["error"]["message"].as_str().unwrap();
+        assert!(
+            m.starts_with("aguardando aprovação") && m.contains("#123"),
+            "{v}"
+        );
+        // Autônoma (o agendador): recusada antes do alinhamento da wip,
+        // que nem tem remoto aqui.
+        let v = ui
+            .call("session.start", start(123, json!({ "autonomous": true })))
+            .await;
+        assert_eq!(v["error"]["code"], ct_http::sync::APPROVAL_REQUIRED, "{v}");
+        let v = ui
+            .call(
+                "session.start",
+                start(123, json!({ "override_approval": "sim" })),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        let v = ui
+            .call(
+                "session.start",
+                start(123, json!({ "override_approval": true })),
+            )
+            .await;
+        assert!(v["result"]["id"].is_string(), "{v}");
+        let v = ui.call("session.start", start(124, json!({}))).await;
+        assert!(v["result"]["id"].is_string(), "{v}");
+    }
+
     /// Remote Control pelo `/ws` (#197): a opção no início, a recusa com
     /// `-32032` por um secret do projeto, o `env.info` e o
     /// `session.remote_control.enable`.
@@ -2587,6 +2658,7 @@ mod tests {
                         session_templates: Default::default(),
                         autonomy: Default::default(),
                         autonomy_runner: false,
+                        approval: Default::default(),
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),

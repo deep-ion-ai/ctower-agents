@@ -7,6 +7,7 @@ import type { HubSession } from "../protocol/hub-gen";
 import { AgentRules } from "../hub/AgentRules";
 import { isJira } from "../hub/tracker";
 import {
+  ApprovalCard,
   AssignmentsCard,
   AutonomyCard,
   CleanupCard,
@@ -169,6 +170,9 @@ export function ProjectSettings({
       break;
     case "templates":
       body = <SessionTemplatesCard project={p} settings={settings} readOnly={web} />;
+      break;
+    case "approval":
+      body = <ApprovalCard project={p} settings={settings} readOnly={web} />;
       break;
     case "secrets":
       body = <ProjectSecretsCard project={pr} secrets={secrets} />;
