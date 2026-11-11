@@ -87,18 +87,19 @@ describe("PR mesclado com a issue aberta (#375)", () => {
 });
 
 describe("modelo faltando num projeto autônomo (#182)", () => {
-  const auto = { gh_owner: "acme", gh_repo: "acme-web", autonomous: true };
-  const manual = { gh_owner: "acme", gh_repo: "acme-web" };
+  const auto = { gh_owner: "acme", gh_repo: "acme-web", autonomy: { enabled: true, env_id: "env-a" } };
+  const manual = { gh_owner: "acme", gh_repo: "acme-web", autonomy: { enabled: false, env_id: null } };
   const withModel = (model: string | null, p: Partial<IssueRow> = {}): RowNode => ({
     ...node(),
     issue: { ...issue, ...p },
     work_item: { status: "backlog", model },
   });
 
-  it("o modo autônomo vem do campo opcional do projeto (#181)", () => {
+  it("o modo autônomo vem de autonomy.enabled do projeto (#181)", () => {
     expect(isAutonomous(auto)).toBe(true);
     expect(isAutonomous(manual)).toBe(false);
-    expect(isAutonomous({ autonomous: "sim" })).toBe(false);
+    expect(isAutonomous({ gh_owner: "acme" })).toBe(false);
+    expect(isAutonomous({ autonomy: { enabled: "sim" } })).toBe(false);
     expect(isAutonomous(null)).toBe(false);
   });
 

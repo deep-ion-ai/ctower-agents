@@ -28,13 +28,14 @@ export const MERGED_OPEN_TEXT = "PR mesclado, issue aberta";
 export const mergedOpenText = (p?: ProviderProject | null) => `${changeLabel(p)} mesclado, issue aberta`;
 
 /**
- * Projeto no modo autônomo (piloto automático, #181). Ponto de extensão: lê
- * o campo opcional `autonomous` do projeto do hub, que a #181 acrescenta; sem
- * ele (hub anterior, projeto local ou antes da #181), o projeto não é
- * autônomo e o selo de modelo faltando não aparece.
+ * Projeto no modo autônomo (piloto automático, #181): `autonomy.enabled` do
+ * projeto do hub. Ausente (hub anterior à #181 ou projeto local), o projeto
+ * não é autônomo e o selo de modelo faltando não aparece.
  */
 export const isAutonomous = (p: unknown): boolean =>
-  typeof p === "object" && p !== null && (p as { autonomous?: unknown }).autonomous === true;
+  typeof p === "object" &&
+  p !== null &&
+  (p as { autonomy?: { enabled?: unknown } | null }).autonomy?.enabled === true;
 
 export const MISSING_MODEL_TEXT = "sem modelo";
 

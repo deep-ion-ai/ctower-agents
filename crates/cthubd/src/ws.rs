@@ -2545,6 +2545,13 @@ pub(crate) mod tests {
         let v = web.call("hub.env.call", start(json!({}))).await;
         assert_eq!(v["result"]["params"]["model"], "opus", "{v}");
         assert_eq!(v["result"]["params"]["effort"], "max", "{v}");
+        // Sessão autônoma (#181, a do agendador): o mesmo preenchimento.
+        let v = web
+            .call("hub.env.call", start(json!({ "autonomous": true })))
+            .await;
+        assert_eq!(v["result"]["params"]["autonomous"], true, "{v}");
+        assert_eq!(v["result"]["params"]["model"], "opus", "{v}");
+        assert_eq!(v["result"]["params"]["effort"], "max", "{v}");
         let v = web
             .call("hub.env.call", start(json!({ "model": null })))
             .await;

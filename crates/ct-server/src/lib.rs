@@ -67,8 +67,10 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// e `autonomy_report` em `Project`, `autonomous` no `session.start` (sessão
 /// autônoma, que sai da branch de integração), `autonomy.align` (também pelo
 /// canal do hub), o erro `AUTONOMY_CONFLICT` (-32050) e o alerta
-/// `autonomy_conflict`.
-pub const PROTOCOL_VERSION: &str = "2.16";
+/// `autonomy_conflict`. 2.17 (#182): `effort` (`--effort`) em
+/// `session.start|start_project|start_gestor` e a ferramenta MCP
+/// `issue_propose_model`.
+pub const PROTOCOL_VERSION: &str = "2.17";
 
 #[derive(Clone)]
 pub struct AppState {
