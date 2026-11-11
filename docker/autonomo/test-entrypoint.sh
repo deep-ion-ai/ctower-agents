@@ -68,7 +68,15 @@ for _ in $(seq 1 100); do grep -q "esperando o token de sync" "$T/out" && break;
 grep -q "cthubd add-env linux-autonomo | docker compose exec -T autonomo ctower hub set-token" "$T/out" \
   || { kill "$pid"; cat "$T/out" >&2; fail "não esperou o token de sync com a instrução"; }
 [[ ! -e $T/ctowerd.env ]] || fail "subiu o ctowerd sem o token de sync"
-printf '%s\r\n' "$SYNC_TOK" | HOME="$T/home" "$BIN/ctower" hub set-token > /dev/null
+# O mesmo ambiente limpo do entrypoint (um XDG_CONFIG_HOME do runner mudaria a pasta).
+printf '%s\r\n' "$SYNC_TOK" | env -i PATH="/usr/bin:/bin" HOME="$T/home" "$BIN/ctower" hub set-token > /dev/null
+# Espera limitada: um entrypoint preso não pode travar o CI.
+for _ in $(seq 1 200); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$pid" 2>/dev/null; then
+  kill "$pid"
+  cat "$T/out" >&2
+  fail "o entrypoint não seguiu depois do set-token"
+fi
 wait "$pid" || { cat "$T/out" >&2; fail "a primeira subida falhou depois do set-token"; }
 grep -qx 'env_name = "linux-autonomo"' "$C/config.toml" || fail "env_name"
 grep -qx 'hub_url = "http://hub.example.com:7879"' "$C/config.toml" || fail "hub_url"
