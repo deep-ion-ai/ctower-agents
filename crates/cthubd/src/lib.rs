@@ -80,7 +80,11 @@ use tokio::sync::broadcast;
 /// 1.19 (#183): agendador do piloto automático —
 /// `hub.autopilot.status|events|pause|resume|set` e o push
 /// `hub.autopilot.changed`.
-pub const PROTOCOL_VERSION: &str = "1.19";
+/// 1.20 (#185): painel e resumo da manhã do piloto automático —
+/// `hub.autopilot.digest|wip`, `wip` em `AutopilotStatus`,
+/// `digest_at_min` em `BudgetPolicy` e o evento `morning_digest` da Web
+/// Push.
+pub const PROTOCOL_VERSION: &str = "1.20";
 
 #[derive(Clone)]
 pub struct HubState {

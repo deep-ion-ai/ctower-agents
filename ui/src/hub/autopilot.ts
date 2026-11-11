@@ -2,7 +2,16 @@
 // política de orçamento por conta (`hub.autopilot.policy.get|set|preview`).
 // A regra em si é do hub (`ct_core::plan::budget`); aqui só se mostra o
 // resultado. Funções puras, testadas em autopilot.test.ts.
-import type { BlockReason, BudgetDecision, BudgetPolicy, TimeBand } from "../protocol/hub-gen";
+import type {
+  AutonomyWip,
+  AutopilotStatus,
+  BlockReason,
+  BudgetDecision,
+  BudgetPolicy,
+  DigestProject,
+  DigestUsage,
+  TimeBand,
+} from "../protocol/hub-gen";
 
 /** Protocolo do hub com a política do piloto automático (#180). */
 export const AUTOPILOT_PROTOCOL = "1.14";
@@ -116,3 +125,101 @@ export function bandSummary(b: TimeBand): string {
 
 /** Cópia profunda (o editor muda o rascunho, nunca o que veio do hub). */
 export const clonePolicy = (p: BudgetPolicy): BudgetPolicy => structuredClone(p);
+
+// ---------------------------------------------------------------------------
+// Painel do piloto automático e resumo da manhã (#185).
+
+/** Protocolo do hub com o agendador e `hub.autopilot.status` (#183). */
+export const AUTOPILOT_STATUS_PROTOCOL = "1.19";
+/** Protocolo do hub com o resumo da manhã e `hub.autopilot.digest|wip` (#185). */
+export const AUTOPILOT_DIGEST_PROTOCOL = "1.20";
+
+export type PilotState = "paused" | "off" | "on" | "waiting_band" | "waiting_budget";
+
+/**
+ * Estado do piloto, pelo status: pausado; desligado (nenhuma conta com
+ * política); ligado (alguma conta pode iniciar agora); aguardando faixa (o
+ * horário não permite); ou aguardando orçamento (o uso está no limite).
+ */
+export function pilotState(s: Pick<AutopilotStatus, "settings" | "accounts">): PilotState {
+  if (s.settings.paused) return "paused";
+  if (s.accounts.length === 0) return "off";
+  if (s.accounts.some((a) => a.decision.can_start)) return "on";
+  const byTime = (r: BlockReason) => r.kind === "band_closed" || r.kind === "no_band" || r.kind === "after_cutoff";
+  if (s.accounts.some((a) => a.decision.reasons.some(byTime))) return "waiting_band";
+  return "waiting_budget";
+}
+
+export const PILOT_STATE_TEXT: Record<PilotState, string> = {
+  paused: "Pausado",
+  off: "Desligado",
+  on: "Ligado",
+  waiting_band: "Aguardando faixa",
+  waiting_budget: "Aguardando orçamento",
+};
+
+export const PILOT_STATE_HINT: Record<PilotState, string> = {
+  paused: "nenhuma sessão nova inicia; as em andamento terminam a issue",
+  off: "nenhuma conta tem política de orçamento (Orçamento do plano, no app desktop)",
+  on: "pode iniciar issues novas agora",
+  waiting_band: "a faixa de horário atual não permite iniciar",
+  waiting_budget: "o uso da conta está no limite da política",
+};
+
+/** "Agora pode usar até X% da semanal (em Y%)", pela decisão da conta. */
+export function weeklyHeadline(d: BudgetDecision): string {
+  if (!d.weekly) return "Sem leitura da semanal: nenhuma sessão informou o uso";
+  const used = d.weekly_used != null ? ` (em ${pct(d.weekly_used)})` : "";
+  return `Agora pode usar até ${pct(d.weekly.effective)} da semanal${used}`;
+}
+
+/**
+ * Próxima faixa elegível, no fuso do aparelho (o status não traz a
+ * política): "faixa elegível agora", "próxima faixa elegível: ter 18:00".
+ */
+export function nextBandText(d: BudgetDecision, offsetMin = -new Date(d.now).getTimezoneOffset()): string {
+  if (d.next_open_at == null) return "nenhuma faixa aberta na política";
+  if (d.next_open_at <= d.now) return "faixa elegível agora";
+  return `próxima faixa elegível: ${localTime(d.next_open_at, offsetMin)}`;
+}
+
+/** Motivo de o item ter ficado de fora da fila (`QueueItem.skip`). */
+export const SKIP_TEXT: Record<string, string> = {
+  epic: "épico",
+  status: "fora do backlog",
+  not_in_mirror: "fora do espelho",
+  not_approved: "sem rótulo de aprovação",
+  no_priority: "sem prioridade",
+  no_model: "sem modelo",
+  live_session: "sessão em andamento",
+};
+
+export const skipText = (s: string) => SKIP_TEXT[s] ?? s;
+
+/** Contagens de um projeto do resumo: "2 mescladas na wip · 1 bloqueada". */
+export function digestCounts(p: DigestProject): string {
+  const n = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;
+  const parts = [
+    p.merged.length > 0 && n(p.merged.length, "mesclada na wip", "mescladas na wip"),
+    p.blocked.length > 0 && n(p.blocked.length, "bloqueada", "bloqueadas"),
+    p.decisions_pending > 0 && n(p.decisions_pending, "decisão para revisar", "decisões para revisar"),
+    p.ahead > 0 && `${p.ahead} à frente da base`,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "nada novo";
+}
+
+/** Estado do CI do PR da wip: o do espelho, ou o aviso de que ele não tem. */
+export const ciText = (ci: string | null) => (ci ? `CI: ${ci}` : "CI sem dados no espelho");
+
+/** "conta-1: +15% no período, semanal em 35%". */
+export function usageText(u: DigestUsage): string {
+  if (u.weekly_used == null) return `${u.account}: sem leitura da semanal`;
+  const delta = u.delta != null ? `+${pct(Math.round(u.delta * 10) / 10)} no período, ` : "";
+  return `${u.account}: ${delta}semanal em ${pct(u.weekly_used)}`;
+}
+
+/** "2 issues à frente de develop" ou "alinhada com develop". */
+export function aheadText(w: Pick<AutonomyWip, "ahead" | "base">): string {
+  const n = w.ahead.length;
+  return n === 0 ? `alinhada com ${w.base}` : `${n} ${n === 1 ? "issue" : "issues"} à frente de ${w.base}`;
+}

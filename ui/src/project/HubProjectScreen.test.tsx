@@ -1776,3 +1776,47 @@ describe("Visão geral (#101): Revisões", () => {
     expect(api.callsTo("review.get")).toHaveLength(0);
   });
 });
+
+test("Visão geral do projeto autônomo (#185): wip/autonoma com as issues à frente da base e o PR", async () => {
+  const auto: HubProject = {
+    ...HUB_PROJECT,
+    autonomy: { enabled: true, env_id: "daemon-wsl", branch: "", base_branch: "", strategy: "merge" },
+  };
+  const api = setupTabs()
+    .onHub("hub.projects.list", [
+      {
+        project: auto,
+        assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
+        locations: [],
+        sync: sync({ project_id: 7, last_ok_at: NOW }),
+        tracker_status: null,
+      },
+    ])
+    .onHub("hub.autopilot.wip", (p: { owner: string; repo: string }) => [
+      {
+        owner: p.owner,
+        repo: p.repo,
+        name: "ctower-agents",
+        branch: "wip/autonoma",
+        base: "develop",
+        ahead: [
+          { number: 57, title: "ACME-57" },
+          { number: 59, title: "ACME-59" },
+          { number: 62, title: "ACME-62" },
+        ],
+        pr_url: "https://github.example/acme/acme-web/pull/5",
+        ci: null,
+        conflict: false,
+      },
+    ]);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const card = await screen.findByRole("region", { name: "Modo autônomo" });
+  const wip = await within(card).findByLabelText("Branch de integração");
+  expect(wip).toHaveTextContent("wip/autonoma: 3 issues à frente de develop");
+  expect(wip).toHaveTextContent("#57, #59, #62 em revisão");
+  expect(within(card).getByRole("link", { name: "PR wip/autonoma → develop" })).toHaveAttribute(
+    "href",
+    "https://github.example/acme/acme-web/pull/5",
+  );
+  expect(api.callsTo("hub.autopilot.wip")[0].params).toEqual({ owner: "deep-ion-ai", repo: "ctower-agents" });
+});

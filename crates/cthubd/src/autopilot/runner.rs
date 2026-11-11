@@ -9,8 +9,8 @@ use crate::HubState;
 use ct_core::{AutonomyState, SessionState};
 use ct_http::rpc::{invalid, RpcResult};
 use ct_ledger::{
-    AutopilotEvent, AutopilotSession, AutopilotSettings, Hub, ParkedSession, RankingFilter,
-    SharedHub, RANKING_MAX,
+    AutonomyWip, AutopilotEvent, AutopilotSession, AutopilotSettings, Hub, ParkedSession,
+    RankingFilter, SharedHub, RANKING_MAX,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -95,6 +95,22 @@ pub fn spawn(st: HubState) {
                 Ok(n) if n > 0 => st.autopilot_changed(),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("piloto automático: ciclo falhou: {e}"),
+            }
+            // Resumo da manhã (#185): no horário da política, uma vez por
+            // dia útil; vira o card da Visão geral e a Web Push.
+            let hub = st.hub.clone();
+            match tokio::task::spawn_blocking(move || super::digest::run(&hub.lock(), now)).await {
+                Ok(Ok(Some(d))) => {
+                    tracing::info!(
+                        "piloto automático: resumo da manhã gerado ({} projetos)",
+                        d.projects.len()
+                    );
+                    st.autopilot_changed();
+                    st.push_kick();
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(e)) => tracing::warn!("piloto automático: resumo da manhã falhou: {e}"),
+                Err(e) => tracing::warn!("piloto automático: resumo da manhã falhou: {e}"),
             }
             st.autopilot.last_tick_at.store(now, Ordering::Relaxed);
             tokio::select! {
@@ -436,6 +452,9 @@ pub struct AutopilotStatus {
     pub parked: Vec<ParkedSession>,
     /// Eventos mais recentes, do mais novo para o mais velho.
     pub events: Vec<AutopilotEvent>,
+    /// A branch de integração de cada projeto autônomo, com as issues à
+    /// frente da base (#185).
+    pub wip: Vec<AutonomyWip>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -524,10 +543,12 @@ pub fn status(
         sessions,
         parked,
         events,
+        wip: hub.autonomy_wip(None)?,
     })
 }
 
-/// `hub.autopilot.status|events|pause|resume|set` (#183). `web` = vindo do
+/// `hub.autopilot.status|events|pause|resume|set` (#183) e
+/// `hub.autopilot.digest|wip` (#185). `web` = vindo do
 /// `/web/ws` (sem as chaves de conta).
 pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> RpcResult {
     let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
@@ -572,6 +593,24 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                             .map_err(e)?;
                     }
                     Ok((json!(s), changed))
+                }
+                // Resumo da manhã (#185): os mais recentes; na web, sem a
+                // chave da conta.
+                "hub.autopilot.digest" => {
+                    let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(1) as u32;
+                    let mut v = hub.list_digests(limit).map_err(e)?;
+                    if web {
+                        super::digest::anonymize(&hub, &mut v).map_err(e)?;
+                    }
+                    Ok((json!(v), false))
+                }
+                // Branch de integração dos projetos autônomos (#185), para a
+                // Visão geral do projeto; `owner` e `repo` filtram.
+                "hub.autopilot.wip" => {
+                    let owner = p.get("owner").and_then(Value::as_str);
+                    let repo = p.get("repo").and_then(Value::as_str);
+                    let only = owner.zip(repo);
+                    Ok((json!(hub.autonomy_wip(only).map_err(e)?), false))
                 }
                 "hub.autopilot.set" => {
                     let n = p
@@ -905,5 +944,40 @@ mod tests {
         assert!(port.calls.lock().unwrap().is_empty());
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
         assert_eq!(ev[0].reason.as_deref(), Some("env_offline"));
+    }
+
+    #[tokio::test]
+    async fn resumo_e_wip_pelo_ws_sem_a_conta_na_web() {
+        let hub = hub();
+        let s = status(&hub.lock(), &FakePort::default(), None, SAB, false).unwrap();
+        assert_eq!(s.wip.len(), 1);
+        assert_eq!(s.wip[0].branch, "wip/autonoma");
+        // Segunda 09:00 em GMT-3, a semana seguinte ao `SAB`.
+        let seg = SAB + 2 * 24 * H - 3 * H;
+        reading(&hub.lock(), 10.0, seg);
+        super::super::digest::run(&hub.lock(), seg)
+            .unwrap()
+            .unwrap();
+        let st = HubState::new(hub, "ui", "hub", "hub-id");
+        let desk = call(&st, "hub.autopilot.digest", json!({}), false)
+            .await
+            .unwrap();
+        assert_eq!(desk[0]["usage"][0]["account"], "conta-a");
+        let web = call(&st, "hub.autopilot.digest", json!({ "limit": 5 }), true)
+            .await
+            .unwrap();
+        assert_eq!(web[0]["usage"][0]["account"], "conta-1");
+        assert_eq!(web[0]["projects"][0]["repo"], "acme-web");
+        let wip = call(
+            &st,
+            "hub.autopilot.wip",
+            json!({ "owner": "acme", "repo": "acme-web" }),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(wip[0]["base"], "develop");
+        assert!(crate::web::web_allowed("hub.autopilot.digest"));
+        assert!(crate::web::web_allowed("hub.autopilot.wip"));
     }
 }

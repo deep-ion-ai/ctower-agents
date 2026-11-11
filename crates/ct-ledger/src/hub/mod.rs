@@ -27,6 +27,7 @@ mod autonomy;
 mod autopilot;
 mod autopilot_run;
 mod config;
+mod digest;
 mod env_keys;
 mod health;
 mod legacy;
@@ -53,6 +54,9 @@ pub use autopilot_run::{
 };
 pub use config::{
     DeleteImpact, HubProjectPatch, NewHubProject, ProjectAdded, ProjectProvider, QuarantineGroup,
+};
+pub use digest::{
+    digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
 };
 pub use env_keys::{EnvAssignmentRev, EnvPubkey, EnvSecretsInput};
 pub use health::{
@@ -753,6 +757,19 @@ CREATE TABLE autopilot_parked (
   window      TEXT NOT NULL,
   resume_at   INTEGER NOT NULL,
   parked_at   INTEGER NOT NULL
+);
+"#,
+    // 37: resumo da manhã do piloto automático (#185, épico #178): um por
+    // dia local (no fuso da política), para nunca sair duas vezes no mesmo
+    // dia. `content` é o JSON de `MorningDigest` (só números, títulos do
+    // espelho, contagens, uso e links; nunca texto do agente).
+    r#"
+CREATE TABLE autopilot_digest (
+  id        INTEGER PRIMARY KEY,
+  local_day INTEGER NOT NULL UNIQUE,
+  at        INTEGER NOT NULL,
+  since     INTEGER NOT NULL,
+  content   TEXT NOT NULL
 );
 "#,
 ];
@@ -5004,7 +5021,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 36);
+        assert_eq!(v, 37);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

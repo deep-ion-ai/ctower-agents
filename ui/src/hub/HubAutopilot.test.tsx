@@ -23,6 +23,7 @@ const DEFAULT: BudgetPolicy = {
   weekly_cap: 80,
   reserve_per_workday: 12,
   workday_cutoff_min: 240,
+  digest_at_min: 540,
 };
 
 const ACCOUNTS: HubPlanAccounts = {
@@ -120,4 +121,24 @@ test("faixas: marcar fechada desabilita o teto, e adicionar faixa", async () => 
   expect(capInput).toBeDisabled();
   await user.click(within(panel).getByRole("button", { name: "Adicionar faixa" }));
   expect(within(panel).getByRole("group", { name: "Faixa Nova faixa" })).toBeInTheDocument();
+});
+
+test("horário do resumo da manhã (#185): editar e salvar com a política; vazio desliga", async () => {
+  const { api, user } = setup();
+  const panel = await screen.findByRole("region", { name: "Orçamento do piloto automático" });
+  const digest = await within(panel).findByLabelText("Resumo da manhã (dias úteis)");
+  expect(digest).toHaveValue("09:00");
+  await user.clear(digest);
+  await user.type(digest, "07:30");
+  await user.click(within(panel).getByRole("button", { name: "Ligar com esta política" }));
+  await within(panel).findByText("Piloto automático ligado nesta conta.");
+  const set = api.calls.filter((c) => c.method === "hub.autopilot.policy.set").pop();
+  expect(set?.params).toMatchObject({ policy: { digest_at_min: 450 } });
+  await user.clear(within(panel).getByLabelText("Resumo da manhã (dias úteis)"));
+  await user.click(within(panel).getByRole("button", { name: "Salvar política" }));
+  await waitFor(() =>
+    expect(api.calls.filter((c) => c.method === "hub.autopilot.policy.set").pop()?.params).toMatchObject({
+      policy: { digest_at_min: null },
+    }),
+  );
 });

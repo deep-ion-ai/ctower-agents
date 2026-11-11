@@ -36,6 +36,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Hub › Token do GitHub",
     "Hub › Sessões web",
     "Hub › Dispositivos",
+    "Hub › Painel do piloto",
     "Hub › Orçamento do plano",
     // Seções da Manutenção (#335).
     "Manutenção › Visão geral",
@@ -211,6 +212,7 @@ test("web: sem os lugares e comandos exclusivos do desktop (#201)", () => {
     "Hub › Ambientes",
     "Hub › Sessões web",
     "Hub › Dispositivos",
+    "Hub › Painel do piloto",
     "Logs",
     "Configurações › Aparência",
     "Configurações › Plano da conta",

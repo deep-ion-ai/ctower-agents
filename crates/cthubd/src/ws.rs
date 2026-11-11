@@ -772,6 +772,8 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         | "hub.autopilot.events"
         | "hub.autopilot.pause"
         | "hub.autopilot.resume"
+        | "hub.autopilot.digest"
+        | "hub.autopilot.wip"
         | "hub.autopilot.set" => {
             crate::autopilot::runner::call(st, method, p, web_session.is_some()).await
         }
@@ -2123,6 +2125,8 @@ mod export {
         HubPlanAccounts::export_all_to(&dir).unwrap();
         crate::autopilot::AutopilotPolicyView::export_all_to(&dir).unwrap();
         crate::autopilot::AutopilotStatus::export_all_to(&dir).unwrap();
+        ct_ledger::MorningDigest::export_all_to(&dir).unwrap();
+        ct_ledger::AutonomyWip::export_all_to(&dir).unwrap();
         ct_ledger::AutopilotEvent::export_all_to(&dir).unwrap();
         ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
@@ -5435,7 +5439,7 @@ pub(crate) mod tests {
         let v = subscribe(&mut web, &format!("{base}/abc"), &b).await;
         let dev = &v["result"];
         assert_eq!(dev["current"], true, "{v}");
-        assert_eq!(dev["events"].as_array().unwrap().len(), 4, "{v}");
+        assert_eq!(dev["events"].as_array().unwrap().len(), 5, "{v}");
         assert!(dev.get("endpoint").is_none() && dev.get("p256dh").is_none());
         let id = dev["id"].as_i64().unwrap();
 
