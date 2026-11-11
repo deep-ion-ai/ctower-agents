@@ -71,8 +71,11 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// `session.start|start_project|start_gestor` e a ferramenta MCP
 /// `issue_propose_model`. 2.18 (#124): `approval` em `Project` (rótulo
 /// de aprovação, vindo do hub), `override_approval` no `session.start` e a
-/// recusa `APPROVAL_REQUIRED` (-32052) da issue sem o rótulo exigido.
-pub const PROTOCOL_VERSION: &str = "2.18";
+/// recusa `APPROVAL_REQUIRED` (-32052) da issue sem o rótulo exigido. 2.19
+/// (#191): `prompt` opcional no `session.start` com `autonomous: true` (o
+/// ambiente monta com `session_templates.autonomous` ou o template padrão)
+/// e `autonomous` em `SessionTemplates`.
+pub const PROTOCOL_VERSION: &str = "2.19";
 
 #[derive(Clone)]
 pub struct AppState {

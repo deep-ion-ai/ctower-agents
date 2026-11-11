@@ -1,10 +1,14 @@
 import type { AutonomyConfig, HubAssignment, HubEnv, HubProject } from "../protocol/hub-gen";
 import {
+  DEFAULT_AUTONOMOUS_TEMPLATE,
+  MAX_AUTONOMOUS_TEMPLATE_BYTES,
+  autonomousTemplateOf,
   autonomyEnvChoices,
   autonomyForm,
   autonomyFormError,
   autonomyOf,
   autonomyPatch,
+  autonomyTemplatesPatch,
   autonomyWarning,
 } from "./autonomy";
 
@@ -46,7 +50,7 @@ test("aviso só com o modo ligado e a branch em conflito", () => {
 test("formulário: padrões vazios no patch e erros", () => {
   const p = project({});
   const f = autonomyForm(autonomyOf(p)!, p);
-  expect(f).toEqual({ enabled: false, envId: "", branch: "wip/autonoma", base: "develop", strategy: "merge" });
+  expect(f).toEqual({ enabled: false, envId: "", branch: "wip/autonoma", base: "develop", strategy: "merge", template: null });
   expect(autonomyPatch(f, p)).toEqual(OFF);
   expect(autonomyPatch({ ...f, enabled: true, envId: "env-auto", branch: "wip/acme", base: "main" }, p)).toEqual({
     enabled: true,
@@ -67,4 +71,21 @@ test("ambientes: atribuídos e marcados como autônomos", () => {
   expect(autonomyEnvChoices([a("env-auto"), a("env-mac")], [e("env-auto", true), e("env-mac", false)]).map((x) => x.env_id)).toEqual([
     "env-auto",
   ]);
+});
+
+test("template autônomo (#191): campo do hub, patch do objeto inteiro e limite", () => {
+  const templates = { issue: "Issue {{key}}", epic: "", project: "", autonomous: "" };
+  const p = { ...project({}), session_templates: templates } as HubProject;
+  // Hub sem o campo: não edita.
+  expect(autonomousTemplateOf(project({}))).toBeNull();
+  expect(autonomousTemplateOf({ ...p, session_templates: { issue: "", epic: "", project: "" } } as unknown as HubProject)).toBeNull();
+  const f = autonomyForm(autonomyOf(p)!, p);
+  expect(f.template).toBe("");
+  expect(autonomyTemplatesPatch(f, p)).toBeNull();
+  expect(autonomyTemplatesPatch({ ...f, template: "  " }, p)).toBeNull();
+  expect(autonomyTemplatesPatch({ ...f, template: "Faça {{ref}}" }, p)).toEqual({ ...templates, autonomous: "Faça {{ref}}" });
+  const own = { ...p, session_templates: { ...templates, autonomous: "Faça {{ref}}" } };
+  expect(autonomyTemplatesPatch({ ...f, template: " \n" }, own)).toEqual(templates);
+  expect(autonomyFormError({ ...f, template: "x".repeat(MAX_AUTONOMOUS_TEMPLATE_BYTES + 1) }, p)).toMatch(/64 KiB/);
+  expect(DEFAULT_AUTONOMOUS_TEMPLATE).toContain("{{integration_branch}}");
 });

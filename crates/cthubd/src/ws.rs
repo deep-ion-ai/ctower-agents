@@ -1516,7 +1516,7 @@ fn docs_param(p: &Value) -> Result<Option<ct_core::DocsConfig>, (i64, String)> {
     }
 }
 
-/// `session_templates` (#166): `{ issue, epic, project }`, chave ausente ou
+/// `session_templates` (#166): `{ issue, epic, project, autonomous }`, chave ausente ou
 /// vazia = o template global; o objeto inteiro substitui o anterior.
 fn templates_param(p: &Value) -> Result<Option<ct_core::SessionTemplates>, (i64, String)> {
     match p.get("session_templates") {
@@ -1525,7 +1525,7 @@ fn templates_param(p: &Value) -> Result<Option<ct_core::SessionTemplates>, (i64,
             .map(Some)
             .map_err(|e| invalid(format!("session_templates inválido: {e}"))),
         Some(_) => Err(invalid(
-            "session_templates deve ser um objeto { issue, epic, project }",
+            "session_templates deve ser um objeto { issue, epic, project, autonomous }",
         )),
     }
 }
@@ -3019,13 +3019,15 @@ pub(crate) mod tests {
             .call(
                 "hub.projects.update",
                 json!({ "owner": "deep-ion-ai", "repo": "demo",
-                        "session_templates": { "issue": "Issue {{key}}", "epic": "  " } }),
+                        "session_templates": { "issue": "Issue {{key}}", "epic": "  ",
+                                               "autonomous": "Faça {{ref}}" } }),
             )
             .await;
         let t = &v["result"]["session_templates"];
         assert_eq!(
             t,
-            &json!({ "issue": "Issue {{key}}", "epic": "", "project": "" }),
+            &json!({ "issue": "Issue {{key}}", "epic": "", "project": "",
+                     "autonomous": "Faça {{ref}}" }),
             "{v}"
         );
         let novo = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();

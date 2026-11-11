@@ -103,7 +103,7 @@ const HUB_PROJECT: HubProject = {
   attribution: true,
   sync_env_id: null,
   docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-  session_templates: { issue: "", epic: "", project: "" },
+  session_templates: { issue: "", epic: "", project: "", autonomous: "" },
   autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
   autonomy_report: null,
   wip_limits: { max_sessions: null, max_prs: null },
@@ -948,7 +948,7 @@ test("Templates de sessão (#166): Personalizar parte do global, salva o objeto 
     .onHub("hub.projects.update", null)
     .onHub("hub.projects.list", [
       {
-        project: { ...HUB_PROJECT, session_templates: { issue: "", epic: "Épico do projeto {{key}}", project: "" } },
+        project: { ...HUB_PROJECT, session_templates: { issue: "", epic: "Épico do projeto {{key}}", project: "", autonomous: "" } },
         assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
         locations: [],
         sync: sync({ project_id: 7, last_ok_at: NOW }),
@@ -978,14 +978,14 @@ test("Templates de sessão (#166): Personalizar parte do global, salva o objeto 
   expect(api.hubCallsTo("hub.projects.update")[0].params).toEqual({
     owner: "deep-ion-ai",
     repo: "ctower-agents",
-    session_templates: { issue: "Só a issue {{key}}", epic: "Épico do projeto {{key}}", project: "" },
+    session_templates: { issue: "Só a issue {{key}}", epic: "Épico do projeto {{key}}", project: "", autonomous: "" },
   });
 
   // Voltar ao global: a chave vazia, o resto igual.
   await user.click(within(card).getByRole("button", { name: "Voltar ao global Épico" }));
   await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(2));
   expect(api.hubCallsTo("hub.projects.update")[1].params).toMatchObject({
-    session_templates: { issue: "", epic: "", project: "" },
+    session_templates: { issue: "", epic: "", project: "", autonomous: "" },
   });
 });
 

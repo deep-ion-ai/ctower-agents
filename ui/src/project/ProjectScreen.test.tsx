@@ -653,7 +653,7 @@ test("template do projeto (#166): override de issue na issue; épico no global; 
         {
           projects: [
             {
-              project: project({ session_templates: { issue: "Override {{key}}: {{title}} em {{branch}}", epic: "", project: "" } }),
+              project: project({ session_templates: { issue: "Override {{key}}: {{title}} em {{branch}}", epic: "", project: "", autonomous: "" } }),
               work_items: [WI28, WI30],
             },
           ],

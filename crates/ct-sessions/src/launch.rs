@@ -431,6 +431,21 @@ impl Sessions {
             self.ledger()
                 .set_work_item_branch(wi.id, &branch, &worktree_str)?;
         }
+        // Sessão autônoma sem prompt (#191): o ambiente monta, com a branch
+        // já decidida.
+        let auto_prompt = match autonomy {
+            Some((integration, _)) if req.prompt.trim().is_empty() => {
+                Some(crate::autonomy::autonomous_prompt(
+                    &project,
+                    wi.kind,
+                    req.gh_number,
+                    &req.title,
+                    &branch,
+                    integration,
+                ))
+            }
+            _ => None,
+        };
         let tool_session_id = uuid::Uuid::new_v4().to_string();
         let remote_name = req
             .agent
@@ -442,7 +457,7 @@ impl Sessions {
             LaunchSpec {
                 cwd: &worktree_str,
                 mode: LaunchMode::New(&tool_session_id),
-                prompt: &req.prompt,
+                prompt: auto_prompt.as_deref().unwrap_or(&req.prompt),
                 size: req.size.unwrap_or(PtySize::DEFAULT),
                 agent: &req.agent,
                 remote_name,
@@ -587,6 +602,7 @@ impl Sessions {
                 .next()
                 .and_then(|e| {
                     Some(crate::autonomy::agent_instruction(
+                        project,
                         e.payload["branch"].as_str()?,
                         e.payload["base"].as_str()?,
                     ))
