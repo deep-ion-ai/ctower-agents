@@ -43,6 +43,7 @@ import { renderGestorTemplate, renderTemplate, resolveTemplate, scopeText } from
 import { cachedTree } from "./ui-store";
 import { rcRequested } from "../web/envActions";
 import { PlanConfirm, PlanEnvChoices, PlanStartNote, usePlanGate } from "../plan/PlanStart";
+import { wipOf, wipReason } from "./wip";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -192,6 +193,24 @@ export function StartSessionModal(props: {
   );
 }
 
+/** Confirmação do início acima do limite de trabalho em andamento (#126). */
+function WipConfirm({ onBack, onConfirm, busy }: { onBack(): void; onConfirm(): void; busy: boolean }) {
+  return (
+    <>
+      <span className="plan-confirm-text" role="alert">
+        Limite de trabalho em andamento atingido. Iniciar mesmo assim?
+      </span>
+      <span className="sm-spacer" />
+      <button type="button" className="btn" onClick={onBack}>
+        Voltar
+      </button>
+      <button type="button" className="btn btn-danger" disabled={busy} onClick={onConfirm}>
+        {busy ? "Iniciando…" : "Iniciar mesmo assim"}
+      </button>
+    </>
+  );
+}
+
 /**
  * Modal de início de sessão (#317): substitui o painel `StartSessionPanel`.
  * Tipo e título; aviso de sessão já existente; no épico, o escopo e atalhos
@@ -253,6 +272,8 @@ function ItemStartModal({
   const [error, setError] = useState<string | null>(null);
   // Plano da conta (#108): no crítico, iniciar passa por um passo de confirmação.
   const [confirming, setConfirming] = useState(false);
+  // Limite de trabalho em andamento (#126): no limite, iniciar pede confirmação.
+  const [wipConfirming, setWipConfirming] = useState(false);
   const dialog = useRef<HTMLElement>(null);
 
   const all = useMemo(() => (roots ?? []).flatMap((r) => [r, ...r.children]), [roots]);
@@ -317,6 +338,15 @@ function ItemStartModal({
   const now = Date.now();
   const plan = usePlanGate(cloneEnv, now);
   useEffect(() => setConfirming(false), [cloneEnv]);
+  // O uso vem do hub (todas as máquinas); só sessões de issue e épico contam.
+  const hubView = project
+    ? tower.hub.projects.find(
+        (v) =>
+          v.project.gh_owner.toLowerCase() === project.gh_owner.toLowerCase() &&
+          v.project.gh_repo.toLowerCase() === project.gh_repo.toLowerCase(),
+      )
+    : undefined;
+  const wipFullText = issue ? wipReason(wipOf(hubView)) : null;
   useEffect(() => {
     if (!web || !cloneEnv || webInfos[cloneEnv]) return;
     let alive = true;
@@ -417,10 +447,14 @@ function ItemStartModal({
     (focusables(el)[0] ?? el).focus();
   }, []);
 
-  const start = async () => {
+  const start = async (wipOk = false) => {
     if (!clone || !project || busy || blocked || loading || !prompt.trim()) return;
     if (plan.alert?.level === "critical" && !confirming) {
       setConfirming(true);
+      return;
+    }
+    if (wipFullText && !wipOk) {
+      setWipConfirming(true);
       return;
     }
     setBusy(true);
@@ -810,6 +844,12 @@ function ItemStartModal({
 
           {plan.account && plan.alert && <PlanStartNote account={plan.account} alert={plan.alert} now={now} />}
 
+          {wipFullText && (
+            <p className="sm-blocked" role="note">
+              {project?.name ?? "O projeto"} está no {wipFullText}. Termine ou mescle algo antes, ou inicie mesmo assim.
+            </p>
+          )}
+
           {error && (
             <p role="alert" className="start-error">
               {error}
@@ -818,7 +858,9 @@ function ItemStartModal({
         </div>
 
         <div className="sm-foot">
-          {confirming ? (
+          {wipConfirming ? (
+            <WipConfirm onBack={() => setWipConfirming(false)} onConfirm={() => void start(true)} busy={busy} />
+          ) : confirming ? (
             <PlanConfirm onBack={() => setConfirming(false)} onConfirm={() => void start()} busy={busy} />
           ) : (
             <>

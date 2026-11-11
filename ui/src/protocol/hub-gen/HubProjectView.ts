@@ -4,6 +4,7 @@ import type { HubLocation } from "./HubLocation";
 import type { HubProject } from "./HubProject";
 import type { HubTrackerStatus } from "./HubTrackerStatus";
 import type { SyncState } from "./SyncState";
+import type { WipUsage } from "./WipUsage";
 
 /**
  * Item de `hub.projects.list`.
@@ -26,4 +27,9 @@ sync: SyncState | null,
  * Projeto Jira: último `tracker_status` aceito, com a prontidão do
  * ambiente de sync (#348). Nulo no GitHub e até o primeiro relato.
  */
-tracker_status: HubTrackerStatus | null, };
+tracker_status: HubTrackerStatus | null, 
+/**
+ * Trabalho em andamento (#126): sessões vivas e PRs abertos do projeto,
+ * com os limites do cadastro. Ausente num hub anterior.
+ */
+wip: WipUsage | null, };

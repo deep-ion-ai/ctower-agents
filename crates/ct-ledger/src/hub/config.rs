@@ -207,6 +207,9 @@ pub struct HubProjectPatch {
     /// Modo autônomo (#181): o objeto inteiro substitui o anterior. O
     /// ambiente vai por `env_id` ou nome.
     pub autonomy: Option<ct_core::AutonomyConfig>,
+    /// Limite de trabalho em andamento (#126): o objeto inteiro substitui o
+    /// anterior; `{}` = sem limite.
+    pub wip_limits: Option<ct_core::WipLimits>,
 }
 
 impl HubProjectPatch {
@@ -222,6 +225,7 @@ impl HubProjectPatch {
             && self.docs.is_none()
             && self.session_templates.is_none()
             && self.autonomy.is_none()
+            && self.wip_limits.is_none()
     }
 }
 
@@ -553,6 +557,9 @@ impl Hub {
         }
         if let Some((env_id, label)) = &sync_env {
             self.set_sync_env_in_tx(&cur, env_id, label, rev)?;
+        }
+        if let Some(w) = &patch.wip_limits {
+            self.set_wip_limits_in_tx(&key, w)?;
         }
         let p = self.project_by_key(&key)?;
         tx.commit()?;

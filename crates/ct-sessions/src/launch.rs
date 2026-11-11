@@ -131,6 +131,9 @@ ou MRs; não mexa em labels, milestones e repositórios.
 ambientes.
 5. Registre com ledger_record_decision as recomendações aceitas pelo usuário (orientada) e as suas \
 escolhas relevantes (autonoma).
+6. Projeto com wip_limit_reached em portfolio_overview está no limite de trabalho em andamento: \
+não recomende começar trabalho novo nele nem proponha prioridade para isso; mostre \
+\"limite de trabalho em andamento\" com o motivo (N de M).
 Esta sessão não tem repositório no cwd: use -R owner/repo em todo comando gh. Nos projetos Jira, \
 leia a issue pelo comando issue_view do projeto em portfolio_overview, que já traz o comando de \
 credencial (nunca a senha).";

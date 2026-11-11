@@ -32,6 +32,7 @@ mod sync;
 pub mod update;
 pub mod web;
 pub mod web_auth;
+pub mod wip;
 pub mod ws;
 
 use axum::response::IntoResponse;
@@ -71,7 +72,10 @@ use tokio::sync::broadcast;
 /// 1.16 (#182): modelo e esforço por issue — `model` e `effort` em
 /// `HubWorkItem`, `hub.workitem.set_model`, a proposta `model` e o `value`
 /// (com `chosen` na proposta) em `hub.proposals.decide`.
-pub const PROTOCOL_VERSION: &str = "1.16";
+/// 1.17 (#126): `wip_limits` em `HubProject` e em `hub.projects.update`,
+/// `wip` em `HubProjectView` e o erro `WIP_LIMIT_REACHED` (-32051) no
+/// `session.start` automático pelo canal (limite de trabalho em andamento).
+pub const PROTOCOL_VERSION: &str = "1.17";
 
 #[derive(Clone)]
 pub struct HubState {

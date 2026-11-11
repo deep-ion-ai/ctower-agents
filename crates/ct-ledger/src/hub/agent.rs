@@ -44,6 +44,14 @@ pub struct AgentProjectSummary {
     /// número.
     #[serde(default)]
     pub issue_view: String,
+    /// Trabalho em andamento (#126): sessões vivas, PRs abertos e limites.
+    #[serde(default)]
+    pub wip: Option<ct_core::WipUsage>,
+    /// Com o limite atingido, o motivo ("limite de trabalho em andamento
+    /// (N de M ...)"): o gestor não inicia nem propõe trabalho novo no
+    /// projeto e mostra o motivo. Ausente = há vaga.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wip_limit_reached: Option<String>,
 }
 
 fn github_tracker() -> ct_core::TrackerKind {
@@ -283,6 +291,7 @@ impl Hub {
                     state: a.state,
                 })
                 .collect();
+            let wip = self.project_wip(p.id)?;
             let tracker = p.tracker.kind();
             let issue_view = ct_core::issue_view_cmd(&p.gh_owner, &p.gh_repo, &p.tracker);
             projects.push(AgentProjectSummary {
@@ -298,6 +307,8 @@ impl Hub {
                 pending_decisions: pending as usize,
                 signals,
                 assignments,
+                wip_limit_reached: wip.reason(),
+                wip: Some(wip),
             });
         }
         let envs = self

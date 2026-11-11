@@ -130,6 +130,8 @@ export type { Warning } from "./Warning";
 export type { WebSessionsRevoked } from "./WebSessionsRevoked";
 export type { WeeklyLimit } from "./WeeklyLimit";
 export type { WindowView } from "./WindowView";
+export type { WipLimits } from "./WipLimits";
+export type { WipUsage } from "./WipUsage";
 export type { WorkItemKind } from "./WorkItemKind";
 export type { WorkItemStatus } from "./WorkItemStatus";
 export type { WorkItemSummary } from "./WorkItemSummary";

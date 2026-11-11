@@ -14,3 +14,4 @@ export { projectSecretsOf, useSecrets, type ProjectSecrets } from "./useSecrets"
 export { projectState, syncText } from "./sync";
 export { DocsCard } from "./DocsCard";
 export { SessionTemplatesCard } from "./SessionTemplatesCard";
+export { WipCard } from "./WipCard";

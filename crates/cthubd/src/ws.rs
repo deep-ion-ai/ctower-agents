@@ -359,14 +359,6 @@ async fn env_call(st: &HubState, p: Value) -> RpcResult {
             format!("método indisponível pelo hub: {}", req.method),
         ));
     }
-    let params = if req.method == "session.start" {
-        let hub = st.hub.clone();
-        tokio::task::spawn_blocking(move || with_issue_agent(&hub.lock(), params))
-            .await
-            .map_err(|e| (-32603, e.to_string()))?
-    } else {
-        params
-    };
     call_env(st, env, &req.method, params).await
 }
 
@@ -414,6 +406,25 @@ fn issue_agent_param(p: &Value) -> Result<ct_ledger::IssueAgent, (i64, String)> 
 /// Chamada ao ambiente `env` pelo canal reverso, com o erro de ambiente
 /// desconhecido ou offline.
 async fn call_env(st: &HubState, env: String, method: &str, params: Value) -> RpcResult {
+    // `session.start`: primeiro o limite de trabalho em andamento (#126),
+    // que recusa o início automático num projeto no limite antes de
+    // qualquer efeito (nem a checagem do canal); depois o modelo e o
+    // esforço da issue (#182).
+    let params = if method == "session.start" {
+        let hub = st.hub.clone();
+        let m = method.to_string();
+        tokio::task::spawn_blocking(move || {
+            let hub = hub.lock();
+            match crate::wip::start_refusal(&hub, &m, &params) {
+                Some(err) => Err(err),
+                None => Ok(with_issue_agent(&hub, params)),
+            }
+        })
+        .await
+        .map_err(|e| (-32603, e.to_string()))??
+    } else {
+        params
+    };
     if !st.channels.is_online(&env) {
         let hub = st.hub.clone();
         let id = env.clone();
@@ -1534,6 +1545,20 @@ fn autonomy_param(p: &Value) -> Result<Option<ct_core::AutonomyConfig>, (i64, St
     }
 }
 
+/// `wip_limits` de `hub.projects.update` (#126): `{ max_sessions,
+/// max_prs }`, nulo ou ausente em cada um = sem limite.
+fn wip_param(p: &Value) -> Result<Option<ct_core::WipLimits>, (i64, String)> {
+    match p.get("wip_limits") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|e| invalid(format!("wip_limits inválido: {e}"))),
+        Some(_) => Err(invalid(
+            "wip_limits deve ser um objeto { max_sessions, max_prs }",
+        )),
+    }
+}
+
 fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(None),
@@ -1637,11 +1662,12 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         docs: docs_param(p)?,
         session_templates: templates_param(p)?,
         autonomy: autonomy_param(p)?,
+        wip_limits: wip_param(p)?,
     };
     if patch.is_empty() {
         return Err(invalid(
             "nada a mudar: informe name, base_branch, protected_branches, tracker, forge, \
-             branch_pattern, attribution, sync_env, docs, session_templates ou autonomy",
+             branch_pattern, attribution, sync_env, docs, session_templates, autonomy ou wip_limits",
         ));
     }
     let cur = st
@@ -3000,6 +3026,77 @@ pub(crate) mod tests {
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// Limite de trabalho em andamento (#126): `wip_limits` pela edição,
+    /// `wip` na lista de projetos e a recusa do início automático pelo
+    /// canal, com o código estável.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn limite_de_trabalho_em_andamento() {
+        let st = hub_com_dados();
+        // Uma sessão viva noutro ambiente.
+        let push: ct_ledger::OutboxEntry = serde_json::from_value(json!({
+            "seq": 1, "created_at": 1,
+            "change": { "kind": "session", "data": {
+                "id": "s-wip", "owner": "deep-ion-ai", "repo": "demo", "gh_number": 5,
+                "tool": "claude", "tool_session_id": null, "transcript_path": null,
+                "cwd": "/x", "state": "running", "exit_code": null, "pid": null,
+                "started_at": 1, "last_event_at": 1, "ended_at": null
+            }}
+        }))
+        .unwrap();
+        st.hub.lock().ingest("env-b", "env-b", &[push]).unwrap();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo",
+                        "wip_limits": { "max_sessions": 1, "max_prs": null } }),
+            )
+            .await;
+        assert_eq!(
+            v["result"]["wip_limits"],
+            json!({ "max_sessions": 1, "max_prs": null }),
+            "{v}"
+        );
+        let v = ui.call("hub.projects.list", json!({})).await;
+        let p = v["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["project"]["gh_repo"] == "demo")
+            .unwrap()
+            .clone();
+        assert_eq!(p["wip"]["limits"]["max_sessions"], 1, "{p}");
+        assert_eq!(p["wip"]["sessions"], 1, "{p}");
+        let start = |autonomous: bool| {
+            json!({ "env": "env-x", "method": "session.start",
+                    "params": { "owner": "deep-ion-ai", "repo": "demo", "gh_number": 7,
+                                "prompt": "oi", "autonomous": autonomous } })
+        };
+        let v = ui.call("hub.env.call", start(true)).await;
+        assert_eq!(v["error"]["code"], crate::wip::WIP_LIMIT_REACHED, "{v}");
+        let m = v["error"]["message"].as_str().unwrap();
+        assert!(
+            m.contains("limite de trabalho em andamento (1 de 1 sessões)"),
+            "{m}"
+        );
+        // O manual não é recusado pelo limite (cai no ambiente sem canal).
+        let v = ui.call("hub.env.call", start(false)).await;
+        assert_ne!(v["error"]["code"], crate::wip::WIP_LIMIT_REACHED, "{v}");
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo",
+                        "wip_limits": { "max_prs": 0 } }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32000, "{v}");
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("PRs abertos"));
     }
 
     /// Cadastro Jira + GitLab (#348): sem a integração com o GitHub (que o
