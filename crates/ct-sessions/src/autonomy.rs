@@ -129,14 +129,54 @@ struct Mode {
 }
 
 /// Instrução ao agente da sessão autônoma (no system prompt, a cada início
-/// e retomada).
-pub fn agent_instruction(branch: &str, base: &str) -> String {
+/// e retomada), com o rótulo (PR ou MR) e o comando da forja do projeto.
+pub fn agent_instruction(project: &Project, branch: &str, base: &str) -> String {
+    let forge = project.forge.kind();
+    let label = ct_core::change_label(forge);
+    let create = match &project.forge {
+        ct_core::ForgeConfig::Github => format!("gh pr create --base {branch}"),
+        ct_core::ForgeConfig::Gitlab(g) => {
+            let path = g.path.trim_matches('/');
+            let path = if path.is_empty() {
+                format!("{}/{}", project.gh_owner, project.gh_repo)
+            } else {
+                path.to_string()
+            };
+            format!(
+                "{} mr create -R {path} -b {branch}",
+                ct_core::glab_cli_prefix(g)
+            )
+        }
+    };
     format!(
         "Modo autônomo (Control Tower): esta issue roda no modo autônomo do projeto. A branch \
-desta sessão saiu de `{branch}`, a branch de integração: abra o PR contra ela (`gh pr create \
---base {branch}`), nunca contra `{base}`. Quem leva `{branch}` para `{base}` é a pessoa, pelo PR \
-rascunho."
+desta sessão saiu de `{branch}`, a branch de integração: abra o {label} contra ela (`{create}`), \
+nunca contra `{base}`. Quem leva `{branch}` para `{base}` é a pessoa, pelo {label} rascunho."
     )
+}
+
+/// Prompt inicial da sessão autônoma sem `prompt` no pedido (#191): o
+/// template `autonomous` do projeto (vazio = o padrão do `ct-core`) com a
+/// branch da sessão e a de integração já decididas.
+pub(crate) fn autonomous_prompt(
+    project: &Project,
+    kind: ct_core::WorkItemKind,
+    number: i64,
+    title: &str,
+    branch: &str,
+    integration_branch: &str,
+) -> String {
+    ct_core::session_templates::AutonomousVars {
+        tracker: project.tracker_ref(),
+        forge: project.forge.kind(),
+        kind,
+        number,
+        title,
+        branch,
+        integration_branch,
+        protected: &project.protected_branches,
+    }
+    .render(project.session_templates.autonomous_template())
 }
 
 impl Sessions {
@@ -279,7 +319,8 @@ impl Sessions {
     /// Sessão autônoma da issue: alinha a branch de integração (conflito =
     /// a sessão não começa) e inicia com ela como base da worktree. O
     /// agente recebe a instrução de abrir o PR contra a branch de
-    /// integração.
+    /// integração. `req.prompt` vazio (ou só espaços) = o ambiente monta o
+    /// prompt com [`autonomous_prompt`] depois de decidir a branch (#191).
     pub fn start_autonomous(
         &self,
         req: StartRequest,
@@ -564,6 +605,146 @@ mod tests {
             .start(env.request(123, "ACME-123 tela de login"))
             .unwrap();
         assert!(env.wait_fake_output(&s2.id).contains("--base wip/autonoma"));
+    }
+
+    /// Sem prompt no pedido (#191): o padrão renderizado com a branch da
+    /// sessão e a de integração; com sobrescrita no projeto, ela; só com
+    /// espaços, o padrão; com prompt, o texto enviado.
+    #[test]
+    fn sessao_autonoma_sem_prompt_monta_o_template() {
+        let (env, _remote) = env_com_remoto(true, true);
+        env.sessions.autonomy_setup(env.project_id, None).unwrap();
+        let start = |n: i64, prompt: &str| {
+            let s = env
+                .sessions
+                .start_autonomous(
+                    StartRequest {
+                        prompt: prompt.into(),
+                        ..env.request(n, "Tela de login")
+                    },
+                    None,
+                )
+                .unwrap();
+            let out = env.wait_fake_output(&s.id);
+            env.wait_state(&s.id, ct_core::SessionState::Exited);
+            out
+        };
+        let out = start(12, "");
+        assert!(
+            out.contains("issue deep-ion-ai/demo#12 (Tela de login)"),
+            "{out}"
+        );
+        assert!(out.contains("para wip/autonoma"), "{out}");
+        assert!(out.contains("origin `autonoma`"), "{out}");
+        let wi = env
+            .sessions
+            .ledger()
+            .find_work_item(env.project_id, 12)
+            .unwrap()
+            .unwrap();
+        let branch = wi.branch.unwrap();
+        assert!(
+            out.contains(&format!(
+                "Branch de trabalho: {branch}, saída de wip/autonoma"
+            )),
+            "{out}"
+        );
+
+        // Sobrescrita do projeto.
+        env.assign_config(2, |p| {
+            p.autonomy = AutonomyConfig {
+                enabled: true,
+                env_id: Some("env-auto".into()),
+                ..Default::default()
+            };
+            p.autonomy_runner = true;
+            p.session_templates.autonomous = "Faça {{ref}} em {{branch}} → {{x}}".into();
+        });
+        let out = start(13, "  ");
+        assert!(out.contains("Faça deep-ion-ai/demo#13 em "), "{out}");
+        assert!(out.contains("→ {{x}}"), "{out}");
+        assert!(!out.contains("Sessão autônoma do Control Tower"), "{out}");
+
+        // Com prompt, vale o enviado.
+        let out = start(14, "texto da UI");
+        assert!(out.contains("texto da UI"), "{out}");
+        assert!(!out.contains("Faça deep-ion-ai/demo#14"), "{out}");
+    }
+
+    /// A instrução do system prompt segue a forja: `gh pr create` no
+    /// GitHub, `glab mr create` (e MR) no GitLab.
+    #[test]
+    fn instrucao_ao_agente_pela_forja() {
+        let gh = Project {
+            gh_owner: "acme".into(),
+            gh_repo: "acme-web".into(),
+            ..Default::default()
+        };
+        let i = agent_instruction(&gh, "wip/autonoma", "develop");
+        assert!(
+            i.contains("abra o PR contra ela (`gh pr create --base wip/autonoma`)"),
+            "{i}"
+        );
+        assert!(i.contains("nunca contra `develop`"), "{i}");
+        let gl = Project {
+            forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                host: "gitlab.example.com".into(),
+                path: "/acme/web/app/".into(),
+                ..Default::default()
+            }),
+            ..gh.clone()
+        };
+        let i = agent_instruction(&gl, "wip/autonoma", "develop");
+        assert!(
+            i.contains("abra o MR contra ela (`GITLAB_HOST=gitlab.example.com glab mr create -R acme/web/app -b wip/autonoma`)"),
+            "{i}"
+        );
+        assert!(i.contains("pelo MR rascunho"), "{i}");
+        assert!(!i.contains("gh pr") && !i.contains(" PR "), "{i}");
+    }
+
+    /// Projeto Jira + GitLab: `{{ref}}` com a chave e o rótulo MR.
+    #[test]
+    fn sessao_autonoma_sem_prompt_no_jira() {
+        let (env, _remote) = env_com_remoto(true, true);
+        env.assign_config(2, |p| {
+            p.autonomy = AutonomyConfig {
+                enabled: true,
+                env_id: Some("env-auto".into()),
+                ..Default::default()
+            };
+            p.autonomy_runner = true;
+            p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
+                url: "https://jira.example.com".into(),
+                project_key: "ACME".into(),
+                jql: "project = ACME".into(),
+                ..Default::default()
+            });
+            p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                host: "gitlab.example.com".into(),
+                path: "deep-ion-ai/demo".into(),
+                ..Default::default()
+            });
+        });
+        env.sessions.autonomy_setup(env.project_id, None).unwrap();
+        let s = env
+            .sessions
+            .start_autonomous(
+                StartRequest {
+                    prompt: String::new(),
+                    ..env.request(123, "Tela de login")
+                },
+                None,
+            )
+            .unwrap();
+        let out = env.wait_fake_output(&s.id);
+        assert!(out.contains("issue ACME-123 (Tela de login)"), "{out}");
+        assert!(out.contains("abra o MR de "), "{out}");
+        assert!(
+            out.contains("glab mr create -R deep-ion-ai/demo -b wip/autonoma"),
+            "{out}"
+        );
+        assert!(!out.contains("gh pr create"), "{out}");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../../App";
+import { DEFAULT_AUTONOMOUS_TEMPLATE } from "../../hub/autonomy";
 import { FakeDaemonApi } from "../../api/fake";
 import type { HubProject, HubProjectView } from "../../protocol/hub-gen";
 import {
@@ -86,4 +87,30 @@ test("conflito com a base: o aviso aparece com os arquivos", async () => {
   const alert = await screen.findByRole("alert");
   expect(alert).toHaveTextContent("wip/autonoma em conflito com a base");
   expect(alert).toHaveTextContent("src/app.ts");
+});
+
+test("template autônomo (#191): padrão como placeholder e o objeto inteiro de session_templates vai ao hub", async () => {
+  const templates = { issue: "Issue {{key}}", epic: "", project: "", autonomous: "" };
+  const { api, user } = setup(hubProject({ session_templates: templates }));
+  const card = await screen.findByRole("region", { name: "Modo autônomo" });
+  expect(within(card).getByText("template padrão")).toBeInTheDocument();
+  await user.click(within(card).getByRole("button", { name: /Editar/ }));
+  const form = screen.getByRole("form", { name: /Modo autônomo de/ });
+  const tpl = within(form).getByLabelText("Template do prompt da sessão autônoma");
+  expect(tpl).toHaveAttribute("placeholder", DEFAULT_AUTONOMOUS_TEMPLATE);
+  expect(tpl).toHaveValue("");
+  await user.type(tpl, "Faça {{{{ref}} sem perguntar");
+  await user.click(within(form).getByRole("button", { name: "Salvar modo autônomo" }));
+  expect(await screen.findByText(/desligado\./)).toBeInTheDocument();
+  expect(api.hubCallsTo("hub.projects.update")[0].params).toMatchObject({
+    session_templates: { ...templates, autonomous: "Faça {{ref}} sem perguntar" },
+  });
+});
+
+test("hub sem o template autônomo: o campo não aparece", async () => {
+  const { user } = setup(hubProject({ session_templates: { issue: "", epic: "", project: "" } as never }));
+  const card = await screen.findByRole("region", { name: "Modo autônomo" });
+  await user.click(within(card).getByRole("button", { name: /Editar/ }));
+  const form = screen.getByRole("form", { name: /Modo autônomo de/ });
+  expect(within(form).queryByLabelText("Template do prompt da sessão autônoma")).toBeNull();
 });

@@ -3,6 +3,7 @@ import { useTower } from "../../state/tower";
 import type { AlignStrategy, HubProjectView } from "../../protocol/hub-gen";
 import {
   AUTONOMY_PROTOCOL,
+  DEFAULT_AUTONOMOUS_TEMPLATE,
   DEFAULT_AUTONOMY_BRANCH,
   STRATEGY_LABEL,
   autonomyBase,
@@ -12,6 +13,8 @@ import {
   autonomyFormError,
   autonomyOf,
   autonomyPatch,
+  autonomyTemplatesPatch,
+  autonomousTemplateOf,
   autonomyWarning,
   type AutonomyForm,
 } from "../../hub/autonomy";
@@ -24,7 +27,9 @@ import { DesktopOnly } from "../../web/DesktopOnly";
  * integração (padrão `wip/autonoma`) e abrem PR para ela; o ambiente mantém
  * o PR rascunho `branch → base` e alinha a branch com a base antes de cada
  * issue. O relato do ambiente aparece aqui (e o conflito, também na Visão
- * geral). Hub anterior à 1.14: só o aviso.
+ * geral). Hub anterior à 1.14: só o aviso. O template do prompt da sessão
+ * autônoma (#191, `session_templates.autonomous`) também se edita aqui;
+ * vazio = o padrão, que o ambiente renderiza.
  */
 export function AutonomyCard({
   project: p,
@@ -62,11 +67,18 @@ export function AutonomyCard({
   const branch = autonomyBranch(cur);
   const base = autonomyBase(cur, pr);
   const formError = form ? autonomyFormError(form, pr) : null;
+  const template = autonomousTemplateOf(pr);
 
   const save = async (f: AutonomyForm) => {
     const autonomy = autonomyPatch(f, pr);
+    const templates = autonomyTemplatesPatch(f, pr);
     const ok = await settings.run(async () => {
-      await api.hubCall("hub.projects.update", { owner: pr.gh_owner, repo: pr.gh_repo, autonomy });
+      await api.hubCall("hub.projects.update", {
+        owner: pr.gh_owner,
+        repo: pr.gh_repo,
+        autonomy,
+        ...(templates ? { session_templates: templates } : {}),
+      });
       return autonomy.enabled
         ? `Modo autônomo de ${pr.name} ligado em ${envName(autonomy.env_id)}; o ambiente cria a branch e o PR rascunho no próximo pull.`
         : `Modo autônomo de ${pr.name} desligado.`;
@@ -111,6 +123,12 @@ export function AutonomyCard({
               <span className="mono">{branch}</span> → <span className="mono">{base}</span> · {STRATEGY_LABEL[cur.strategy].toLowerCase()}
             </dd>
           </div>
+          {template !== null && (
+            <div>
+              <dt>Prompt da sessão</dt>
+              <dd>{template.trim() ? "template do projeto" : "template padrão"}</dd>
+            </div>
+          )}
           {cur.enabled && (
             <div>
               <dt>Situação</dt>
@@ -206,6 +224,26 @@ export function AutonomyCard({
               ))}
             </select>
           </div>
+          {form.template !== null && (
+            <div className="field hub-wide">
+              <label htmlFor={`au-tpl-${pr.id}`}>Template do prompt da sessão autônoma</label>
+              <textarea
+                id={`au-tpl-${pr.id}`}
+                className="mono"
+                rows={8}
+                value={form.template}
+                placeholder={DEFAULT_AUTONOMOUS_TEMPLATE}
+                onChange={(e) => setForm({ ...form, template: e.target.value })}
+              />
+              <span className="hint muted">
+                Vazio = o padrão acima. O ambiente monta o prompt quando o hub inicia a sessão sem a UI. Variáveis:{" "}
+                <span className="mono">
+                  {"{{kind}} {{number}} {{ref}} {{owner}} {{repo}} {{title}} {{branch}} {{integration_branch}} {{protected}} {{change}}"}
+                </span>{" "}
+                (<span className="mono">{"{{change}}"}</span> = PR ou MR).
+              </span>
+            </div>
+          )}
           {formError && (
             <p className="hint muted" role="note">
               {formError}

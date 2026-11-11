@@ -620,7 +620,13 @@ impl Conn {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(invalid("override_approval deve ser true ou false")),
                 };
-                let prompt = str_param(p, "prompt")?.to_string();
+                // Sessão autônoma sem `prompt` (#191): o ambiente monta com o
+                // template do projeto, depois de decidir a branch.
+                let prompt = if autonomous && matches!(p.get("prompt"), None | Some(Value::Null)) {
+                    String::new()
+                } else {
+                    str_param(p, "prompt")?.to_string()
+                };
                 let size = size_param(p)?;
                 let agent = agent_param(p)?;
                 let kind = match p.get("kind").and_then(Value::as_str) {
@@ -2191,6 +2197,31 @@ mod tests {
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+        // Sem `autonomous`, o `prompt` continua obrigatório (#191).
+        let v = ui
+            .call(
+                "session.start",
+                json!({ "project_id": pid, "gh_number": 2, "title": "ACME-123" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        // Autônoma sem `prompt`: o ambiente monta o prompt.
+        let v = ui
+            .call(
+                "session.start",
+                json!({ "project_id": pid, "gh_number": 2, "title": "Tela de login",
+                        "autonomous": true }),
+            )
+            .await;
+        let sid = v["result"]["id"]
+            .as_str()
+            .expect("sessão autônoma")
+            .to_string();
+        let out = env.wait_fake_output(&sid);
+        assert!(
+            out.contains("issue deep-ion-ai/demo#2 (Tela de login)"),
+            "{out}"
+        );
 
         // Conflito: a wip e a base mudam o mesmo arquivo.
         let other = env.tmp.path().join("outro");
