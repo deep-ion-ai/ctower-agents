@@ -112,6 +112,13 @@ jobs:
       - name: migrate-to-cthubd.sh (sem tocar no sistema)
         if: matrix.os == 'linux'
         run: bash scripts/test-migrate-to-cthubd.sh
+      # Entrypoint do ambiente autônomo em container (#179), sem Docker: HOME
+      # temporário, o ctower de target/debug e ctowerd/claude/gh falsos.
+      - name: docker/autonomo (entrypoint, sem Docker)
+        if: matrix.os == 'linux'
+        run: |
+          cargo build -p ctower --locked
+          bash docker/autonomo/test-entrypoint.sh target/debug
       - name: Tipos TypeScript da UI em dia
         if: matrix.os == 'linux'
         run: |

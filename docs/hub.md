@@ -710,7 +710,7 @@ Cópias fora do destino (histórico de versões da pasta sincronizada, cópias �
 
 ### Plano das contas (`hub.plan.accounts`)
 
-Cada ambiente informa, no envio, a conta do Claude Code (`claude auth status`), a saúde do statusline e a leitura mais recente das janelas do plano (docs/ambiente.md, "Uso do plano"). O hub agrupa os ambientes pela conta (`orgId` com `email`): vários ambientes na mesma conta viram uma conta só, e a leitura mais recente de qualquer um deles vale para todos. Contas diferentes nunca se misturam; ambiente sem login fica em `unknown`, fora dos agregados. `hub.plan.accounts` aplica a regra do reset no relógio do hub. Na UI web, a resposta não traz e-mail nem organização.
+Cada ambiente informa, no envio, a conta do Claude Code (`claude auth status`), a saúde do statusline e a leitura mais recente das janelas do plano (docs/ambiente.md, "Uso do plano"). O hub agrupa os ambientes pela conta (`orgId` com `email`): vários ambientes na mesma conta viram uma conta só, e a leitura mais recente de qualquer um deles vale para todos. Contas diferentes nunca se misturam; ambiente sem login fica em `unknown`, fora dos agregados. Ambiente com login por token (`CLAUDE_CODE_OAUTH_TOKEN`) informa a conta declarada em `CTOWER_CLAUDE_ORG_ID` e `CTOWER_CLAUDE_EMAIL` (docs/ambiente.md). `hub.plan.accounts` aplica a regra do reset no relógio do hub. Na UI web, a resposta não traz e-mail nem organização.
 
 ### Hub fora do ar
 

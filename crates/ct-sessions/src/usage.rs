@@ -511,8 +511,15 @@ pub fn install_statusline(
 // ---------- conta do ambiente ----------
 
 /// Conta do ambiente por `claude auth status`. `None` sem login, com falha
-/// ou fora do prazo ("conta desconhecida"). Nada da saída vai para logs.
+/// ou fora do prazo ("conta desconhecida"). Com login por token, sem a conta
+/// na saída, vale a declarada em `CTOWER_CLAUDE_ORG_ID` e
+/// `CTOWER_CLAUDE_EMAIL` (#179). Nada da saída vai para logs.
 pub fn read_account(claude_bin: &str) -> Option<PlanAccount> {
+    read_account_or(claude_bin, PlanAccount::declared_from_env().as_ref())
+}
+
+/// [`read_account`] com a conta declarada explícita.
+pub fn read_account_or(claude_bin: &str, declared: Option<&PlanAccount>) -> Option<PlanAccount> {
     let child = Command::new(claude_bin)
         .args(["auth", "status"])
         .stdin(Stdio::null())
@@ -522,7 +529,7 @@ pub fn read_account(claude_bin: &str) -> Option<PlanAccount> {
         .ok()?;
     let out = wait_output(child, Duration::from_secs(15))?;
     let v: Value = serde_json::from_slice(&out).ok()?;
-    PlanAccount::from_auth_status(&v)
+    PlanAccount::from_auth_status_or(&v, declared)
 }
 
 #[cfg(test)]
@@ -749,5 +756,43 @@ mod tests {
             Some(1)
         );
         assert_eq!(our_version("jq -r .model"), None);
+    }
+
+    fn fake_claude(dir: &Path, out: &str) -> String {
+        let bin = dir.join("claude");
+        fs::write(&bin, format!("#!/bin/sh\ncat <<'EOF'\n{out}\nEOF\n")).unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        bin.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn conta_por_token_cai_na_declarada() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_claude(
+            d.path(),
+            r#"{"loggedIn": true, "authMethod": "oauth_token", "apiProvider": "firstParty"}"#,
+        );
+        assert_eq!(read_account_or(&bin, None), None);
+        let declared = PlanAccount::declared(Some("conta-a"), Some("fulano@example.com"));
+        let a = read_account_or(&bin, declared.as_ref()).unwrap();
+        assert_eq!(a.key, "conta-a/fulano@example.com");
+    }
+
+    #[test]
+    fn conta_do_login_vence_a_declarada() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_claude(
+            d.path(),
+            r#"{"loggedIn": true, "orgId": "conta-b", "email": "beltrano@example.com"}"#,
+        );
+        let declared = PlanAccount::declared(Some("conta-a"), None);
+        assert_eq!(
+            read_account_or(&bin, declared.as_ref()).unwrap().key,
+            "conta-b/beltrano@example.com"
+        );
+        assert_eq!(
+            read_account_or("/nao/existe/claude", declared.as_ref()),
+            None
+        );
     }
 }

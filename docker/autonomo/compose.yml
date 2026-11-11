@@ -1,0 +1,63 @@
+# Ambiente autônomo (#179). Uso, tokens e cuidados: docs/ambiente-autonomo.md.
+#
+#   cd docker/autonomo
+#   docker compose up -d --build     # com os logins no ambiente do shell
+#   cthubd add-env linux-autonomo | docker compose exec -T autonomo ctower hub set-token
+#   docker compose exec autonomo ct-autonomo verificar
+#   docker compose down -v           # apaga tudo (inclusive o HOME do ambiente)
+#
+# Nada do HOME do host é montado: o HOME do ambiente é o volume `home`. O login
+# do Claude e o do gh vêm de secrets lidos do shell na criação do container
+# (nunca deste arquivo, do .env ou de um volume). Os tokens do hub entram pelo
+# `docker compose exec` acima e ficam no config do volume, como em qualquer
+# ambiente.
+name: ct-autonomo
+
+services:
+  autonomo:
+    image: ct-autonomo:${CT_VERSION:-latest}
+    build:
+      context: .
+      args:
+        CT_VERSION: ${CT_VERSION:-latest}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-stable}
+    # A release só tem o ctower-env Linux x86_64.
+    platform: linux/amd64
+    hostname: ${CT_ENV_NAME:-linux-autonomo}
+    restart: unless-stopped
+    init: false # o tini já é o PID 1
+    environment:
+      CT_ENV_NAME: ${CT_ENV_NAME:-linux-autonomo}
+      # Só na primeira subida (depois vale o config.toml do volume).
+      CT_HUB_URL: ${CT_HUB_URL:-}
+      # Conta do plano com login por token (docs/ambiente.md, "Uso do plano").
+      CTOWER_CLAUDE_ORG_ID: ${CTOWER_CLAUDE_ORG_ID:-}
+      CTOWER_CLAUDE_EMAIL: ${CTOWER_CLAUDE_EMAIL:-}
+      CT_GIT_NAME: ${CT_GIT_NAME:-}
+      CT_GIT_EMAIL: ${CT_GIT_EMAIL:-}
+      CT_AUTONOMO_SEM_PROMPTS: ${CT_AUTONOMO_SEM_PROMPTS:-1}
+    secrets:
+      - claude_code_oauth_token
+      - gh_token
+    ports:
+      # Opcional: o hub fala com o ambiente pelo canal reverso. Só para o app
+      # desktop desta máquina ligar direto no ambiente.
+      - "127.0.0.1:${CT_AUTONOMO_PORT:-17880}:7878"
+    # Hub nesta mesma máquina: CT_HUB_URL=http://host.docker.internal:7879.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - home:/home/ct
+
+# Lidos das variáveis do shell quando o container é criado e copiados para
+# /run/secrets dentro dele. Sem eles, o compose recusa criar o container.
+# Com o container já criado, `up -d` sem eles não o recria (o valor não entra
+# na comparação): trocar um token pede `up -d --force-recreate`.
+secrets:
+  claude_code_oauth_token:
+    environment: CLAUDE_CODE_OAUTH_TOKEN
+  gh_token:
+    environment: GH_TOKEN
+
+volumes:
+  home:
