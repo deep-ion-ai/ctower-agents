@@ -1,0 +1,31 @@
+# Unidade systemd opcional do ambiente autônomo (#179), no host Linux.
+#
+# O `restart: unless-stopped` do compose.yml já sobe o container de novo
+# depois de um reboot (com o Docker habilitado no boot). Esta unidade serve
+# para quem quer o ambiente sob o systemd: `systemctl start|stop|status`.
+#
+# Instalação (troque @DIR@ pela pasta docker/autonomo do clone):
+#   sed "s|@DIR@|$PWD|g" ct-autonomo.service | sudo tee /etc/systemd/system/ct-autonomo.service
+#   sudo systemctl daemon-reload && sudo systemctl enable ct-autonomo
+#
+# A unidade não recebe tokens: o `--no-recreate` reaproveita o container já
+# criado (com os secrets dele). Criar o container (primeira subida, versão
+# nova, token novo) é com `docker compose up -d` no shell, com os tokens
+# (docs/ambiente-autonomo.md).
+
+[Unit]
+Description=Control Tower: ambiente autônomo (Docker)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@DIR@
+ExecStart=/usr/bin/docker compose up -d --no-recreate --no-build
+ExecStop=/usr/bin/docker compose stop
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

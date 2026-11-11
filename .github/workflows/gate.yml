@@ -70,6 +70,7 @@ jobs:
               - 'scripts/migrate-to-cthubd.sh'
               - 'scripts/test-migrate-to-cthubd.sh'
               - 'packaging/**'
+              - 'docker/autonomo/**'
               - 'ui/src/protocol/gen/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/gate.yml'

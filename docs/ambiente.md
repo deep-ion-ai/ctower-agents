@@ -106,6 +106,8 @@ A cada atualização de uma sessão interativa (do Control Tower ou aberta diret
 
 O `ctowerd` lê a conta do ambiente com `claude auth status` (relida a cada 5 minutos) e expõe `session.usage` (última leitura da sessão, ou `null`), `account.get` (conta, saúde do statusline e o plano pelas sessões do ambiente) e `env.statusline.install`. O `env.info` traz a saúde do statusline (instalado, versão, se encadeia outro). Ligado a um hub, o ambiente envia a conta e a leitura mais recente quando mudam; o hub agrupa os ambientes pela conta em `hub.plan.accounts` (docs/hub.md).
 
+**Login por token** (`CLAUDE_CODE_OAUTH_TOKEN`, gerado por `claude setup-token`): o `claude auth status` responde `loggedIn: true` com `authMethod: "oauth_token"`, mas sem `orgId` nem `email`, e a conta ficaria desconhecida. Nesse caso, o `ctowerd` usa a conta declarada nas variáveis `CTOWER_CLAUDE_ORG_ID` e `CTOWER_CLAUDE_EMAIL` do processo dele (#179). Copie os dois valores do `claude auth status` de um ambiente com login normal na mesma conta (`claude auth status | jq -r '.orgId, .email'`): com os mesmos valores, a chave é a mesma e o hub junta as leituras. Sem login, a conta declarada não vale; com a conta na saída do `claude auth status`, a da saída vence. O ambiente autônomo em container passa as duas variáveis pelo compose ([ambiente-autonomo.md](ambiente-autonomo.md)).
+
 Regra do reset: com `agora >= resets_at`, a janela já renovou; o percentual antigo não é mostrado nem usado em alerta até chegar leitura nova.
 
 ## Diagnóstico
