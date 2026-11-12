@@ -127,7 +127,8 @@ impl Sessions {
                 "o gestor não tem pasta de item para abrir um shell".into(),
             ));
         }
-        let cwd = if wi.gh_number == PROJECT_WORK_ITEM {
+        // Sessão do projeto (#0) e de release (#-1): o clone principal.
+        let cwd = if wi.gh_number <= PROJECT_WORK_ITEM {
             if !Path::new(&project.repo_path).is_dir() {
                 return Err(SessionsError::Invalid(format!(
                     "clone do projeto não encontrado em {}",

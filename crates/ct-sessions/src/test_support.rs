@@ -15,7 +15,7 @@ pub const T: Duration = Duration::from_secs(10);
 
 /// `claude` falso: registra argv/env em `<tmp>/fake-out/<sessão>.txt` e
 /// depois executa o corpo (padrão: `sleep N; exit C`). Do ambiente, grava
-/// as `CTOWER_*`, as `CT_*` (docs), as `T_*` (secrets de teste), as `GITLAB_*` e `JIRA_*`
+/// as `CTOWER_*`, as `CT_*` (docs), as `T_*` (secrets de teste), `GH_*`, as `GITLAB_*` e `JIRA_*`
 /// (projetos Jira + GitLab) e `PATH`/`HOME` com o prefixo `ENV_`.
 pub struct FakeClaude {
     body: String,
@@ -41,7 +41,7 @@ impl FakeClaude {
         let script = format!(
             "#!/bin/bash\n\
              out=\"{out}/$CTOWER_SESSION.txt\"\n\
-             {{ printf '%s\\n' \"$@\"; echo \"PWD=$(pwd)\"; echo \"SIZE=$(stty size 2>/dev/null)\"; env | grep -E '^(CTOWER|CT|T|GITLAB|JIRA)_' | sort; echo \"ENV_PATH=$PATH\"; echo \"ENV_HOME=$HOME\"; }} > \"$out.tmp\"\n\
+             {{ printf '%s\\n' \"$@\"; echo \"PWD=$(pwd)\"; echo \"SIZE=$(stty size 2>/dev/null)\"; env | grep -E '^(CTOWER|CT|T|GITLAB|JIRA|GH)_' | sort; echo \"ENV_PATH=$PATH\"; echo \"ENV_HOME=$HOME\"; }} > \"$out.tmp\"\n\
              mv \"$out.tmp\" \"$out\"\n\
              {body}\n",
             out = out_dir.display(),

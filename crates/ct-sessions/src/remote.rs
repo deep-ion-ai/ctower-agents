@@ -87,13 +87,15 @@ pub struct RemoteControlEnable {
 
 /// Nome da sessão remota: `<repo>#<n> <título>` na sessão de issue (no
 /// projeto Jira, `<CHAVE>-<n> <título>`, #353), `<repo> planejamento` na do
-/// projeto e `gestor` na do gestor; sem quebras
+/// projeto, `<repo> release` na de release e `gestor` na do gestor; sem quebras
 /// de linha nem aspas, até [`NAME_MAX`] caracteres (com `…`).
 pub fn session_name(project: &Project, wi: &WorkItem, title: Option<&str>) -> String {
     let raw = if project.kind == ProjectKind::Gestor {
         "gestor".to_string()
     } else if wi.gh_number == crate::PROJECT_WORK_ITEM {
         format!("{} planejamento", project.gh_repo)
+    } else if wi.gh_number == ct_core::RELEASE_WORK_ITEM {
+        format!("{} release", project.gh_repo)
     } else {
         let item = match project.tracker {
             ct_core::TrackerConfig::Jira(_) => project.item_ref(wi.gh_number),
