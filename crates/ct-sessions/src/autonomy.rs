@@ -3,7 +3,10 @@
 //!
 //! - **Ligar o modo** ([`Sessions::autonomy_setup`]): o ambiente do modo
 //!   cria a branch a partir da base, se faltar, e abre o PR rascunho
-//!   `branch → base`. Roda na aplicação da configuração do hub.
+//!   `branch → base`. Roda na aplicação da configuração do hub. A branch
+//!   recém-criada é igual à base, e o GitHub recusa o PR sem commits: o
+//!   relato fica `ok` com o PR pendente (`pr_pending`), e cada alinhamento
+//!   tenta de novo, até o primeiro merge na branch.
 //! - **Alinhar** ([`Sessions::autonomy_align`]): traz a base para a branch
 //!   (merge ou rebase, conforme o projeto). Conflito = o relato `conflict`
 //!   sobe ao hub (aviso "wip/autonoma em conflito com a base") e o erro
@@ -17,7 +20,7 @@
 
 use crate::launch::StartRequest;
 use crate::{Result, Sessions, SessionsError};
-use ct_core::autonomy::conflict_warning;
+use ct_core::autonomy::{conflict_warning, draft_pr_pending_message};
 use ct_core::{now_ms, AlignStrategy, AutonomyReport, AutonomyState};
 use ct_git::integration::{align_branch, ensure_remote_branch, AlignOutcome, Strategy};
 use ct_ledger::{NewEvent, Project, Session};
@@ -48,12 +51,20 @@ pub struct DraftPr {
 /// Quem abre o PR rascunho da branch de integração (o GitHub do ambiente).
 pub trait PrOpener: Send + Sync {
     /// O PR aberto `head → base`, abrindo-o como rascunho se não existir.
+    /// `Ok(None)` = ainda não dá para abrir: a forja recusa o PR porque
+    /// `head` não tem commits além de `base` (a branch recém-criada).
     fn ensure_draft_pr(
         &self,
         project: &Project,
         head: &str,
         base: &str,
-    ) -> std::result::Result<DraftPr, String>;
+    ) -> std::result::Result<Option<DraftPr>, String>;
+}
+
+/// O `422` do GitHub para o PR sem commits entre as branches ("Validation
+/// Failed: No commits between develop and wip/autonoma").
+fn no_commits_between(e: &ct_gh::GhError) -> bool {
+    matches!(e, ct_gh::GhError::Http { status: 422, message } if message.contains("No commits between"))
 }
 
 /// Título e corpo do PR rascunho da branch de integração.
@@ -78,7 +89,7 @@ impl PrOpener for ct_gh::GhClient {
         project: &Project,
         head: &str,
         base: &str,
-    ) -> std::result::Result<DraftPr, String> {
+    ) -> std::result::Result<Option<DraftPr>, String> {
         let (o, r) = (&project.gh_owner, &project.gh_repo);
         let path = ct_gh::sync::open_pulls_path(o, r, head, base);
         let open = match self.get_all(&path, None).map_err(|e| e.to_string())? {
@@ -100,12 +111,13 @@ impl PrOpener for ct_gh::GhClient {
             })
         };
         if let Some(v) = open.first() {
-            return pr(v, false);
+            return pr(v, false).map(Some);
         }
-        let v = self
-            .post_json(&format!("/repos/{o}/{r}/pulls"), &draft_pr_body(head, base))
-            .map_err(|e| e.to_string())?;
-        pr(&v, true)
+        match self.post_json(&format!("/repos/{o}/{r}/pulls"), &draft_pr_body(head, base)) {
+            Ok(v) => pr(&v, true).map(Some),
+            Err(e) if no_commits_between(&e) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
@@ -115,7 +127,7 @@ impl PrOpener for crate::GithubSync {
         project: &Project,
         head: &str,
         base: &str,
-    ) -> std::result::Result<DraftPr, String> {
+    ) -> std::result::Result<Option<DraftPr>, String> {
         self.client().ensure_draft_pr(project, head, base)
     }
 }
@@ -262,16 +274,17 @@ impl Sessions {
             }
             Ok(AlignOutcome::Conflict { files }) => {
                 let warning = conflict_warning(&m.branch);
-                let report = self.report(
-                    &m,
-                    AutonomyState::Conflict,
-                    Some(warning.clone()),
-                    files.clone(),
-                    m.project
-                        .autonomy_report
-                        .as_ref()
-                        .and_then(|r| r.pr_url.clone()),
-                );
+                let last = m.project.autonomy_report.as_ref();
+                let report = AutonomyReport {
+                    pr_pending: last.is_some_and(|r| r.pr_pending),
+                    ..self.report(
+                        &m,
+                        AutonomyState::Conflict,
+                        Some(warning.clone()),
+                        files.clone(),
+                        last.and_then(|r| r.pr_url.clone()),
+                    )
+                };
                 {
                     let l = self.ledger();
                     if l.record_autonomy_report(project_id, &report)? {
@@ -334,34 +347,50 @@ impl Sessions {
         self.start_with_base(req, Some((&report.branch, &report.base)))
     }
 
-    /// Relato `ok`, com o PR rascunho garantido (a falha do PR não impede
-    /// nada: vai na mensagem).
+    /// Relato `ok`, com o PR rascunho garantido. A branch sem commits além
+    /// da base (recém-criada) ainda não tem PR: `pr_pending` e a mensagem
+    /// dizem que ele abre depois do primeiro merge, e o próximo alinhamento
+    /// tenta de novo. Outra falha do PR não impede nada: vai na mensagem.
     fn report_ok(&self, m: &Mode, pr: Option<&dyn PrOpener>) -> AutonomyReport {
-        let (url, message) = match pr {
-            None => (
-                None,
-                Some(format!(
-                    "sem GitHub neste ambiente: abra o PR rascunho {} → {} à mão",
+        // O PR rascunho é aberto pela API do GitHub: num projeto de outra
+        // forja, o MR fica para a pessoa.
+        let github = matches!(m.project.forge, ct_core::ForgeConfig::Github);
+        let label = ct_core::change_label(m.project.forge.kind());
+        let (url, message, pending) = match pr.filter(|_| github) {
+            None => {
+                let why = if github {
+                    "sem GitHub neste ambiente"
+                } else {
+                    "fora do GitHub"
+                };
+                let message = format!(
+                    "{why}: abra o {label} rascunho {} → {} à mão",
                     m.branch, m.base
-                )),
-            ),
+                );
+                (None, Some(message), false)
+            }
             Some(p) => match p.ensure_draft_pr(&m.project, &m.branch, &m.base) {
-                Ok(d) => {
+                Ok(Some(d)) => {
                     if d.created {
                         tracing::info!("modo autônomo: PR rascunho aberto: {}", d.url);
                     }
-                    (Some(d.url), None)
+                    (Some(d.url), None, false)
                 }
+                Ok(None) => (None, Some(draft_pr_pending_message(&m.branch)), true),
                 Err(e) => (
                     None,
                     Some(format!(
                         "PR rascunho {} → {} não foi aberto: {e}",
                         m.branch, m.base
                     )),
+                    false,
                 ),
             },
         };
-        self.report(m, AutonomyState::Ok, message, vec![], url)
+        AutonomyReport {
+            pr_pending: pending,
+            ..self.report(m, AutonomyState::Ok, message, vec![], url)
+        }
     }
 
     fn report(
@@ -379,6 +408,7 @@ impl Sessions {
             message,
             conflicts,
             pr_url,
+            pr_pending: false,
             at: now_ms(),
         }
     }
@@ -401,14 +431,14 @@ mod tests {
             _project: &Project,
             head: &str,
             base: &str,
-        ) -> std::result::Result<DraftPr, String> {
+        ) -> std::result::Result<Option<DraftPr>, String> {
             let mut v = self.0.lock().unwrap();
             v.push((head.into(), base.into()));
-            Ok(DraftPr {
+            Ok(Some(DraftPr {
                 number: 5,
                 url: "https://example.com/acme/acme-web/pull/5".into(),
                 created: v.len() == 1,
-            })
+            }))
         }
     }
 
@@ -548,6 +578,112 @@ mod tests {
             .autonomy_setup(env.project_id, Some(&client))
             .unwrap();
         assert_eq!(gh.posted().len(), 1);
+    }
+
+    /// A branch recém-criada é igual à base: o GitHub recusa o PR com o
+    /// `422` "No commits between". O relato fica `ok` com o PR pendente (não
+    /// é erro), e o alinhamento seguinte, depois do primeiro merge na
+    /// branch, abre o PR.
+    #[test]
+    fn pr_rascunho_pendente_ate_o_primeiro_merge_na_branch() {
+        use ct_gh::fake::{fake_gh, FakeGitHub};
+        use ct_gh::{GhClient, GhConfig};
+        let (env, remote) = env_com_remoto(true, true);
+        let gh = FakeGitHub::start("tok");
+        let bin = fake_gh(env.tmp.path(), "tok");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let list = ct_gh::sync::open_pulls_path("deep-ion-ai", "demo", "wip/autonoma", "develop");
+        let create = "/repos/deep-ion-ai/demo/pulls";
+        gh.set(&list, json!([]));
+        gh.set(
+            create,
+            json!({ "number": 9, "html_url": "https://example.com/pull/9" }),
+        );
+        let sem_commits = || {
+            json!({ "message": "Validation Failed", "errors": [
+                { "resource": "PullRequest", "code": "custom",
+                  "message": "No commits between develop and wip/autonoma" }
+            ] })
+        };
+        gh.fail_next_with(create, 422, sem_commits());
+        let r = env
+            .sessions
+            .autonomy_setup(env.project_id, Some(&client))
+            .unwrap();
+        assert_eq!(r.state, AutonomyState::Ok);
+        assert!(r.pr_pending);
+        assert_eq!(r.pr_url, None);
+        assert_eq!(
+            r.message.as_deref(),
+            Some("o PR rascunho abre depois do primeiro merge na wip/autonoma")
+        );
+        let p = env.sessions.ledger().get_project(env.project_id).unwrap();
+        assert!(p.autonomy_report.unwrap().pr_pending);
+        // Alinhar antes da issue tenta de novo; ainda sem commits, segue
+        // pendente.
+        gh.fail_next_with(create, 422, sem_commits());
+        let r = env
+            .sessions
+            .autonomy_align(env.project_id, Some(&client))
+            .unwrap();
+        assert!(r.pr_pending, "{r:?}");
+        // Primeiro merge na branch: o alinhamento seguinte abre o PR.
+        commit_remoto(&env, &remote, "wip/autonoma", "a.txt", "a");
+        let r = env
+            .sessions
+            .autonomy_align(env.project_id, Some(&client))
+            .unwrap();
+        assert_eq!(r.state, AutonomyState::Ok);
+        assert!(!r.pr_pending);
+        assert_eq!(r.message, None);
+        assert_eq!(r.pr_url.as_deref(), Some("https://example.com/pull/9"));
+        // Uma tentativa por relato: as duas recusadas e a que abriu.
+        let posts = gh
+            .calls()
+            .into_iter()
+            .filter(|(m, p)| m == "POST" && p == create)
+            .count();
+        assert_eq!(posts, 3);
+        // Outra recusa do GitHub não é pendência: vai na mensagem.
+        gh.set(&list, json!([]));
+        gh.fail_next(create, 500, &[]);
+        let r = env
+            .sessions
+            .autonomy_align(env.project_id, Some(&client))
+            .unwrap();
+        assert!(!r.pr_pending);
+        assert!(r.message.unwrap().contains("não foi aberto"));
+    }
+
+    /// Projeto fora do GitHub: o PR rascunho não passa pela API do GitHub;
+    /// o relato pede o MR à mão.
+    #[test]
+    fn pr_rascunho_fora_do_github_fica_para_a_pessoa() {
+        let (env, _remote) = env_com_remoto(true, true);
+        env.assign_config(2, |p| {
+            p.autonomy = AutonomyConfig {
+                enabled: true,
+                env_id: Some("env-auto".into()),
+                ..Default::default()
+            };
+            p.autonomy_runner = true;
+            p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                host: "gitlab.example.com".into(),
+                path: "grupo/acme-web".into(),
+                ..Default::default()
+            });
+        });
+        let pr = FakePr::default();
+        let r = env
+            .sessions
+            .autonomy_setup(env.project_id, Some(&pr))
+            .unwrap();
+        assert_eq!(r.state, AutonomyState::Ok);
+        assert!(pr.0.lock().unwrap().is_empty());
+        assert!(r.message.unwrap().contains("abra o MR rascunho"));
     }
 
     #[test]

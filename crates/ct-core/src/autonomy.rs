@@ -165,7 +165,8 @@ pub struct AutonomyReport {
     pub state: AutonomyState,
     pub branch: String,
     pub base: String,
-    /// Aviso para a tela (conflito) ou o erro.
+    /// Aviso para a tela (conflito), o erro ou, com `ok`, a situação do PR
+    /// rascunho (pendente ou não aberto).
     #[serde(default)]
     pub message: Option<String>,
     /// Arquivos em conflito, no conflito.
@@ -174,8 +175,19 @@ pub struct AutonomyReport {
     /// PR rascunho `branch → base`, quando conhecido.
     #[serde(default)]
     pub pr_url: Option<String>,
+    /// O PR rascunho ainda não pode abrir: a branch não tem commits além da
+    /// base (o GitHub recusa o PR vazio). Não é erro: o ambiente tenta de
+    /// novo a cada alinhamento, e o PR abre depois do primeiro merge na
+    /// branch. Ausente (relato anterior) = `false`.
+    #[serde(default)]
+    pub pr_pending: bool,
     /// Quando o relato foi feito (ms).
     pub at: i64,
+}
+
+/// Mensagem do relato com o PR rascunho pendente ([`AutonomyReport::pr_pending`]).
+pub fn draft_pr_pending_message(branch: &str) -> String {
+    format!("o PR rascunho abre depois do primeiro merge na {branch}")
 }
 
 /// Aviso do projeto com a branch de integração em conflito com a base.
@@ -268,6 +280,7 @@ mod tests {
         .unwrap();
         assert_eq!(r.state, AutonomyState::Conflict);
         assert!(r.conflicts.is_empty());
+        assert!(!r.pr_pending);
         assert_eq!(
             conflict_warning("wip/autonoma"),
             "wip/autonoma em conflito com a base"

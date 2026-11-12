@@ -245,9 +245,9 @@ export function AutonomyCard({
               <span className="hint muted">
                 Vazio = o padrão acima. O ambiente monta o prompt quando o hub inicia a sessão sem a UI. Variáveis:{" "}
                 <span className="mono">
-                  {"{{kind}} {{number}} {{ref}} {{owner}} {{repo}} {{title}} {{branch}} {{integration_branch}} {{protected}} {{change}}"}
+                  {"{{kind}} {{number}} {{ref}} {{owner}} {{repo}} {{title}} {{branch}} {{integration_branch}} {{protected}} {{change}} {{closes}}"}
                 </span>{" "}
-                (<span className="mono">{"{{change}}"}</span> = PR ou MR).
+                (<span className="mono">{"{{change}}"}</span> = PR ou MR; <span className="mono">{"{{closes}}"}</span> = <span className="mono">Closes #12</span> no GitHub ou a chave no Jira).
               </span>
             </div>
           )}

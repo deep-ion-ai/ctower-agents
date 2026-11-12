@@ -163,6 +163,9 @@ pub struct StartItem {
     pub owner: String,
     pub repo: String,
     pub number: i64,
+    /// Título do espelho do hub: vai no `session.start`, porque o espelho do
+    /// ambiente pode ainda não ter a issue (projeto recém-atribuído).
+    pub title: String,
     pub model: String,
     /// Sessão sonda: a conta não tem leitura do plano (veja o módulo).
     pub probe: bool,
@@ -581,6 +584,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
                             owner: p.owner.clone(),
                             repo: p.repo.clone(),
                             number: i.number,
+                            title: i.title.clone().expect("elegível está no espelho"),
                             model: i.model.clone().expect("elegível tem modelo"),
                             probe,
                         }));
