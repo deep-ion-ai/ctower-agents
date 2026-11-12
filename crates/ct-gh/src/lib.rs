@@ -146,6 +146,55 @@ impl GhClient {
         })
     }
 
+    /// GET condicional de um recurso só (`path` relativo à API), sem seguir
+    /// paginação: os checks do commit (#129), que vêm num objeto.
+    pub fn get_one(&self, path: &str, etag: Option<&str>) -> Result<Fetched<Value>, GhError> {
+        let url = format!("{}{}", self.cfg.api_url, path);
+        Ok(match self.get(&url, etag)? {
+            None => Fetched::NotModified,
+            Some(page) => Fetched::Modified {
+                body: page.body,
+                etag: page.etag,
+            },
+        })
+    }
+
+    /// Trecho final do log de um job do GitHub Actions (#129, para a #133):
+    /// `GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs`, que redireciona
+    /// para um endereço temporário (seguido sem o token). Lê o log inteiro em
+    /// fluxo e guarda só os últimos `max_bytes`, a partir do começo de uma
+    /// linha. `None` = o log não existe mais ou o token não tem acesso
+    /// (`404`/`410`).
+    pub fn job_log_tail(
+        &self,
+        owner: &str,
+        repo: &str,
+        job_id: i64,
+        max_bytes: usize,
+    ) -> Result<Option<String>, GhError> {
+        let url = format!(
+            "{}{}",
+            self.cfg.api_url,
+            sync::job_logs_path(owner, repo, job_id)
+        );
+        let mut renewed = false;
+        let resp = loop {
+            match self.request("GET", &url)?.call() {
+                Ok(r) => break r,
+                Err(ureq::Error::Status(401, _)) if !renewed => {
+                    *self.token.lock().unwrap() = None;
+                    renewed = true;
+                }
+                Err(ureq::Error::Status(404 | 410, _)) => return Ok(None),
+                Err(ureq::Error::Status(code, r)) => return Err(status_error(code, r)),
+                Err(ureq::Error::Transport(t)) => return Err(GhError::Network(t.to_string())),
+            }
+        };
+        let tail = read_tail(resp.into_reader(), max_bytes)
+            .map_err(|e| GhError::Network(e.to_string()))?;
+        Ok(Some(tail))
+    }
+
     /// GET de um recurso (`path` relativo à API). `None` = `404` (não existe
     /// ou o token não tem acesso).
     pub fn get_json(&self, path: &str) -> Result<Option<Value>, GhError> {
@@ -426,6 +475,37 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
     f.write_all(contents.as_bytes())?;
     f.sync_all()?;
     std::fs::rename(&tmp, path)
+}
+
+/// Os últimos `max` bytes de `r`, em fluxo, a partir do começo de uma
+/// linha quando o trecho foi cortado. Bytes inválidos em UTF-8 viram `�`.
+fn read_tail(mut r: impl Read, max: usize) -> std::io::Result<String> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    let mut cut = false;
+    loop {
+        let n = r.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        // Descarta o excesso só de vez em quando (o dobro do teto).
+        if buf.len() > max.saturating_mul(2).max(chunk.len()) {
+            let drop = buf.len() - max;
+            buf.drain(..drop);
+            cut = true;
+        }
+    }
+    if buf.len() > max {
+        buf.drain(..buf.len() - max);
+        cut = true;
+    }
+    if cut {
+        if let Some(nl) = buf.iter().position(|b| *b == b'\n') {
+            buf.drain(..=nl);
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 fn into_array(v: Value) -> Result<Vec<Value>, GhError> {
@@ -861,5 +941,72 @@ mod tests {
             Some("https://api.github.com/x?page=2")
         );
         assert_eq!(next_link(r#"<https://a/x?page=1>; rel="prev""#), None);
+    }
+
+    fn client_for(gh: &FakeGitHub, d: &std::path::Path) -> GhClient {
+        let bin = fake_gh(d, "tok");
+        GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(crate::fake::FAKE_GH_TOKEN_TIMEOUT),
+        )
+    }
+
+    /// #129 (para a #133): o log do job segue o redirecionamento, sem levar
+    /// o token, e devolve só o fim, a partir do começo de uma linha.
+    #[test]
+    fn trecho_final_do_log_do_job() {
+        let d = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let c = client_for(&gh, d.path());
+        let log: String = (1..=50)
+            .map(|i| format!("2026-11-12T10:00:{i:02}Z linha {i}\n"))
+            .collect();
+        gh.set_redirect(
+            &sync::job_logs_path("acme", "acme-web", 457),
+            "/blob/logs/457.txt",
+        );
+        gh.set_text("/blob/logs/457.txt", &log);
+        let tail = c
+            .job_log_tail("acme", "acme-web", 457, 100)
+            .unwrap()
+            .unwrap();
+        assert!(tail.len() <= 100, "{tail:?}");
+        assert!(tail.starts_with("2026-11-12T10:00:"), "{tail:?}");
+        assert!(tail.ends_with("linha 50\n"), "{tail:?}");
+        // Cabe inteiro: vem inteiro.
+        let all = c
+            .job_log_tail("acme", "acme-web", 457, 1 << 20)
+            .unwrap()
+            .unwrap();
+        assert_eq!(all, log);
+        // Log expirado ou sem acesso.
+        assert_eq!(c.job_log_tail("acme", "acme-web", 999, 100).unwrap(), None);
+    }
+
+    #[test]
+    fn get_one_com_etag() {
+        let d = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let c = client_for(&gh, d.path());
+        gh.set("/repos/o/r/commits/abc/status", json!({ "statuses": [] }));
+        let Fetched::Modified { body, etag } =
+            c.get_one("/repos/o/r/commits/abc/status", None).unwrap()
+        else {
+            panic!("esperado 200");
+        };
+        assert_eq!(body, json!({ "statuses": [] }));
+        assert_eq!(
+            c.get_one("/repos/o/r/commits/abc/status", etag.as_deref())
+                .unwrap(),
+            Fetched::NotModified
+        );
+    }
+
+    #[test]
+    fn read_tail_corta_na_linha() {
+        let r = |s: &str, max| read_tail(s.as_bytes(), max).unwrap();
+        assert_eq!(r("a\nb\nc\n", 100), "a\nb\nc\n");
+        assert_eq!(r("aaaa\nbb\ncc\n", 6), "cc\n");
+        assert_eq!(r("", 10), "");
     }
 }

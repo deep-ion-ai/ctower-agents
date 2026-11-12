@@ -843,7 +843,7 @@ Na web, as contas chegam como `conta-N`.
   - as issues em `bloqueado` agora;
   - as decisões autônomas sem revisão (todas, e quantas são do período);
   - as issues à frente da base;
-  - o link do PR `branch → base`, do relato do ambiente do modo (`autonomy_report.pr_url`, porque esse PR não é de work item e não entra no `pr_cache`), com o estado do CI que o espelho tiver. Enquanto o espelho não guarda os checks dos PRs (#129), o CI aparece como "sem dados no espelho" (`ci: null`).
+  - o link do PR `branch → base`, do relato do ambiente do modo (`autonomy_report.pr_url`, porque esse PR não é de work item e não entra no `pr_cache`), com o resumo dos checks do head desse PR no espelho do hub (`ci`, ex.: "3 checks, 1 falhou", #129, hub 1.21; o sync do hub lê esse PR e os checks dele, veja "Sincronização com o GitHub" em docs/ambiente.md). Sem PR aberto ou com os checks ainda não lidos, o CI aparece como "sem dados no espelho" (`ci: null`).
 
   E, por conta com política, o uso da semanal: o atual, o do resumo anterior e quanto subiu no período (com a semanal renovada no meio, o uso desde o reset). No primeiro resumo não há resumo anterior para a diferença: "quanto subiu" é o uso atual da semanal, desde o reset dela, e não o das últimas 24 h.
 - **Sem texto do agente:** o resumo leva números, títulos das issues (do GitHub), contagens, uso e links; nunca a mensagem de uma decisão, evento ou sessão. A notificação da Web Push (`morning_digest`) leva só o nome do projeto, as contagens e o link para a Visão geral.

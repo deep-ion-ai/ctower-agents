@@ -84,7 +84,11 @@ use tokio::sync::broadcast;
 /// `hub.autopilot.digest|wip`, `wip` em `AutopilotStatus`,
 /// `digest_at_min` em `BudgetPolicy` e o evento `morning_digest` da Web
 /// Push.
-pub const PROTOCOL_VERSION: &str = "1.20";
+/// 1.21 (#129): checks do head do PR no espelho — `pr_checks` (resumo:
+/// situação, contagens e texto) no `WorkItemSummary` do `hub.tree.get`, e o
+/// `ci` de `AutonomyWip` e `DigestProject` preenchido com o resumo dos checks
+/// do PR da branch de integração.
+pub const PROTOCOL_VERSION: &str = "1.21";
 
 #[derive(Clone)]
 pub struct HubState {

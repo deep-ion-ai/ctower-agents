@@ -33,6 +33,10 @@ struct State {
     calls: Vec<(String, String)>,
     /// (caminho, corpo JSON) de cada `POST`.
     posted: Vec<(String, Value)>,
+    /// `GET` que responde `302` para outro caminho deste servidor.
+    redirects: HashMap<String, String>,
+    /// Texto servido sem exigir token (o endereço temporário do log).
+    raw: HashMap<String, String>,
 }
 
 /// Servidor GitHub falso. As rotas são casadas pelo caminho completo com a
@@ -119,6 +123,26 @@ impl FakeGitHub {
             .link = Some(next.to_string());
     }
 
+    /// `GET path` (com token) responde `302` para `to`, outro caminho deste
+    /// servidor (o log do job do Actions, #129).
+    pub fn set_redirect(&self, path: &str, to: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .redirects
+            .insert(path.to_string(), to.to_string());
+    }
+
+    /// Publica `text` em `path` como texto, sem exigir token (como o
+    /// endereço temporário para onde o GitHub redireciona o log).
+    pub fn set_text(&self, path: &str, text: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .raw
+            .insert(path.to_string(), text.to_string());
+    }
+
     /// A próxima requisição a `path` recebe `status` com estes cabeçalhos.
     pub fn fail_next(&self, path: &str, status: u16, headers: &[(&str, &str)]) {
         let h = headers
@@ -173,6 +197,13 @@ impl FakeGitHub {
     }
 }
 
+fn out_addr(stream: &TcpStream) -> String {
+    stream
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default()
+}
+
 fn etag_of(v: &Value) -> String {
     let mut h = DefaultHasher::new();
     v.to_string().hash(&mut h);
@@ -218,12 +249,22 @@ fn handle(stream: TcpStream, st: &Mutex<State>) -> std::io::Result<()> {
         if let Some((code, h, body)) = s.fails.get_mut(&path).and_then(VecDeque::pop_front) {
             let body = body.unwrap_or_else(|| json!({ "message": "falha programada" }));
             (code, h, body.to_string())
+        } else if let Some(text) = s.raw.get(&path) {
+            // Endereço temporário: o cliente não manda o token aqui.
+            if headers.contains_key("authorization") {
+                (400, vec![], "token no redirecionamento".to_string())
+            } else {
+                (200, vec![], text.clone())
+            }
         } else if !auth_ok {
             (
                 401,
                 vec![],
                 json!({ "message": "Bad credentials" }).to_string(),
             )
+        } else if let Some(to) = s.redirects.get(&path) {
+            let loc = format!("http://{}{to}", out_addr(&stream));
+            (302, vec![("Location".to_string(), loc)], String::new())
         } else if method == "DELETE" {
             let read = path.replace("/git/refs/", "/git/ref/");
             let a = s.routes.remove(&path).is_some();

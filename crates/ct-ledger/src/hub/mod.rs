@@ -780,6 +780,24 @@ CREATE TABLE autopilot_digest (
     r#"
 ALTER TABLE autopilot_state ADD COLUMN idle_timeout_min INTEGER NOT NULL DEFAULT 30;
 "#,
+    // 39: checks do head dos PRs abertos (#129, épico #136), no mesmo
+    // espelho do `ledger.db` (migração 23 de lá), também para o PR da
+    // branch de integração do modo autônomo, que não fica no `pr_cache`.
+    r#"
+CREATE TABLE pr_checks (
+  project_id  INTEGER NOT NULL,
+  pr_number   INTEGER NOT NULL,
+  head        TEXT NOT NULL,
+  base        TEXT NOT NULL,
+  head_sha    TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  checks      TEXT NOT NULL DEFAULT '[]',
+  synced_at   INTEGER NOT NULL,
+  runs_etag   TEXT,
+  status_etag TEXT,
+  PRIMARY KEY (project_id, pr_number)
+);
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -2087,6 +2105,9 @@ impl Hub {
             self.recompute_status(wi)?;
             out.status_changes.push((wi, WorkItemStatus::Concluido));
         }
+        if let Some(c) = &s.pr_checks {
+            self.gh().apply_checks(s.project_id, c, s.synced_at)?;
+        }
         self.gh().finish_ok(s)?;
         tx.commit()?;
         Ok(out)
@@ -2178,6 +2199,39 @@ impl Hub {
 
     pub fn etag(&self, key: &str) -> Result<Option<String>> {
         self.gh().etag(key)
+    }
+
+    /// PRs abertos do projeto no espelho, por número.
+    pub fn open_prs(&self, project_id: i64) -> Result<Vec<PrRow>> {
+        self.gh().open_prs(project_id)
+    }
+
+    /// Checks do head do PR `number` no espelho do hub (#129); `None` = PR
+    /// fechado, fora do espelho ou ainda não lido.
+    pub fn pr_checks(&self, project_id: i64, number: i64) -> Result<Option<crate::PrChecks>> {
+        self.gh().pr_checks(project_id, number)
+    }
+
+    /// Checks dos PRs abertos do work item, do PR mais recente ao mais
+    /// antigo (#129).
+    pub fn pr_checks_for_work_item(&self, work_item_id: i64) -> Result<Vec<crate::PrChecks>> {
+        self.gh().pr_checks_for_work_item(work_item_id)
+    }
+
+    /// Checks de todos os PRs abertos do projeto no espelho, por número.
+    pub fn list_pr_checks(&self, project_id: i64) -> Result<Vec<crate::PrChecks>> {
+        self.gh().list_pr_checks(project_id)
+    }
+
+    /// Checks do PR aberto `head → base` (#129): o da branch de integração
+    /// do modo autônomo para a base, que não fica no `pr_cache`.
+    pub fn pr_checks_by_head(
+        &self,
+        project_id: i64,
+        head: &str,
+        base: &str,
+    ) -> Result<Option<crate::PrChecks>> {
+        self.gh().pr_checks_by_head(project_id, head, base)
     }
 
     /// Registra quantas mudanças o ambiente ainda tem no outbox.
@@ -3868,6 +3922,7 @@ mod tests {
                 synced_at: 5,
                 gone: Vec::new(),
                 me: None,
+                pr_checks: None,
             },
             "hub",
         )
@@ -4388,6 +4443,7 @@ mod tests {
             synced_at: 5,
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         };
         let r = hub
             .apply_github(&snap(vec![pr(PrState::Open)], vec![issue("open")]), "hub")
@@ -5169,7 +5225,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 38);
+        assert_eq!(v, 39);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
