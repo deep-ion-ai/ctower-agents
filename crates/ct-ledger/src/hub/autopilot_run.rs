@@ -98,8 +98,11 @@ pub struct ParkedSession {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdleSession {
     pub session_id: String,
-    /// Desde quando está ociosa: o `last_event_at` (o `Stop` que a deixou
-    /// ociosa, ou o aviso de espera do Claude Code depois dele).
+    /// Desde quando está ociosa: o `ts` do último `session_state` para
+    /// `idle` (o `Stop` que a deixou ociosa); sem ele no hub, o
+    /// `last_event_at`. O aviso de espera do Claude Code depois do `Stop`
+    /// (hook `Notification`) avança o `last_event_at` mas não é atividade:
+    /// não adia o encerramento.
     pub since: i64,
     /// Sessão autônoma: iniciada pelo agendador ou depois de um início
     /// autônomo da issue no mesmo ambiente (evento `autonomy_session`).
@@ -408,7 +411,12 @@ impl Hub {
     /// encerrar as autônomas que terminaram ou pararam ([`IdleSession`]).
     pub fn autopilot_idle_sessions(&self) -> Result<Vec<IdleSession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.last_event_at,
+            "SELECT s.id,
+                    coalesce((SELECT max(e.ts) FROM event e
+                              WHERE e.work_item_id = s.work_item_id AND e.session_id = s.id
+                                AND e.type = 'session_state'
+                                AND json_extract(e.payload, '$.to') = 'idle'),
+                             s.last_event_at),
                     EXISTS (SELECT 1 FROM autopilot_event a
                             WHERE a.kind = 'started' AND a.session_id = s.id)
                     OR EXISTS (SELECT 1 FROM event e
@@ -632,6 +640,28 @@ mod tests {
             view,
             vec![("antes", 105, false, false), ("depois", 305, true, false)]
         );
+        // O `Stop` em 302 e o aviso de espera do Claude Code em 305 (que
+        // avançou o `last_event_at`): ociosa desde o `Stop` (R3-1, #178).
+        h.conn
+            .execute(
+                "INSERT INTO event (uid, env_id, hlc, ts, project_id, work_item_id, session_id,
+                                    type, payload)
+                 SELECT 'u2', 'env-auto', 2, 302, project_id, id, 'depois', 'session_state',
+                        '{\"from\":\"running\",\"to\":\"idle\"}'
+                 FROM work_item WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        let since = |id: &str| {
+            h.autopilot_idle_sessions()
+                .unwrap()
+                .into_iter()
+                .find(|i| i.session_id == id)
+                .unwrap()
+                .since
+        };
+        assert_eq!(since("depois"), 302);
+        assert_eq!(since("antes"), 105);
         // PR aberto da issue: terminou.
         h.conn
             .execute(

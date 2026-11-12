@@ -49,7 +49,7 @@ O desenho atende **várias máquinas físicas** (PC com WSL, Mac mini, notebook 
 
 > **Substituída em parte** (nova spec §5): a regra "projeto com atributos divergentes: vale o mais recente" saiu. Atributos de projeto só mudam no hub.
 
-- **Status do work item:** no hub, o status é o do evento de status mais recente pelo **horário de origem**. Cada daemon mantém um relógio lógico híbrido (HLC) persistido e grava o `hlc` em cada evento. O desempate é por `env_id`. Um evento que chega atrasado, vindo de um ambiente que estava offline, não sobrescreve um status mais novo, mas fica no histórico.
+- **Status do work item:** no hub, o status é o do evento de status mais recente pelo **horário de origem**. Cada daemon mantém um relógio lógico híbrido (HLC) persistido e grava o `hlc` em cada evento. O desempate é por `env_id`. Um evento que chega atrasado, vindo de um ambiente que estava offline, não sobrescreve um status mais novo, mas fica no histórico. Exceção: um `status_changed` de causa `needs_human` só vale se o status anterior no hub o aceita (`ct_core::next_status`); ele não volta para `aguardando_voce` um item `em_revisao`, `concluido` ou `aguardando_epico`, mesmo que o `from` do ambiente, que não viu o PR, diga outra coisa.
 - **Projeto com atributos divergentes** (`base_branch`, protegidas, nome): vale o valor mais recente.
 - **Sessão:** não há conflito, porque só o ambiente dono a altera. O hub aplica a cópia com `last_event_at` maior.
 - **Limitação aceita:** o status local de um ambiente não fica sabendo de mudanças feitas em outro. As automações locais (spec §6) usam o status local. A visão que vale para o humano é a do hub.

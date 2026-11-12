@@ -303,6 +303,21 @@ mod tests {
         );
         assert_eq!(wi(&env), WorkItemStatus::EmExecucao);
 
+        // PR aberto e a sessão ociosa: o aviso de espera do Claude Code
+        // registra o pedido, mas a issue continua em revisão (R3-1, #178).
+        env.sessions
+            .ledger()
+            .apply_trigger(s.work_item_id, WorkItemTrigger::PrOpened)
+            .unwrap();
+        ap("Stop", json!({}));
+        ap(
+            "Notification",
+            json!({ "message": "Claude is waiting for your input" }),
+        );
+        assert_eq!(wi(&env), WorkItemStatus::EmRevisao);
+        ap("UserPromptSubmit", json!({ "prompt": "ajuste a revisão" }));
+        assert_eq!(wi(&env), WorkItemStatus::EmExecucao);
+
         ap(
             "GuardBlocked",
             json!({ "command": "git push origin develop", "reason": "push para develop" }),
