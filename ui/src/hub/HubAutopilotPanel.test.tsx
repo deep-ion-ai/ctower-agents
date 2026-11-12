@@ -39,7 +39,7 @@ function decision(d: Partial<BudgetDecision> = {}): BudgetDecision {
 
 function status(account: string, settings: Partial<AutopilotSettings> = {}): AutopilotStatus {
   return {
-    settings: { paused: false, paused_at: null, max_sessions_per_env: 1, ...settings },
+    settings: { paused: false, paused_at: null, max_sessions_per_env: 1, idle_timeout_min: 30, ...settings },
     last_tick_at: NOW - 30_000,
     now: NOW,
     accounts: [{ account, decision: decision(), exhausted_window: null, exhausted_until: null }],
@@ -124,7 +124,7 @@ function status(account: string, settings: Partial<AutopilotSettings> = {}): Aut
 
 /** `hub.autopilot.*` como o hub: pausar e retomar mudam o estado e avisam pelo push. */
 function withAutopilot<T extends FakeDaemonApi>(api: T, account: string) {
-  let settings: AutopilotSettings = { paused: false, paused_at: null, max_sessions_per_env: 1 };
+  let settings: AutopilotSettings = { paused: false, paused_at: null, max_sessions_per_env: 1, idle_timeout_min: 30 };
   const set = (paused: boolean) => {
     settings = { ...settings, paused, paused_at: paused ? NOW : null };
     queueMicrotask(() => api.hubPush("hub.autopilot.changed"));

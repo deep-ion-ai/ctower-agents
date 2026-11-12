@@ -9,7 +9,7 @@
 # com a unidade copiada com outro nome, como ct-autonomo-acme.service):
 #   sed -e "s|@DIR@|$PWD|g" -e "s|@PROJECT@|ct-autonomo|g" ct-autonomo.service \
 #     | sudo tee /etc/systemd/system/ct-autonomo.service
-#   sudo systemctl daemon-reload && sudo systemctl enable ct-autonomo
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ct-autonomo
 #
 # A unidade não recebe tokens. No Compose recente, `docker compose up` e
 # `docker compose start` sem os logins no ambiente recusam rodar ("environment
@@ -18,6 +18,22 @@
 # com `docker start`: o Docker guarda os secrets com o container criado.
 # Criar o container (primeira subida, versão nova, token novo) é com
 # `docker compose up -d` no shell, com os logins (docs/ambiente-autonomo.md).
+#
+# O systemd acompanha o container: o processo principal é o `docker start -a`,
+# que fica ligado a ele até ele parar (e só se liga, se o container já
+# estava rodando, como depois de um `docker compose up -d` ou de um reboot,
+# em que o Docker o sobe antes). Assim o `systemctl status` mostra o estado
+# real, e o `systemctl stop` (o `docker compose stop`, que funciona sem os
+# logins) para o container mesmo que outro o tenha subido.
+#   - O container parou sozinho ou foi recriado (`docker compose up -d`): a
+#     unidade liga de novo em 10 s (`Restart=always`), no container novo se
+#     ele foi recriado. Com a unidade ativa, pare pelo `systemctl stop`: um
+#     `docker stop` por fora também volta em 10 s.
+#   - Nenhum container (ex.: depois de `docker compose down`): sai com 3, a
+#     mensagem no journal e sem nova tentativa (`RestartPreventExitStatus`).
+#   - O `restart: unless-stopped` continua valendo: o `systemctl stop` é um
+#     stop manual para o Docker, e o container só volta com a unidade.
+# Os logs do container também vão para o journal da unidade.
 # O `$$` é o `$` literal para o sh.
 
 [Unit]
@@ -25,15 +41,25 @@ Description=Control Tower: ambiente autônomo (Docker, @PROJECT@)
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+# A falha da conferência (sem container) também conta para o `Restart=`:
+# depois de 3 tentativas em 2 minutos, a unidade desiste e fica `failed`.
+StartLimitIntervalSec=120
+StartLimitBurst=3
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=exec
 WorkingDirectory=@DIR@
 Environment=COMPOSE_PROJECT_NAME=@PROJECT@
-ExecStart=/bin/sh -c 'id="$$(/usr/bin/docker compose ps -aq autonomo)" || exit 1; if [ -z "$$id" ]; then echo "nenhum container do ambiente autônomo no projeto $$COMPOSE_PROJECT_NAME: crie-o com docker compose up -d no shell, com os logins (docs/ambiente-autonomo.md)" >&2; exit 1; fi; exec /usr/bin/docker start $$id'
+# A conferência antes: sem container, o próprio `systemctl start` falha.
+ExecStartPre=/bin/sh -c 'id="$$(/usr/bin/docker compose ps -aq autonomo)" || exit 1; if [ -z "$$id" ]; then echo "nenhum container do ambiente autônomo no projeto $$COMPOSE_PROJECT_NAME: crie-o com docker compose up -d no shell, com os logins (docs/ambiente-autonomo.md)" >&2; exit 3; fi'
+ExecStart=/bin/sh -c 'id="$$(/usr/bin/docker compose ps -aq autonomo)" || exit 1; [ -n "$$id" ] || exit 3; exec /usr/bin/docker start -a $$id'
 ExecStop=/usr/bin/docker compose stop
-TimeoutStartSec=120
+# Saída do container parado pelo SIGTERM (o `docker compose stop`).
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+RestartPreventExitStatus=3
+TimeoutStopSec=60
 
 [Install]
 WantedBy=multi-user.target

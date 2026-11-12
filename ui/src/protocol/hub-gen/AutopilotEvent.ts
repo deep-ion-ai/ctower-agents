@@ -11,13 +11,15 @@ export type AutopilotEvent = {
 id: number, at: number, 
 /**
  * `started`, `start_failed`, `refused`, `parked`, `resumed`,
- * `resume_failed`, `unparked`, `paused` ou `unpaused`.
+ * `resume_failed`, `unparked`, `ended`, `end_failed`, `paused` ou
+ * `unpaused`.
  */
 kind: string, 
 /**
  * De quem é o evento: `hub`, `account:<chave>`, `project:<owner/repo>`
- * ou `item:<owner/repo#n>`. A recusa (`refused`, `start_failed`) só é gravada de novo quando o
- * motivo (`reason`) muda no mesmo escopo.
+ * ou `item:<owner/repo#n>`. A recusa (`refused`, `start_failed`,
+ * `end_failed`) só é gravada de novo quando o motivo (`reason`) ou a
+ * causa no texto (`message`, sem os números) muda no mesmo escopo.
  */
 scope: string, 
 /**

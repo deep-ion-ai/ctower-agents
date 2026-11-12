@@ -49,7 +49,8 @@ pub use agent::{
 pub use approval::ApprovalStatus;
 pub use assignments::{AssignmentAdded, AssignmentFilter, AssignmentState, HubAssignment};
 pub use autopilot_run::{
-    AutopilotEvent, AutopilotSession, AutopilotSettings, ParkedSession, AUTOPILOT_EVENT_TTL_MS,
+    AutopilotEvent, AutopilotSession, AutopilotSettings, IdleSession, ParkedSession,
+    AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN, AUTOPILOT_IDLE_TIMEOUT_MAX_MIN,
     AUTOPILOT_MAX_PER_ENV_CEILING, AUTOPILOT_MAX_PER_ENV_DEFAULT,
 };
 pub use config::{
@@ -771,6 +772,12 @@ CREATE TABLE autopilot_digest (
   since     INTEGER NOT NULL,
   content   TEXT NOT NULL
 );
+"#,
+    // 38: sessão autônoma ociosa (#183, épico #178): minutos que uma
+    // sessão autônoma pode ficar ociosa sem PR antes de o agendador a
+    // encerrar (0 = nunca).
+    r#"
+ALTER TABLE autopilot_state ADD COLUMN idle_timeout_min INTEGER NOT NULL DEFAULT 30;
 "#,
 ];
 
@@ -5021,7 +5028,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 37);
+        assert_eq!(v, 38);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

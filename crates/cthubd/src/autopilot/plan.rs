@@ -29,16 +29,34 @@
 //!   mais) antes do reset estaciona as sessões ociosas dos ambientes
 //!   autônomos dela; depois do `resets_at` (mais [`RESUME_MARGIN_MS`]) o
 //!   agendador as retoma, antes de iniciar qualquer outra na conta.
+//! - **Sessão autônoma ociosa:** a sessão autônoma ([`IdleSession`]) ociosa
+//!   num ambiente autônomo online é encerrada (`session.kill`, retomável
+//!   como qualquer encerrada) quando a issue já tem PR aberto (ou está em
+//!   revisão), depois de [`DONE_GRACE_MS`] (`pr_aberto`), ou, sem PR, depois
+//!   de `idle_timeout_min` (`sessao_ociosa`), se a conta não está com a
+//!   janela esgotada (aí ela estaciona). A estacionada nunca é encerrada, e
+//!   a que terminou a issue não estaciona: não há o que continuar.
 
 use ct_core::plan::budget::{BlockReason, BudgetDecision};
 use ct_core::plan::{PlanView, WindowView};
 use ct_core::{Priority, SessionState, WipUsage, WorkItemKind, WorkItemStatus};
-use ct_ledger::{AutopilotSession, AutopilotSettings, ParkedSession};
+use ct_ledger::{AutopilotSession, AutopilotSettings, IdleSession, ParkedSession};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Folga depois do `resets_at` antes de retomar: a renovação não é exata.
 pub const RESUME_MARGIN_MS: i64 = 60_000;
+
+/// Ociosa com a issue já com PR: espera isto antes de encerrar (o agente
+/// pode estar fechando o turno, ou alguém olhando).
+pub const DONE_GRACE_MS: i64 = 5 * 60_000;
+
+/// `reason` do evento `ended`: a issue já tem PR aberto (ou está em
+/// revisão).
+pub const END_DONE: &str = "pr_aberto";
+/// `reason` do evento `ended`: ociosa sem PR por mais de
+/// `idle_timeout_min`.
+pub const END_IDLE: &str = "sessao_ociosa";
 
 /// Fotografia do hub para uma decisão.
 #[derive(Debug, Clone, Default)]
@@ -54,6 +72,11 @@ pub struct Snapshot {
     /// que o ambiente ainda não sincronizou, como `starting`).
     pub sessions: Vec<AutopilotSession>,
     pub parked: Vec<ParkedSession>,
+    /// As sessões ociosas, por id.
+    pub idle: BTreeMap<String, IdleSession>,
+    /// Sessões que o agendador acabou de encerrar (o ambiente ainda não
+    /// sincronizou): não encerra de novo.
+    pub ended: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -154,6 +177,13 @@ pub enum Action {
         via: ResumeVia,
     },
     Start(StartItem),
+    /// Encerra a sessão autônoma ociosa (`session.kill`).
+    End {
+        session: AutopilotSession,
+        /// [`END_DONE`] ou [`END_IDLE`].
+        reason: &'static str,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -338,10 +368,81 @@ pub fn decide(s: &Snapshot) -> Outcome {
         });
     }
 
-    // 2. Estacionar: sessões ociosas de ambientes autônomos numa conta com
-    // política e com a janela esgotada.
+    // 2. Encerrar: sessões autônomas ociosas que terminaram a issue ou
+    // pararam sem PR (veja o módulo).
+    let exhausted_now = |key: &str| {
+        s.accounts
+            .get(key)
+            .and_then(|a| a.exhausted.as_ref())
+            .is_some_and(|ex| ex.resets_at > now)
+    };
+    let timeout_ms = i64::from(s.settings.idle_timeout_min) * 60_000;
+    let mut done_ids: BTreeSet<&str> = BTreeSet::new();
     for x in &s.sessions {
-        if parked_ids.contains(x.session_id.as_str()) || x.state != SessionState::Idle {
+        if parked_ids.contains(x.session_id.as_str())
+            || x.state != SessionState::Idle
+            || s.ended.contains(&x.session_id)
+        {
+            continue;
+        }
+        let Some(i) = s.idle.get(&x.session_id).filter(|i| i.autonomous) else {
+            continue;
+        };
+        let Some(e) = env(&x.env_id).filter(|e| e.autonomous) else {
+            continue;
+        };
+        if i.done {
+            done_ids.insert(x.session_id.as_str());
+        }
+        if !e.online {
+            continue;
+        }
+        let idle_ms = now - i.since;
+        let slug = format!("{}/{}#{}", x.owner, x.repo, x.gh_number);
+        let (reason, message) = if i.done {
+            if idle_ms < DONE_GRACE_MS {
+                continue;
+            }
+            (
+                END_DONE,
+                format!(
+                    "{slug}: a issue já tem PR; a sessão autônoma ociosa foi encerrada para \
+                     liberar o ambiente (dá para retomá-la)"
+                ),
+            )
+        } else {
+            // Conta com a janela esgotada: a sessão parou pelo limite e
+            // estaciona (passo 3), não encerra.
+            if timeout_ms == 0
+                || idle_ms < timeout_ms
+                || e.account.as_deref().is_some_and(exhausted_now)
+            {
+                continue;
+            }
+            (
+                END_IDLE,
+                format!(
+                    "{slug}: a sessão autônoma ficou ociosa sem PR por mais de {} min e foi \
+                     encerrada para liberar o ambiente (dá para retomá-la)",
+                    s.settings.idle_timeout_min
+                ),
+            )
+        };
+        out.actions.push(Action::End {
+            session: x.clone(),
+            reason,
+            message,
+        });
+    }
+
+    // 3. Estacionar: sessões ociosas de ambientes autônomos numa conta com
+    // política e com a janela esgotada. A que terminou a issue não
+    // estaciona (encerra no passo 2).
+    for x in &s.sessions {
+        if parked_ids.contains(x.session_id.as_str())
+            || x.state != SessionState::Idle
+            || done_ids.contains(x.session_id.as_str())
+        {
             continue;
         }
         let Some(e) = env(&x.env_id).filter(|e| e.autonomous) else {
@@ -368,7 +469,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
         }));
     }
 
-    // 3. Inícios.
+    // 4. Inícios.
     let live_on_env = |env_id: &str| {
         s.sessions
             .iter()
@@ -1161,5 +1262,133 @@ mod tests {
         assert!(starts(&o).is_empty());
         assert!(!o.projects[0].probe);
         assert_eq!(o.projects[0].blocked.as_deref(), Some("autonomy_error"));
+    }
+
+    fn idle(s: &mut Snapshot, id: &str, since: i64, autonomous: bool, done: bool) {
+        s.idle.insert(
+            id.into(),
+            IdleSession {
+                session_id: id.into(),
+                since,
+                autonomous,
+                done,
+            },
+        );
+    }
+
+    fn ends(o: &Outcome) -> Vec<(String, &'static str)> {
+        o.actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::End {
+                    session, reason, ..
+                } => Some((session.session_id.clone(), *reason)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sessao_autonoma_ociosa_com_pr_encerra_depois_da_folga() {
+        let mut s = snap(SAB);
+        s.sessions
+            .push(session("s1", "env-auto", 123, SessionState::Idle));
+        idle(&mut s, "s1", SAB - DONE_GRACE_MS + 1, true, true);
+        // Dentro da folga: nada; o ambiente segue ocupado neste ciclo.
+        let o = decide(&s);
+        assert!(ends(&o).is_empty());
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("env_busy"));
+        idle(&mut s, "s1", SAB - DONE_GRACE_MS, true, true);
+        let o = decide(&s);
+        assert_eq!(ends(&o), vec![("s1".to_string(), END_DONE)]);
+        match &o.actions[0] {
+            Action::End { message, .. } => assert!(message.contains("acme/acme-web#123")),
+            a => panic!("{a:?}"),
+        }
+        // A vaga só abre quando o ambiente sincroniza o encerramento.
+        assert!(starts(&o).is_empty());
+        // Já encerrada (o ambiente não sincronizou): não encerra de novo.
+        s.ended.insert("s1".into());
+        assert!(ends(&decide(&s)).is_empty());
+        s.ended.clear();
+        // Ambiente offline: tenta no ciclo em que voltar.
+        s.envs.get_mut("env-auto").unwrap().online = false;
+        assert!(ends(&decide(&s)).is_empty());
+    }
+
+    #[test]
+    fn sessao_autonoma_ociosa_sem_pr_encerra_depois_do_limite() {
+        let mut s = snap(SAB);
+        s.settings.idle_timeout_min = 30;
+        s.sessions
+            .push(session("s1", "env-auto", 123, SessionState::Idle));
+        idle(&mut s, "s1", SAB - 29 * 60_000, true, false);
+        assert!(ends(&decide(&s)).is_empty());
+        idle(&mut s, "s1", SAB - 30 * 60_000, true, false);
+        let o = decide(&s);
+        assert_eq!(ends(&o), vec![("s1".to_string(), END_IDLE)]);
+        match &o.actions[0] {
+            Action::End { message, .. } => assert!(message.contains("30 min"), "{message}"),
+            a => panic!("{a:?}"),
+        }
+        // Pausado também: a pausa só segura os inícios.
+        s.settings.paused = true;
+        assert_eq!(ends(&decide(&s)).len(), 1);
+        s.settings.paused = false;
+        // 0 desliga o limite sem PR.
+        s.settings.idle_timeout_min = 0;
+        assert!(ends(&decide(&s)).is_empty());
+    }
+
+    #[test]
+    fn so_encerra_sessao_autonoma_ociosa_de_ambiente_autonomo() {
+        let mut s = snap(SAB);
+        s.settings.idle_timeout_min = 30;
+        s.sessions
+            .push(session("s1", "env-auto", 123, SessionState::Idle));
+        // Sessão comum (sem início autônomo): nunca.
+        idle(&mut s, "s1", SAB - 10 * H, false, true);
+        assert!(ends(&decide(&s)).is_empty());
+        // Rodando: nunca (só a ociosa).
+        idle(&mut s, "s1", SAB - 10 * H, true, true);
+        s.sessions[0].state = SessionState::Running;
+        assert!(ends(&decide(&s)).is_empty());
+        s.sessions[0].state = SessionState::Idle;
+        // Ambiente que não é autônomo: nunca.
+        s.envs.get_mut("env-auto").unwrap().autonomous = false;
+        assert!(ends(&decide(&s)).is_empty());
+    }
+
+    #[test]
+    fn estacionada_nunca_encerra_e_a_que_terminou_nao_estaciona() {
+        // Conta em 100% da 5h: a ociosa sem PR estaciona, não encerra.
+        let mut s = snap(SAB);
+        s.settings.idle_timeout_min = 30;
+        s.accounts
+            .insert("conta-a".into(), account(100.0, 40.0, SAB));
+        s.sessions
+            .push(session("s1", "env-auto", 123, SessionState::Idle));
+        idle(&mut s, "s1", SAB - 10 * H, true, false);
+        let o = decide(&s);
+        assert!(ends(&o).is_empty());
+        let parked = match &o.actions[..] {
+            [Action::Park(p)] => p.clone(),
+            a => panic!("{a:?}"),
+        };
+        // Estacionada, esperando o reset: nem com a conta já renovada, nem
+        // com a issue com PR, encerra.
+        s.parked.push(parked);
+        s.accounts
+            .insert("conta-a".into(), account(10.0, 40.0, SAB));
+        assert!(ends(&decide(&s)).is_empty());
+        idle(&mut s, "s1", SAB - 10 * H, true, true);
+        assert!(ends(&decide(&s)).is_empty());
+        // A que terminou a issue (PR aberto) não estaciona: encerra.
+        s.parked.clear();
+        s.accounts
+            .insert("conta-a".into(), account(100.0, 40.0, SAB));
+        let o = decide(&s);
+        assert_eq!(ends(&o), vec![("s1".to_string(), END_DONE)]);
+        assert!(!o.actions.iter().any(|a| matches!(a, Action::Park(_))));
     }
 }

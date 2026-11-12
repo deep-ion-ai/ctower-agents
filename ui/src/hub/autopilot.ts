@@ -200,6 +200,13 @@ export const SKIP_TEXT: Record<string, string> = {
 
 export const skipText = (s: string) => SKIP_TEXT[s] ?? s;
 
+/** Encerramento da sessão autônoma ociosa; `undefined` = hub anterior. */
+export function idleText(min: number | undefined): string {
+  if (min === undefined) return "";
+  const pr = "A sessão autônoma ociosa com PR aberto é encerrada (dá para retomá-la)";
+  return min === 0 ? `${pr}.` : `${pr}, e a sem PR depois de ${min} min ociosa.`;
+}
+
 /** Contagens de um projeto do resumo: "2 mescladas na wip · 1 bloqueada". */
 export function digestCounts(p: DigestProject): string {
   const n = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;

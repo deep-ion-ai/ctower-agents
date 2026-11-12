@@ -117,12 +117,22 @@ O Docker sobe o container de novo depois de um reboot, por causa do `restart: un
 sed -e "s|@DIR@|$PWD|g" -e "s|@PROJECT@|ct-autonomo|g" ct-autonomo.service \
   | sudo tee /etc/systemd/system/ct-autonomo.service
 sudo systemctl daemon-reload
-sudo systemctl enable ct-autonomo
+sudo systemctl enable --now ct-autonomo
 ```
 
 O `@PROJECT@` é o projeto do compose: `ct-autonomo`, o `name:` do compose.yml, ou o `-p` de um container por dono (abaixo).
 
-A unidade não recebe tokens. Ela acha o container já criado com `docker compose ps -aq autonomo` e o sobe com `docker start`: o Docker guarda os secrets com o container. Se não há container, ela falha com a mensagem para criá-lo. Criar o container (primeira subida, versão nova ou token novo) é sempre no shell, como no passo 3.
+A unidade não recebe tokens. Ela acha o container já criado com `docker compose ps -aq autonomo` e o sobe com `docker start`: o Docker guarda os secrets com o container. Se não há container, o `systemctl start` falha com a mensagem para criá-lo (depois de 3 tentativas em 2 minutos, a unidade desiste e fica `failed`). Criar o container (primeira subida, versão nova ou token novo) é sempre no shell, como no passo 3.
+
+O systemd **acompanha o container**: o processo principal da unidade é o `docker start -a`, que fica ligado ao container até ele parar. Se o container já estava rodando (subido pelo Docker no boot, por um `docker compose up -d` ou por um `docker start` à mão), o `systemctl start` só se liga a ele, sem reiniciá-lo. Assim:
+
+- `systemctl status ct-autonomo` mostra o estado real (`active` com o container rodando), e os logs do container também vão para o journal da unidade.
+- `sudo systemctl stop ct-autonomo` roda o `docker compose stop` (funciona sem os logins) e para o container, mesmo que ele tenha sido subido por fora. Para o Docker, é um stop manual: o `restart: unless-stopped` não o sobe de novo, só a unidade.
+- O container parou sozinho, o Docker o reiniciou ou ele foi recriado (`docker compose up -d` com versão ou token novo): a unidade se liga de novo em 10 s (`Restart=always`), no container novo se ele foi recriado.
+- Com a unidade ativa, pare pelo `systemctl stop`: um `docker stop` ou `docker compose stop` por fora também volta em 10 s. Para mexer à mão no container, pare a unidade antes.
+- Com a unidade inativa (ex.: desabilitada, e o container subido pelo Docker no boot), `systemctl stop` não faz nada: rode `sudo systemctl start ct-autonomo` para ela passar a acompanhar o container.
+
+Uma unidade instalada antes (com `Type=oneshot`) não acompanhava o container: reinstale com o `sed` acima e `sudo systemctl daemon-reload`.
 
 No Compose recente, `docker compose up` e `docker compose start` **sem os logins no shell** recusam rodar, mesmo com o container já criado ("environment variable \"CLAUDE_CODE_OAUTH_TOKEN\" required by secret ... is not set"). Para subir de novo um container parado, use `sudo systemctl start ct-autonomo` ou `docker start $(docker compose ps -aq autonomo)`, não o `docker compose start`. O `docker compose stop`, o `ps` e o `logs` funcionam sem os logins.
 

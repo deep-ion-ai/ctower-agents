@@ -29,6 +29,10 @@ const FIRST_TICK: Duration = Duration::from_secs(20);
 /// por este tempo.
 const PENDING_START_MS: i64 = 10 * 60_000;
 
+/// Uma sessão que o agendador encerrou e o ambiente ainda não
+/// sincronizou não é encerrada de novo por este tempo.
+const PENDING_END_MS: i64 = 10 * 60_000;
+
 /// Texto do `session.resume` da sessão estacionada que encerrou.
 /// O mesmo texto do `session.continue` do ambiente
 /// (`ct_sessions::remote::CONTINUE_TEXT`).
@@ -186,6 +190,15 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
         });
     }
     s.parked = hub.list_parked()?;
+    s.idle = hub
+        .autopilot_idle_sessions()?
+        .into_iter()
+        .map(|i| (i.session_id.clone(), i))
+        .collect();
+    s.ended = hub
+        .autopilot_recent_ends(now - PENDING_END_MS)?
+        .into_iter()
+        .collect();
     for p in hub.list_projects()? {
         if !p.autonomy.is_on() {
             continue;
@@ -363,6 +376,42 @@ pub async fn tick(hub: &SharedHub, port: &dyn EnvPort, now: i64) -> Result<usize
                             now,
                         ));
                     }
+                }
+            }
+            Action::End {
+                session: x,
+                reason,
+                message,
+            } => {
+                let slug = format!("{}/{}#{}", x.owner, x.repo, x.gh_number);
+                let ev = |kind: &str, reason: &str, message: String| AutopilotEvent {
+                    env_id: Some(x.env_id.clone()),
+                    owner: Some(x.owner.clone()),
+                    repo: Some(x.repo.clone()),
+                    gh_number: Some(x.gh_number),
+                    session_id: Some(x.session_id.clone()),
+                    reason: Some(reason.into()),
+                    ..event(kind, format!("item:{slug}"), message, now)
+                };
+                match port
+                    .call(
+                        x.env_id.clone(),
+                        "session.kill",
+                        json!({ "session_id": x.session_id }),
+                    )
+                    .await
+                {
+                    Ok(_) => events.push(ev("ended", reason, message)),
+                    // Canal caiu entre a fotografia e a chamada: tenta no
+                    // próximo ciclo.
+                    Err((c, _))
+                        if c == ct_http::sync::CHANNEL_ENV_OFFLINE
+                            || c == ct_http::sync::CHANNEL_TIMEOUT => {}
+                    Err((_, m)) => events.push(ev(
+                        "end_failed",
+                        reason,
+                        format!("{slug}: o encerramento da sessão ociosa falhou: {m}"),
+                    )),
                 }
             }
             Action::Start(i) => {
@@ -642,13 +691,36 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     Ok((json!(hub.autonomy_wip(only).map_err(e)?), false))
                 }
                 "hub.autopilot.set" => {
-                    let n = p
-                        .get("max_sessions_per_env")
-                        .and_then(Value::as_u64)
-                        .ok_or_else(|| invalid("parâmetro obrigatório: max_sessions_per_env"))?;
-                    let s = hub
-                        .set_autopilot_max_per_env(n.min(u32::MAX as u64) as u32, now)
-                        .map_err(e)?;
+                    let num = |k: &str| -> Result<Option<u32>, (i64, String)> {
+                        match p.get(k) {
+                            None | Some(Value::Null) => Ok(None),
+                            Some(v) => v
+                                .as_u64()
+                                .map(|n| Some(n.min(u32::MAX as u64) as u32))
+                                .ok_or_else(|| invalid(format!("{k} deve ser um inteiro"))),
+                        }
+                    };
+                    let max = num("max_sessions_per_env")?;
+                    let idle = num("idle_timeout_min")?;
+                    if max.is_none() && idle.is_none() {
+                        return Err(invalid(
+                            "parâmetro obrigatório: max_sessions_per_env ou idle_timeout_min",
+                        ));
+                    }
+                    // Confere os dois antes de gravar qualquer um.
+                    if idle.is_some_and(|n| n > ct_ledger::AUTOPILOT_IDLE_TIMEOUT_MAX_MIN) {
+                        return Err(invalid(format!(
+                            "minutos de sessão ociosa: de 0 a {}",
+                            ct_ledger::AUTOPILOT_IDLE_TIMEOUT_MAX_MIN
+                        )));
+                    }
+                    let mut s = hub.autopilot_settings().map_err(e)?;
+                    if let Some(n) = max {
+                        s = hub.set_autopilot_max_per_env(n, now).map_err(e)?;
+                    }
+                    if let Some(n) = idle {
+                        s = hub.set_autopilot_idle_timeout(n, now).map_err(e)?;
+                    }
                     Ok((json!(s), true))
                 }
                 _ => Err((-32601, format!("método desconhecido: {method2}"))),
@@ -682,6 +754,8 @@ mod tests {
         calls: Mutex<Vec<(String, String, Value)>>,
         /// Resposta de `session.start`; `None` = `{ "id": "s-<n>" }`.
         start_error: Option<(i64, String)>,
+        /// Erro de `session.kill`; `None` = encerra.
+        kill_error: Option<(i64, String)>,
     }
 
     impl EnvPort for FakePort {
@@ -702,6 +776,9 @@ mod tests {
             let r = match (&self.start_error, method) {
                 (Some(e), "session.start") => Err(e.clone()),
                 (_, "session.start") => Ok(json!({ "id": format!("s-{n}") })),
+                (_, "session.kill") if self.kill_error.is_some() => {
+                    Err(self.kill_error.clone().unwrap())
+                }
                 _ => Ok(json!({})),
             };
             Box::pin(async move { r })
@@ -1101,5 +1178,191 @@ mod tests {
         assert_eq!(wip[0]["base"], "develop");
         assert!(crate::web::web_allowed("hub.autopilot.digest"));
         assert!(crate::web::web_allowed("hub.autopilot.wip"));
+    }
+
+    /// Sessão ociosa `id` da issue 123 em `env-auto`, iniciada em `started`
+    /// e ociosa desde `since`.
+    fn idle_session(hub: &SharedHub, id: &str, started: i64, since: i64) -> i64 {
+        let h = hub.lock();
+        let wi = h.find_work_item("acme", "acme-web", 123).unwrap().unwrap();
+        h.conn()
+            .execute(
+                "INSERT INTO session (id, env_id, work_item_id, tool, cwd, state, started_at,
+                                      last_event_at)
+                 VALUES (?1, 'env-auto', ?2, 'claude', '/tmp/acme-web', 'idle', ?3, ?4)",
+                rusqlite::params![id, wi.id, started, since],
+            )
+            .unwrap();
+        wi.id
+    }
+
+    fn kills(port: &FakePort) -> Vec<Value> {
+        port.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, m, _)| m == "session.kill")
+            .map(|(_, _, p)| p.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn encerra_a_sessao_autonoma_ociosa_com_a_issue_em_revisao() {
+        let hub = hub();
+        let wi = idle_session(&hub, "s1", SAB - H, SAB - 10 * 60_000);
+        // Iniciada pelo agendador; a issue foi a `em_revisao` (PR aberto).
+        hub.lock()
+            .record_autopilot_event(&AutopilotEvent {
+                session_id: Some("s1".into()),
+                ..event(
+                    "started",
+                    "project:acme/acme-web".into(),
+                    "x".into(),
+                    SAB - H,
+                )
+            })
+            .unwrap();
+        hub.lock()
+            .conn()
+            .execute(
+                "UPDATE work_item SET status = 'em_revisao' WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        let port = FakePort::default();
+        tick(&hub, &port, SAB).await.unwrap();
+        assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
+        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        assert_eq!(ev[0].kind, "ended");
+        assert_eq!(ev[0].reason.as_deref(), Some(plan::END_DONE));
+        assert_eq!(ev[0].session_id.as_deref(), Some("s1"));
+        assert_eq!(ev[0].scope, "item:acme/acme-web#123");
+        // O ambiente ainda não sincronizou: o ciclo seguinte não encerra de
+        // novo.
+        port.calls.lock().unwrap().clear();
+        tick(&hub, &port, SAB + 60_000).await.unwrap();
+        assert!(kills(&port).is_empty());
+    }
+
+    #[tokio::test]
+    async fn encerra_a_sessao_autonoma_ociosa_sem_pr_depois_do_limite() {
+        let hub = hub();
+        let wi = idle_session(&hub, "s1", SAB - H, SAB - 20 * 60_000);
+        // Início autônomo da issue (feito à mão, pela UI) antes da sessão.
+        hub.lock()
+            .conn()
+            .execute(
+                "INSERT INTO event (uid, env_id, hlc, ts, project_id, work_item_id, type, payload)
+                 SELECT 'u-auto', 'env-auto', 1, ?1, project_id, id, 'autonomy_session', '{}'
+                 FROM work_item WHERE id = ?2",
+                rusqlite::params![SAB - H - 1000, wi],
+            )
+            .unwrap();
+        let port = FakePort::default();
+        tick(&hub, &port, SAB).await.unwrap();
+        assert!(kills(&port).is_empty());
+        // Ajuste pelo `hub.autopilot.set`: 15 minutos.
+        let st = HubState::new(hub.clone(), "ui", "hub", "hub-id");
+        let v = call(
+            &st,
+            "hub.autopilot.set",
+            json!({ "idle_timeout_min": 15 }),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["idle_timeout_min"], 15);
+        assert_eq!(v["max_sessions_per_env"], 1);
+        assert!(call(
+            &st,
+            "hub.autopilot.set",
+            json!({ "max_sessions_per_env": 2, "idle_timeout_min": 99_999 }),
+            false,
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            hub.lock()
+                .autopilot_settings()
+                .unwrap()
+                .max_sessions_per_env,
+            1
+        );
+        assert!(call(&st, "hub.autopilot.set", json!({}), false)
+            .await
+            .is_err());
+        tick(&hub, &port, SAB).await.unwrap();
+        assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
+        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        assert_eq!(ev[0].kind, "ended");
+        assert_eq!(ev[0].reason.as_deref(), Some(plan::END_IDLE));
+        assert!(ev[0].message.contains("15 min"), "{}", ev[0].message);
+    }
+
+    #[tokio::test]
+    async fn sessao_comum_ociosa_no_ambiente_autonomo_nao_encerra() {
+        let hub = hub();
+        let wi = idle_session(&hub, "s1", SAB - 10 * H, SAB - 9 * H);
+        // O início autônomo veio depois desta sessão: ela não é autônoma.
+        hub.lock()
+            .conn()
+            .execute(
+                "INSERT INTO event (uid, env_id, hlc, ts, project_id, work_item_id, type, payload)
+                 SELECT 'u-auto', 'env-auto', 1, ?1, project_id, id, 'autonomy_session', '{}'
+                 FROM work_item WHERE id = ?2",
+                rusqlite::params![SAB - 5 * H, wi],
+            )
+            .unwrap();
+        hub.lock()
+            .conn()
+            .execute(
+                "UPDATE work_item SET status = 'em_revisao' WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        let port = FakePort::default();
+        tick(&hub, &port, SAB).await.unwrap();
+        assert!(kills(&port).is_empty());
+    }
+
+    #[tokio::test]
+    async fn falha_ao_encerrar_vira_um_evento_so() {
+        let hub = hub();
+        let wi = idle_session(&hub, "s1", SAB - H, SAB - 10 * 60_000);
+        hub.lock()
+            .record_autopilot_event(&AutopilotEvent {
+                session_id: Some("s1".into()),
+                ..event(
+                    "started",
+                    "project:acme/acme-web".into(),
+                    "x".into(),
+                    SAB - H,
+                )
+            })
+            .unwrap();
+        hub.lock()
+            .conn()
+            .execute(
+                "UPDATE work_item SET status = 'em_revisao' WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        let port = FakePort {
+            kill_error: Some((-32602, "sessão s1 não está rodando neste daemon".into())),
+            ..Default::default()
+        };
+        // Falhou: espera `PENDING_END_MS` antes de tentar de novo, e a falha
+        // repetida não vira outro evento.
+        for i in 0..3 {
+            tick(&hub, &port, SAB + i * 60_000).await.unwrap();
+        }
+        assert_eq!(kills(&port).len(), 1);
+        tick(&hub, &port, SAB + PENDING_END_MS + 1).await.unwrap();
+        assert_eq!(kills(&port).len(), 2);
+        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let failed: Vec<_> = ev.iter().filter(|e| e.kind == "end_failed").collect();
+        assert_eq!(failed.len(), 1, "{ev:?}");
+        assert_eq!(failed[0].reason.as_deref(), Some(plan::END_DONE));
+        assert!(failed[0].message.contains("não está rodando"));
     }
 }

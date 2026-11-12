@@ -3,6 +3,7 @@ import {
   bandSummary,
   endInput,
   hhmmToMin,
+  idleText,
   localTime,
   minToHHMM,
   nextOpenText,
@@ -93,4 +94,12 @@ test("resumo da faixa", () => {
   expect(bandSummary({ label: "f", days: [6, 5], start_min: 0, end_min: 1440, five_hour_cap: 95, workday: false })).toBe(
     "sáb, dom 00:00–24:00 · 5h até 95%",
   );
+});
+
+test("sessão autônoma ociosa", () => {
+  expect(idleText(30)).toBe(
+    "A sessão autônoma ociosa com PR aberto é encerrada (dá para retomá-la), e a sem PR depois de 30 min ociosa.",
+  );
+  expect(idleText(0)).toBe("A sessão autônoma ociosa com PR aberto é encerrada (dá para retomá-la).");
+  expect(idleText(undefined)).toBe("");
 });
