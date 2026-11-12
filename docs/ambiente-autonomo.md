@@ -79,9 +79,19 @@ docker compose exec -T autonomo ctower hub set-agent-token
 
 Se o `cthubd` não está no `PATH` do ssh, use o caminho completo (`~/.cargo/bin/cthubd`, na instalação do `provision.sh`). O `ctower hub set-token` grava o token e o `env_id` em `~/.config/ctower` (`0600`, no volume). Ele pede para reiniciar o `ctowerd`, mas aqui não precisa: o entrypoint ainda não o subiu. Em seguida, o entrypoint:
 
-1. instala o statusline e marca o onboarding do Claude Code como feito;
+1. instala o statusline e marca as telas da primeira execução do Claude Code, que prenderiam uma sessão sem ninguém no terminal (veja abaixo);
 2. liga o `gh` como helper de credencial do `git` (`gh auth setup-git`). O helper lê o `GH_TOKEN` do ambiente, e o `~/.gitconfig` não guarda token;
 3. sobe o `ctowerd`, e o ambiente aparece online no hub.
+
+O que o entrypoint marca no Claude Code a cada subida (idempotente):
+
+| Arquivo | Chave | Evita |
+|---|---|---|
+| `~/.claude.json` | `hasCompletedOnboarding = true` | o onboarding (tema, login, avisos iniciais) |
+| `~/.claude.json` | `hasSeenAutoDefaultNudge = true` | a oferta "Make auto mode your default permission mode?", que aparece depois da primeira resposta quando o `defaultMode` não é `auto` |
+| `~/.claude/settings.json` | `permissions.defaultMode = "bypassPermissions"`, `skipDangerousModePermissionPrompt = true` | os prompts de permissão e o aviso do modo sem prompts (só com `CT_AUTONOMO_SEM_PROMPTS=1`) |
+
+O diálogo de confiança na pasta não entra aqui: o `ctowerd` pré-aprova a worktree de cada sessão no `~/.claude.json` ao lançá-la.
 
 Nas subidas seguintes, o que já foi gravado não muda. Quem roda o container sem o compose pode passar os tokens do hub em `CT_HUB_TOKEN` e `CT_HUB_AGENT_TOKEN` (como no `provision.sh`), em vez do pipe: o entrypoint os grava e os tira do ambiente antes de subir o `ctowerd`.
 

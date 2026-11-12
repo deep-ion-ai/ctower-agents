@@ -89,6 +89,7 @@ jq -e '.statusLine.command | contains("statusline")' "$S" >/dev/null || fail "st
 jq -e '.permissions.defaultMode == "bypassPermissions" and .skipDangerousModePermissionPrompt' "$S" >/dev/null \
   || fail "prompts de permissão não desligados"
 jq -e '.hasCompletedOnboarding' "$T/home/.claude.json" >/dev/null || fail "onboarding"
+jq -e '.hasSeenAutoDefaultNudge' "$T/home/.claude.json" >/dev/null || fail "oferta do auto mode não calada"
 [[ "$(HOME="$T/home" git config --global user.email)" == fulano@example.com ]] || fail "git user.email"
 
 # (3) O que chega ao ctowerd e o que fica em arquivo.
@@ -109,6 +110,8 @@ cmp -s "$C/config.toml" "$T/config.antes" || fail "a segunda subida mudou o conf
 jq -e '(.permissions.defaultMode // "") != "bypassPermissions" and (has("skipDangerousModePermissionPrompt") | not)' "$S" >/dev/null \
   || fail "CT_AUTONOMO_SEM_PROMPTS=0 não religou os prompts"
 jq -e '.statusLine.command | contains("statusline")' "$S" >/dev/null || fail "statusline sumiu"
+jq -e '.hasCompletedOnboarding and .hasSeenAutoDefaultNudge' "$T/home/.claude.json" >/dev/null \
+  || fail "a segunda subida perdeu as marcas da primeira execução"
 [[ -s $E ]] || fail "o ctowerd não subiu na segunda vez"
 
 echo "ok: entrypoint do ambiente autônomo"
