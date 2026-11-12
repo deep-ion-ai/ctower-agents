@@ -147,6 +147,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Compilar
         run: cargo build --release --locked -p ctowerd -p ctower
+      # A imagem do ambiente autônomo (docker/autonomo) é bookworm, com a
+      # glibc 2.36. Um CI_RUNNER_LINUX mais novo (Ubuntu 24.04 pede a 2.39)
+      # geraria um binário que não roda nela.
+      - name: Conferir a glibc
+        if: matrix.os == 'linux'
+        run: |
+          MAX=$(objdump -T target/release/ctowerd target/release/ctower | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "glibc máxima pedida: ${MAX:-nenhuma}"
+          VER=${MAX#GLIBC_}
+          if [ -n "$VER" ] && [ "$(printf '%s\n' "$VER" 2.36 | sort -V | tail -1)" != 2.36 ]; then
+            echo "::error::os binários pedem $MAX, mas a imagem de docker/autonomo (bookworm) tem a glibc 2.36. Compile num runner com glibc <= 2.36 (docs/ambiente-autonomo.md)."
+            exit 1
+          fi
       - name: Anexar à release
         env:
           GH_TOKEN: ${{ github.token }}
