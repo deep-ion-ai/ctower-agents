@@ -31,16 +31,48 @@
 //!   agendador as retoma, antes de iniciar qualquer outra na conta.
 //! - **Sessão autônoma ociosa:** a sessão autônoma ([`IdleSession`]) ociosa
 //!   num ambiente autônomo online é encerrada (`session.kill`, retomável
-//!   como qualquer encerrada) quando a issue já tem PR aberto (ou está em
-//!   revisão), depois de [`DONE_GRACE_MS`] (`pr_aberto`), ou, sem PR, depois
-//!   de `idle_timeout_min` (`sessao_ociosa`), se a conta não está com a
-//!   janela esgotada (aí ela estaciona). A estacionada nunca é encerrada, e
-//!   a que terminou a issue não estaciona: não há o que continuar.
+//!   como qualquer encerrada) quando a issue já tem PR mesclado ou está em
+//!   revisão (ou tem PR aberto contra outra base que não a branch de
+//!   integração), depois de [`DONE_GRACE_MS`] (`pr_aberto`), ou, sem PR,
+//!   depois de `idle_timeout_min` (`sessao_ociosa`), se a conta não está com
+//!   a janela esgotada (aí ela estaciona). A estacionada nunca é encerrada,
+//!   e a que terminou a issue não estaciona: não há o que continuar.
+//! - **Fechamento autônomo (#184):** a sessão autônoma ociosa cuja issue
+//!   tem PR aberto contra a branch de integração do projeto ([`Closing`])
+//!   não encerra com o PR só aberto: o hub dirige o fechamento pelo
+//!   `session.continue` com texto (ambiente a partir de
+//!   [`CONTINUE_TEXT_PROTOCOL`]).
+//!   - CI pendente, ou checks ainda não lidos para o head atual: espera.
+//!   - Checks concluídos com falha num head ainda não enviado: manda ao
+//!     agente o pedido de correção ([`feedback_text`]: instrução fixa e os
+//!     dados do espelho entre delimitadores, sem logs nem corpos externos)
+//!     e conta uma tentativa. Com `max_ci_attempts` tentativas já feitas,
+//!     a falha seguinte bloqueia a issue (`ci_tentativas_esgotadas`).
+//!   - Thread não resolvida ou review que pede mudanças de colaborador (não
+//!     externo) ainda não enviada: manda o pedido de correção, sem contar
+//!     tentativa.
+//!   - CI verde, sem pendência de colaborador e com as reviews lidas para a
+//!     versão atual do PR: pede o merge com rebase uma vez por head
+//!     ([`merge_text`]). Sem nenhum check, o head conta como verde
+//!     [`NO_CHECKS_GREEN_MS`] depois de o hub vê-lo lido.
+//!   - Nada novo a enviar e ociosa há `idle_timeout_min` desde o último
+//!     envio: bloqueia (`sem_progresso`).
+//!   - Depois do merge, o PR sai de aberto e a issue vai para `em_revisao`:
+//!     a regra `pr_aberto` acima encerra a sessão.
+//!   - Ambiente sem o texto no `session.continue`: o comportamento anterior
+//!     (`pr_aberto`), com uma recusa `env_outdated` no escopo `env:`.
+//! - **Aguardando você (#184):** a sessão autônoma viva cujo work item está
+//!   em `aguardando_voce` há `waiting_timeout_min` é encerrada e a issue
+//!   fica `bloqueado` (`aguardando_voce`). A estacionada nunca, nem a da
+//!   conta com a janela esgotada (essa estaciona).
 
 use ct_core::plan::budget::{BlockReason, BudgetDecision};
 use ct_core::plan::{PlanView, WindowView};
 use ct_core::{Priority, SessionState, WipUsage, WorkItemKind, WorkItemStatus};
-use ct_ledger::{AutopilotSession, AutopilotSettings, IdleSession, ParkedSession};
+use ct_ledger::{
+    pr_feedback_text, AutopilotSession, AutopilotSettings, ChecksState, CloseState,
+    FeedbackTextOptions, IdleSession, ParkedSession, PrChecks, PrFeedback, PrRow, WaitingSession,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,6 +89,80 @@ pub const END_DONE: &str = "pr_aberto";
 /// `reason` do evento `ended`: ociosa sem PR por mais de
 /// `idle_timeout_min`.
 pub const END_IDLE: &str = "sessao_ociosa";
+
+/// `reason` do evento `blocked`: o CI falhou de novo depois das
+/// `max_ci_attempts` tentativas de correção.
+pub const BLOCK_ATTEMPTS: &str = "ci_tentativas_esgotadas";
+/// `reason` do evento `blocked`: parada em "Aguardando você" por mais de
+/// `waiting_timeout_min`.
+pub const BLOCK_WAITING: &str = "aguardando_voce";
+/// `reason` do evento `blocked`: ociosa com o PR na branch de integração e
+/// nada novo a enviar por mais de `idle_timeout_min`.
+pub const BLOCK_STALLED: &str = "sem_progresso";
+/// `reason` do evento `feedback_sent`: checks falharam.
+pub const FEEDBACK_CI: &str = "ci_falhou";
+/// `reason` do evento `feedback_sent`: review de colaborador pendente.
+pub const FEEDBACK_REVIEW: &str = "review";
+/// `reason` do evento `merge_requested`.
+pub const MERGE_GREEN: &str = "ci_verde";
+/// `reason` da recusa no escopo `env:`: o ambiente não aceita texto no
+/// `session.continue`.
+pub const ENV_OUTDATED: &str = "env_outdated";
+
+/// Versão do protocolo do ambiente com o `text` no `session.continue`.
+pub const CONTINUE_TEXT_PROTOCOL: (u32, u32) = (2, 22);
+
+/// Head sem nenhum check conta como verde depois disto desde que o hub o
+/// viu lido (repositório sem CI). Dá tempo ao Actions de registrar os
+/// checks do push.
+pub const NO_CHECKS_GREEN_MS: i64 = 10 * 60_000;
+
+/// Instrução fixa do pedido de correção, antes dos dados.
+pub const FEEDBACK_REQUEST: &str = "Piloto automático do Control Tower: o PR desta issue \
+precisa de correção (checks do CI falharam ou há review de colaborador pendente). Corrija, \
+faça push na mesma branch e responda nas threads de review. Use as ferramentas pr_feedback \
+e pr_check_log do Control Tower para ver os detalhes e os logs dos checks. Não mescle o PR \
+agora: o hub pede o merge quando o CI passar.";
+
+/// O pedido de merge: CI verde no PR `n`, base `branch`.
+pub fn merge_text(n: i64, branch: &str) -> String {
+    format!(
+        "Piloto automático do Control Tower: CI verde no PR #{n}, sem review pendente. Mescle \
+         o PR #{n} na {branch} com `gh pr merge {n} --rebase` e encerre (não mescle em outra \
+         branch nem abra outro PR)."
+    )
+}
+
+/// O pedido de correção do PR: [`FEEDBACK_REQUEST`] e o feedback do
+/// espelho ([`pr_feedback_text`], sem logs nem corpos externos). Passando
+/// de `ct_core::autonomy::CONTINUE_TEXT_MAX_BYTES`, vai só a instrução e o
+/// aviso para ler pelo `pr_feedback`.
+pub fn feedback_text(pr: &PrRow, checks: Option<&PrChecks>, fb: Option<&PrFeedback>) -> String {
+    let full = pr_feedback_text(
+        pr,
+        checks,
+        fb,
+        &FeedbackTextOptions {
+            request: Some(FEEDBACK_REQUEST),
+            include_external_bodies: false,
+            logs: &[],
+        },
+    );
+    if full.len() <= ct_core::autonomy::CONTINUE_TEXT_MAX_BYTES {
+        return full;
+    }
+    format!(
+        "{FEEDBACK_REQUEST}\n\nO feedback do PR #{} passou do tamanho que cabe aqui: leia com \
+         a ferramenta pr_feedback.",
+        pr.number
+    )
+}
+
+/// `major.minor` do protocolo do ambiente (`env.info.protocol`).
+pub fn parse_protocol(v: &str) -> Option<(u32, u32)> {
+    let (a, b) = v.trim().split_once('.')?;
+    Some((a.parse().ok()?, b.split('.').next()?.parse().ok()?))
+}
 
 /// Fotografia do hub para uma decisão.
 #[derive(Debug, Clone, Default)]
@@ -77,6 +183,25 @@ pub struct Snapshot {
     /// Sessões que o agendador acabou de encerrar (o ambiente ainda não
     /// sincronizou): não encerra de novo.
     pub ended: BTreeSet<String>,
+    /// Sessões vivas em "Aguardando você", por id (#184).
+    pub waiting: BTreeMap<String, WaitingSession>,
+    /// Sessões autônomas ociosas com o PR aberto da issue contra a branch
+    /// de integração do projeto, por id (#184).
+    pub closing: BTreeMap<String, Closing>,
+}
+
+/// O PR aberto de uma issue autônoma contra a branch de integração (#184),
+/// com o que o espelho do hub sabe dele.
+#[derive(Debug, Clone)]
+pub struct Closing {
+    pub work_item_id: i64,
+    /// Branch de integração do projeto.
+    pub integration: String,
+    pub pr: PrRow,
+    pub checks: Option<PrChecks>,
+    pub feedback: Option<PrFeedback>,
+    /// O que já foi enviado (padrão = nada).
+    pub state: CloseState,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -87,6 +212,10 @@ pub struct EnvSnap {
     pub autonomous: bool,
     /// Chave da conta do Claude Code do ambiente; `None` = desconhecida.
     pub account: Option<String>,
+    /// O ambiente aceita texto no `session.continue` (protocolo
+    /// [`CONTINUE_TEXT_PROTOCOL`] ou mais novo, #184); `None` = não se sabe
+    /// (sem `env.info` neste ciclo): o fechamento espera.
+    pub continue_text: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -184,6 +313,37 @@ pub enum Action {
         reason: &'static str,
         message: String,
     },
+    /// Manda um texto à sessão autônoma (`session.continue` com `text`) e,
+    /// se o ambiente aceitar, grava `close` (#184).
+    Send {
+        session: AutopilotSession,
+        kind: SendKind,
+        close: CloseState,
+        text: String,
+        message: String,
+    },
+    /// Grava o estado do fechamento sem enviar nada (o head novo lido).
+    Track(CloseState),
+    /// Encerra a sessão autônoma (`session.kill`) e põe a issue em
+    /// `bloqueado` com o motivo (#184).
+    Block {
+        session: AutopilotSession,
+        work_item_id: i64,
+        /// [`BLOCK_ATTEMPTS`], [`BLOCK_WAITING`] ou [`BLOCK_STALLED`].
+        reason: &'static str,
+        /// Motivo no status da issue.
+        status_reason: String,
+        message: String,
+    },
+}
+
+/// O que o texto do [`Action::Send`] pede.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendKind {
+    /// Correção: [`FEEDBACK_CI`] ou [`FEEDBACK_REVIEW`].
+    Feedback(&'static str),
+    /// Merge com o CI verde.
+    Merge,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -297,6 +457,197 @@ fn skip_of(item: &ItemSnap, label: Option<&str>, live: bool) -> Option<&'static 
     }
 }
 
+/// Ids das threads e reviews de colaborador (não externos) pendentes, em
+/// ordem.
+fn collaborator_items(fb: Option<&PrFeedback>) -> Vec<String> {
+    let mut ids: Vec<String> = fb
+        .map(|f| {
+            f.threads
+                .iter()
+                .filter(|t| !t.external)
+                .map(|t| t.id.clone())
+                .chain(
+                    f.changes_requested
+                        .iter()
+                        .filter(|c| !c.external)
+                        .map(|c| c.id.clone()),
+                )
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
+}
+
+/// O fechamento de uma sessão autônoma ociosa com o PR na branch de
+/// integração (veja o módulo).
+fn close_step(
+    s: &Snapshot,
+    x: &AutopilotSession,
+    i: &IdleSession,
+    c: &Closing,
+    slug: &str,
+) -> Vec<Action> {
+    let now = s.now;
+    let n = c.pr.number;
+    let mut st = CloseState {
+        work_item_id: c.work_item_id,
+        ..c.state.clone()
+    };
+    // Checks ainda não lidos para o head atual: espera.
+    let Some(head) = c.pr.head_sha.clone() else {
+        return Vec::new();
+    };
+    let Some(checks) = c.checks.as_ref().filter(|k| k.head_sha == head) else {
+        return Vec::new();
+    };
+    if st.head_sha.as_deref() != Some(head.as_str()) {
+        st.head_sha = Some(head.clone());
+        st.head_seen_at = Some(now);
+    }
+    let track = |st: CloseState| -> Vec<Action> {
+        if st != c.state {
+            vec![Action::Track(st)]
+        } else {
+            Vec::new()
+        }
+    };
+    let seen_at = st.head_seen_at.unwrap_or(now);
+    let completed = checks.completed();
+    let failed = completed && checks.state == ChecksState::Failure;
+    let no_checks = checks.checks.is_empty();
+    let green = (completed && checks.state == ChecksState::Success)
+        || (no_checks && now - seen_at >= NO_CHECKS_GREEN_MS);
+    // CI pendente (ou repositório sem checks ainda no prazo): espera.
+    if !failed && !green {
+        return track(st);
+    }
+    let collab = collaborator_items(c.feedback.as_ref());
+    let new_items = collab.iter().any(|id| !st.threads_sent.contains(id));
+    let max = s.settings.max_ci_attempts;
+    if failed && st.feedback_head.as_deref() != Some(head.as_str()) {
+        if st.attempts >= max {
+            let tries = if max == 0 {
+                "sem reenvio (0 tentativas configuradas)".to_string()
+            } else {
+                format!(
+                    "depois de {max} {}",
+                    if max == 1 {
+                        "tentativa de correção"
+                    } else {
+                        "tentativas de correção"
+                    }
+                )
+            };
+            return vec![Action::Block {
+                session: x.clone(),
+                work_item_id: c.work_item_id,
+                reason: BLOCK_ATTEMPTS,
+                status_reason: format!(
+                    "piloto automático: o CI do PR #{n} falhou {tries} (head {})",
+                    short(&head)
+                ),
+                message: format!(
+                    "{slug}: o CI do PR #{n} falhou {tries} (head {}); a sessão foi encerrada \
+                     e a issue ficou bloqueada",
+                    short(&head)
+                ),
+            }];
+        }
+        st.attempts += 1;
+        st.feedback_head = Some(head.clone());
+        st.threads_sent = collab;
+        st.last_sent_at = Some(now);
+        let message = format!(
+            "{slug}: o CI do PR #{n} falhou (head {}); o pedido de correção foi enviado ao \
+             agente (tentativa {} de {max})",
+            short(&head),
+            st.attempts
+        );
+        return vec![Action::Send {
+            session: x.clone(),
+            kind: SendKind::Feedback(FEEDBACK_CI),
+            close: st,
+            text: feedback_text(&c.pr, Some(checks), c.feedback.as_ref()),
+            message,
+        }];
+    }
+    if new_items {
+        let k = collab.len();
+        st.threads_sent = collab;
+        st.last_sent_at = Some(now);
+        return vec![Action::Send {
+            session: x.clone(),
+            kind: SendKind::Feedback(FEEDBACK_REVIEW),
+            close: st,
+            text: feedback_text(&c.pr, Some(checks), c.feedback.as_ref()),
+            message: format!(
+                "{slug}: o PR #{n} tem {k} {} de colaborador pendente(s); o pedido de \
+                 correção foi enviado ao agente (head {})",
+                if k == 1 { "review" } else { "reviews" },
+                short(&head)
+            ),
+        }];
+    }
+    let reviews_fresh = c
+        .feedback
+        .as_ref()
+        .is_some_and(|f| f.read_at_updated == Some(c.pr.updated_at));
+    if green
+        && collab.is_empty()
+        && reviews_fresh
+        && st.merge_head.as_deref() != Some(head.as_str())
+    {
+        st.merge_head = Some(head.clone());
+        st.last_sent_at = Some(now);
+        let sem = if no_checks { " (sem checks)" } else { "" };
+        return vec![Action::Send {
+            session: x.clone(),
+            kind: SendKind::Merge,
+            close: st,
+            text: merge_text(n, &c.integration),
+            message: format!(
+                "{slug}: CI verde no PR #{n}{sem} (head {}); o merge na {} foi pedido ao agente",
+                short(&head),
+                c.integration
+            ),
+        }];
+    }
+    // Nada novo a enviar: parada sem progresso depois do prazo.
+    let timeout_ms = i64::from(s.settings.idle_timeout_min) * 60_000;
+    let since = i.since.max(st.last_sent_at.unwrap_or(i64::MIN));
+    if timeout_ms > 0 && now - since >= timeout_ms {
+        let why = if failed {
+            "o CI segue falhando e o agente não mandou correção"
+        } else if !collab.is_empty() {
+            "há review de colaborador pendente"
+        } else if st.merge_head.as_deref() == Some(head.as_str()) {
+            "o merge foi pedido e não aconteceu"
+        } else {
+            "o PR não avançou"
+        };
+        let min = s.settings.idle_timeout_min;
+        return vec![Action::Block {
+            session: x.clone(),
+            work_item_id: c.work_item_id,
+            reason: BLOCK_STALLED,
+            status_reason: format!(
+                "piloto automático: PR #{n} parado há mais de {min} min ({why})"
+            ),
+            message: format!(
+                "{slug}: a sessão autônoma ficou ociosa por mais de {min} min com o PR #{n} \
+                 parado ({why}); foi encerrada e a issue ficou bloqueada"
+            ),
+        }];
+    }
+    track(st)
+}
+
 /// Decide o ciclo.
 pub fn decide(s: &Snapshot) -> Outcome {
     let mut out = Outcome::default();
@@ -368,7 +719,8 @@ pub fn decide(s: &Snapshot) -> Outcome {
         });
     }
 
-    // 2. Encerrar: sessões autônomas ociosas que terminaram a issue ou
+    // 2. Encerrar ou fechar: sessões autônomas paradas em "Aguardando
+    // você", com o PR na branch de integração, que terminaram a issue ou
     // pararam sem PR (veja o módulo).
     let exhausted_now = |key: &str| {
         s.accounts
@@ -377,28 +729,86 @@ pub fn decide(s: &Snapshot) -> Outcome {
             .is_some_and(|ex| ex.resets_at > now)
     };
     let timeout_ms = i64::from(s.settings.idle_timeout_min) * 60_000;
+    let waiting_ms = i64::from(s.settings.waiting_timeout_min) * 60_000;
     let mut done_ids: BTreeSet<&str> = BTreeSet::new();
+    let mut outdated_envs: BTreeSet<&str> = BTreeSet::new();
     for x in &s.sessions {
         if parked_ids.contains(x.session_id.as_str())
-            || x.state != SessionState::Idle
+            || !x.state.is_live()
             || s.ended.contains(&x.session_id)
         {
             continue;
         }
-        let Some(i) = s.idle.get(&x.session_id).filter(|i| i.autonomous) else {
-            continue;
-        };
         let Some(e) = env(&x.env_id).filter(|e| e.autonomous) else {
             continue;
         };
-        if i.done {
+        let idle = s
+            .idle
+            .get(&x.session_id)
+            .filter(|i| i.autonomous && x.state == SessionState::Idle);
+        let closing = s.closing.get(&x.session_id).filter(|_| idle.is_some());
+        let new_closing = closing.is_some() && e.continue_text != Some(false);
+        if idle.is_some_and(|i| i.done) && !new_closing {
             done_ids.insert(x.session_id.as_str());
         }
         if !e.online {
             continue;
         }
-        let idle_ms = now - i.since;
         let slug = format!("{}/{}#{}", x.owner, x.repo, x.gh_number);
+        let exhausted = e.account.as_deref().is_some_and(exhausted_now);
+        // "Aguardando você" além do prazo: bloqueia.
+        if let Some(w) = s.waiting.get(&x.session_id).filter(|w| w.autonomous) {
+            if waiting_ms > 0 && now - w.since >= waiting_ms && !exhausted {
+                let min = s.settings.waiting_timeout_min;
+                out.actions.push(Action::Block {
+                    session: x.clone(),
+                    work_item_id: w.work_item_id,
+                    reason: BLOCK_WAITING,
+                    status_reason: format!(
+                        "piloto automático: sessão autônoma parada aguardando você há mais de \
+                         {min} min"
+                    ),
+                    message: format!(
+                        "{slug}: a sessão autônoma ficou parada aguardando você por mais de \
+                         {min} min; foi encerrada e a issue ficou bloqueada"
+                    ),
+                });
+                continue;
+            }
+        }
+        let Some(i) = idle else { continue };
+        // Fechamento pelo hub (#184). Conta com a janela esgotada: a
+        // sessão estaciona (passo 3) em vez de receber o pedido.
+        if let Some(c) = closing {
+            match e.continue_text {
+                Some(true) => {
+                    if !exhausted {
+                        out.actions.extend(close_step(s, x, i, c, &slug));
+                    }
+                    continue;
+                }
+                None => continue,
+                Some(false) => {
+                    if outdated_envs.insert(x.env_id.as_str()) {
+                        out.refusals.push(Refusal {
+                            scope: format!("env:{}", x.env_id),
+                            reason: ENV_OUTDATED.into(),
+                            message: format!(
+                                "o ambiente autônomo {} é anterior ao protocolo {}.{}: o hub \
+                                 não devolve o CI ao agente nem pede o merge; a sessão com PR \
+                                 aberto é encerrada como antes (atualize o ambiente)",
+                                e.name, CONTINUE_TEXT_PROTOCOL.0, CONTINUE_TEXT_PROTOCOL.1
+                            ),
+                            account: e.account.clone(),
+                            env_id: Some(x.env_id.clone()),
+                            owner: None,
+                            repo: None,
+                        });
+                    }
+                }
+            }
+        }
+        let idle_ms = now - i.since;
         let (reason, message) = if i.done {
             if idle_ms < DONE_GRACE_MS {
                 continue;
@@ -413,10 +823,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
         } else {
             // Conta com a janela esgotada: a sessão parou pelo limite e
             // estaciona (passo 3), não encerra.
-            if timeout_ms == 0
-                || idle_ms < timeout_ms
-                || e.account.as_deref().is_some_and(exhausted_now)
-            {
+            if timeout_ms == 0 || idle_ms < timeout_ms || exhausted {
                 continue;
             }
             (
@@ -780,6 +1187,7 @@ mod tests {
                 online: true,
                 autonomous: true,
                 account: Some("conta-a".into()),
+                continue_text: Some(true),
             },
         );
         s.accounts
@@ -937,6 +1345,7 @@ mod tests {
                 online: true,
                 autonomous: true,
                 account: Some("conta-b".into()),
+                continue_text: Some(true),
             },
         );
         s.accounts
@@ -1188,6 +1597,7 @@ mod tests {
                 online: true,
                 autonomous: true,
                 account: Some("conta-a".into()),
+                continue_text: Some(true),
             },
         );
         s.sessions
@@ -1272,6 +1682,7 @@ mod tests {
                 since,
                 autonomous,
                 done,
+                work_item_id: 1,
             },
         );
     }
@@ -1390,5 +1801,444 @@ mod tests {
         let o = decide(&s);
         assert_eq!(ends(&o), vec![("s1".to_string(), END_DONE)]);
         assert!(!o.actions.iter().any(|a| matches!(a, Action::Park(_))));
+    }
+    // --- Fechamento autônomo (#184) ---
+
+    use ct_core::PrState;
+    use ct_ledger::{ChangesRequest, CheckSource, PrCheck, ReviewThread};
+
+    fn check(name: &str, conclusion: Option<&str>) -> PrCheck {
+        PrCheck {
+            name: name.into(),
+            source: CheckSource::CheckRun,
+            conclusion: conclusion.map(String::from),
+            url: None,
+            job_id: Some(1),
+        }
+    }
+
+    fn pr_row(head_sha: &str) -> PrRow {
+        PrRow {
+            number: 9,
+            work_item_id: 1,
+            head: "feat/123-login".into(),
+            base: "wip/autonoma".into(),
+            state: PrState::Open,
+            url: "https://github.com/acme/acme-web/pull/9".into(),
+            updated_at: 50,
+            head_sha: Some(head_sha.into()),
+        }
+    }
+
+    fn checks_of(head_sha: &str, checks: Vec<PrCheck>) -> PrChecks {
+        PrChecks {
+            pr_number: 9,
+            head: "feat/123-login".into(),
+            base: "wip/autonoma".into(),
+            head_sha: head_sha.into(),
+            state: ct_ledger::checks_state(&checks),
+            checks,
+            synced_at: 1,
+            runs_etag: None,
+            status_etag: None,
+        }
+    }
+
+    fn feedback(threads: Vec<ReviewThread>, changes: Vec<ChangesRequest>) -> PrFeedback {
+        PrFeedback {
+            pr: pr_row("h1"),
+            read_at_updated: Some(50),
+            threads,
+            changes_requested: changes,
+        }
+    }
+
+    fn thread(id: &str, external: bool) -> ReviewThread {
+        ReviewThread {
+            id: id.into(),
+            path: "src/login.rs".into(),
+            line: Some(3),
+            outdated: false,
+            author: "fulano".into(),
+            author_association: if external { "NONE" } else { "MEMBER" }.into(),
+            external,
+            body: "trocar o nome".into(),
+            url: "https://github.com/acme/acme-web/pull/9#r1".into(),
+            replies: 0,
+            created_at: 1,
+        }
+    }
+
+    /// Sessão `s1` da issue 123 ociosa (desde `SAB - 2 min`), com o PR #9
+    /// contra a `wip/autonoma` no head `head` e esses checks.
+    fn closing_snap(head: &str, checks: Option<PrChecks>) -> Snapshot {
+        let mut s = snap(SAB);
+        s.sessions
+            .push(session("s1", "env-auto", 123, SessionState::Idle));
+        idle(&mut s, "s1", SAB - 2 * 60_000, true, true);
+        s.closing.insert(
+            "s1".into(),
+            Closing {
+                work_item_id: 1,
+                integration: "wip/autonoma".into(),
+                pr: pr_row(head),
+                checks,
+                feedback: Some(feedback(vec![], vec![])),
+                state: CloseState::default(),
+            },
+        );
+        s
+    }
+
+    fn sends(o: &Outcome) -> Vec<(SendKind, CloseState, String)> {
+        o.actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Send {
+                    kind, close, text, ..
+                } => Some((*kind, close.clone(), text.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn blocks(o: &Outcome) -> Vec<(&'static str, String)> {
+        o.actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Block {
+                    reason,
+                    status_reason,
+                    ..
+                } => Some((*reason, status_reason.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ci_pendente_ou_nao_lido_espera_e_nao_encerra() {
+        // Checks ainda não lidos.
+        let o = decide(&closing_snap("h1", None));
+        assert!(
+            ends(&o).is_empty() && sends(&o).is_empty(),
+            "{:?}",
+            o.actions
+        );
+        // Checks de um head anterior: ainda não lidos para o atual.
+        let o = decide(&closing_snap(
+            "h2",
+            Some(checks_of("h1", vec![check("test", Some("success"))])),
+        ));
+        assert!(o.actions.is_empty(), "{:?}", o.actions);
+        // Em andamento (mesmo com um que já falhou): espera, só grava o head.
+        let mut s = closing_snap(
+            "h1",
+            Some(checks_of(
+                "h1",
+                vec![check("test", Some("failure")), check("lint", None)],
+            )),
+        );
+        // Muito tempo depois, ainda espera.
+        s.settings.idle_timeout_min = 30;
+        s.idle.get_mut("s1").unwrap().since = SAB - 10 * H;
+        let o = decide(&s);
+        assert!(ends(&o).is_empty() && sends(&o).is_empty() && blocks(&o).is_empty());
+        match &o.actions[..] {
+            [Action::Track(c)] => {
+                assert_eq!(c.head_sha.as_deref(), Some("h1"));
+                assert_eq!(c.head_seen_at, Some(SAB));
+            }
+            a => panic!("{a:?}"),
+        }
+        // Sem o `pr_aberto` antigo: o ambiente segue ocupado.
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("env_busy"));
+    }
+
+    #[test]
+    fn falha_volta_ao_agente_uma_vez_por_head_e_conta_tentativa() {
+        let mut s = closing_snap(
+            "h1",
+            Some(checks_of("h1", vec![check("test", Some("failure"))])),
+        );
+        let o = decide(&s);
+        let sent = sends(&o);
+        assert_eq!(sent.len(), 1, "{:?}", o.actions);
+        let (kind, close, text) = &sent[0];
+        assert_eq!(*kind, SendKind::Feedback(FEEDBACK_CI));
+        assert_eq!(close.attempts, 1);
+        assert_eq!(close.feedback_head.as_deref(), Some("h1"));
+        assert_eq!(close.last_sent_at, Some(SAB));
+        assert!(text.starts_with(FEEDBACK_REQUEST), "{text}");
+        assert!(text.contains("pr_check_log"), "{text}");
+        assert!(text.contains("Falhou: `test`"), "{text}");
+        assert!(ends(&o).is_empty());
+        // Já enviado para o h1: nada de novo (a sessão ainda não rodou).
+        s.closing.get_mut("s1").unwrap().state = close.clone();
+        let o = decide(&s);
+        assert!(o.actions.is_empty(), "{:?}", o.actions);
+        // Corrigido: head novo, verde. Pede o merge.
+        let c = s.closing.get_mut("s1").unwrap();
+        c.pr = pr_row("h2");
+        c.checks = Some(checks_of("h2", vec![check("test", Some("success"))]));
+        let o = decide(&s);
+        let sent = sends(&o);
+        assert_eq!(sent.len(), 1, "{:?}", o.actions);
+        let (kind, close, text) = &sent[0];
+        assert_eq!(*kind, SendKind::Merge);
+        assert_eq!(close.merge_head.as_deref(), Some("h2"));
+        assert_eq!(close.attempts, 1);
+        assert!(
+            text.contains("`gh pr merge 9 --rebase`") && text.contains("wip/autonoma"),
+            "{text}"
+        );
+        // Uma vez por head.
+        s.closing.get_mut("s1").unwrap().state = close.clone();
+        assert!(sends(&decide(&s)).is_empty());
+        // Ainda parada muito depois do pedido: bloqueia sem progresso.
+        s.settings.idle_timeout_min = 30;
+        s.now = SAB + 31 * 60_000;
+        let o = decide(&s);
+        let b = blocks(&o);
+        assert_eq!(b.len(), 1, "{:?}", o.actions);
+        assert_eq!(b[0].0, BLOCK_STALLED);
+        assert!(b[0].1.contains("merge foi pedido"), "{}", b[0].1);
+    }
+
+    #[test]
+    fn tentativas_esgotadas_bloqueiam_a_issue() {
+        let mut s = closing_snap(
+            "h4",
+            Some(checks_of("h4", vec![check("test", Some("failure"))])),
+        );
+        s.closing.get_mut("s1").unwrap().state = CloseState {
+            work_item_id: 1,
+            attempts: 3,
+            feedback_head: Some("h3".into()),
+            ..Default::default()
+        };
+        let o = decide(&s);
+        let b = blocks(&o);
+        assert_eq!(b.len(), 1, "{:?}", o.actions);
+        assert_eq!(b[0].0, BLOCK_ATTEMPTS);
+        assert!(b[0].1.contains("3 tentativas"), "{}", b[0].1);
+        assert!(sends(&o).is_empty() && ends(&o).is_empty());
+        // Ainda com tentativa sobrando: envia a quarta.
+        s.settings.max_ci_attempts = 4;
+        assert_eq!(sends(&decide(&s))[0].1.attempts, 4);
+        // 0 = bloqueia na primeira falha.
+        s.settings.max_ci_attempts = 0;
+        s.closing.get_mut("s1").unwrap().state = CloseState::default();
+        let b = blocks(&decide(&s));
+        assert_eq!(b[0].0, BLOCK_ATTEMPTS);
+        assert!(b[0].1.contains("sem reenvio"), "{}", b[0].1);
+    }
+
+    #[test]
+    fn review_de_colaborador_volta_ao_agente_e_o_externo_nao_segura_o_merge() {
+        let mut s = closing_snap(
+            "h1",
+            Some(checks_of("h1", vec![check("test", Some("success"))])),
+        );
+        s.closing.get_mut("s1").unwrap().feedback = Some(feedback(
+            vec![thread("t-ext", true), thread("t-in", false)],
+            vec![],
+        ));
+        let o = decide(&s);
+        let sent = sends(&o);
+        assert_eq!(sent.len(), 1, "{:?}", o.actions);
+        assert_eq!(sent[0].0, SendKind::Feedback(FEEDBACK_REVIEW));
+        assert_eq!(sent[0].1.threads_sent, vec!["t-in".to_string()]);
+        assert_eq!(sent[0].1.attempts, 0);
+        assert!(sent[0].2.contains("texto omitido"), "{}", sent[0].2);
+        // Enviada e ainda não resolvida: não pede o merge.
+        s.closing.get_mut("s1").unwrap().state = sent[0].1.clone();
+        assert!(sends(&decide(&s)).is_empty());
+        // Só a externa: o merge sai.
+        s.closing.get_mut("s1").unwrap().feedback =
+            Some(feedback(vec![thread("t-ext", true)], vec![]));
+        assert_eq!(sends(&decide(&s))[0].0, SendKind::Merge);
+        // Review que pede mudanças, de colaborador: volta ao agente.
+        s.closing.get_mut("s1").unwrap().feedback = Some(feedback(
+            vec![],
+            vec![ChangesRequest {
+                id: "r1".into(),
+                author: "fulano".into(),
+                author_association: "COLLABORATOR".into(),
+                external: false,
+                body: "faltou teste".into(),
+                url: "https://github.com/acme/acme-web/pull/9#r".into(),
+                submitted_at: 1,
+            }],
+        ));
+        assert_eq!(sends(&decide(&s))[0].0, SendKind::Feedback(FEEDBACK_REVIEW));
+        // Reviews ainda não lidas para a versão atual do PR: espera o merge.
+        let c = s.closing.get_mut("s1").unwrap();
+        c.feedback = Some(PrFeedback {
+            read_at_updated: Some(10),
+            ..feedback(vec![], vec![])
+        });
+        assert!(sends(&decide(&s)).is_empty());
+    }
+
+    #[test]
+    fn repositorio_sem_checks_conta_como_verde_depois_do_prazo() {
+        let mut s = closing_snap("h1", Some(checks_of("h1", vec![])));
+        let o = decide(&s);
+        assert!(sends(&o).is_empty());
+        let seen = match &o.actions[..] {
+            [Action::Track(c)] => c.clone(),
+            a => panic!("{a:?}"),
+        };
+        s.closing.get_mut("s1").unwrap().state = seen;
+        s.now = SAB + NO_CHECKS_GREEN_MS - 1;
+        assert!(sends(&decide(&s)).is_empty());
+        s.now = SAB + NO_CHECKS_GREEN_MS;
+        assert_eq!(sends(&decide(&s))[0].0, SendKind::Merge);
+    }
+
+    #[test]
+    fn ambiente_antigo_cai_no_pr_aberto_e_avisa() {
+        let mut s = closing_snap(
+            "h1",
+            Some(checks_of("h1", vec![check("test", Some("failure"))])),
+        );
+        idle(&mut s, "s1", SAB - DONE_GRACE_MS, true, true);
+        s.envs.get_mut("env-auto").unwrap().continue_text = Some(false);
+        let o = decide(&s);
+        assert_eq!(ends(&o), vec![("s1".to_string(), END_DONE)]);
+        assert!(sends(&o).is_empty());
+        let r: Vec<_> = o
+            .refusals
+            .iter()
+            .filter(|r| r.scope == "env:env-auto")
+            .collect();
+        assert_eq!(r.len(), 1, "{:?}", o.refusals);
+        assert_eq!(r[0].reason, ENV_OUTDATED);
+        assert!(r[0].message.contains("2.22"), "{}", r[0].message);
+        // Versão desconhecida (o `env.info` não respondeu): espera.
+        s.envs.get_mut("env-auto").unwrap().continue_text = None;
+        assert!(decide(&s).actions.is_empty());
+        // Sem PR na branch de integração (outra base, ou já mesclado): o
+        // `pr_aberto` de antes, sem pedir merge.
+        s.closing.clear();
+        s.envs.get_mut("env-auto").unwrap().continue_text = Some(true);
+        let o = decide(&s);
+        assert_eq!(ends(&o), vec![("s1".to_string(), END_DONE)]);
+        assert!(sends(&o).is_empty());
+    }
+
+    #[test]
+    fn conta_esgotada_estaciona_em_vez_de_fechar() {
+        let mut s = closing_snap(
+            "h1",
+            Some(checks_of("h1", vec![check("test", Some("failure"))])),
+        );
+        s.accounts
+            .insert("conta-a".into(), account(100.0, 40.0, SAB));
+        let o = decide(&s);
+        assert!(sends(&o).is_empty() && ends(&o).is_empty());
+        assert!(
+            matches!(o.actions[..], [Action::Park(_)]),
+            "{:?}",
+            o.actions
+        );
+    }
+
+    fn waiting(s: &mut Snapshot, id: &str, since: i64, autonomous: bool) {
+        s.waiting.insert(
+            id.into(),
+            WaitingSession {
+                session_id: id.into(),
+                since,
+                autonomous,
+                work_item_id: 1,
+            },
+        );
+    }
+
+    #[test]
+    fn aguardando_voce_alem_do_prazo_bloqueia() {
+        let mut s = snap(SAB);
+        s.sessions
+            .push(session("s1", "env-auto", 123, SessionState::Running));
+        waiting(&mut s, "s1", SAB - 19 * 60_000, true);
+        assert!(blocks(&decide(&s)).is_empty());
+        waiting(&mut s, "s1", SAB - 20 * 60_000, true);
+        let o = decide(&s);
+        let b = blocks(&o);
+        assert_eq!(b.len(), 1, "{:?}", o.actions);
+        assert_eq!(b[0].0, BLOCK_WAITING);
+        assert!(
+            b[0].1.contains("aguardando você há mais de 20 min"),
+            "{}",
+            b[0].1
+        );
+        // Ociosa também (e sem o `sessao_ociosa` junto).
+        s.sessions[0].state = SessionState::Idle;
+        s.settings.idle_timeout_min = 5;
+        idle(&mut s, "s1", SAB - H, true, false);
+        let o = decide(&s);
+        assert_eq!(blocks(&o).len(), 1);
+        assert!(ends(&o).is_empty());
+        // 0 desliga.
+        s.settings.waiting_timeout_min = 0;
+        assert!(blocks(&decide(&s)).is_empty());
+        s.settings.waiting_timeout_min = 20;
+        // Sessão comum: nunca.
+        waiting(&mut s, "s1", SAB - H, false);
+        assert!(blocks(&decide(&s)).is_empty());
+        waiting(&mut s, "s1", SAB - H, true);
+        // Estacionada pelo limite do plano: nunca.
+        s.parked.push(ParkedSession {
+            session_id: "s1".into(),
+            env_id: "env-auto".into(),
+            account_key: "conta-a".into(),
+            owner: "acme".into(),
+            repo: "acme-web".into(),
+            gh_number: 123,
+            window: "five_hour".into(),
+            resume_at: SAB + H,
+            parked_at: SAB - H,
+        });
+        assert!(blocks(&decide(&s)).is_empty());
+        s.parked.clear();
+        // Conta com a janela esgotada: estaciona, não bloqueia.
+        s.accounts
+            .insert("conta-a".into(), account(100.0, 40.0, SAB));
+        let o = decide(&s);
+        assert!(blocks(&o).is_empty());
+        assert!(
+            matches!(o.actions[..], [Action::Park(_)]),
+            "{:?}",
+            o.actions
+        );
+    }
+
+    #[test]
+    fn protocolo_do_ambiente() {
+        assert_eq!(parse_protocol("2.22"), Some((2, 22)));
+        assert_eq!(parse_protocol(" 2.3.1"), Some((2, 3)));
+        assert_eq!(parse_protocol("x"), None);
+        assert!(parse_protocol("2.21").unwrap() < CONTINUE_TEXT_PROTOCOL);
+        assert!(parse_protocol("3.0").unwrap() >= CONTINUE_TEXT_PROTOCOL);
+    }
+
+    #[test]
+    fn feedback_grande_demais_vai_sem_os_dados() {
+        let pr = pr_row("h1");
+        let big: Vec<ReviewThread> = (0..40)
+            .map(|i| ReviewThread {
+                body: "x".repeat(2000),
+                ..thread(&format!("t{i}"), false)
+            })
+            .collect();
+        let t = feedback_text(&pr, None, Some(&feedback(big, vec![])));
+        assert!(t.len() <= ct_core::autonomy::CONTINUE_TEXT_MAX_BYTES);
+        assert!(
+            t.starts_with(FEEDBACK_REQUEST) && t.contains("pr_feedback"),
+            "{t}"
+        );
+        assert!(!t.contains(ct_ledger::DATA_OPEN));
     }
 }

@@ -1092,6 +1092,7 @@ mod tests {
         let issue = |n: i64| crate::DigestIssue {
             number: n,
             title: Some(format!("ACME-{n}: texto que o agente escreveu")),
+            reason: None,
         };
         let d = crate::MorningDigest {
             local_day: 20_000,

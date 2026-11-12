@@ -1036,9 +1036,17 @@ impl Conn {
             // Sessão parada pelo limite real do plano (#183): o agendador do
             // hub a retoma depois do reset escrevendo um texto fixo no PTY
             // (nunca entrada livre, por isso pode vir pelo canal).
+            // Com `text` (#184): o pedido de correção ou de merge do piloto
+            // automático, só numa sessão autônoma (o ambiente confere), com
+            // no máximo 16 KB e sem caracteres de controle.
             "session.continue" => {
                 let id = str_param(p, "session_id")?.to_string();
-                blocking(&sessions, move |s| s.continue_session(&id)).await?;
+                let text = match p.get("text") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(t)) => Some(t.clone()),
+                    Some(_) => return Err(invalid("text deve ser texto")),
+                };
+                blocking(&sessions, move |s| s.continue_session(&id, text.as_deref())).await?;
                 Ok(json!({ "continued": true }))
             }
             // Liga o Remote Control numa sessão em andamento (#197): escreve
@@ -3495,6 +3503,7 @@ mod tests {
                 synced_at: 1,
                 gone: Vec::new(),
                 me: None,
+                pr_checks: None,
             })
             .unwrap();
             let dec = |wi: i64, origin| {

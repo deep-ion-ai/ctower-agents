@@ -57,6 +57,11 @@ pub struct DecisionCounts {
 pub struct WorkItemSummary {
     /// PR mais recente da branch do work item.
     pub pr: Option<PrRow>,
+    /// Resumo dos checks do head desse PR, se ele está aberto e os checks
+    /// já foram lidos (#129). Ausente num hub ou ambiente anterior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub pr_checks: Option<crate::PrChecksSummary>,
     pub decisions: DecisionCounts,
     /// `ts` do último evento do work item, sem os de prioridade e ordem.
     pub last_activity_at: Option<i64>,
@@ -281,8 +286,10 @@ impl Hub {
             rows.collect::<rusqlite::Result<_>>()?
         };
         live_envs.sort();
+        let pr = self.prs_for_work_item(wi.id)?.into_iter().next();
         Ok(WorkItemSummary {
-            pr: self.prs_for_work_item(wi.id)?.into_iter().next(),
+            pr_checks: self.gh().pr_checks_summary(wi.project_id, pr.as_ref())?,
+            pr,
             decisions: DecisionCounts {
                 total: decisions.len(),
                 pending_autonomous,
@@ -607,6 +614,7 @@ mod tests {
                 synced_at: 1,
                 gone: Vec::new(),
                 me: None,
+                pr_checks: None,
             },
             "hub",
         )

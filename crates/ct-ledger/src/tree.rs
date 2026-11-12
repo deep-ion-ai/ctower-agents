@@ -44,8 +44,10 @@ impl Ledger {
             [wi.id],
             |r| r.get(0),
         )?;
+        let pr = self.prs_for_work_item(wi.id)?.into_iter().next();
         Ok(WorkItemSummary {
-            pr: self.prs_for_work_item(wi.id)?.into_iter().next(),
+            pr_checks: self.gh().pr_checks_summary(wi.project_id, pr.as_ref())?,
+            pr,
             decisions: DecisionCounts {
                 total: decisions.len(),
                 pending_autonomous,
@@ -163,6 +165,7 @@ mod tests {
             synced_at: 10,
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         })
         .unwrap();
 
@@ -227,6 +230,7 @@ mod tests {
             synced_at: 10,
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         })
         .unwrap();
 

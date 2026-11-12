@@ -8,4 +8,11 @@ export type DigestIssue = { number: number,
 /**
  * `None` = fora do espelho.
  */
-title: string | null, };
+title: string | null, 
+/**
+ * Só nas bloqueadas: o motivo da última mudança de status feita pelo
+ * hub (`status_set_manual`: a pessoa na UI do hub ou o piloto
+ * automático, #184), nunca o de um evento do ambiente (que pode vir do
+ * agente). `None` = sem motivo.
+ */
+reason: string | null, };

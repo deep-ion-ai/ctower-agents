@@ -576,6 +576,7 @@ mod tests {
                     synced_at: ct_core::now_ms(),
                     gone: Vec::new(),
                     me: None,
+                    pr_checks: None,
                 })
                 .unwrap();
         }
@@ -890,6 +891,7 @@ mod tests {
                     synced_at: 1,
                     gone: Vec::new(),
                     me: None,
+                    pr_checks: None,
                 })
                 .unwrap();
         };
@@ -998,6 +1000,7 @@ mod tests {
                 synced_at: 1,
                 gone: Vec::new(),
                 me: None,
+                pr_checks: None,
             })
             .unwrap();
         let c = e.cleaner();
