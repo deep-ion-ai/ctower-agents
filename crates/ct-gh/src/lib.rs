@@ -6,6 +6,7 @@
 
 pub mod refs;
 pub mod release;
+pub mod reviews;
 pub mod sync;
 pub mod time;
 
@@ -157,6 +158,55 @@ impl GhClient {
         })
     }
 
+    /// GET condicional de um recurso só (`path` relativo à API), sem seguir
+    /// paginação: os checks do commit (#129), que vêm num objeto.
+    pub fn get_one(&self, path: &str, etag: Option<&str>) -> Result<Fetched<Value>, GhError> {
+        let url = format!("{}{}", self.cfg.api_url, path);
+        Ok(match self.get(&url, etag)? {
+            None => Fetched::NotModified,
+            Some(page) => Fetched::Modified {
+                body: page.body,
+                etag: page.etag,
+            },
+        })
+    }
+
+    /// Trecho final do log de um job do GitHub Actions (#129, para a #133):
+    /// `GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs`, que redireciona
+    /// para um endereço temporário (seguido sem o token). Lê o log inteiro em
+    /// fluxo e guarda só os últimos `max_bytes`, a partir do começo de uma
+    /// linha. `None` = o log não existe mais ou o token não tem acesso
+    /// (`404`/`410`).
+    pub fn job_log_tail(
+        &self,
+        owner: &str,
+        repo: &str,
+        job_id: i64,
+        max_bytes: usize,
+    ) -> Result<Option<String>, GhError> {
+        let url = format!(
+            "{}{}",
+            self.cfg.api_url,
+            sync::job_logs_path(owner, repo, job_id)
+        );
+        let mut renewed = false;
+        let resp = loop {
+            match self.request("GET", &url)?.call() {
+                Ok(r) => break r,
+                Err(ureq::Error::Status(401, _)) if !renewed => {
+                    *self.token.lock().unwrap() = None;
+                    renewed = true;
+                }
+                Err(ureq::Error::Status(404 | 410, _)) => return Ok(None),
+                Err(ureq::Error::Status(code, r)) => return Err(status_error(code, r)),
+                Err(ureq::Error::Transport(t)) => return Err(GhError::Network(t.to_string())),
+            }
+        };
+        let tail = read_tail(resp.into_reader(), max_bytes)
+            .map_err(|e| GhError::Network(e.to_string()))?;
+        Ok(Some(tail))
+    }
+
     /// GET de um recurso (`path` relativo à API). `None` = `404` (não existe
     /// ou o token não tem acesso).
     pub fn get_json(&self, path: &str) -> Result<Option<Value>, GhError> {
@@ -200,7 +250,7 @@ impl GhClient {
     /// POST de `body` (`path` relativo à API); devolve a resposta. Um `401`
     /// descarta o token e tenta uma vez mais.
     pub fn post_json(&self, path: &str, body: &Value) -> Result<Value, GhError> {
-        self.send_json("POST", path, body)
+        self.post_url(&format!("{}{}", self.cfg.api_url, path), body)
     }
 
     /// PUT de `body` (`path` relativo à API); devolve a resposta (o merge de
@@ -214,21 +264,80 @@ impl GhClient {
         self.send_json("PATCH", path, body)
     }
 
-    /// Requisição com corpo JSON. Resposta vazia (`204`, ou o `201` sem
-    /// corpo do `.../approve` de um run) vira `null`.
+    /// Requisição com corpo JSON ([`json_or_null`]).
     fn send_json(&self, method: &str, path: &str, body: &Value) -> Result<Value, GhError> {
         let url = format!("{}{}", self.cfg.api_url, path);
         let mut renewed = false;
         loop {
             return match self.request(method, &url)?.send_json(body) {
-                Ok(r) => {
-                    let text = r.into_string().map_err(|e| GhError::Parse(e.to_string()))?;
-                    if text.trim().is_empty() {
-                        Ok(Value::Null)
-                    } else {
-                        serde_json::from_str(&text).map_err(|e| GhError::Parse(e.to_string()))
-                    }
+                Ok(r) => json_or_null(r),
+                Err(ureq::Error::Status(401, _)) if !renewed => {
+                    *self.token.lock().unwrap() = None;
+                    renewed = true;
+                    continue;
                 }
+                Err(ureq::Error::Status(code, r)) => Err(status_error(code, r)),
+                Err(ureq::Error::Transport(t)) => Err(GhError::Network(t.to_string())),
+            };
+        }
+    }
+
+    /// Endpoint GraphQL da API configurada: `<api>/graphql` no github.com,
+    /// `<host>/api/graphql` no GitHub Enterprise (REST em `<host>/api/v3`).
+    pub fn graphql_url(&self) -> String {
+        match self.cfg.api_url.strip_suffix("/api/v3") {
+            Some(host) => format!("{host}/api/graphql"),
+            None => format!("{}/graphql", self.cfg.api_url),
+        }
+    }
+
+    /// Consulta GraphQL; devolve o `data`. Resposta com `errors` vira erro:
+    /// `RATE_LIMITED` em [`GhError::RateLimited`], `NOT_FOUND` num `404` e o
+    /// resto num [`GhError::Parse`] com as mensagens.
+    pub fn graphql(&self, query: &str, variables: &Value) -> Result<Value, GhError> {
+        let v = self.post_url(
+            &self.graphql_url(),
+            &serde_json::json!({ "query": query, "variables": variables }),
+        )?;
+        let errors: Vec<&Value> = v
+            .get("errors")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .collect();
+        if !errors.is_empty() {
+            let kind = |t: &str| {
+                errors
+                    .iter()
+                    .any(|e| e.get("type").and_then(Value::as_str) == Some(t))
+            };
+            let message = errors
+                .iter()
+                .filter_map(|e| e.get("message").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(if kind("RATE_LIMITED") {
+                GhError::RateLimited { reset_at: None }
+            } else if kind("NOT_FOUND") {
+                GhError::Http {
+                    status: 404,
+                    message,
+                }
+            } else {
+                GhError::Parse(format!("GraphQL: {}", truncate(&message, 300)))
+            });
+        }
+        v.get("data")
+            .filter(|d| !d.is_null())
+            .cloned()
+            .ok_or_else(|| GhError::Parse("GraphQL sem data".into()))
+    }
+
+    fn post_url(&self, url: &str, body: &Value) -> Result<Value, GhError> {
+        let mut renewed = false;
+        loop {
+            return match self.request("POST", url)?.send_json(body) {
+                Ok(r) => json_or_null(r),
                 Err(ureq::Error::Status(401, _)) if !renewed => {
                     *self.token.lock().unwrap() = None;
                     renewed = true;
@@ -464,6 +573,37 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
     std::fs::rename(&tmp, path)
 }
 
+/// Os últimos `max` bytes de `r`, em fluxo, a partir do começo de uma
+/// linha quando o trecho foi cortado. Bytes inválidos em UTF-8 viram `�`.
+fn read_tail(mut r: impl Read, max: usize) -> std::io::Result<String> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    let mut cut = false;
+    loop {
+        let n = r.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        // Descarta o excesso só de vez em quando (o dobro do teto).
+        if buf.len() > max.saturating_mul(2).max(chunk.len()) {
+            let drop = buf.len() - max;
+            buf.drain(..drop);
+            cut = true;
+        }
+    }
+    if buf.len() > max {
+        buf.drain(..buf.len() - max);
+        cut = true;
+    }
+    if cut {
+        if let Some(nl) = buf.iter().position(|b| *b == b'\n') {
+            buf.drain(..=nl);
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 fn into_array(v: Value) -> Result<Vec<Value>, GhError> {
     match v {
         Value::Array(a) => Ok(a),
@@ -535,6 +675,17 @@ fn next_link(h: &str) -> Option<String> {
 
 fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
+}
+
+/// Corpo JSON da resposta; vazio (`204`, ou o `201` sem corpo do
+/// `.../approve` de um run) vira `null`.
+fn json_or_null(r: ureq::Response) -> Result<Value, GhError> {
+    let text = r.into_string().map_err(|e| GhError::Parse(e.to_string()))?;
+    if text.trim().is_empty() {
+        Ok(Value::Null)
+    } else {
+        serde_json::from_str(&text).map_err(|e| GhError::Parse(e.to_string()))
+    }
 }
 
 /// `gh auth token`, com prazo.
@@ -897,5 +1048,72 @@ mod tests {
             Some("https://api.github.com/x?page=2")
         );
         assert_eq!(next_link(r#"<https://a/x?page=1>; rel="prev""#), None);
+    }
+
+    fn client_for(gh: &FakeGitHub, d: &std::path::Path) -> GhClient {
+        let bin = fake_gh(d, "tok");
+        GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(crate::fake::FAKE_GH_TOKEN_TIMEOUT),
+        )
+    }
+
+    /// #129 (para a #133): o log do job segue o redirecionamento, sem levar
+    /// o token, e devolve só o fim, a partir do começo de uma linha.
+    #[test]
+    fn trecho_final_do_log_do_job() {
+        let d = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let c = client_for(&gh, d.path());
+        let log: String = (1..=50)
+            .map(|i| format!("2026-11-12T10:00:{i:02}Z linha {i}\n"))
+            .collect();
+        gh.set_redirect(
+            &sync::job_logs_path("acme", "acme-web", 457),
+            "/blob/logs/457.txt",
+        );
+        gh.set_text("/blob/logs/457.txt", &log);
+        let tail = c
+            .job_log_tail("acme", "acme-web", 457, 100)
+            .unwrap()
+            .unwrap();
+        assert!(tail.len() <= 100, "{tail:?}");
+        assert!(tail.starts_with("2026-11-12T10:00:"), "{tail:?}");
+        assert!(tail.ends_with("linha 50\n"), "{tail:?}");
+        // Cabe inteiro: vem inteiro.
+        let all = c
+            .job_log_tail("acme", "acme-web", 457, 1 << 20)
+            .unwrap()
+            .unwrap();
+        assert_eq!(all, log);
+        // Log expirado ou sem acesso.
+        assert_eq!(c.job_log_tail("acme", "acme-web", 999, 100).unwrap(), None);
+    }
+
+    #[test]
+    fn get_one_com_etag() {
+        let d = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let c = client_for(&gh, d.path());
+        gh.set("/repos/o/r/commits/abc/status", json!({ "statuses": [] }));
+        let Fetched::Modified { body, etag } =
+            c.get_one("/repos/o/r/commits/abc/status", None).unwrap()
+        else {
+            panic!("esperado 200");
+        };
+        assert_eq!(body, json!({ "statuses": [] }));
+        assert_eq!(
+            c.get_one("/repos/o/r/commits/abc/status", etag.as_deref())
+                .unwrap(),
+            Fetched::NotModified
+        );
+    }
+
+    #[test]
+    fn read_tail_corta_na_linha() {
+        let r = |s: &str, max| read_tail(s.as_bytes(), max).unwrap();
+        assert_eq!(r("a\nb\nc\n", 100), "a\nb\nc\n");
+        assert_eq!(r("aaaa\nbb\ncc\n", 6), "cc\n");
+        assert_eq!(r("", 10), "");
     }
 }

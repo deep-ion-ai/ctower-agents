@@ -91,6 +91,9 @@ pub struct GithubSnapshot {
     /// ou a saída do `jira me`. Vai ao `sync_state.me` com a rodada bem
     /// sucedida; `None` mantém o anterior.
     pub me: Option<String>,
+    /// Checks do head dos PRs abertos (#129). `None` = esta rodada não leu
+    /// checks (Jira, GitLab): os gravados ficam como estão.
+    pub pr_checks: Option<crate::PrChecksSnapshot>,
 }
 
 /// Issue que sumiu do GitHub (#89): um épico do espelho que respondeu
@@ -174,7 +177,8 @@ const SYNC_COLS: &str =
 const ISSUE_COLS: &str =
     "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints, meta,
      assignees";
-const PR_COLS: &str = "number, work_item_id, head, base, state, url, updated_at, head_sha";
+pub(crate) const PR_COLS: &str =
+    "number, work_item_id, head, base, state, url, updated_at, head_sha";
 
 fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
     Ok(IssueRow {
@@ -192,7 +196,7 @@ fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
     })
 }
 
-fn row_to_pr(r: &Row) -> rusqlite::Result<PrRow> {
+pub(crate) fn row_to_pr(r: &Row) -> rusqlite::Result<PrRow> {
     Ok(PrRow {
         number: r.get(0)?,
         work_item_id: r.get(1)?,
@@ -834,6 +838,9 @@ impl Ledger {
             }
         }
 
+        if let Some(c) = &s.pr_checks {
+            self.gh().apply_checks(s.project_id, c, s.synced_at)?;
+        }
         if finish {
             self.gh().finish_ok(s)?;
         }
@@ -893,6 +900,23 @@ impl Ledger {
     pub fn etag(&self, key: &str) -> Result<Option<String>> {
         self.gh().etag(key)
     }
+
+    /// Checks do head do PR `number` no espelho (#129); `None` = PR fechado,
+    /// fora do espelho ou ainda não lido.
+    pub fn pr_checks(&self, project_id: i64, number: i64) -> Result<Option<crate::PrChecks>> {
+        self.gh().pr_checks(project_id, number)
+    }
+
+    /// Checks dos PRs abertos do work item, do PR mais recente ao mais
+    /// antigo (#129).
+    pub fn pr_checks_for_work_item(&self, work_item_id: i64) -> Result<Vec<crate::PrChecks>> {
+        self.gh().pr_checks_for_work_item(work_item_id)
+    }
+
+    /// Checks de todos os PRs abertos do projeto no espelho, por número.
+    pub fn list_pr_checks(&self, project_id: i64) -> Result<Vec<crate::PrChecks>> {
+        self.gh().list_pr_checks(project_id)
+    }
 }
 
 #[cfg(test)]
@@ -937,6 +961,7 @@ mod tests {
             synced_at: 100,
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         }
     }
 
@@ -1494,6 +1519,7 @@ mod tests {
             synced_at: 100,
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         };
         assert!(l.apply_github(&s).is_err());
         assert!(l.list_issues(p.id).unwrap().is_empty());

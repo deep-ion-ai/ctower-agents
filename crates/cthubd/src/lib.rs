@@ -85,11 +85,23 @@ use tokio::sync::broadcast;
 /// `hub.autopilot.digest|wip`, `wip` em `AutopilotStatus`,
 /// `digest_at_min` em `BudgetPolicy` e o evento `morning_digest` da Web
 /// Push.
-/// 1.21 (#204): sessão de release — `release` em `HubProject` e em
+/// 1.21 (#129): checks do head do PR no espelho — `pr_checks` (resumo:
+/// situação, contagens e texto) no `WorkItemSummary` do `hub.tree.get`, e o
+/// `ci` de `AutonomyWip` e `DigestProject` preenchido com o resumo dos checks
+/// do PR da branch de integração.
+/// 1.22 (#130): `hub.workitem.pr_feedback` (threads de review não
+/// resolvidas e pedidos de mudança dos PRs do item, do espelho, com a marca
+/// de autor externo).
+/// 1.23 (#184): fechamento autônomo da issue — `max_ci_attempts` e
+/// `waiting_timeout_min` em `AutopilotSettings` e no `hub.autopilot.set`, os
+/// eventos `feedback_sent`, `merge_requested`, `blocked` e `continue_failed`
+/// do agendador (e o escopo `env:`), e `reason` em `DigestIssue` (o motivo da
+/// issue bloqueada).
+/// 1.24 (#204): sessão de release — `release` em `HubProject` e em
 /// `hub.projects.update` (só GitHub + GitHub), `release` em
 /// `SessionTemplates` e `hub.release.status` (prévia do botão "Criar
 /// release", com o token do hub, só leitura).
-pub const PROTOCOL_VERSION: &str = "1.21";
+pub const PROTOCOL_VERSION: &str = "1.24";
 
 #[derive(Clone)]
 pub struct HubState {

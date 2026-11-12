@@ -127,6 +127,9 @@ pub const WEB_REFUSED: &[&str] = &[
     "hub.autopilot.set",
     "hub.quarantine.discard",
     "hub.workitem.move",
+    // Feedback de review dos PRs do item (#130): leitura, entra na web
+    // quando a tela da revisão (#131) o usar.
+    "hub.workitem.pr_feedback",
     "hub.rules.set",
     "hub.rules.import",
     "hub.rules.proposals.decide",

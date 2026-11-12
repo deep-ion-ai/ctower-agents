@@ -17,6 +17,7 @@ pub mod hub_config;
 pub mod hub_sync;
 mod mcp;
 mod mcp_gestor;
+mod mcp_pr;
 pub mod permissions;
 pub mod plan;
 pub mod update;
@@ -77,12 +78,17 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// e `autonomous` em `SessionTemplates`. 2.20 (#183): `session.continue`
 /// (também pelo canal do hub), que escreve um texto fixo na sessão viva
 /// parada pelo limite real do plano, para o agendador do piloto automático
-/// retomá-la depois do reset. 2.21 (#204): sessão de release —
-/// `release` em `Project` e em `SessionTemplates`, `session.start_release`
-/// (também pelo canal do hub), o erro `RELEASE_BUSY` (-32053) e as rotas
-/// `/session/release/context` e `/session/release/event` do `ctower
-/// release`.
-pub const PROTOCOL_VERSION: &str = "2.21";
+/// retomá-la depois do reset. 2.21 (#129): `pr_checks` (resumo dos checks
+/// do head do PR aberto) no `WorkItemSummary` da árvore do projeto. 2.22
+/// (#184): `text` opcional no `session.continue` (o pedido de correção ou de
+/// merge do piloto automático do hub, só numa sessão autônoma, até 16 KB) e
+/// a variável `CTOWER_AUTONOMY_BRANCH` da sessão autônoma (o `ctower hook`
+/// só deixa `gh pr merge` em PR com base na branch de integração).
+/// 2.23 (#204): sessão de release — `release` em `Project` e em
+/// `SessionTemplates`, `session.start_release` (também pelo canal do hub),
+/// o erro `RELEASE_BUSY` (-32053) e as rotas `/session/release/context` e
+/// `/session/release/event` do `ctower release`.
+pub const PROTOCOL_VERSION: &str = "2.23";
 
 #[derive(Clone)]
 pub struct AppState {

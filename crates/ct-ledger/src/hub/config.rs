@@ -727,6 +727,7 @@ impl Hub {
         for sql in [
             "DELETE FROM event WHERE project_id = ?1".to_string(),
             format!("DELETE FROM decision WHERE work_item_id IN ({wi})"),
+            "DELETE FROM pr_checks WHERE project_id = ?1".to_string(),
             "DELETE FROM pr_cache WHERE project_id = ?1".to_string(),
             format!("DELETE FROM session WHERE work_item_id IN ({wi})"),
             format!("DELETE FROM work_item_location WHERE work_item_id IN ({wi})"),

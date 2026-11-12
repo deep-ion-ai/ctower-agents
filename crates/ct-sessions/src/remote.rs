@@ -27,6 +27,7 @@
 //! [`AgentOptions::remote_control`]: crate::AgentOptions::remote_control
 
 use crate::{Result, Sessions, SessionsError};
+use ct_core::autonomy::CONTINUE_TEXT_MAX_BYTES;
 use ct_core::ProjectKind;
 use ct_ledger::{NewEvent, Project, Session, WorkItem};
 use ct_pty::PtySession;
@@ -57,6 +58,18 @@ const ANTHROPIC_HOST: &str = "api.anthropic.com";
 /// Pausa entre o texto do `/remote-control` e o Enter, para o Claude Code não
 /// tratar os dois como uma colagem.
 const TYPE_PAUSE: Duration = Duration::from_millis(150);
+
+/// Texto livre do `session.continue` sem caracteres de controle: `\r`
+/// (Enter, que enviaria o texto pela metade) vira quebra de linha, e o resto
+/// (ESC das sequências do terminal, inclusive) sai; quebra de linha e
+/// tabulação ficam.
+pub fn sanitize_continue_text(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .chars()
+        .map(|c| if c == '\r' { '\n' } else { c })
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect()
+}
 
 /// O que `session.continue` escreve na sessão parada pelo limite do plano
 /// (#183), depois do reset da janela.
@@ -365,11 +378,16 @@ impl Sessions {
         })
     }
 
-    /// Retoma a sessão viva parada pelo limite real do plano (#183): escreve
-    /// no PTY o texto fixo [`CONTINUE_TEXT`] e Enter, e grava o evento
-    /// `session_continued`. Só texto fixo, nunca entrada livre: por isso
-    /// pode vir pelo canal do hub (o agendador do piloto automático).
-    pub fn continue_session(&self, session_id: &str) -> Result<()> {
+    /// Escreve um texto na sessão viva e Enter, e grava o evento
+    /// `session_continued`. Sem `text`: o texto fixo [`CONTINUE_TEXT`], que
+    /// retoma a sessão parada pelo limite real do plano (#183). Com `text`
+    /// (#184): o pedido de correção ou de merge do piloto automático do hub,
+    /// aceito só numa sessão autônoma (o work item tem o evento
+    /// [`crate::autonomy::AUTONOMY_SESSION`]), com no máximo
+    /// [`CONTINUE_TEXT_MAX_BYTES`] e sem caracteres de controle (fora quebra
+    /// de linha e tabulação): o texto não manda teclas ao terminal. O texto
+    /// não vai ao ledger, só o tamanho.
+    pub fn continue_session(&self, session_id: &str, text: Option<&str>) -> Result<()> {
         let s = self.ledger().get_session(session_id)?;
         let pty = match self.pty(session_id) {
             Some(p) if s.state.is_live() => p,
@@ -379,11 +397,47 @@ impl Sessions {
                 )))
             }
         };
-        pty.write(CONTINUE_TEXT.as_bytes())?;
+        let custom = match text {
+            None => None,
+            Some(t) => Some(self.continue_text(&s, t)?),
+        };
+        let bytes = custom.as_deref().unwrap_or(CONTINUE_TEXT).as_bytes();
+        pty.write(bytes)?;
         std::thread::sleep(TYPE_PAUSE);
         pty.write(b"\r")?;
-        self.rc_event(&s, "session_continued", json!({ "via": "autopilot" }))?;
+        let payload = match &custom {
+            None => json!({ "via": "autopilot" }),
+            Some(t) => json!({ "via": "autopilot", "text_bytes": t.len() }),
+        };
+        self.rc_event(&s, "session_continued", payload)?;
         Ok(())
+    }
+
+    /// Confere e limpa o texto livre do `session.continue` (#184).
+    fn continue_text(&self, s: &Session, text: &str) -> Result<String> {
+        let autonomous = !self
+            .ledger()
+            .list_events_of_kind(s.work_item_id, crate::autonomy::AUTONOMY_SESSION)?
+            .is_empty();
+        if !autonomous {
+            return Err(SessionsError::Invalid(format!(
+                "sessão {}: texto no session.continue só numa sessão autônoma",
+                s.id
+            )));
+        }
+        let clean = sanitize_continue_text(text);
+        if clean.trim().is_empty() {
+            return Err(SessionsError::Invalid(
+                "texto do session.continue vazio".into(),
+            ));
+        }
+        if clean.len() > CONTINUE_TEXT_MAX_BYTES {
+            return Err(SessionsError::Invalid(format!(
+                "texto do session.continue com {} bytes (máximo {CONTINUE_TEXT_MAX_BYTES})",
+                clean.len()
+            )));
+        }
+        Ok(clean)
     }
 
     /// Acompanha a saída do PTY por [`WATCH_WINDOW`]: responde à confirmação
@@ -770,7 +824,7 @@ mod tests {
         ));
         let s = env.sessions.start(env.request(17, "Parada")).unwrap();
         env.wait_fake_output(&s.id);
-        env.sessions.continue_session(&s.id).unwrap();
+        env.sessions.continue_session(&s.id, None).unwrap();
         let cmd = env.fake_output_path(&s.id).with_extension("txt.cmd");
         let deadline = Instant::now() + T;
         while std::fs::read_to_string(&cmd).map_or(true, |c| c.is_empty()) {
@@ -781,9 +835,67 @@ mod tests {
         env.sessions.kill(&s.id).ok();
         env.wait_state(&s.id, SessionState::Exited);
         assert!(matches!(
-            env.sessions.continue_session(&s.id),
+            env.sessions.continue_session(&s.id, None),
             Err(SessionsError::Invalid(_))
         ));
+    }
+
+    /// `session.continue` com texto (#184): só na sessão autônoma, sem
+    /// caracteres de controle e com o limite de tamanho.
+    #[test]
+    fn continuar_com_texto_so_na_sessao_autonoma() {
+        let env = TestEnv::new(FakeClaude::script(
+            "read cmd; printf '%s' \"$cmd\" > \"$out.cmd\"; sleep 30",
+        ));
+        let s = env.sessions.start(env.request(18, "Com PR")).unwrap();
+        env.wait_fake_output(&s.id);
+        // Sessão comum: recusa.
+        assert!(matches!(
+            env.sessions.continue_session(&s.id, Some("corrija")),
+            Err(SessionsError::Invalid(_))
+        ));
+        env.sessions
+            .ledger()
+            .append_event(NewEvent {
+                project_id: env.project_id,
+                work_item_id: Some(s.work_item_id),
+                session_id: None,
+                kind: crate::autonomy::AUTONOMY_SESSION,
+                payload: json!({ "branch": "wip/autonoma", "base": "develop" }),
+            })
+            .unwrap();
+        let grande = "x".repeat(CONTINUE_TEXT_MAX_BYTES + 1);
+        assert!(matches!(
+            env.sessions.continue_session(&s.id, Some(&grande)),
+            Err(SessionsError::Invalid(_))
+        ));
+        assert!(matches!(
+            env.sessions.continue_session(&s.id, Some(" \u{1b} ")),
+            Err(SessionsError::Invalid(_))
+        ));
+        env.sessions
+            .continue_session(&s.id, Some("CI verde: mescle o PR #9\u{1b}[201~ agora"))
+            .unwrap();
+        let cmd = env.fake_output_path(&s.id).with_extension("txt.cmd");
+        let deadline = Instant::now() + T;
+        while std::fs::read_to_string(&cmd).map_or(true, |c| c.is_empty()) {
+            assert!(Instant::now() < deadline, "texto não chegou ao PTY");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&cmd).unwrap(),
+            "CI verde: mescle o PR #9[201~ agora"
+        );
+        env.sessions.kill(&s.id).ok();
+        env.wait_state(&s.id, SessionState::Exited);
+    }
+
+    #[test]
+    fn texto_do_continue_sem_controle() {
+        assert_eq!(
+            sanitize_continue_text("a\r\nb\rc\u{1b}[0m\td\u{7}"),
+            "a\nb\nc[0m\td"
+        );
     }
 
     /// `ANTHROPIC_API_KEY` num secret do projeto recusa o início com o

@@ -670,6 +670,7 @@ mod tests {
                         synced_at: 1,
                         gone: Vec::new(),
                         me: None,
+                        pr_checks: None,
                     },
                     "hub",
                 )

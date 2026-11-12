@@ -388,7 +388,7 @@ Pré-requisito: um ambiente 2.15 ou maior com uma sessão de issue rodando, com 
 
 ## 26. Sessão de release (#204)
 
-Pré-requisito: hub 1.21 e um ambiente 2.21 com um projeto GitHub de teste (por exemplo `acme/acme-web`, com o fluxo do release-please) atribuído. Não use um repositório de produção.
+Pré-requisito: hub 1.24 e um ambiente 2.23 com um projeto GitHub de teste (por exemplo `acme/acme-web`, com o fluxo do release-please) atribuído. Não use um repositório de produção.
 
 1. Em **Configurações do projeto › Release**, clique **Editar release**, ligue a sessão de release e salve. **Esperado:** "ligada", o fluxo `develop → main` e o secret `CT_RELEASE_GH_TOKEN`: ausente. Troque o destino para `develop`: o formulário avisa que origem e destino precisam ser diferentes e não salva.
 2. Na tela do projeto, clique **Criar release**. **Esperado:** a modal "Sessão de release" com o estado (diferença de conteúdo, PRs abertos, última release) e o início bloqueado com "Cadastre o secret CT_RELEASE_GH_TOKEN...".

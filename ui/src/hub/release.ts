@@ -4,7 +4,7 @@
 import type { HubProject, HubReleaseStatus, ReleaseConfig, ReleaseStatus, ReleaseStep } from "../protocol/hub-gen";
 
 /** Protocolo do hub com `release` (#204). */
-export const RELEASE_PROTOCOL = "1.21";
+export const RELEASE_PROTOCOL = "1.24";
 
 /** Configuração padrão (desligada); espelha `ReleaseConfig::default` do ct-core. */
 export const DEFAULT_RELEASE_CONFIG: ReleaseConfig = {

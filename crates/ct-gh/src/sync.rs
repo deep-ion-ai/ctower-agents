@@ -6,8 +6,8 @@ use crate::{time, Fetched, GhClient, GhError};
 use ct_core::branch::issue_number_from_branch;
 use ct_core::{PrState, WorkItemKind, WorkItemStatus};
 use ct_ledger::{
-    project_key, GithubSnapshot, GoneIssue, Hub, IssueMeta, IssueRow, Ledger, PrRow, Project,
-    WorkItem,
+    project_key, CheckSource, ChecksRead, GithubSnapshot, GoneIssue, Hub, IssueMeta, IssueRow,
+    Ledger, PrCheck, PrChecks, PrChecksFetch, PrChecksSnapshot, PrRow, Project, WorkItem,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -19,8 +19,11 @@ const CLOSED_WINDOW_MS: i64 = 30 * 86_400_000;
 /// próximo ciclo ler as issues sem os ETags gravados (uma vez), para que as
 /// que não mudaram no GitHub ganhem o que a leitura passou a extrair, como o
 /// `MIRROR_VERSION` do Jira: 1 = com os metadados (`meta`, #70); 2 = com os
-/// responsáveis (`assignees`, #149).
-pub const MIRROR_VERSION: i64 = 2;
+/// responsáveis (`assignees`, #149); 3 = com os checks do head dos PRs
+/// (#129): a releitura traz também, sem ETag, o PR da branch de integração
+/// do modo autônomo, que não fica no `pr_cache` e cujo head os checks
+/// precisam conhecer.
+pub const MIRROR_VERSION: i64 = 3;
 
 /// Chave, no `gh_etag`, da `MIRROR_VERSION` com que o espelho do projeto foi
 /// lido por último. Ausente = espelho anterior à versão 1.
@@ -45,8 +48,15 @@ pub struct SyncInput {
     /// `mirror_stale`.
     pub etags: HashMap<String, String>,
     /// O espelho foi lido com outra `MIRROR_VERSION`: as consultas de issues
-    /// vão sem ETag e o snapshot grava a versão atual.
+    /// (e a do PR da branch de integração) vão sem ETag e o snapshot grava a
+    /// versão atual.
     pub mirror_stale: bool,
+    /// PRs abertos no cache dos work items observados (#129): os checks do
+    /// head deles são lidos mesmo quando a listagem do PR vem em `304`.
+    pub open_prs: Vec<PrRow>,
+    /// Checks gravados no espelho, por número do PR: o SHA e os ETags da
+    /// leitura anterior.
+    pub checks: HashMap<i64, PrChecks>,
     pub now_ms: i64,
 }
 
@@ -58,8 +68,12 @@ impl SyncInput {
             .into_iter()
             .filter(|w| w.branch.is_some() && w.status != WorkItemStatus::Concluido)
             .collect();
-        let issues = l.list_issues(project_id)?;
-        Self::build(project, work_items, &issues, now_ms, |k| l.etag(k))
+        let mirror = Mirror {
+            issues: l.list_issues(project_id)?,
+            open_prs: l.open_prs(project_id)?,
+            checks: l.list_pr_checks(project_id)?,
+        };
+        Self::build(project, work_items, mirror, now_ms, |k| l.etag(k))
     }
 
     /// Entrada de um projeto central do `hub.db`, que não precisa de clone
@@ -97,18 +111,34 @@ impl SyncInput {
                 closed_at: w.closed_at,
             })
             .collect();
-        let issues = hub.list_issues(project_id)?;
-        Self::build(project, work_items, &issues, now_ms, |k| hub.etag(k))
+        let mirror = Mirror {
+            issues: hub.list_issues(project_id)?,
+            open_prs: hub.open_prs(project_id)?,
+            checks: hub.list_pr_checks(project_id)?,
+        };
+        Self::build(project, work_items, mirror, now_ms, |k| hub.etag(k))
     }
 
     fn build(
         project: Project,
         mut work_items: Vec<WorkItem>,
-        issues: &[IssueRow],
+        mirror: Mirror,
         now_ms: i64,
         etag: impl Fn(&str) -> ct_ledger::Result<Option<String>>,
     ) -> ct_ledger::Result<Self> {
         work_items.retain(|w| w.status != WorkItemStatus::AguardandoEpico);
+        let issues = &mirror.issues;
+        let observed: BTreeSet<i64> = work_items.iter().map(|w| w.id).collect();
+        let open_prs = mirror
+            .open_prs
+            .into_iter()
+            .filter(|p| observed.contains(&p.work_item_id))
+            .collect();
+        let checks = mirror
+            .checks
+            .into_iter()
+            .map(|c| (c.pr_number, c))
+            .collect();
         let open_epics: Vec<i64> = issues
             .iter()
             .filter(|i| i.has_sub_issues && i.state == "open")
@@ -132,7 +162,10 @@ impl SyncInput {
         // PRs para a branch de cada épico em andamento: os das sub-issues.
         paths.extend(epic_branches(&work_items).map(|(_, b)| pulls_base_path(o, r, b)));
         // PR da branch de integração do modo autônomo para a base (#181).
-        paths.extend(autonomy_branch(&project).map(|(b, _)| pulls_path(o, r, &b)));
+        // Na releitura, sem ETag: o head dele só vem na listagem (#129).
+        if !mirror_stale {
+            paths.extend(autonomy_branch(&project).map(|(b, _)| pulls_path(o, r, &b)));
+        }
         let mut etags = HashMap::new();
         for p in paths {
             if let Some(e) = etag(&p)? {
@@ -150,9 +183,18 @@ impl SyncInput {
             parents,
             etags,
             mirror_stale,
+            open_prs,
+            checks,
             now_ms,
         })
     }
+}
+
+/// O espelho lido para a entrada do sync.
+struct Mirror {
+    issues: Vec<IssueRow>,
+    open_prs: Vec<PrRow>,
+    checks: Vec<PrChecks>,
 }
 
 /// `since` das issues fechadas: início do dia UTC de 30 dias atrás (estável
@@ -189,6 +231,28 @@ pub fn open_pulls_path(owner: &str, repo: &str, head: &str, base: &str) -> Strin
         encode(&format!("{owner}:{head}")),
         encode(base)
     )
+}
+
+/// Check runs do commit `sha` (#129). Sem `filter`: o padrão (`latest`)
+/// traz só a execução mais recente de cada check.
+pub fn check_runs_path(owner: &str, repo: &str, sha: &str) -> String {
+    format!(
+        "/repos/{owner}/{repo}/commits/{}/check-runs?per_page=100",
+        encode(sha)
+    )
+}
+
+/// Status combinado do commit `sha` (#129): o último de cada `context`.
+pub fn commit_status_path(owner: &str, repo: &str, sha: &str) -> String {
+    format!(
+        "/repos/{owner}/{repo}/commits/{}/status?per_page=100",
+        encode(sha)
+    )
+}
+
+/// Log de um job do GitHub Actions (redireciona para o arquivo).
+pub fn job_logs_path(owner: &str, repo: &str, job_id: i64) -> String {
+    format!("/repos/{owner}/{repo}/actions/jobs/{job_id}/logs")
 }
 
 /// PRs (todos os estados) cuja base é `branch`: os das sub-issues para a
@@ -536,9 +600,10 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
         }
     }
     // O PR da branch de integração para a base (#181): não é de work item
-    // (id 0, fica fora do cache); quem aplica conclui as issues dela.
+    // (id 0, fica fora do cache); quem aplica conclui as issues dela. Na
+    // releitura do espelho vem inteiro, para os checks saberem o head.
     if let Some((branch, base)) = autonomy_branch(&input.project) {
-        for v in get(pulls_path(o, r, &branch), true)?.unwrap_or_default() {
+        for v in get(pulls_path(o, r, &branch), !input.mirror_stale)?.unwrap_or_default() {
             if let Some(row) = pr_row(&v, 0).filter(|p| p.base == base) {
                 prs.push(row);
             }
@@ -546,6 +611,7 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
     }
     // Do mais antigo ao mais novo: o PR mais recente da branch decide por último.
     prs.sort_by_key(|p| p.number);
+    let pr_checks = fetch_checks(api, input, &prs)?;
 
     Ok(GithubSnapshot {
         project_id: input.project.id,
@@ -556,7 +622,180 @@ pub fn fetch(api: &GhClient, input: &SyncInput) -> Result<GithubSnapshot, GhErro
         gone,
         // Quem chama preenche com `GhClient::login` (#149).
         me: None,
+        pr_checks: Some(pr_checks),
     })
+}
+
+/// Um PR aberto cujo head tem os checks observados.
+struct CheckTarget {
+    number: i64,
+    head: String,
+    base: String,
+    sha: String,
+}
+
+/// PRs abertos com os checks a observar (#129): os do cache dos work items
+/// observados, com o que esta rodada trouxe por cima (aberto entra, fechado
+/// ou mesclado sai), e o da branch de integração do modo autônomo, que só
+/// existe na listagem desta rodada ou nos checks já gravados.
+fn check_targets(input: &SyncInput, prs: &[PrRow]) -> Vec<CheckTarget> {
+    let target = |p: &PrRow| {
+        Some(CheckTarget {
+            number: p.number,
+            head: p.head.clone(),
+            base: p.base.clone(),
+            sha: p.head_sha.clone()?,
+        })
+    };
+    let mut out: BTreeMap<i64, CheckTarget> = input
+        .open_prs
+        .iter()
+        .filter_map(|p| Some((p.number, target(p)?)))
+        .collect();
+    if let Some((branch, base)) = autonomy_branch(&input.project) {
+        for c in input.checks.values() {
+            if c.head == branch && c.base == base {
+                out.insert(
+                    c.pr_number,
+                    CheckTarget {
+                        number: c.pr_number,
+                        head: c.head.clone(),
+                        base: c.base.clone(),
+                        sha: c.head_sha.clone(),
+                    },
+                );
+            }
+        }
+    }
+    for p in prs {
+        match target(p).filter(|_| p.state == PrState::Open) {
+            Some(t) => {
+                out.insert(p.number, t);
+            }
+            None => {
+                out.remove(&p.number);
+            }
+        }
+    }
+    out.into_values().collect()
+}
+
+/// Lê os checks do head de cada PR aberto (#129): check runs e status
+/// combinado, com o ETag da leitura anterior do mesmo SHA (`304` não gasta
+/// cota). Um SHA igual ao anterior com todos os checks concluídos não é
+/// relido. Um erro HTTP num PR (token sem permissão de checks, SHA sumido)
+/// deixa os checks dele como estavam e não derruba a rodada; rede e rate
+/// limit, sim.
+fn fetch_checks(
+    api: &GhClient,
+    input: &SyncInput,
+    prs: &[PrRow],
+) -> Result<PrChecksSnapshot, GhError> {
+    let (o, r) = (&input.project.gh_owner, &input.project.gh_repo);
+    let mut out = PrChecksSnapshot::default();
+    for t in check_targets(input, prs) {
+        out.open.push(t.number);
+        let prev = input.checks.get(&t.number).filter(|c| c.head_sha == t.sha);
+        if prev.is_some_and(PrChecks::completed) {
+            continue;
+        }
+        let read = |path: String, etag: Option<&str>, parse: fn(&Value) -> Vec<PrCheck>| {
+            api.get_one(&path, etag).map(|f| match f {
+                Fetched::NotModified => None,
+                Fetched::Modified { body, etag } => Some(ChecksRead {
+                    checks: parse(&body),
+                    etag,
+                }),
+            })
+        };
+        let runs_etag = prev.and_then(|c| c.runs_etag.as_deref());
+        let status_etag = prev.and_then(|c| c.status_etag.as_deref());
+        let fetched = read(check_runs_path(o, r, &t.sha), runs_etag, check_runs).and_then(|runs| {
+            let st = read(commit_status_path(o, r, &t.sha), status_etag, statuses)?;
+            Ok((runs, st))
+        });
+        let (runs, statuses) = match fetched {
+            Ok(v) => v,
+            Err(GhError::Http { .. }) => continue,
+            Err(e) => return Err(e),
+        };
+        if runs.is_none() && statuses.is_none() {
+            continue;
+        }
+        out.updates.push(PrChecksFetch {
+            pr_number: t.number,
+            head: t.head,
+            base: t.base,
+            head_sha: t.sha,
+            runs,
+            statuses,
+        });
+    }
+    Ok(out)
+}
+
+/// `check_runs` de `GET /commits/{sha}/check-runs` → checks.
+pub fn check_runs(v: &Value) -> Vec<PrCheck> {
+    v.get("check_runs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let s = |k: &str| c.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
+            let conclusion = (s("status") == Some("completed"))
+                .then(|| s("conclusion").map(String::from))
+                .flatten();
+            Some(PrCheck {
+                name: s("name")?.to_string(),
+                source: CheckSource::CheckRun,
+                conclusion,
+                url: s("html_url").or(s("details_url")).map(String::from),
+                job_id: actions_job_id(c),
+            })
+        })
+        .collect()
+}
+
+/// `statuses` de `GET /commits/{sha}/status` → checks (`pending` = em
+/// andamento).
+pub fn statuses(v: &Value) -> Vec<PrCheck> {
+    v.get("statuses")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let s = |k: &str| c.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
+            Some(PrCheck {
+                name: s("context")?.to_string(),
+                source: CheckSource::Status,
+                conclusion: s("state").filter(|st| *st != "pending").map(String::from),
+                url: s("target_url").map(String::from),
+                job_id: None,
+            })
+        })
+        .collect()
+}
+
+/// Job do Actions de um check run: o número depois de `/job/` (ou `/jobs/`)
+/// no `details_url`; senão o `external_id` numérico; senão, num check run
+/// do app `github-actions`, o próprio `id` (que é o do job).
+pub fn actions_job_id(c: &Value) -> Option<i64> {
+    let from_url = c.get("details_url").and_then(Value::as_str).and_then(|u| {
+        let mut parts = u.split(['/', '?', '#']);
+        parts.find(|p| *p == "job" || *p == "jobs")?;
+        parts.next()?.parse().ok()
+    });
+    let external = || {
+        c.get("external_id")
+            .and_then(Value::as_str)
+            .and_then(|e| e.parse().ok())
+    };
+    let actions = || {
+        (c.pointer("/app/slug").and_then(Value::as_str) == Some("github-actions"))
+            .then(|| c.get("id").and_then(Value::as_i64))
+            .flatten()
+    };
+    from_url.or_else(external).or_else(actions)
 }
 
 #[cfg(test)]
@@ -565,7 +804,7 @@ mod tests {
     use crate::fake::{fake_gh, FakeGitHub};
     use crate::GhConfig;
     use ct_core::WorkItemKind;
-    use ct_ledger::NewProject;
+    use ct_ledger::{ChecksState, NewProject};
     use serde_json::json;
 
     const NOW: &str = "2026-10-15T12:00:00Z";
@@ -1281,6 +1520,258 @@ mod tests {
         assert_eq!(
             e.l.etag(&issues_path("o", "r", "open", None)).unwrap(),
             None
+        );
+    }
+
+    // --- Checks do head do PR (#129) ---
+
+    fn check_run(id: i64, name: &str, status: &str, conclusion: Option<&str>) -> Value {
+        json!({
+            "id": id, "name": name, "status": status, "conclusion": conclusion,
+            "html_url": format!("https://github.com/o/r/runs/{id}"),
+            "details_url": format!("https://github.com/o/r/actions/runs/77/job/{id}"),
+            "external_id": "", "app": { "slug": "github-actions" },
+        })
+    }
+
+    /// Work item #2 com o PR 30 aberto (`sha-30`) e os checks publicados.
+    fn env_com_pr_aberto(runs: Value, statuses: Value) -> (Env, i64) {
+        let e = Env::new();
+        let wi =
+            e.l.ensure_work_item(e.project, 2, WorkItemKind::Issue)
+                .unwrap();
+        e.l.set_work_item_branch(wi.id, "feat/2-x", "/wt/feat__2-x")
+            .unwrap();
+        e.gh.set(
+            &issues_path("o", "r", "open", None),
+            json!([gh_issue(2, "open", None, 0)]),
+        );
+        e.gh.set(
+            &pulls_path("o", "r", "feat/2-x"),
+            json!([gh_pr(30, "open", false, "feat/2-x")]),
+        );
+        e.gh.set(
+            &check_runs_path("o", "r", "sha-30"),
+            json!({ "total_count": 9, "check_runs": runs }),
+        );
+        e.gh.set(
+            &commit_status_path("o", "r", "sha-30"),
+            json!({ "state": "pending", "statuses": statuses }),
+        );
+        (e, wi.id)
+    }
+
+    /// Requisições aos checks do commit (check runs e status).
+    fn check_requests(gh: &FakeGitHub) -> Vec<(String, Option<String>)> {
+        gh.requests()
+            .into_iter()
+            .filter(|(p, _)| p.contains("/commits/"))
+            .collect()
+    }
+
+    #[test]
+    fn caminhos_dos_checks() {
+        assert_eq!(
+            check_runs_path("acme", "acme-web", "abc123"),
+            "/repos/acme/acme-web/commits/abc123/check-runs?per_page=100"
+        );
+        assert_eq!(
+            commit_status_path("acme", "acme-web", "abc123"),
+            "/repos/acme/acme-web/commits/abc123/status?per_page=100"
+        );
+        assert_eq!(
+            job_logs_path("acme", "acme-web", 456),
+            "/repos/acme/acme-web/actions/jobs/456/logs"
+        );
+    }
+
+    #[test]
+    fn job_id_do_actions() {
+        let c = |v: Value| actions_job_id(&v);
+        assert_eq!(
+            c(json!({ "details_url": "https://github.com/acme/acme-web/actions/runs/1/job/456" })),
+            Some(456)
+        );
+        assert_eq!(
+            c(
+                json!({ "details_url": "https://github.com/acme/acme-web/actions/runs/1/jobs/457?pr=3" })
+            ),
+            Some(457)
+        );
+        // Fora do Actions: o `external_id` numérico, senão nada.
+        assert_eq!(
+            c(json!({ "details_url": "https://ci.example.com/build/9", "external_id": "88" })),
+            Some(88)
+        );
+        assert_eq!(
+            c(
+                json!({ "details_url": "https://ci.example.com/build/9", "external_id": "x-1", "id": 5 })
+            ),
+            None
+        );
+        // Check run do app `github-actions` sem `details_url`: o `id` é o do job.
+        assert_eq!(
+            c(json!({ "id": 12, "app": { "slug": "github-actions" } })),
+            Some(12)
+        );
+    }
+
+    /// Critério de aceite: um PR fictício com um check falho aparece com a
+    /// falha e o nome do job, por PR e por work item, e no resumo da árvore.
+    #[test]
+    fn pr_com_check_falho_aparece_com_a_falha_e_o_job() {
+        let (e, wi) = env_com_pr_aberto(
+            json!([
+                check_run(456, "build", "completed", Some("success")),
+                check_run(457, "test", "completed", Some("failure")),
+            ]),
+            json!([{
+                "context": "ci/lint", "state": "success",
+                "target_url": "https://ci.example.com/lint/1",
+            }]),
+        );
+        e.sync();
+        let c = e.l.pr_checks(e.project, 30).unwrap().unwrap();
+        assert_eq!(
+            (c.head_sha.as_str(), c.state),
+            ("sha-30", ChecksState::Failure)
+        );
+        assert_eq!((c.head.as_str(), c.base.as_str()), ("feat/2-x", "develop"));
+        let failed: Vec<_> = c.failed().collect();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].name, "test");
+        assert_eq!(failed[0].conclusion.as_deref(), Some("failure"));
+        assert_eq!(failed[0].job_id, Some(457));
+        assert_eq!(
+            failed[0].url.as_deref(),
+            Some("https://github.com/o/r/runs/457")
+        );
+        let lint = c.checks.iter().find(|c| c.name == "ci/lint").unwrap();
+        assert_eq!(
+            (lint.source, lint.job_id),
+            (ct_ledger::CheckSource::Status, None)
+        );
+        assert_eq!(c.summary().text, "3 checks, 1 falhou");
+        assert_eq!(e.l.pr_checks_for_work_item(wi).unwrap(), vec![c]);
+        // O resumo vai junto do PR na árvore do projeto.
+        let tree = e.l.project_tree(e.project).unwrap();
+        let summary = tree.roots[0].summary.pr_checks.as_ref().unwrap();
+        assert_eq!((summary.total, summary.failed), (3, 1));
+        assert_eq!(summary.text, "3 checks, 1 falhou");
+    }
+
+    /// Critério de aceite: sem mudança de SHA nem de checks, o ciclo só gasta
+    /// o `304` (com o ETag da leitura anterior do mesmo SHA); com tudo
+    /// concluído, nem isso.
+    #[test]
+    fn sem_mudanca_os_checks_so_gastam_o_304() {
+        let (e, _) = env_com_pr_aberto(
+            json!([check_run(456, "build", "in_progress", None)]),
+            json!([]),
+        );
+        e.sync();
+        let c = e.l.pr_checks(e.project, 30).unwrap().unwrap();
+        assert_eq!(c.state, ChecksState::Pending);
+        assert_eq!(c.summary().text, "1 check, 1 em andamento");
+
+        e.gh.clear_requests();
+        e.sync();
+        let reqs = check_requests(&e.gh);
+        assert_eq!(reqs.len(), 2, "{reqs:?}");
+        assert!(reqs.iter().all(|(_, inm)| inm.is_some()), "{reqs:?}");
+        assert_eq!(e.l.pr_checks(e.project, 30).unwrap().unwrap(), c);
+
+        // O check conclui: a leitura muda e grava.
+        e.gh.set(
+            &check_runs_path("o", "r", "sha-30"),
+            json!({ "total_count": 1, "check_runs": [
+                check_run(456, "build", "completed", Some("success")),
+            ]}),
+        );
+        e.gh.clear_requests();
+        e.sync();
+        assert_eq!(check_requests(&e.gh).len(), 2);
+        let c = e.l.pr_checks(e.project, 30).unwrap().unwrap();
+        assert_eq!(
+            (c.state, c.summary().text.as_str()),
+            (ChecksState::Success, "1 check, passou")
+        );
+
+        // Mesmo SHA, tudo concluído: os checks não são relidos.
+        e.gh.clear_requests();
+        e.sync();
+        assert!(check_requests(&e.gh).is_empty());
+    }
+
+    /// Head novo: os checks do SHA antigo dão lugar aos do novo, lidos sem
+    /// ETag; PR mesclado sai do espelho dos checks.
+    #[test]
+    fn sha_novo_rele_e_pr_fechado_sai() {
+        let (e, _) = env_com_pr_aberto(
+            json!([check_run(456, "build", "completed", Some("failure"))]),
+            json!([]),
+        );
+        e.sync();
+        assert_eq!(
+            e.l.pr_checks(e.project, 30).unwrap().unwrap().state,
+            ChecksState::Failure
+        );
+
+        let mut pr = gh_pr(30, "open", false, "feat/2-x");
+        pr["head"]["sha"] = json!("sha-31");
+        e.gh.set(&pulls_path("o", "r", "feat/2-x"), json!([pr]));
+        e.gh.set(
+            &check_runs_path("o", "r", "sha-31"),
+            json!({ "total_count": 1, "check_runs": [
+                check_run(458, "build", "queued", None),
+            ]}),
+        );
+        e.gh.set(
+            &commit_status_path("o", "r", "sha-31"),
+            json!({ "state": "pending", "statuses": [] }),
+        );
+        e.gh.clear_requests();
+        e.sync();
+        let reqs = check_requests(&e.gh);
+        assert_eq!(reqs.len(), 2, "{reqs:?}");
+        assert!(reqs
+            .iter()
+            .all(|(p, inm)| p.contains("sha-31") && inm.is_none()));
+        let c = e.l.pr_checks(e.project, 30).unwrap().unwrap();
+        assert_eq!(
+            (c.head_sha.as_str(), c.state),
+            ("sha-31", ChecksState::Pending)
+        );
+        assert_eq!(c.checks.len(), 1);
+        assert_eq!(c.checks[0].job_id, Some(458));
+
+        let mut pr = gh_pr(30, "closed", true, "feat/2-x");
+        pr["head"]["sha"] = json!("sha-31");
+        e.gh.set(&pulls_path("o", "r", "feat/2-x"), json!([pr]));
+        e.sync();
+        assert_eq!(e.l.pr_checks(e.project, 30).unwrap(), None);
+        assert!(e.l.list_pr_checks(e.project).unwrap().is_empty());
+    }
+
+    /// Um erro HTTP nos checks de um PR (ex.: token sem permissão) não
+    /// derruba a rodada: o resto do espelho é aplicado e os checks ficam
+    /// para o próximo ciclo.
+    #[test]
+    fn erro_nos_checks_nao_derruba_a_rodada() {
+        let (e, wi) = env_com_pr_aberto(json!([]), json!([]));
+        e.gh.fail_next(&check_runs_path("o", "r", "sha-30"), 403, &[]);
+        let applied = e.sync();
+        assert_eq!(
+            applied.status_changes,
+            vec![(wi, WorkItemStatus::EmRevisao)]
+        );
+        assert_eq!(e.l.pr_checks(e.project, 30).unwrap(), None);
+        // Próximo ciclo lê; sem checks, fica pendente ("sem checks").
+        e.sync();
+        let c = e.l.pr_checks(e.project, 30).unwrap().unwrap();
+        assert_eq!(
+            (c.state, c.summary().text.as_str()),
+            (ChecksState::Pending, "sem checks")
         );
     }
 }
