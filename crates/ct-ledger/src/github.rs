@@ -177,7 +177,8 @@ const SYNC_COLS: &str =
 const ISSUE_COLS: &str =
     "gh_number, title, state, labels, parent_number, has_sub_issues, url, updated_at, sprints, meta,
      assignees";
-const PR_COLS: &str = "number, work_item_id, head, base, state, url, updated_at, head_sha";
+pub(crate) const PR_COLS: &str =
+    "number, work_item_id, head, base, state, url, updated_at, head_sha";
 
 fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
     Ok(IssueRow {
@@ -195,7 +196,7 @@ fn row_to_issue(r: &Row) -> rusqlite::Result<IssueRow> {
     })
 }
 
-fn row_to_pr(r: &Row) -> rusqlite::Result<PrRow> {
+pub(crate) fn row_to_pr(r: &Row) -> rusqlite::Result<PrRow> {
     Ok(PrRow {
         number: r.get(0)?,
         work_item_id: r.get(1)?,

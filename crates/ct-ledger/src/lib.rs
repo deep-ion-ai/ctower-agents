@@ -9,6 +9,7 @@ mod events;
 mod github;
 mod hub;
 mod hub_config;
+mod pr_review;
 mod projects;
 mod prune;
 mod rules;
@@ -78,6 +79,10 @@ pub use hub::{
 pub use hub::{HubWebSession, IssuedWebSession, WEB_SESSION_TOUCH_MS};
 pub use hub_config::{
     ConfigApplied, ConfigDone, ConfigProject, ConfigRemoved, ConfigResponse, DoneResponse,
+};
+pub use pr_review::{
+    is_external_association, ChangesRequest, PrFeedback, PrReviews, ReviewTarget, ReviewThread,
+    TRUSTED_ASSOCIATIONS,
 };
 #[cfg(test)]
 pub(crate) use projects::ProjectPatch;

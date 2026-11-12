@@ -5,6 +5,7 @@
 //! Síncrono; quem chama roda fora do runtime assíncrono.
 
 pub mod refs;
+pub mod reviews;
 pub mod sync;
 pub mod time;
 
@@ -238,10 +239,64 @@ impl GhClient {
     /// POST de `body` (`path` relativo à API); devolve a resposta. Um `401`
     /// descarta o token e tenta uma vez mais.
     pub fn post_json(&self, path: &str, body: &Value) -> Result<Value, GhError> {
-        let url = format!("{}{}", self.cfg.api_url, path);
+        self.post_url(&format!("{}{}", self.cfg.api_url, path), body)
+    }
+
+    /// Endpoint GraphQL da API configurada: `<api>/graphql` no github.com,
+    /// `<host>/api/graphql` no GitHub Enterprise (REST em `<host>/api/v3`).
+    pub fn graphql_url(&self) -> String {
+        match self.cfg.api_url.strip_suffix("/api/v3") {
+            Some(host) => format!("{host}/api/graphql"),
+            None => format!("{}/graphql", self.cfg.api_url),
+        }
+    }
+
+    /// Consulta GraphQL; devolve o `data`. Resposta com `errors` vira erro:
+    /// `RATE_LIMITED` em [`GhError::RateLimited`], `NOT_FOUND` num `404` e o
+    /// resto num [`GhError::Parse`] com as mensagens.
+    pub fn graphql(&self, query: &str, variables: &Value) -> Result<Value, GhError> {
+        let v = self.post_url(
+            &self.graphql_url(),
+            &serde_json::json!({ "query": query, "variables": variables }),
+        )?;
+        let errors: Vec<&Value> = v
+            .get("errors")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .collect();
+        if !errors.is_empty() {
+            let kind = |t: &str| {
+                errors
+                    .iter()
+                    .any(|e| e.get("type").and_then(Value::as_str) == Some(t))
+            };
+            let message = errors
+                .iter()
+                .filter_map(|e| e.get("message").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(if kind("RATE_LIMITED") {
+                GhError::RateLimited { reset_at: None }
+            } else if kind("NOT_FOUND") {
+                GhError::Http {
+                    status: 404,
+                    message,
+                }
+            } else {
+                GhError::Parse(format!("GraphQL: {}", truncate(&message, 300)))
+            });
+        }
+        v.get("data")
+            .filter(|d| !d.is_null())
+            .cloned()
+            .ok_or_else(|| GhError::Parse("GraphQL sem data".into()))
+    }
+
+    fn post_url(&self, url: &str, body: &Value) -> Result<Value, GhError> {
         let mut renewed = false;
         loop {
-            return match self.request("POST", &url)?.send_json(body) {
+            return match self.request("POST", url)?.send_json(body) {
                 Ok(r) => r
                     .into_json::<Value>()
                     .map_err(|e| GhError::Parse(e.to_string())),
