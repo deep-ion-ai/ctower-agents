@@ -82,8 +82,13 @@ pub const GESTOR_REPO: &str = "gestor";
 str_enum!(Priority, "priority", { P0 => "P0", P1 => "P1", P2 => "P2", P3 => "P3" });
 
 // Proposta do gestor (spec do gestor §8): o que muda e em que pé está. Só o
-// hub marca `obsoleta`; `aprovada` e `rejeitada` vêm da UI do hub.
-str_enum!(ProposalKind, "proposal_kind", { Priority => "priority", Status => "status" });
+// hub marca `obsoleta`; `aprovada` e `rejeitada` vêm da UI do hub. `model`
+// (issue #182) = modelo e esforço do agente na issue.
+str_enum!(ProposalKind, "proposal_kind", {
+    Priority => "priority",
+    Status => "status",
+    Model => "model",
+});
 str_enum!(ProposalState, "proposal_state", {
     Pendente => "pendente",
     Aprovada => "aprovada",
@@ -127,6 +132,10 @@ impl Default for SessionMode {
 /// de cada família). Espelha `ui/src/settings/session-options.ts`.
 pub const CLAUDE_MODELS: &[&str] = &["fable", "opus", "sonnet", "haiku"];
 
+/// Níveis de esforço do Claude Code aceitos em `--effort` (issue #182), do
+/// menor para o maior. Espelha `ui/src/settings/session-options.ts`.
+pub const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
 str_enum!(DecisionOrigin, "decision_origin", {
     Autonoma => "autonoma",
     Orientada => "orientada",
@@ -166,6 +175,13 @@ pub enum WorkItemTrigger {
     SubIssuePrMerged,
     /// PR do épico mesclado na base: conclui a sub-issue que o aguardava.
     EpicMerged,
+    /// PR da issue mesclado na branch de integração do modo autônomo
+    /// (`wip/autonoma`, #181): a issue fica em revisão até a branch chegar
+    /// na base.
+    AutonomyPrMerged,
+    /// PR da branch de integração mesclado na base: conclui as issues que
+    /// tinham sido mescladas nela.
+    AutonomyMerged,
 }
 
 impl WorkItemTrigger {
@@ -178,6 +194,8 @@ impl WorkItemTrigger {
             Self::PrMerged => "pr_merged",
             Self::SubIssuePrMerged => "sub_issue_pr_merged",
             Self::EpicMerged => "epic_merged",
+            Self::AutonomyPrMerged => "autonomy_pr_merged",
+            Self::AutonomyMerged => "autonomy_merged",
         }
     }
 }
@@ -199,6 +217,8 @@ pub fn next_status(current: WorkItemStatus, trigger: WorkItemTrigger) -> Option<
         T::PrMerged => S::Concluido,
         T::SubIssuePrMerged => S::AguardandoEpico,
         T::EpicMerged => S::Concluido,
+        T::AutonomyPrMerged => S::EmRevisao,
+        T::AutonomyMerged => S::Concluido,
     };
     let aceito = match current {
         S::Concluido => trigger == T::SessionActive,

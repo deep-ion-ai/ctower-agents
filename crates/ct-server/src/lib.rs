@@ -63,8 +63,22 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// `docs.list` e o push `session_files` (visualizador de markdown, também
 /// pelo canal do hub). 2.15 (#168): `git.diff`, `git.diff_file` e
 /// `git.commits` (visualizador de diff da worktree do work item, também pelo
-/// canal do hub).
-pub const PROTOCOL_VERSION: &str = "2.15";
+/// canal do hub). 2.16 (#181): modo autônomo — `autonomy`, `autonomy_runner`
+/// e `autonomy_report` em `Project`, `autonomous` no `session.start` (sessão
+/// autônoma, que sai da branch de integração), `autonomy.align` (também pelo
+/// canal do hub), o erro `AUTONOMY_CONFLICT` (-32050) e o alerta
+/// `autonomy_conflict`. 2.17 (#182): `effort` (`--effort`) em
+/// `session.start|start_project|start_gestor` e a ferramenta MCP
+/// `issue_propose_model`. 2.18 (#124): `approval` em `Project` (rótulo
+/// de aprovação, vindo do hub), `override_approval` no `session.start` e a
+/// recusa `APPROVAL_REQUIRED` (-32052) da issue sem o rótulo exigido. 2.19
+/// (#191): `prompt` opcional no `session.start` com `autonomous: true` (o
+/// ambiente monta com `session_templates.autonomous` ou o template padrão)
+/// e `autonomous` em `SessionTemplates`. 2.20 (#183): `session.continue`
+/// (também pelo canal do hub), que escreve um texto fixo na sessão viva
+/// parada pelo limite real do plano, para o agendador do piloto automático
+/// retomá-la depois do reset.
+pub const PROTOCOL_VERSION: &str = "2.20";
 
 #[derive(Clone)]
 pub struct AppState {

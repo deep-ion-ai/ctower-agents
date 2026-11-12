@@ -7,7 +7,9 @@ import type { HubSession } from "../protocol/hub-gen";
 import { AgentRules } from "../hub/AgentRules";
 import { isJira } from "../hub/tracker";
 import {
+  ApprovalCard,
   AssignmentsCard,
+  AutonomyCard,
   CleanupCard,
   DangerZone,
   DocsCard,
@@ -15,6 +17,7 @@ import {
   RepositoryCard,
   SessionTemplatesCard,
   SyncEnvCard,
+  WipCard,
   keyOf,
   projectSecretsOf,
   syncText,
@@ -108,6 +111,13 @@ export function ProjectSettings({
           order={{ pos, total: hub.projects.length }}
         />
       );
+      // Limite de trabalho em andamento (#126): no cadastro, junto do Geral.
+      body = (
+        <>
+          {body}
+          <WipCard project={p} settings={settings} readOnly={web} />
+        </>
+      );
       break;
     case "tracker": {
       const sync = syncText(p.sync, now);
@@ -152,11 +162,17 @@ export function ProjectSettings({
         />
       );
       break;
+    case "autonomy":
+      body = <AutonomyCard project={p} settings={settings} readOnly={web} />;
+      break;
     case "rules":
       body = <AgentRules owner={pr.gh_owner} repo={pr.gh_repo} epic={0} label={pr.name} now={now} className="hub-card" />;
       break;
     case "templates":
       body = <SessionTemplatesCard project={p} settings={settings} readOnly={web} />;
+      break;
+    case "approval":
+      body = <ApprovalCard project={p} settings={settings} readOnly={web} />;
       break;
     case "secrets":
       body = <ProjectSecretsCard project={pr} secrets={secrets} />;

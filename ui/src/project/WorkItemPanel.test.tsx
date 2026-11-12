@@ -56,7 +56,11 @@ const HUB_PROJECT: HubProject = {
   attribution: true,
   sync_env_id: null,
   docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-  session_templates: { issue: "", epic: "", project: "" },
+  session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+  autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+  autonomy_report: null,
+  wip_limits: { max_sessions: null, max_prs: null },
+  approval: { label: "aprovada", required: false },
 };
 
 const hubItem = (n: number, p: Partial<HubWorkItem> = {}): HubWorkItem => ({
@@ -70,6 +74,8 @@ const hubItem = (n: number, p: Partial<HubWorkItem> = {}): HubWorkItem => ({
   closed_at: null,
   priority: null,
   rank: null,
+  model: null,
+  effort: null,
   ...p,
 });
 
@@ -316,6 +322,56 @@ test("prioridade: menu com P0–P3 e não triado, chama hub.workitem.set_priorit
     number: 50,
     priority: "P1",
   });
+});
+
+test("modelo e esforço (#182): o menu grava com hub.workitem.set_model", async () => {
+  const { api, user } = setup(true);
+  api.onHub("hub.workitem.set_model", hubItem(50, { model: "opus", effort: "high" }));
+  const panel = await openPanel(user, "ui: painel de detalhe");
+  await user.click(within(panel).getByRole("button", { name: "Modelo: sem modelo ▾" }));
+  const menu = within(panel).getByRole("group", { name: "Mudar modelo e esforço" });
+  const [model, effort] = within(menu).getAllByRole("combobox");
+  expect(effort).toBeDisabled();
+  await user.selectOptions(model, "opus");
+  await user.selectOptions(effort, "high");
+  await user.click(within(menu).getByRole("button", { name: "Salvar" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.workitem.set_model")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.workitem.set_model")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    number: 50,
+    model: "opus",
+    effort: "high",
+  });
+});
+
+test("modelo e esforço (#182): hub anterior ao 1.16 deixa o botão desabilitado com o motivo", async () => {
+  const api = build(true).onHub("hub.info", hubInfo({ protocol: "1.15" }));
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const panel = await openPanel(userEvent.setup(), "ui: painel de detalhe");
+  const b = await within(panel).findByRole("button", { name: "Modelo: sem modelo ▾" });
+  await waitFor(() => expect(b).toBeDisabled());
+  expect(b).toHaveAttribute("title", expect.stringContaining("1.16"));
+});
+
+test("modelo e esforço (#182): a modal de início vem com os da issue e os manda no session.start", async () => {
+  const api = build(true);
+  const tree = structuredClone(TREE);
+  for (const x of tree.roots)
+    if (x.issue.gh_number === 59 && x.work_item) x.work_item = { ...x.work_item, model: "opus", effort: "high" };
+  api.onHub("hub.tree.get", tree);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  const panel = await openPanel(user, "sync ambiente→hub");
+  expect(within(panel).getByRole("button", { name: "Modelo: Opus · esforço high ▾" })).toBeInTheDocument();
+  await user.click(within(panel).getByRole("button", { name: "Iniciar sessão" }));
+  const modal = screen.getByRole("dialog");
+  await waitFor(() => expect(within(modal).getByLabelText("Modelo")).toHaveValue("opus"));
+  expect(within(modal).getByLabelText("Esforço")).toHaveValue("high");
+  expect(within(modal).getByText(/Definido na issue: Opus · esforço high/)).toBeInTheDocument();
+  await user.click(within(modal).getByRole("button", { name: /^Iniciar sessão/ }));
+  await waitFor(() => expect(api.callsTo("session.start")).toHaveLength(1));
+  expect(api.callsTo("session.start")[0].params).toMatchObject({ gh_number: 59, model: "opus", effort: "high" });
 });
 
 test("prioridade: subir na ordem troca com o vizinho da classe pelo ranking", async () => {

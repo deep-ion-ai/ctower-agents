@@ -25,6 +25,9 @@ Cite issues pelo ref de ledger_get_context (owner/repo#n no GitHub, a chave no J
 As regras do projeto e do épico já estão no seu system prompt; releia as vigentes com rules_get. \
 Para mudá-las, proponha o texto completo novo com rules_propose: a proposta fica pendente até o \
 usuário aprovar, então nunca diga que as regras mudaram antes disso. \
+Ao criar uma issue (sessão de planejamento), sugira o modelo e o esforço do agente nela com \
+issue_propose_model, justificando pelo tamanho, pelo risco e pelas áreas tocadas; também fica \
+pendente até o usuário aprovar. \
 Quando criar um .md para o usuário ler (análise, especificação, plano, relatório), compartilhe-o \
 com share_file: ele abre no visualizador do Control Tower, em qualquer máquina.";
 
@@ -112,6 +115,13 @@ fn dispatch(
     if method == "tools/call" && params.get("name").and_then(Value::as_str) == Some("share_file") {
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         return Ok(tool_result(share_file(sessions, &session, &args)));
+    }
+    // `issue_propose_model` (#182) vai ao hub pela rede: fora do ledger.
+    if method == "tools/call"
+        && params.get("name").and_then(Value::as_str) == Some("issue_propose_model")
+    {
+        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        return Ok(tool_result(propose_model(sessions, hub, &session, &args)));
     }
     let l = sessions.ledger();
     match method {
@@ -360,6 +370,20 @@ fn tools(epic: bool) -> Value {
             }
         },
         {
+            "name": "issue_propose_model",
+            "description": "Sugere o modelo e o esforço do agente para uma issue deste projeto (por exemplo, logo depois de criá-la na sessão de planejamento). Cria uma proposta pendente no hub: só vale depois que o usuário aprovar (ele pode aprovar com outro valor). Justifique pelo tamanho, pelo risco e pelas áreas tocadas.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "number": { "type": "integer", "description": "Número da issue (no Jira, o número da chave)." },
+                    "model": { "type": "string", "enum": ct_core::CLAUDE_MODELS },
+                    "effort": { "type": "string", "enum": ct_core::CLAUDE_EFFORTS },
+                    "justification": { "type": "string", "maxLength": 2000 }
+                },
+                "required": ["number", "model", "justification"]
+            }
+        },
+        {
             "name": "share_file",
             "description": "Compartilha um arquivo .md com o usuário: ele aparece no painel da sessão na UI do Control Tower e abre num visualizador (formatado, com diagramas Mermaid, ou texto), em qualquer máquina. Use para análises, especificações, planos e relatórios que o usuário deve ler. Só .md dentro da pasta da sessão (worktree) ou da pasta de docs do projeto ($CT_DOCS_DIR); até 1 MiB.",
             "inputSchema": {
@@ -387,6 +411,48 @@ fn tools(epic: bool) -> Value {
         }));
     }
     tools
+}
+
+/// `issue_propose_model` (#182): a proposta `model` para uma issue do
+/// projeto da sessão, pelo token de agente do ambiente (o mesmo caminho do
+/// `portfolio_propose` do gestor). Sem hub ou sem token, o erro diz o que
+/// falta.
+fn propose_model(
+    sessions: &Sessions,
+    hub: Option<&HubSender>,
+    s: &Session,
+    args: &Value,
+) -> Result<Value, String> {
+    let hub = hub.ok_or_else(|| format!("hub indisponível: {}", crate::hub_sync::NOT_LINKED))?;
+    let (owner, repo) = {
+        let l = sessions.ledger();
+        let e = |e: ct_ledger::LedgerError| e.to_string();
+        let wi = l.get_work_item(s.work_item_id).map_err(e)?;
+        let p = l.get_project(wi.project_id).map_err(e)?;
+        (p.gh_owner, p.gh_repo)
+    };
+    let number = args
+        .get("number")
+        .and_then(Value::as_i64)
+        .filter(|n| *n > 0)
+        .ok_or("parâmetro obrigatório: number")?;
+    let text = |k: &str| {
+        args.get(k)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+    let model = text("model").ok_or("parâmetro obrigatório: model")?;
+    let justification = text("justification").ok_or("parâmetro obrigatório: justification")?;
+    let body = json!({
+        "kind": "model",
+        "owner": owner,
+        "repo": repo,
+        "number": number,
+        "proposed": { "model": model, "effort": text("effort") },
+        "justification": justification,
+    });
+    hub.agent_call("POST", "proposals", &[], Some(&body), &s.id)
 }
 
 /// Sub-issues do épico no espelho, com o status do work item; sem work
@@ -645,6 +711,7 @@ mod tests {
                 "ledger_get_context",
                 "rules_get",
                 "rules_propose",
+                "issue_propose_model",
                 "share_file"
             ]
         );
@@ -1029,6 +1096,32 @@ mod tests {
                 .map(|w| w.priority),
             None
         );
+        // Sessão comum (a de planejamento que acabou de criar a issue, #182):
+        // sugere modelo e esforço pela mesma proposta, no projeto dela.
+        let r = call(
+            &srv,
+            &comum.id,
+            "issue_propose_model",
+            json!({ "number": 8, "model": "opus", "effort": "high",
+                    "justification": "toca autenticação e migração" }),
+        )
+        .await;
+        assert_eq!(r["isError"], false, "{r}");
+        assert_eq!(r["structuredContent"]["kind"], "model", "{r}");
+        assert_eq!(
+            r["structuredContent"]["proposed"],
+            json!({ "model": "opus", "effort": "high" })
+        );
+        assert_eq!(r["structuredContent"]["ref"], "deep-ion-ai/demo#8");
+        assert_eq!(r["structuredContent"]["session_id"], comum.id.as_str());
+        for bad in [
+            json!({ "number": 8, "model": "gpt-4", "justification": "x" }),
+            json!({ "number": 8, "model": "opus" }),
+            json!({ "model": "opus", "justification": "x" }),
+        ] {
+            let r = call(&srv, &comum.id, "issue_propose_model", bad.clone()).await;
+            assert_eq!(r["isError"], true, "{bad}: {r}");
+        }
         let r = call(&srv, &g.id, "ledger_get_context", json!({})).await;
         let c = &r["structuredContent"];
         assert_eq!(c["kind"], "gestor");

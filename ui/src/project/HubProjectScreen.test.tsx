@@ -103,7 +103,11 @@ const HUB_PROJECT: HubProject = {
   attribution: true,
   sync_env_id: null,
   docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-  session_templates: { issue: "", epic: "", project: "" },
+  session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+  autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+  autonomy_report: null,
+  wip_limits: { max_sessions: null, max_prs: null },
+  approval: { label: "aprovada", required: false },
 };
 
 function hubItem(n: number, p: Partial<HubWorkItem> = {}): HubWorkItem {
@@ -118,6 +122,8 @@ function hubItem(n: number, p: Partial<HubWorkItem> = {}): HubWorkItem {
     closed_at: null,
     priority: null,
     rank: null,
+    model: null,
+    effort: null,
     ...p,
   };
 }
@@ -262,6 +268,27 @@ test("tela Projeto pelo hub: ambiente da sessão viva e início por owner/repo",
     labels: ["ui"],
   });
   expect(call.params.project_id).toBeUndefined();
+});
+
+test("limite de trabalho em andamento (#126): iniciar no limite pede confirmação", async () => {
+  const limited = { ...HUB_PROJECT, wip_limits: { max_sessions: 2, max_prs: null } };
+  const api = setup(true).onHub("hub.projects.list", [
+    fx.hubProjectView(limited, [], { sessions: 2, prs: 1, limits: limited.wip_limits }),
+  ]);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  await screen.findByText("ui: hub");
+  await waitFor(() => expect(api.callsTo("hub.projects.list").length).toBeGreaterThan(0));
+  const user = userEvent.setup();
+  await user.click(play(62));
+  const modal = screen.getByRole("dialog");
+  expect(await within(modal).findByText(/limite de trabalho em andamento \(2 de 2 sessões\)/)).toBeInTheDocument();
+  await user.click(startButton());
+  expect(within(modal).getByRole("alert")).toHaveTextContent("Limite de trabalho em andamento atingido. Iniciar mesmo assim?");
+  expect(api.callsTo("session.start")).toHaveLength(0);
+  await user.click(within(modal).getByRole("button", { name: "Voltar" }));
+  await user.click(startButton());
+  await user.click(within(modal).getByRole("button", { name: "Iniciar mesmo assim" }));
+  await waitFor(() => expect(api.callsTo("session.start")).toHaveLength(1));
 });
 
 test("endereço do hub com o hub fora cai no projeto local", async () => {
@@ -822,8 +849,10 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
     "Geral",
     "Repositório e rastreador",
     "Ambientes e atribuições",
+    "Modo autônomo",
     "Regras do agente",
     "Templates de sessão",
+    "Aprovação",
     "Secrets e variáveis",
     "Docs",
     "Limpeza",
@@ -852,12 +881,74 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
   expect(screen.getByLabelText("Ambiente da manutenção")).toHaveValue("wsl");
 });
 
+test("Trabalho em andamento (#126): N de M no Geral e o limite salvo inteiro, vazio = sem limite", async () => {
+  const limited = { ...HUB_PROJECT, wip_limits: { max_sessions: 3, max_prs: null } };
+  const api = setupTabs()
+    .onHub("hub.projects.update", null)
+    .onHub("hub.projects.list", [fx.hubProjectView(limited, [], { sessions: 1, prs: 2, limits: limited.wip_limits })]);
+  render(
+    <App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "settings", section: "general" }} />,
+  );
+  const user = userEvent.setup();
+  const geral = await screen.findByRole("group", { name: "Geral" });
+  const card = await within(geral).findByRole("region", { name: "Trabalho em andamento" });
+  expect(card).toHaveTextContent(/Sessões simultâneas\s*1 de 3 sessões/);
+  expect(card).toHaveTextContent(/PRs abertos\s*sem limite/);
+  await user.click(within(card).getByRole("button", { name: "Alterar limite" }));
+  await user.clear(within(card).getByLabelText("Sessões simultâneas"));
+  await user.type(within(card).getByLabelText("PRs abertos"), "4");
+  await user.click(within(card).getByRole("button", { name: "Salvar limite" }));
+  await waitFor(() => expect(api.callsTo("hub.projects.update")).toHaveLength(1));
+  expect(api.callsTo("hub.projects.update")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    wip_limits: { max_sessions: null, max_prs: 4 },
+  });
+});
+
+test("Aprovação (#124): edita o rótulo e a exigência e manda o objeto inteiro", async () => {
+  const api = setupTabs()
+    .onHub("hub.projects.update", null)
+    .onHub("hub.projects.list", [
+      {
+        project: HUB_PROJECT,
+        assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
+        locations: [],
+        sync: sync({ project_id: 7, last_ok_at: NOW }),
+        tracker_status: null,
+      },
+    ]);
+  render(
+    <App
+      api={api}
+      initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "settings", section: "approval" }}
+    />,
+  );
+  const user = userEvent.setup();
+  const card = await screen.findByRole("group", { name: "Aprovação" });
+  expect(card).toHaveTextContent(/sem exigir para iniciar sessão/);
+  await user.click(within(card).getByRole("button", { name: "Editar aprovação" }));
+  const form = within(card).getByRole("form", { name: "Editar rótulo de aprovação de ctower-agents" });
+  const input = within(form).getByLabelText("Rótulo de aprovação");
+  expect(input).toHaveValue("aprovada");
+  await user.clear(input);
+  await user.type(input, " pronta ");
+  await user.click(within(form).getByLabelText("Exigir para iniciar sessão"));
+  await user.click(within(form).getByRole("button", { name: "Salvar aprovação" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.projects.update")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    approval: { label: "pronta", required: true },
+  });
+});
+
 test("Templates de sessão (#166): Personalizar parte do global, salva o objeto inteiro e Voltar ao global remove", async () => {
   const api = setupTabs()
     .onHub("hub.projects.update", null)
     .onHub("hub.projects.list", [
       {
-        project: { ...HUB_PROJECT, session_templates: { issue: "", epic: "Épico do projeto {{key}}", project: "" } },
+        project: { ...HUB_PROJECT, session_templates: { issue: "", epic: "Épico do projeto {{key}}", project: "", autonomous: "" } },
         assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
         locations: [],
         sync: sync({ project_id: 7, last_ok_at: NOW }),
@@ -887,14 +978,14 @@ test("Templates de sessão (#166): Personalizar parte do global, salva o objeto 
   expect(api.hubCallsTo("hub.projects.update")[0].params).toEqual({
     owner: "deep-ion-ai",
     repo: "ctower-agents",
-    session_templates: { issue: "Só a issue {{key}}", epic: "Épico do projeto {{key}}", project: "" },
+    session_templates: { issue: "Só a issue {{key}}", epic: "Épico do projeto {{key}}", project: "", autonomous: "" },
   });
 
   // Voltar ao global: a chave vazia, o resto igual.
   await user.click(within(card).getByRole("button", { name: "Voltar ao global Épico" }));
   await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(2));
   expect(api.hubCallsTo("hub.projects.update")[1].params).toMatchObject({
-    session_templates: { issue: "", epic: "", project: "" },
+    session_templates: { issue: "", epic: "", project: "", autonomous: "" },
   });
 });
 
@@ -1684,4 +1775,49 @@ describe("Visão geral (#101): Revisões", () => {
     expect(api.callsTo("review.mark_reviewed")).toHaveLength(0);
     expect(api.callsTo("review.get")).toHaveLength(0);
   });
+});
+
+test("Visão geral do projeto autônomo (#185): wip/autonoma com as issues à frente da base e o PR", async () => {
+  const auto: HubProject = {
+    ...HUB_PROJECT,
+    autonomy: { enabled: true, env_id: "daemon-wsl", branch: "", base_branch: "", strategy: "merge" },
+  };
+  const api = setupTabs()
+    .onHub("hub.projects.list", [
+      {
+        project: auto,
+        assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
+        locations: [],
+        sync: sync({ project_id: 7, last_ok_at: NOW }),
+        tracker_status: null,
+      },
+    ])
+    .onHub("hub.autopilot.wip", (p: { owner: string; repo: string }) => [
+      {
+        owner: p.owner,
+        repo: p.repo,
+        name: "ctower-agents",
+        branch: "wip/autonoma",
+        base: "develop",
+        ahead: [
+          { number: 57, title: "ACME-57" },
+          { number: 59, title: "ACME-59" },
+          { number: 62, title: "ACME-62" },
+        ],
+        pr_url: "https://github.example/acme/acme-web/pull/5",
+        ci: null,
+        conflict: false,
+        error: null,
+      },
+    ]);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const card = await screen.findByRole("region", { name: "Modo autônomo" });
+  const wip = await within(card).findByLabelText("Branch de integração");
+  expect(wip).toHaveTextContent("wip/autonoma: 3 issues à frente de develop");
+  expect(wip).toHaveTextContent("#57, #59, #62 em revisão");
+  expect(within(card).getByRole("link", { name: "PR wip/autonoma → develop" })).toHaveAttribute(
+    "href",
+    "https://github.example/acme/acme-web/pull/5",
+  );
+  expect(api.callsTo("hub.autopilot.wip")[0].params).toEqual({ owner: "deep-ion-ai", repo: "ctower-agents" });
 });

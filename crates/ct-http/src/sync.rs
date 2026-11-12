@@ -108,6 +108,9 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "session.start_project",
     "session.start_gestor",
     "session.resume",
+    // Retomada da sessão parada pelo limite do plano (#183): só um texto
+    // fixo no PTY, para o agendador do piloto automático.
+    "session.continue",
     "session.kill",
     "session.archive",
     "session.remote_control.enable",
@@ -135,6 +138,9 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "git.diff",
     "git.diff_file",
     "git.commits",
+    // Modo autônomo (#181): alinhar a branch de integração com a base
+    // (o agendador da #183 e o "Verificar agora" da tela do projeto).
+    "autonomy.align",
 ];
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:
@@ -154,12 +160,24 @@ pub const CHANNEL_PUSHES: &[&str] = &[
     "session_files",
 ];
 
+/// Erro do ambiente: a branch de integração do modo autônomo está em
+/// conflito com a base (#181), e a issue autônoma não começou
+/// (`session.start` com `autonomous`, `autonomy.align`).
+pub const AUTONOMY_CONFLICT: i64 = -32050;
+
 /// Erro de método fora de [`CHANNEL_METHODS`], nos dois lados do canal.
 pub const CHANNEL_METHOD_UNAVAILABLE: i64 = -32601;
 /// Erro do hub: o ambiente não tem canal aberto.
 pub const CHANNEL_ENV_OFFLINE: i64 = -32030;
 /// Erro do hub: o ambiente não respondeu no prazo.
 pub const CHANNEL_TIMEOUT: i64 = -32031;
+
+/// `session.start` recusado pelo ambiente (#124): a issue não tem o rótulo
+/// de aprovação que o projeto exige. A mensagem começa com
+/// `aguardando aprovação` e traz o rótulo; a UI oferece "iniciar mesmo
+/// assim" (`override_approval: true`), que o gestor e as automações nunca
+/// mandam.
+pub const APPROVAL_REQUIRED: i64 = -32052;
 
 /// O canal aceita `method`?
 pub fn channel_method_allowed(method: &str) -> bool {

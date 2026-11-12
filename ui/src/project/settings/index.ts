@@ -1,4 +1,5 @@
 export { AssignmentsCard } from "./AssignmentsCard";
+export { AutonomyCard } from "./AutonomyCard";
 export { CleanupCard } from "./CleanupCard";
 export { DangerZone } from "./DangerZone";
 export { DocsForm } from "./DocsForm";
@@ -13,3 +14,5 @@ export { projectSecretsOf, useSecrets, type ProjectSecrets } from "./useSecrets"
 export { projectState, syncText } from "./sync";
 export { DocsCard } from "./DocsCard";
 export { SessionTemplatesCard } from "./SessionTemplatesCard";
+export { WipCard } from "./WipCard";
+export { ApprovalCard } from "./ApprovalCard";

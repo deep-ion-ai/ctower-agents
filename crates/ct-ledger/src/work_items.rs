@@ -230,13 +230,23 @@ impl Ledger {
                 "ledger_start_sub_issue é só para a sessão de um épico".into(),
             ));
         }
-        let parent = self
-            .get_issue(epic.project_id, number)?
-            .and_then(|i| i.parent_number);
-        if parent != Some(epic.gh_number) {
+        let issue = self.get_issue(epic.project_id, number)?;
+        if issue.as_ref().and_then(|i| i.parent_number) != Some(epic.gh_number) {
             return Err(LedgerError::Conflict(format!(
                 "#{number} não é sub-issue do épico #{} (confira as sub-issues em ledger_get_context)",
                 epic.gh_number
+            )));
+        }
+        // Rótulo de aprovação (#124): a sub-issue precisa do dela (não
+        // herda o do épico). A sessão do épico é uma automação: sem
+        // "iniciar mesmo assim".
+        let project = self.get_project(epic.project_id)?;
+        let labels = issue.map(|i| i.labels).unwrap_or_default();
+        if project.approval.blocks_start(&labels) {
+            let item = ct_core::item_short(&project.tracker_ref(), number);
+            return Err(LedgerError::Conflict(format!(
+                "{}; peça a aprovação da sub-issue antes de começá-la",
+                project.approval.refusal(&item)
             )));
         }
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());

@@ -52,8 +52,8 @@ test("pelos ambientes conectados: vivas, interrompidas e encerradas com erro do 
 test("o hub completa: sem repetir as do ambiente e com os ambientes que a UI não alcança (só leitura)", () => {
   const hp = hubProject({ id: 7 });
   const items = [
-    { ...WI5, id: 105, project_id: 7, priority: null, rank: null },
-    { ...WI0, id: 109, project_id: 7, priority: null, rank: null },
+    { ...WI5, id: 105, project_id: 7, priority: null, rank: null, model: null, effort: null },
+    { ...WI0, id: 109, project_id: 7, priority: null, rank: null, model: null, effort: null },
   ].map(({ worktree_path: _w, parent_number: _p, ...w }) => w);
   const hub: HubSource = {
     dashboard: {

@@ -65,7 +65,11 @@ export function project(p: Partial<Project> = {}): Project {
     attribution: true,
     sync_role: false,
     docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-    session_templates: { issue: "", epic: "", project: "" },
+    session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+    autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+    autonomy_runner: false,
+    autonomy_report: null,
+    approval: { label: "aprovada", required: false },
     ...p,
   };
 }
@@ -265,6 +269,7 @@ export function hubProposal(p: Partial<HubProposal> = {}): HubProposal {
     decided_at: null,
     decision_note: null,
     applied_event_uid: null,
+    chosen: null,
     ...p,
   };
 }
@@ -326,7 +331,11 @@ export function hubProject(p: Partial<HubProject> = {}): HubProject {
     attribution: true,
     sync_env_id: null,
     docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-    session_templates: { issue: "", epic: "", project: "" },
+    session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+    autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
+    autonomy_report: null,
+    wip_limits: { max_sessions: null, max_prs: null },
+    approval: { label: "aprovada", required: false },
     ...p,
   };
 }
@@ -382,12 +391,16 @@ export function hubAssignment(a: Partial<HubAssignment> = {}): HubAssignment {
   };
 }
 
-export function hubProjectView(project: HubProject, assignments: HubAssignment[] = []): HubProjectView {
-  return { project, assignments, locations: [], sync: null, tracker_status: null };
+export function hubProjectView(
+  project: HubProject,
+  assignments: HubAssignment[] = [],
+  wip: HubProjectView["wip"] = null,
+): HubProjectView {
+  return { project, assignments, locations: [], sync: null, tracker_status: null, wip };
 }
 
 export function hubEnv(e: Partial<HubEnv> = {}): HubEnv {
-  return { env_id: "daemon-wsl", name: "wsl-pc", created_at: 0, last_seen_at: NOW - MIN, last_seq: 10, pending: 0, cleanup: null, online: false, ...e };
+  return { env_id: "daemon-wsl", name: "wsl-pc", created_at: 0, last_seen_at: NOW - MIN, last_seq: 10, pending: 0, cleanup: null, online: false, autonomous: false, ...e };
 }
 
 export const HUB_DASHBOARD: HubDashboard = {

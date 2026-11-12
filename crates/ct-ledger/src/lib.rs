@@ -28,6 +28,10 @@ pub use github::{
     GithubSnapshot, GoneIssue, IssueMeta, IssueRow, PrRow, SyncState, GH_ISSUE_GONE_CAUSE,
     GH_ISSUE_GONE_REASON,
 };
+pub use hub::IssueAgent;
+pub use hub::{
+    digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
+};
 pub use hub::{list_snapshots, rotate_snapshots, IssuedEnvToken, AGENT_TOKEN_PREFIX};
 pub use hub::{
     AgentAssignment, AgentDecision, AgentDecisionFilter, AgentDecisions, AgentEnv, AgentEvent,
@@ -35,9 +39,14 @@ pub use hub::{
     AgentSession, AgentWorkItem,
 };
 pub use hub::{
-    AssignmentAdded, AssignmentFilter, AssignmentState, DeleteImpact, HubAssignment,
-    HubProjectPatch, HubTrackerStatus, LegacyAdoption, NewHubProject, ProjectAdded,
+    ApprovalStatus, AssignmentAdded, AssignmentFilter, AssignmentState, DeleteImpact,
+    HubAssignment, HubProjectPatch, HubTrackerStatus, LegacyAdoption, NewHubProject, ProjectAdded,
     ProjectProvider, QuarantineGroup,
+};
+pub use hub::{
+    AutopilotEvent, AutopilotSession, AutopilotSettings, IdleSession, ParkedSession,
+    AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN, AUTOPILOT_IDLE_TIMEOUT_MAX_MIN,
+    AUTOPILOT_MAX_PER_ENV_CEILING, AUTOPILOT_MAX_PER_ENV_DEFAULT,
 };
 pub use hub::{
     ChannelStates, HubPushDevice, NewPushSubscription, PushEvent, PushNotice, PushTarget,

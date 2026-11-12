@@ -8,7 +8,10 @@ import { hubClones, liveSessions } from "./clones";
 import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
-import { ProjectGestorCard, ProjectHealthCard, ProjectProposalsCard, ProjectReviewsCard, ProjectSyncCard } from "./OverviewCards";
+import { autonomyOf, autonomyWarning } from "../hub/autonomy";
+import {
+  ProjectAutonomyCard,
+  ProjectGestorCard, ProjectHealthCard, ProjectProposalsCard, ProjectReviewsCard, ProjectSyncCard } from "./OverviewCards";
 import { projectSyncInfo } from "./sync-now";
 import { ProjectSessions } from "./ProjectSessions";
 import { ProjectSettings } from "./ProjectSettings";
@@ -143,6 +146,14 @@ export function HubProjectScreen({
               onPage={goPage}
               extra={
                 <>
+                  {hp && (autonomyOf(hp)?.enabled || autonomyWarning(hp)) && (
+                    <ProjectAutonomyCard
+                      owner={ref.owner}
+                      repo={ref.repo}
+                      warning={autonomyWarning(hp)}
+                      onSettings={() => goPage("settings", "autonomy")}
+                    />
+                  )}
                   <ProjectHealthCard owner={ref.owner} repo={ref.repo} project={hp ?? p} />
                   <ProjectSyncCard info={syncInfo} />
                   <ProjectGestorCard owner={ref.owner} repo={ref.repo} />

@@ -162,6 +162,7 @@ impl TestEnv {
             prompt: "prompt inicial".into(),
             size: None,
             agent: AgentOptions::default(),
+            override_approval: false,
         }
     }
 
@@ -281,6 +282,9 @@ impl TestEnv {
         let mut project = ConfigProject {
             docs: Default::default(),
             session_templates: Default::default(),
+            autonomy: Default::default(),
+            autonomy_runner: false,
+            approval: Default::default(),
             owner: "deep-ion-ai".into(),
             repo: "demo".into(),
             name: "demo".into(),
@@ -324,6 +328,32 @@ impl TestEnv {
                 has_sub_issues: *subs,
                 url: String::new(),
                 updated_at: 0,
+                ..Default::default()
+            })
+            .collect();
+        self.sessions
+            .ledger()
+            .apply_github(&ct_ledger::GithubSnapshot {
+                project_id: self.project_id,
+                issues,
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    /// Grava no espelho as issues `(número, épico pai, rótulos)`, com
+    /// sub-issues no número que alguma outra tem como pai (#124).
+    pub fn mirror_labeled(&self, issues: &[(i64, Option<i64>, &[&str])]) {
+        let parents: Vec<i64> = issues.iter().filter_map(|(_, p, _)| *p).collect();
+        let issues = issues
+            .iter()
+            .map(|(n, parent, labels)| ct_ledger::IssueRow {
+                gh_number: *n,
+                title: format!("ACME-{n}"),
+                state: "open".into(),
+                labels: labels.iter().map(|s| s.to_string()).collect(),
+                parent_number: *parent,
+                has_sub_issues: parents.contains(n),
                 ..Default::default()
             })
             .collect();

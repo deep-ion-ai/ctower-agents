@@ -1,6 +1,8 @@
 //! Domínio do Control Tower: tipos, máquinas de estado e regras puras (sem
 //! I/O, exceto os arquivos privados de `files`).
 
+pub mod approval;
+pub mod autonomy;
 pub mod branch;
 mod clock;
 mod credentials;
@@ -14,7 +16,10 @@ mod model;
 mod repo_url;
 pub mod session_templates;
 pub mod tracker;
+pub mod wip;
 
+pub use approval::{ApprovalConfig, APPROVAL_REFUSAL_PREFIX, DEFAULT_APPROVAL_LABEL};
+pub use autonomy::{AlignStrategy, AutonomyConfig, AutonomyReport, AutonomyState};
 pub use clock::{civil_from_days, hlc, now_ms, parse_iso8601, utc_stamp};
 pub use credentials::{
     CredentialApplied, CredentialOverride, CredentialOverrides, SharedCredentials,
@@ -32,6 +37,7 @@ pub use tracker::{
     TrackerConfig, TrackerKind, TrackerProgress, TrackerReadiness, TrackerRef, ACTIVE_SPRINT_JQL,
     DEFAULT_MAX_ISSUES, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS,
 };
+pub use wip::{WipLimits, WipUsage, WIP_LIMIT_REACHED};
 
 // "Adicionar issue pelo ID" (#148).
 pub use tracker::TrackerIssueAdded;

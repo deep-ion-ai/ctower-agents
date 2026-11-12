@@ -48,6 +48,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "session.start_project",
   "session.start_gestor",
   "session.resume",
+  "session.continue",
   "session.kill",
   "session.archive",
   "session.remote_control.enable",
@@ -62,6 +63,7 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "git.diff",
   "git.diff_file",
   "git.commits",
+  "autonomy.align",
 ]);
 
 /** O método do ambiente existe na web? */

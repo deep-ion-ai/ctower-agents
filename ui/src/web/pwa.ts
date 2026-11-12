@@ -19,6 +19,11 @@ export const PUSH_EVENTS: { event: PushEvent; label: string; hint: string }[] = 
   { event: "session_error", label: "Sessão saiu com erro", hint: "código de saída diferente de 0" },
   { event: "proposal_new", label: "Proposta nova do gestor", hint: "prioridade ou status a decidir" },
   { event: "env_stale", label: "Ambiente fora do ar", hint: "sem canal com o hub há mais de 1 min (ou, num ambiente antigo, sem enviar ao hub)" },
+  {
+    event: "morning_digest",
+    label: "Resumo da manhã do piloto automático",
+    hint: "em todo dia útil, no horário da política: projeto, contagens e link (hub 1.20)",
+  },
 ];
 
 /**
@@ -72,6 +77,11 @@ export function deepLinkTab(search: string): OpenTab | null {
       const section = q.get("section");
       return envTab(env, undefined, isEnvSection(section) ? section : undefined);
     }
+    // Resumo da manhã (#185): o card fica na Visão geral do Hub.
+    case "hub":
+      return hubTab("overview");
+    case "hub:autopilot-panel":
+      return hubTab("autopilot-panel");
     case "hub:proposals":
       return hubTab("proposals");
     case "hub:envs":

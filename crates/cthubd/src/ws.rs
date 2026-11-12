@@ -362,9 +362,69 @@ async fn env_call(st: &HubState, p: Value) -> RpcResult {
     call_env(st, env, &req.method, params).await
 }
 
+/// `session.start` de uma issue pelo hub (#182): sem `model` (ou `effort`)
+/// nos parâmetros, vale o da issue no hub, para a sessão iniciada à mão
+/// pela web, e pelo agendador (#183), usar o modelo decidido. Só com
+/// `owner`, `repo` e `gh_number`; o que veio nos parâmetros vence.
+pub(crate) fn with_issue_agent(hub: &ct_ledger::Hub, mut params: Value) -> Value {
+    let (Some(owner), Some(repo), Some(n)) = (
+        params.get("owner").and_then(Value::as_str),
+        params.get("repo").and_then(Value::as_str),
+        params.get("gh_number").and_then(Value::as_i64),
+    ) else {
+        return params;
+    };
+    let Ok(Some(agent)) = hub.issue_agent(owner, repo, n) else {
+        return params;
+    };
+    let absent = |p: &Value, k: &str| p.get(k).is_none_or(Value::is_null);
+    if let Some(m) = agent.model.filter(|_| absent(&params, "model")) {
+        params["model"] = json!(m);
+        if let Some(e) = agent.effort.filter(|_| absent(&params, "effort")) {
+            params["effort"] = json!(e);
+        }
+    }
+    params
+}
+
+/// `{ model, effort }` de `hub.workitem.set_model` (nulos ou ausentes =
+/// limpar).
+fn issue_agent_param(p: &Value) -> Result<ct_ledger::IssueAgent, (i64, String)> {
+    let field = |k: &str| match p.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(v)) if !v.trim().is_empty() => Ok(Some(v.trim().to_string())),
+        Some(_) => Err(invalid(format!("{k} deve ser texto ou null"))),
+    };
+    let agent = ct_ledger::IssueAgent {
+        model: field("model")?,
+        effort: field("effort")?,
+    };
+    agent.validate().map_err(invalid)?;
+    Ok(agent)
+}
+
 /// Chamada ao ambiente `env` pelo canal reverso, com o erro de ambiente
 /// desconhecido ou offline.
-async fn call_env(st: &HubState, env: String, method: &str, params: Value) -> RpcResult {
+pub(crate) async fn call_env(st: &HubState, env: String, method: &str, params: Value) -> RpcResult {
+    // `session.start`: primeiro o limite de trabalho em andamento (#126),
+    // que recusa o início automático num projeto no limite antes de
+    // qualquer efeito (nem a checagem do canal); depois o modelo e o
+    // esforço da issue (#182).
+    let params = if method == "session.start" {
+        let hub = st.hub.clone();
+        let m = method.to_string();
+        tokio::task::spawn_blocking(move || {
+            let hub = hub.lock();
+            match crate::wip::start_refusal(&hub, &m, &params) {
+                Some(err) => Err(err),
+                None => Ok(with_issue_agent(&hub, params)),
+            }
+        })
+        .await
+        .map_err(|e| (-32603, e.to_string()))??
+    } else {
+        params
+    };
     if !st.channels.is_online(&env) {
         let hub = st.hub.clone();
         let id = env.clone();
@@ -706,6 +766,24 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         "github.status" | "github.set_token" | "github.clear_token" => github(st, method, &p).await,
         "hub.env.call" => env_call(st, p).await,
         "hub.plan.accounts" => plan_accounts(st, web_session.is_some()),
+        // Agendador do piloto automático (#183): o painel (#185) lê o estado
+        // e os eventos e pausa; na web, sem as chaves de conta.
+        "hub.autopilot.status"
+        | "hub.autopilot.events"
+        | "hub.autopilot.pause"
+        | "hub.autopilot.resume"
+        | "hub.autopilot.digest"
+        | "hub.autopilot.wip"
+        | "hub.autopilot.set" => {
+            crate::autopilot::runner::call(st, method, p, web_session.is_some()).await
+        }
+        // Política de orçamento do piloto automático por conta (#180).
+        m if m.starts_with("hub.autopilot.") => {
+            let (st, method) = (st.clone(), method.to_string());
+            tokio::task::spawn_blocking(move || crate::autopilot::call(&st, &method, &p))
+                .await
+                .map_err(|e| (-32603, e.to_string()))?
+        }
         // Log do hub (#65): as últimas linhas, mascaradas.
         "hub.logs.tail" => ct_http::logs::rpc_tail(ct_http::logs::global(), &p).await,
         "hub.workitem.body" => workitem_body(st, p).await,
@@ -799,6 +877,7 @@ fn hub_call(st: &HubState, method: &str, p: &Value) -> RpcResult {
         method,
         "hub.workitem.set_status"
             | "hub.workitem.set_priority"
+            | "hub.workitem.set_model"
             | "hub.workitem.move"
             | "hub.proposals.decide"
     );
@@ -1057,6 +1136,16 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 .map(|w| json!(w))
                 .map_err(e)
         }
+        // Modelo e esforço do agente na issue (#182): `model` null limpa.
+        "hub.workitem.set_model" => {
+            let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
+            let number = i64_param(p, "number")?;
+            let agent = issue_agent_param(p)?;
+            let reason = p.get("reason").and_then(Value::as_str);
+            h.set_model(owner, repo, number, &agent, reason, None, &st.hub_id)
+                .map(|w| json!(w))
+                .map_err(e)
+        }
         "hub.workitem.move" => {
             let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
             let number = i64_param(p, "number")?;
@@ -1149,10 +1238,19 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 .and_then(Value::as_bool)
                 .ok_or_else(|| invalid("parâmetro obrigatório: approve (true ou false)"))?;
             let note = p.get("note").and_then(Value::as_str);
+            // Proposta `model` aprovada com outro valor (#182): `value`, só
+            // com `id`.
+            let value = p.get("value").filter(|v| !v.is_null());
             let decide =
                 |id: i64| h.decide_proposal(id, approve, note, &st.hub_id, ct_core::now_ms());
             match (p.get("id").and_then(Value::as_i64), p.get("ids")) {
-                (Some(id), None) => decide(id).map(|v| json!(v)).map_err(e),
+                (Some(id), None) => h
+                    .decide_proposal_with(id, approve, value, note, &st.hub_id, ct_core::now_ms())
+                    .map(|v| json!(v))
+                    .map_err(e),
+                (None, Some(_)) if value.is_some() => {
+                    Err(invalid("value só vale com id (uma proposta)"))
+                }
                 // Em lote: cada uma na sua transação; uma recusada não
                 // impede as outras.
                 (None, Some(ids)) => {
@@ -1193,6 +1291,21 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
             let mut envs = h.list_envs().map_err(e)?;
             st.channels.mark_online(&mut envs);
             Ok(json!(envs))
+        }
+        // Marca o ambiente como autônomo (#181): só os marcados rodam o modo
+        // autônomo de um projeto.
+        "hub.envs.set_autonomous" => {
+            let env = str_param(p, "env")?;
+            let on = bool_param(p, "autonomous")?
+                .ok_or_else(|| invalid("parâmetro obrigatório: autonomous"))?;
+            let id = h.set_env_autonomous(env, on).map_err(e)?;
+            tracing::info!(
+                "ambiente {id} {} como autônomo",
+                if on { "marcado" } else { "desmarcado" }
+            );
+            let mut envs = h.list_envs().map_err(e)?;
+            st.channels.mark_online(&mut envs);
+            Ok(json!(envs.into_iter().find(|x| x.env_id == id)))
         }
         "hub.rules.get" => {
             let (owner, repo, epic) = rules_scope(p)?;
@@ -1414,7 +1527,7 @@ fn docs_param(p: &Value) -> Result<Option<ct_core::DocsConfig>, (i64, String)> {
     }
 }
 
-/// `session_templates` (#166): `{ issue, epic, project }`, chave ausente ou
+/// `session_templates` (#166): `{ issue, epic, project, autonomous }`, chave ausente ou
 /// vazia = o template global; o objeto inteiro substitui o anterior.
 fn templates_param(p: &Value) -> Result<Option<ct_core::SessionTemplates>, (i64, String)> {
     match p.get("session_templates") {
@@ -1423,8 +1536,53 @@ fn templates_param(p: &Value) -> Result<Option<ct_core::SessionTemplates>, (i64,
             .map(Some)
             .map_err(|e| invalid(format!("session_templates inválido: {e}"))),
         Some(_) => Err(invalid(
-            "session_templates deve ser um objeto { issue, epic, project }",
+            "session_templates deve ser um objeto { issue, epic, project, autonomous }",
         )),
+    }
+}
+
+/// `autonomy` (#181): `{ enabled, env_id, branch, base_branch, strategy }`,
+/// campos ausentes = padrão; o objeto inteiro substitui o anterior. O
+/// `env_id` aceita também o nome do ambiente.
+fn autonomy_param(p: &Value) -> Result<Option<ct_core::AutonomyConfig>, (i64, String)> {
+    match p.get("autonomy") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|e| invalid(format!("autonomy inválido: {e}"))),
+        Some(_) => Err(invalid(
+            "autonomy deve ser um objeto { enabled, env_id, branch, base_branch, strategy }",
+        )),
+    }
+}
+
+/// `wip_limits` de `hub.projects.update` (#126): `{ max_sessions,
+/// max_prs }`, nulo ou ausente em cada um = sem limite.
+fn wip_param(p: &Value) -> Result<Option<ct_core::WipLimits>, (i64, String)> {
+    match p.get("wip_limits") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|e| invalid(format!("wip_limits inválido: {e}"))),
+        Some(_) => Err(invalid(
+            "wip_limits deve ser um objeto { max_sessions, max_prs }",
+        )),
+    }
+}
+
+/// `approval` (#124): `{ label, required }`, campos ausentes = padrão
+/// (rótulo `aprovada`, sem exigir); o objeto inteiro substitui o anterior.
+/// Rótulo vazio desliga.
+fn approval_param(p: &Value) -> Result<Option<ct_core::ApprovalConfig>, (i64, String)> {
+    match p.get("approval") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => {
+            let a: ct_core::ApprovalConfig = serde_json::from_value(v.clone())
+                .map_err(|e| invalid(format!("approval inválido: {e}")))?;
+            a.validate().map_err(invalid)?;
+            Ok(Some(a))
+        }
+        Some(_) => Err(invalid("approval deve ser um objeto { label, required }")),
     }
 }
 
@@ -1464,6 +1622,7 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             attribution: bool_param(p, "attribution")?.unwrap_or(true),
             docs: docs_param(p)?.unwrap_or_default().normalized(),
             session_templates: templates_param(p)?.unwrap_or_default().normalized(),
+            approval: approval_param(p)?.unwrap_or_default().normalized(),
         };
         provider.validate().map_err(invalid)?;
         let base_branch = opt_str(p, "base_branch").unwrap_or_else(|| "develop".into());
@@ -1530,11 +1689,15 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         sync_env: opt_str(p, "sync_env"),
         docs: docs_param(p)?,
         session_templates: templates_param(p)?,
+        autonomy: autonomy_param(p)?,
+        wip_limits: wip_param(p)?,
+        approval: approval_param(p)?,
     };
     if patch.is_empty() {
         return Err(invalid(
             "nada a mudar: informe name, base_branch, protected_branches, tracker, forge, \
-             branch_pattern, attribution, sync_env, docs ou session_templates",
+             branch_pattern, attribution, sync_env, docs, session_templates, autonomy, wip_limits \
+             ou approval",
         ));
     }
     let cur = st
@@ -1554,11 +1717,46 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
+    // A base própria do modo autônomo (#181) precisa existir no GitHub.
+    if let Some(b) = patch
+        .autonomy
+        .as_ref()
+        .filter(|a| a.enabled)
+        .map(|a| a.base_branch.trim())
+        .filter(|b| !b.is_empty() && *b != cur.base_branch && cur.forge.gitlab().is_none())
+    {
+        github()?
+            .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+            .map_err(|m| (-32000, m))?;
+    }
     let updated = st
         .hub
         .lock()
         .update_project(owner, repo, &patch)
         .map_err(e)?;
+    if patch.approval.is_some() {
+        let a = &updated.approval;
+        tracing::info!(
+            "rótulo de aprovação de {owner}/{repo}: {:?} ({})",
+            a.label,
+            if a.enforced() {
+                "exigido para iniciar sessão"
+            } else {
+                "não exigido"
+            }
+        );
+    }
+    if patch.autonomy.is_some() {
+        tracing::info!(
+            "modo autônomo de {owner}/{repo}: {} ({})",
+            if updated.autonomy.enabled {
+                "ligado"
+            } else {
+                "desligado"
+            },
+            updated.autonomy.env_id.as_deref().unwrap_or("-")
+        );
+    }
     if let Some(env) = &patch.sync_env {
         tracing::info!(
             "ambiente de sync de {owner}/{repo}: {env} (config_rev {})",
@@ -1925,6 +2123,12 @@ mod export {
         let _ = fs::remove_dir_all(&dir);
         HubInfo::export_all_to(&dir).unwrap();
         HubPlanAccounts::export_all_to(&dir).unwrap();
+        crate::autopilot::AutopilotPolicyView::export_all_to(&dir).unwrap();
+        crate::autopilot::AutopilotStatus::export_all_to(&dir).unwrap();
+        ct_ledger::MorningDigest::export_all_to(&dir).unwrap();
+        ct_ledger::AutonomyWip::export_all_to(&dir).unwrap();
+        ct_ledger::AutopilotEvent::export_all_to(&dir).unwrap();
+        ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
         ProjectDeleted::export_all_to(&dir).unwrap();
@@ -2314,6 +2518,128 @@ pub(crate) mod tests {
         assert_eq!(v["result"]["priority"], Value::Null);
     }
 
+    /// #182: a tela da issue define o modelo e o esforço, a proposta
+    /// `model` é aprovada com outro valor, e o `session.start` pelo hub
+    /// recebe o modelo da issue quando não traz um.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn modelo_da_issue_definir_aprovar_alterado_e_inicio_pelo_hub() {
+        let (st, cookie) = hub_web();
+        let env_id = st.hub.lock().list_envs().unwrap()[0].env_id.clone();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let d = |extra: Value| {
+            let mut v = json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 5 });
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let v = ui
+            .call(
+                "hub.workitem.set_model",
+                d(json!({ "model": "sonnet", "effort": "medium", "reason": "pequena" })),
+            )
+            .await;
+        assert_eq!(v["result"]["model"], "sonnet", "{v}");
+        assert_eq!(v["result"]["effort"], "medium", "{v}");
+        for bad in [
+            json!({ "model": "gpt-4" }),
+            json!({ "model": "opus", "effort": "turbo" }),
+            json!({ "effort": "high" }),
+            json!({ "model": 3 }),
+        ] {
+            let v = ui.call("hub.workitem.set_model", d(bad.clone())).await;
+            assert_eq!(v["error"]["code"], -32602, "{bad}: {v}");
+        }
+
+        // Proposta do gestor aprovada com outro valor: grava o escolhido.
+        let id = st
+            .hub
+            .lock()
+            .create_proposal(
+                &ct_ledger::NewProposal {
+                    kind: ct_core::ProposalKind::Model,
+                    owner: "deep-ion-ai".into(),
+                    repo: "demo".into(),
+                    number: 5,
+                    proposed: json!({ "model": "opus", "effort": "high" }),
+                    justification: "toca autenticação".into(),
+                },
+                &env_id,
+                Some("s-gestor"),
+                ct_core::now_ms(),
+            )
+            .unwrap()
+            .id;
+        let v = ui
+            .call(
+                "hub.proposals.decide",
+                json!({ "ids": [id], "approve": true, "value": { "model": "haiku" } }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        let v = ui
+            .call(
+                "hub.proposals.decide",
+                json!({ "id": id, "approve": true,
+                        "value": { "model": "opus", "effort": "max" } }),
+            )
+            .await;
+        assert_eq!(v["result"]["state"], "aprovada", "{v}");
+        assert_eq!(
+            v["result"]["chosen"],
+            json!({ "model": "opus", "effort": "max" })
+        );
+        let v = ui
+            .call(
+                "hub.workitem.history",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 5 }),
+            )
+            .await;
+        let wi = &v["result"]["work_item"];
+        assert_eq!(
+            (wi["model"].clone(), wi["effort"].clone()),
+            (json!("opus"), json!("max"))
+        );
+
+        // Início pelo hub: sem modelo nos parâmetros, vale o da issue; com
+        // modelo, o escolhido na hora.
+        let mut web = web_ui(&url, &cookie).await;
+        let _env = fake_env(&st, &url, "env-x").await;
+        let start = |extra: Value| {
+            let mut p = json!({ "owner": "deep-ion-ai", "repo": "demo", "gh_number": 5,
+                                "prompt": "vai" });
+            p.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            json!({ "env": "env-x", "method": "session.start", "params": p })
+        };
+        let v = web.call("hub.env.call", start(json!({}))).await;
+        assert_eq!(v["result"]["params"]["model"], "opus", "{v}");
+        assert_eq!(v["result"]["params"]["effort"], "max", "{v}");
+        // Sessão autônoma (#181, a do agendador): o mesmo preenchimento.
+        let v = web
+            .call("hub.env.call", start(json!({ "autonomous": true })))
+            .await;
+        assert_eq!(v["result"]["params"]["autonomous"], true, "{v}");
+        assert_eq!(v["result"]["params"]["model"], "opus", "{v}");
+        assert_eq!(v["result"]["params"]["effort"], "max", "{v}");
+        let v = web
+            .call("hub.env.call", start(json!({ "model": null })))
+            .await;
+        assert_eq!(v["result"]["params"]["model"], "opus", "{v}");
+        let v = web
+            .call("hub.env.call", start(json!({ "model": "haiku" })))
+            .await;
+        assert_eq!(v["result"]["params"]["model"], "haiku", "{v}");
+        assert!(v["result"]["params"].get("effort").is_none(), "{v}");
+        // Issue sem work item no hub: segue como veio.
+        let mut p = start(json!({}));
+        p["params"]["gh_number"] = json!(77);
+        let v = web.call("hub.env.call", p).await;
+        assert!(v["result"]["params"].get("model").is_none(), "{v}");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn propostas_listar_decidir_e_push() {
         let st = hub_com_dados();
@@ -2651,6 +2977,50 @@ pub(crate) mod tests {
         assert_eq!(v["error"]["code"], -32602, "{v}");
     }
 
+    /// Rótulo de aprovação (#124) pela edição: o objeto inteiro substitui,
+    /// o rótulo sai sem espaços, campo ausente é o padrão e outro tipo ou
+    /// rótulo inválido é recusado.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rotulo_de_aprovacao_pela_edicao() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui.call("hub.projects.list", json!({})).await;
+        assert_eq!(
+            v["result"][0]["project"]["approval"],
+            json!({ "label": "aprovada", "required": false }),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo",
+                        "approval": { "label": " pronta ", "required": true } }),
+            )
+            .await;
+        assert_eq!(
+            v["result"]["approval"],
+            json!({ "label": "pronta", "required": true }),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "approval": { "required": true } }),
+            )
+            .await;
+        assert_eq!(v["result"]["approval"]["label"], "aprovada", "{v}");
+        for bad in [json!("x"), json!({ "label": "a\nb" })] {
+            let v = ui
+                .call(
+                    "hub.projects.update",
+                    json!({ "owner": "deep-ion-ai", "repo": "demo", "approval": bad }),
+                )
+                .await;
+            assert_eq!(v["error"]["code"], -32602, "{v}");
+        }
+    }
+
     /// Templates do prompt inicial do projeto (#166) pela edição: o objeto
     /// inteiro substitui, a chave vazia volta ao global e outro tipo é
     /// recusado.
@@ -2664,13 +3034,15 @@ pub(crate) mod tests {
             .call(
                 "hub.projects.update",
                 json!({ "owner": "deep-ion-ai", "repo": "demo",
-                        "session_templates": { "issue": "Issue {{key}}", "epic": "  " } }),
+                        "session_templates": { "issue": "Issue {{key}}", "epic": "  ",
+                                               "autonomous": "Faça {{ref}}" } }),
             )
             .await;
         let t = &v["result"]["session_templates"];
         assert_eq!(
             t,
-            &json!({ "issue": "Issue {{key}}", "epic": "", "project": "" }),
+            &json!({ "issue": "Issue {{key}}", "epic": "", "project": "",
+                     "autonomous": "Faça {{ref}}" }),
             "{v}"
         );
         let novo = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();
@@ -2689,6 +3061,134 @@ pub(crate) mod tests {
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// Modo autônomo (#181): marcar o ambiente, ligar o modo no projeto
+    /// (só com ambiente autônomo e atribuído) e desmarcar recusado em uso.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn modo_autonomo_pela_edicao() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let ligar = json!({ "owner": "deep-ion-ai", "repo": "demo",
+                            "autonomy": { "enabled": true, "env_id": "wsl" } });
+        let v = ui.call("hub.projects.update", ligar.clone()).await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("não está marcado como autônomo"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.envs.set_autonomous",
+                json!({ "env": "wsl", "autonomous": true }),
+            )
+            .await;
+        assert_eq!(v["result"]["autonomous"], true, "{v}");
+        let v = ui
+            .call(
+                "hub.assignments.add",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "env": "wsl" }),
+            )
+            .await;
+        assert!(v["error"].is_null(), "{v}");
+        let v = ui.call("hub.projects.update", ligar).await;
+        let a = &v["result"]["autonomy"];
+        assert_eq!(a["enabled"], true, "{v}");
+        assert!(a["env_id"].as_str().unwrap().len() > 3, "{v}");
+        let v = ui
+            .call(
+                "hub.envs.set_autonomous",
+                json!({ "env": "wsl", "autonomous": false }),
+            )
+            .await;
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("deep-ion-ai/demo"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "autonomy": "x" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// Limite de trabalho em andamento (#126): `wip_limits` pela edição,
+    /// `wip` na lista de projetos e a recusa do início automático pelo
+    /// canal, com o código estável.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn limite_de_trabalho_em_andamento() {
+        let st = hub_com_dados();
+        // Uma sessão viva noutro ambiente.
+        let push: ct_ledger::OutboxEntry = serde_json::from_value(json!({
+            "seq": 1, "created_at": 1,
+            "change": { "kind": "session", "data": {
+                "id": "s-wip", "owner": "deep-ion-ai", "repo": "demo", "gh_number": 5,
+                "tool": "claude", "tool_session_id": null, "transcript_path": null,
+                "cwd": "/x", "state": "running", "exit_code": null, "pid": null,
+                "started_at": 1, "last_event_at": 1, "ended_at": null
+            }}
+        }))
+        .unwrap();
+        st.hub.lock().ingest("env-b", "env-b", &[push]).unwrap();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo",
+                        "wip_limits": { "max_sessions": 1, "max_prs": null } }),
+            )
+            .await;
+        assert_eq!(
+            v["result"]["wip_limits"],
+            json!({ "max_sessions": 1, "max_prs": null }),
+            "{v}"
+        );
+        let v = ui.call("hub.projects.list", json!({})).await;
+        let p = v["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["project"]["gh_repo"] == "demo")
+            .unwrap()
+            .clone();
+        assert_eq!(p["wip"]["limits"]["max_sessions"], 1, "{p}");
+        assert_eq!(p["wip"]["sessions"], 1, "{p}");
+        let start = |autonomous: bool| {
+            json!({ "env": "env-x", "method": "session.start",
+                    "params": { "owner": "deep-ion-ai", "repo": "demo", "gh_number": 7,
+                                "prompt": "oi", "autonomous": autonomous } })
+        };
+        let v = ui.call("hub.env.call", start(true)).await;
+        assert_eq!(v["error"]["code"], crate::wip::WIP_LIMIT_REACHED, "{v}");
+        let m = v["error"]["message"].as_str().unwrap();
+        assert!(
+            m.contains("limite de trabalho em andamento (1 de 1 sessões)"),
+            "{m}"
+        );
+        // O manual não é recusado pelo limite (cai no ambiente sem canal).
+        let v = ui.call("hub.env.call", start(false)).await;
+        assert_ne!(v["error"]["code"], crate::wip::WIP_LIMIT_REACHED, "{v}");
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo",
+                        "wip_limits": { "max_prs": 0 } }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32000, "{v}");
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("PRs abertos"));
     }
 
     /// Cadastro Jira + GitLab (#348): sem a integração com o GitHub (que o
@@ -4939,7 +5439,7 @@ pub(crate) mod tests {
         let v = subscribe(&mut web, &format!("{base}/abc"), &b).await;
         let dev = &v["result"];
         assert_eq!(dev["current"], true, "{v}");
-        assert_eq!(dev["events"].as_array().unwrap().len(), 4, "{v}");
+        assert_eq!(dev["events"].as_array().unwrap().len(), 5, "{v}");
         assert!(dev.get("endpoint").is_none() && dev.get("p256dh").is_none());
         let id = dev["id"].as_i64().unwrap();
 

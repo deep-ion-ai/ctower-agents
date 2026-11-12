@@ -1,3 +1,4 @@
+import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HubProposal, HubProposals, HubRanking, ProposalDecided } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
@@ -7,6 +8,12 @@ import { ago } from "../util/time";
 import { itemFullRef, itemShort, type ProviderProject } from "../util/item";
 import { hubProjectOf } from "../util/hub";
 import { errText } from "./calls";
+import {
+  CLAUDE_EFFORTS,
+  CLAUDE_MODELS,
+  DEFAULT_EFFORT_VALUE,
+  issueAgentLabel,
+} from "../settings/session-options";
 import { placeProposals, type PlacedProposal } from "./proposalOrder";
 
 /** Quantas decididas ou obsoletas a seção mostra abaixo das pendentes. */
@@ -27,9 +34,26 @@ const STATE_TEXT = {
 
 type Value = Record<string, unknown>;
 
-/** "P1", "não triado", "Pausado"; com posição, "P1 · antes de #12" (ou da chave do Jira). */
+/** Nome do tipo da proposta, no selo e no histórico. */
+export const KIND_TEXT: Record<HubProposal["kind"], string> = {
+  priority: "prioridade",
+  status: "status",
+  model: "modelo",
+};
+
+/** `{ model, effort }` da proposta `model` (#182), com os não-texto como nulos. */
+export function agentOf(v: unknown): { model: string | null; effort: string | null } {
+  const o = (v ?? {}) as Value;
+  return {
+    model: typeof o.model === "string" ? o.model : null,
+    effort: typeof o.effort === "string" ? o.effort : null,
+  };
+}
+
+/** "P1", "não triado", "Pausado", "Opus · esforço high"; com posição, "P1 · antes de #12" (ou da chave do Jira). */
 export function valueText(kind: HubProposal["kind"], v: unknown, project?: ProviderProject | null): string {
   const o = (v ?? {}) as Value;
+  if (kind === "model") return issueAgentLabel(agentOf(v));
   if (kind === "status") {
     const s = o.status as keyof typeof STATUS | undefined;
     return s && STATUS[s] ? STATUS[s].text : String(o.status ?? "?");
@@ -124,8 +148,11 @@ export interface ProposalsData {
   /** Já houve uma leitura com sucesso (antes, "vazio" ainda não quer dizer nada). */
   loaded: boolean;
   load(): Promise<void>;
-  /** Aprova ou rejeita (uma ou várias) e relê; devolve a mensagem para a tela. */
-  decide(ids: number[], approve: boolean, note?: string): Promise<DecideResult>;
+  /**
+   * Aprova ou rejeita (uma ou várias) e relê; devolve a mensagem para a tela.
+   * `value`: na proposta `model` (uma só), o valor aprovado no lugar do proposto (#182).
+   */
+  decide(ids: number[], approve: boolean, note?: string, value?: unknown): Promise<DecideResult>;
 }
 
 /** Projeto de `owner/repo`, sem diferença de caixa (como a chave do hub). */
@@ -191,12 +218,17 @@ export function useHubProposals(project?: { owner: string; repo: string }): Prop
   }, [api, load, hub.connected]);
 
   const decide = useCallback(
-    async (ids: number[], approve: boolean, note?: string): Promise<DecideResult> => {
+    async (ids: number[], approve: boolean, note?: string, value?: unknown): Promise<DecideResult> => {
       const extra = note?.trim() ? { note: note.trim() } : {};
       let out: DecideResult;
       try {
         if (ids.length === 1) {
-          const r = await api.hubCall<HubProposal>("hub.proposals.decide", { id: ids[0], approve, ...extra });
+          const r = await api.hubCall<HubProposal>("hub.proposals.decide", {
+            id: ids[0],
+            approve,
+            ...extra,
+            ...(value !== undefined ? { value } : {}),
+          });
           out =
             r.state === "obsoleta"
               ? { text: `A proposta #${r.id} ficou obsoleta: ${r.decision_note ?? "o valor atual mudou"}.`, error: true }
@@ -266,10 +298,10 @@ export function useProposalBatch(data: ProposalsData) {
     });
   }, [pending]);
 
-  const decide = async (ids: number[], approve: boolean) => {
+  const decide = async (ids: number[], approve: boolean, value?: unknown) => {
     setBusy(true);
     setMsg(null);
-    const r = await data.decide(ids, approve, note);
+    const r = await data.decide(ids, approve, note, value);
     setMsg(r);
     if (!r.failed) {
       setNote("");
@@ -388,7 +420,7 @@ export function ProposalItem({
           onChange={pick.onToggle}
         />
       )}
-      <span className="badge">{p.kind === "priority" ? "prioridade" : "status"}</span>
+      <span className="badge">{KIND_TEXT[p.kind] ?? p.kind}</span>
       <div className="hub-card-text">
         <span className="proposal-line">
           <button
@@ -441,6 +473,89 @@ export function ProposalItem({
 }
 
 /**
+ * Linha da proposta `model` (#182): o valor proposto já nos seletores, que a
+ * pessoa ajusta antes de aprovar. Aprovar com outro valor manda `value` e o
+ * hub grava o escolhido; igual ao proposto, aprova como veio.
+ */
+export function ModelRow({
+  p,
+  busy,
+  pick,
+  project,
+  issue,
+  origin,
+  age,
+  onDecide,
+}: {
+  p: HubProposal;
+  busy: boolean;
+  pick: React.ReactNode;
+  project: React.ReactNode;
+  issue: React.ReactNode;
+  origin: React.ReactNode;
+  age: string;
+  onDecide(approve: boolean, value?: unknown): void;
+}) {
+  const proposed = agentOf(p.proposed);
+  const [model, setModel] = useState(proposed.model ?? CLAUDE_MODELS[0].value);
+  const [effort, setEffort] = useState(proposed.effort ?? DEFAULT_EFFORT_VALUE);
+  const changed = model !== proposed.model || (effort || null) !== proposed.effort;
+  return (
+    <tr aria-label={`Proposta #${p.id}`}>
+      {pick}
+      <td>{project}</td>
+      <td>{issue}</td>
+      <td className="nowrap">{valueText(p.kind, p.current)}</td>
+      <td className="nowrap">
+        <select aria-label={`Modelo da proposta #${p.id}`} value={model} onChange={(e) => setModel(e.target.value)}>
+          {CLAUDE_MODELS.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
+        </select>{" "}
+        <select aria-label={`Esforço da proposta #${p.id}`} value={effort} onChange={(e) => setEffort(e.target.value)}>
+          <option value={DEFAULT_EFFORT_VALUE}>esforço padrão</option>
+          {CLAUDE_EFFORTS.map((x) => (
+            <option key={x.value} value={x.value}>
+              {x.label}
+            </option>
+          ))}
+        </select>
+        {changed && <div className="muted small">proposto: {valueText(p.kind, p.proposed)}</div>}
+      </td>
+      <td className="proposal-why">
+        <Why text={p.justification} />
+      </td>
+      {origin}
+      <td className="nowrap">{age}</td>
+      <td>
+        <span className="env-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            aria-label={`Aprovar a proposta #${p.id}`}
+            onClick={() => onDecide(true, changed ? { model, effort: effort || null } : undefined)}
+          >
+            {changed ? "Aprovar alterada" : "Aprovar"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={busy}
+            aria-label={`Rejeitar a proposta #${p.id}`}
+            onClick={() => onDecide(false)}
+          >
+            Rejeitar
+          </button>
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+/**
  * Propostas do gestor (spec do gestor §8 e §11), em tabelas. As de
  * prioridade vêm na ordem que resulta de aprovar todas (classe proposta,
  * depois a posição, §4.3), com a posição atual no ranking do portfólio
@@ -460,6 +575,7 @@ export function ProposalsPanel({ now, data }: { now: number; data: ProposalsData
     [pending, ranking, hub.projects],
   );
   const statusOnes = pending.filter((p) => p.kind === "status");
+  const modelOnes = pending.filter((p) => p.kind === "model");
   const rankingNote =
     ranking === undefined
       ? null
@@ -639,6 +755,45 @@ export function ProposalsPanel({ now, data }: { now: number; data: ProposalsData
               </div>
             </>
           )}
+          {modelOnes.length > 0 && (
+            <>
+              <h3 className="section-title">Modelo e esforço</h3>
+              <div className="table-wrap proposals-table">
+                <table aria-label="Propostas de modelo">
+                  <thead>
+                    <tr>
+                      <th>
+                        <span className="sr-only">Marcar</span>
+                      </th>
+                      <th>Projeto</th>
+                      <th>Issue</th>
+                      <th>Atual</th>
+                      <th title="Ajuste antes de aprovar: o hub grava o valor escolhido">Aprovar com</th>
+                      <th>Justificativa</th>
+                      <th>Ambiente</th>
+                      <th>Idade</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modelOnes.map((p) => (
+                      <ModelRow
+                        key={p.id}
+                        p={p}
+                        busy={busy}
+                        pick={pick(p)}
+                        project={project(p)}
+                        issue={issue(p, p.title)}
+                        origin={origin(p)}
+                        age={ago(p.created_at, now)}
+                        onDecide={(approve, value) => decide([p.id], approve, value)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
           <div className="field">
             <label htmlFor="proposal-note">Nota (opcional, vai junto com a decisão)</label>
             <input id="proposal-note" type="text" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -709,8 +864,14 @@ export function ProposalsPanel({ now, data }: { now: number; data: ProposalsData
                       </button>
                     </td>
                     <td>
-                      {p.kind === "priority" ? "prioridade" : "status"}: {valueText(p.kind, p.current, projOf(p))} →{" "}
+                      {KIND_TEXT[p.kind] ?? p.kind}: {valueText(p.kind, p.current, projOf(p))} →{" "}
                       {valueText(p.kind, p.proposed, projOf(p))}
+                      {p.chosen != null && (
+                        <>
+                          {" "}
+                          <span className="muted">(aprovada com {valueText(p.kind, p.chosen, projOf(p))})</span>
+                        </>
+                      )}
                     </td>
                     <td className="muted">{p.decision_note ?? ""}</td>
                     <td className="muted nowrap">{p.decided_at !== null ? ago(p.decided_at, now) : ""}</td>

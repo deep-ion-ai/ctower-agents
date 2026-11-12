@@ -354,6 +354,21 @@ CREATE TABLE shared_file (
   UNIQUE (session_id, path)
 );
 "#,
+    // 21: modo autônomo do projeto, como vem do hub (#181): JSON de
+    // `AutonomyConfig` (`{}` = desligado), se este ambiente é o que roda as
+    // sessões autônomas, e o último relato da branch de integração (JSON de
+    // `AutonomyReport`, nulo = nenhum), que sobe na fotografia do projeto.
+    r#"
+ALTER TABLE project ADD COLUMN autonomy_config TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE project ADD COLUMN autonomy_runner INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE project ADD COLUMN autonomy_report TEXT;
+"#,
+    // 22: rótulo de aprovação do projeto, como vem do hub (#124): JSON de
+    // `ApprovalConfig` (`label`, `required`). `{}` = o rótulo padrão, sem
+    // exigir.
+    r#"
+ALTER TABLE project ADD COLUMN approval_config TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo

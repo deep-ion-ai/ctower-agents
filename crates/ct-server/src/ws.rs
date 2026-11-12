@@ -13,7 +13,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
-use ct_core::{DecisionOrigin, SessionMode, WorkItemKind, CLAUDE_MODELS};
+use ct_core::{DecisionOrigin, SessionMode, WorkItemKind, CLAUDE_EFFORTS, CLAUDE_MODELS};
 use ct_http::rpc::{i64_param, invalid, str_param, RpcResult};
 use ct_ledger::{Decision, Ledger, Project};
 use ct_sessions::transcript_view::TAIL_MAX_ENTRIES;
@@ -162,6 +162,8 @@ pub const REMOTE_CONTROL_UNAVAILABLE: i64 = -32032;
 fn from_sessions(e: SessionsError) -> (i64, String) {
     match e {
         SessionsError::RemoteControl(m) => (REMOTE_CONTROL_UNAVAILABLE, m),
+        SessionsError::AutonomyConflict(m) => (ct_http::sync::AUTONOMY_CONFLICT, m),
+        SessionsError::ApprovalRequired(m) => (ct_http::sync::APPROVAL_REQUIRED, m),
         e => (-32000, e.to_string()),
     }
 }
@@ -224,7 +226,8 @@ fn size_param(p: &Value) -> Result<Option<PtySize>, (i64, String)> {
     }
 }
 
-/// Modelo e modo do agente: `model` (alias de [`CLAUDE_MODELS`]) e `mode`
+/// Modelo, esforço e modo do agente: `model` (alias de [`CLAUDE_MODELS`]),
+/// `effort` ([`CLAUDE_EFFORTS`], #182) e `mode`
 /// (`native` | `subagents`), opcionais. Ausentes: padrão do Claude Code e
 /// `native`. Mais o `remote_control` (#197).
 fn agent_param(p: &Value) -> Result<AgentOptions, (i64, String)> {
@@ -238,6 +241,16 @@ fn agent_param(p: &Value) -> Result<AgentOptions, (i64, String)> {
             )))
         }
     };
+    let effort = match p.get("effort") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(e)) if CLAUDE_EFFORTS.contains(&e.as_str()) => Some(e.clone()),
+        Some(e) => {
+            return Err(invalid(format!(
+                "effort inválido: {e} (aceitos: {})",
+                CLAUDE_EFFORTS.join(", ")
+            )))
+        }
+    };
     let mode = match p.get("mode") {
         None | Some(Value::Null) => SessionMode::default(),
         Some(m) => m
@@ -247,6 +260,7 @@ fn agent_param(p: &Value) -> Result<AgentOptions, (i64, String)> {
     };
     Ok(AgentOptions {
         model,
+        effort,
         mode,
         remote_control: remote_control_param(p)?,
     })
@@ -594,7 +608,25 @@ impl Conn {
             "session.start" => {
                 let project_id = project_param(&sessions, self.linked(), p).await?;
                 let gh_number = i64_param(p, "gh_number")?;
-                let prompt = str_param(p, "prompt")?.to_string();
+                let autonomous = match p.get("autonomous") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err(invalid("autonomous deve ser true ou false")),
+                };
+                // "Iniciar mesmo assim" (#124): só a UI manda, depois da
+                // confirmação; o gestor e as automações nunca.
+                let override_approval = match p.get("override_approval") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err(invalid("override_approval deve ser true ou false")),
+                };
+                // Sessão autônoma sem `prompt` (#191): o ambiente monta com o
+                // template do projeto, depois de decidir a branch.
+                let prompt = if autonomous && matches!(p.get("prompt"), None | Some(Value::Null)) {
+                    String::new()
+                } else {
+                    str_param(p, "prompt")?.to_string()
+                };
                 let size = size_param(p)?;
                 let agent = agent_param(p)?;
                 let kind = match p.get("kind").and_then(Value::as_str) {
@@ -655,8 +687,36 @@ impl Conn {
                     prompt,
                     size,
                     agent,
+                    override_approval,
                 };
-                let v = blocking(&sessions, move |s| s.start(req)).await?;
+                // Sessão autônoma (#181): alinha a branch de integração e sai
+                // dela; conflito = `AUTONOMY_CONFLICT`, e a issue não começa.
+                let v = if autonomous {
+                    let gh = self.st.github.clone();
+                    blocking(&sessions, move |s| {
+                        let pr = gh
+                            .as_deref()
+                            .map(|g| g as &dyn ct_sessions::autonomy::PrOpener);
+                        s.start_autonomous(req, pr)
+                    })
+                    .await?
+                } else {
+                    blocking(&sessions, move |s| s.start(req)).await?
+                };
+                Ok(json!(v))
+            }
+            // Alinha a branch de integração do modo autônomo com a base
+            // (#181) e devolve o relato; conflito = `AUTONOMY_CONFLICT`.
+            "autonomy.align" => {
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let gh = self.st.github.clone();
+                let v = blocking(&sessions, move |s| {
+                    let pr = gh
+                        .as_deref()
+                        .map(|g| g as &dyn ct_sessions::autonomy::PrOpener);
+                    s.autonomy_align(project_id, pr)
+                })
+                .await?;
                 Ok(json!(v))
             }
             "session.start_project" => {
@@ -972,6 +1032,14 @@ impl Conn {
                 let rc = remote_control_param(p)?;
                 let v = blocking(&sessions, move |s| s.resume(&id, prompt.as_deref(), rc)).await?;
                 Ok(json!(v))
+            }
+            // Sessão parada pelo limite real do plano (#183): o agendador do
+            // hub a retoma depois do reset escrevendo um texto fixo no PTY
+            // (nunca entrada livre, por isso pode vir pelo canal).
+            "session.continue" => {
+                let id = str_param(p, "session_id")?.to_string();
+                blocking(&sessions, move |s| s.continue_session(&id)).await?;
+                Ok(json!({ "continued": true }))
             }
             // Liga o Remote Control numa sessão em andamento (#197): escreve
             // `/remote-control <nome>` no PTY; o id chega depois pelo push
@@ -2098,6 +2166,177 @@ mod tests {
         ui.call("env.info", json!({})).await["result"]["remote_control"].clone()
     }
 
+    /// Modo autônomo pelo `/ws` (#181): `autonomy.align` cria e alinha a
+    /// branch; com a branch em conflito, `autonomy.align` e o `session.start`
+    /// autônomo respondem `AUTONOMY_CONFLICT` e nada começa.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn modo_autonomo_pelo_ws() {
+        use ct_sessions::test_support::git_in;
+        let srv = Srv::linked(FakeClaude::exit(0));
+        let env = &srv.env;
+        let remote = env.tmp.path().join("acme-web.git");
+        git_in(
+            env.tmp.path(),
+            &["init", "-q", "--bare", remote.to_str().unwrap()],
+        );
+        env.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        env.git(&["push", "-q", "origin", "develop"]);
+        env.assign_config(2, |p| {
+            p.autonomy = ct_core::AutonomyConfig {
+                enabled: true,
+                env_id: Some("env-auto".into()),
+                ..Default::default()
+            };
+            p.autonomy_runner = true;
+        });
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let pid = env.project_id;
+        let v = ui
+            .call("autonomy.align", json!({ "project_id": pid }))
+            .await;
+        assert_eq!(v["result"]["state"], "ok", "{v}");
+        assert_eq!(v["result"]["branch"], "wip/autonoma", "{v}");
+        let v = ui
+            .call(
+                "session.start",
+                json!({ "project_id": pid, "gh_number": 1, "title": "ACME-123", "prompt": "oi",
+                        "autonomous": "sim" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        // Sem `autonomous`, o `prompt` continua obrigatório (#191).
+        let v = ui
+            .call(
+                "session.start",
+                json!({ "project_id": pid, "gh_number": 2, "title": "ACME-123" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        // Autônoma sem `prompt`: o ambiente monta o prompt.
+        let v = ui
+            .call(
+                "session.start",
+                json!({ "project_id": pid, "gh_number": 2, "title": "Tela de login",
+                        "autonomous": true }),
+            )
+            .await;
+        let sid = v["result"]["id"]
+            .as_str()
+            .expect("sessão autônoma")
+            .to_string();
+        let out = env.wait_fake_output(&sid);
+        assert!(
+            out.contains("issue deep-ion-ai/demo#2 (Tela de login)"),
+            "{out}"
+        );
+
+        // Conflito: a wip e a base mudam o mesmo arquivo.
+        let other = env.tmp.path().join("outro");
+        git_in(
+            env.tmp.path(),
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        git_in(&other, &["config", "user.email", "t@t"]);
+        git_in(&other, &["config", "user.name", "t"]);
+        for (branch, text) in [("wip/autonoma", "wip"), ("develop", "base")] {
+            git_in(
+                &other,
+                &["checkout", "-q", "-B", branch, &format!("origin/{branch}")],
+            );
+            std::fs::write(other.join("app.txt"), text).unwrap();
+            git_in(&other, &["add", "."]);
+            git_in(&other, &["commit", "-q", "-m", text]);
+            git_in(&other, &["push", "-q", "origin", branch]);
+        }
+        let v = ui
+            .call(
+                "session.start",
+                json!({ "project_id": pid, "gh_number": 1, "title": "ACME-123", "prompt": "oi",
+                        "autonomous": true }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], ct_http::sync::AUTONOMY_CONFLICT, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("wip/autonoma em conflito com a base"),
+            "{v}"
+        );
+        let v = ui
+            .call("autonomy.align", json!({ "project_id": pid }))
+            .await;
+        assert_eq!(v["error"]["code"], ct_http::sync::AUTONOMY_CONFLICT, "{v}");
+    }
+
+    /// Rótulo de aprovação pelo `/ws` (#124): a issue sem o rótulo exigido
+    /// é recusada com `APPROVAL_REQUIRED` e o motivo, também a autônoma
+    /// (antes de alinhar a branch); `override_approval` (o "iniciar mesmo
+    /// assim" da UI) inicia; outro tipo é inválido.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rotulo_de_aprovacao_pelo_ws() {
+        let srv = Srv::linked(FakeClaude::exit(0));
+        srv.env.assign_config(2, |p| {
+            p.approval = ct_core::ApprovalConfig {
+                label: "aprovada".into(),
+                required: true,
+            };
+            p.autonomy = ct_core::AutonomyConfig {
+                enabled: true,
+                env_id: Some("env-auto".into()),
+                ..Default::default()
+            };
+            p.autonomy_runner = true;
+        });
+        srv.env
+            .mirror_labeled(&[(123, None, &["bug"]), (124, None, &["aprovada"])]);
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let pid = srv.env.project_id;
+        let start = |n: i64, extra: Value| {
+            let mut p = json!({ "project_id": pid, "gh_number": n, "prompt": "oi" });
+            p.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            p
+        };
+        let v = ui.call("session.start", start(123, json!({}))).await;
+        assert_eq!(v["error"]["code"], ct_http::sync::APPROVAL_REQUIRED, "{v}");
+        let m = v["error"]["message"].as_str().unwrap();
+        assert!(
+            m.starts_with("aguardando aprovação") && m.contains("#123"),
+            "{v}"
+        );
+        // Autônoma (o agendador): recusada antes do alinhamento da wip,
+        // que nem tem remoto aqui.
+        let v = ui
+            .call("session.start", start(123, json!({ "autonomous": true })))
+            .await;
+        assert_eq!(v["error"]["code"], ct_http::sync::APPROVAL_REQUIRED, "{v}");
+        let v = ui
+            .call(
+                "session.start",
+                start(123, json!({ "override_approval": "sim" })),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        let v = ui
+            .call(
+                "session.start",
+                start(123, json!({ "override_approval": true })),
+            )
+            .await;
+        assert!(v["result"]["id"].is_string(), "{v}");
+        let v = ui.call("session.start", start(124, json!({}))).await;
+        assert!(v["result"]["id"].is_string(), "{v}");
+    }
+
     /// Remote Control pelo `/ws` (#197): a opção no início, a recusa com
     /// `-32032` por um secret do projeto, o `env.info` e o
     /// `session.remote_control.enable`.
@@ -2456,6 +2695,9 @@ mod tests {
                     projects: Some(vec![ct_ledger::ConfigProject {
                         docs: Default::default(),
                         session_templates: Default::default(),
+                        autonomy: Default::default(),
+                        autonomy_runner: false,
+                        approval: Default::default(),
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),
@@ -3148,7 +3390,7 @@ mod tests {
             .call(
                 "session.start",
                 json!({ "project_id": pid, "gh_number": 5, "title": "t", "prompt": "x",
-                        "model": "haiku", "mode": "subagents" }),
+                        "model": "haiku", "effort": "low", "mode": "subagents" }),
             )
             .await;
         assert_eq!(v["result"]["model"], "haiku", "{v}");
@@ -3156,7 +3398,7 @@ mod tests {
         let out = srv
             .env
             .wait_fake_output(v["result"]["id"].as_str().unwrap());
-        assert!(out.contains("--model\nhaiku\n"), "{out}");
+        assert!(out.contains("--model\nhaiku\n--effort\nlow\n"), "{out}");
         let v = ui
             .call(
                 "session.start_project",
@@ -3184,6 +3426,11 @@ mod tests {
             ),
             ("session.start_project", json!({ "model": 3 })),
             ("session.start_project", json!({ "mode": "" })),
+            ("session.start_project", json!({ "effort": "turbo" })),
+            (
+                "session.start",
+                json!({ "gh_number": 6, "title": "t", "effort": 2 }),
+            ),
         ] {
             let mut params = bad.clone();
             params["project_id"] = json!(pid);

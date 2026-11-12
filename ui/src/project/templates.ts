@@ -94,8 +94,12 @@ export function templateKeyFor(kind: WorkItemKind | "project", tracker: TrackerC
   return kind === "epic" ? "epic" : kind === "project" ? "project" : "issue";
 }
 
-/** Tipo de sessão com override por projeto (#166): a chave de `SessionTemplates`. */
-export type SessionTemplateKind = keyof SessionTemplates;
+/**
+ * Tipo de sessão com override por projeto (#166): a chave de
+ * `SessionTemplates`. O `autonomous` (#191) fica de fora: quem renderiza é o
+ * ambiente, e ele se edita no cartão do modo autônomo.
+ */
+export type SessionTemplateKind = Exclude<keyof SessionTemplates, "autonomous">;
 
 export const SESSION_TEMPLATE_KINDS: SessionTemplateKind[] = ["issue", "epic", "project"];
 

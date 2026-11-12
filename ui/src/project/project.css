@@ -327,6 +327,18 @@
   font-size: 11px;
 }
 
+/* Issue sem o rótulo de aprovação exigido pelo projeto (#124). */
+.pj-approval {
+  flex: none;
+  padding: 0 5px;
+  border: 1px dashed var(--attention-border);
+  border-radius: 4px;
+  color: var(--attention);
+  font-size: 10.5px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
 /* Sprint atual do item (projetos Jira), discreta. */
 .pj-sprint {
   flex: none;
@@ -340,6 +352,18 @@
   color: var(--muted);
   font-size: 10.5px;
   line-height: 15px;
+}
+
+/* Modelo faltando num projeto autônomo (#182). */
+.pj-nomodel {
+  flex: none;
+  padding: 0 5px;
+  border: 1px dashed var(--attention-border);
+  border-radius: 4px;
+  color: var(--attention);
+  font-size: 10.5px;
+  line-height: 15px;
+  white-space: nowrap;
 }
 
 .pj-sprint[data-state="active"] {

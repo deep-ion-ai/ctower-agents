@@ -310,6 +310,9 @@ mod tests {
                 projects: Some(vec![ConfigProject {
                     docs: Default::default(),
                     session_templates: Default::default(),
+                    autonomy: Default::default(),
+                    autonomy_runner: false,
+                    approval: Default::default(),
                     owner: "deep-ion-ai".into(),
                     repo: "demo".into(),
                     name: "demo".into(),

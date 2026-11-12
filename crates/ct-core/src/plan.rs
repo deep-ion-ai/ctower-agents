@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod budget;
+
 /// Versão do registro do statusline no `settings.json` do Claude Code. Sobe
 /// quando o comando registrado muda de formato; ambiente com versão menor
 /// aparece como desatualizado.
@@ -82,10 +84,50 @@ pub fn account_key(org_id: Option<&str>, email: Option<&str>) -> Option<String> 
     })
 }
 
+/// Variável com o `orgId` da conta, para o ambiente com login por token
+/// (`CLAUDE_CODE_OAUTH_TOKEN`), em que o `claude auth status` não traz a conta.
+pub const DECLARED_ORG_ID_ENV: &str = "CTOWER_CLAUDE_ORG_ID";
+/// Variável com o e-mail da conta (opcional, mas sem ele a chave não junta
+/// com a dos ambientes que têm o e-mail no `claude auth status`).
+pub const DECLARED_EMAIL_ENV: &str = "CTOWER_CLAUDE_EMAIL";
+
 impl PlanAccount {
+    /// Conta declarada pelo operador ([`DECLARED_ORG_ID_ENV`] e
+    /// [`DECLARED_EMAIL_ENV`]), com a mesma chave que o `claude auth status`
+    /// daria para ela. `None` sem `orgId`.
+    pub fn declared(org_id: Option<&str>, email: Option<&str>) -> Option<Self> {
+        let email = email
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        Some(PlanAccount {
+            key: account_key(org_id, email.as_deref())?,
+            email,
+            org_name: None,
+            subscription_type: None,
+        })
+    }
+
+    /// Conta declarada pelas variáveis de ambiente do processo.
+    pub fn declared_from_env() -> Option<Self> {
+        let var = |k: &str| std::env::var(k).ok();
+        Self::declared(
+            var(DECLARED_ORG_ID_ENV).as_deref(),
+            var(DECLARED_EMAIL_ENV).as_deref(),
+        )
+    }
+
     /// Conta da saída JSON de `claude auth status`. `None` sem login ou sem
     /// `orgId` ("conta desconhecida").
     pub fn from_auth_status(v: &serde_json::Value) -> Option<Self> {
+        Self::from_auth_status_or(v, None)
+    }
+
+    /// Como [`Self::from_auth_status`], mas com login e sem `orgId` na saída
+    /// (login por token, `authMethod: "oauth_token"`) vale a conta
+    /// `declared`. Com o `orgId` na saída, ela vence a declarada. Sem login,
+    /// `None` mesmo com a declarada: não há leituras dessa conta aqui.
+    pub fn from_auth_status_or(v: &serde_json::Value, declared: Option<&Self>) -> Option<Self> {
         if v.get("loggedIn").and_then(serde_json::Value::as_bool) != Some(true) {
             return None;
         }
@@ -97,8 +139,14 @@ impl PlanAccount {
                 .map(String::from)
         };
         let email = s("email");
+        let Some(key) = account_key(s("orgId").as_deref(), email.as_deref()) else {
+            return declared.cloned().map(|d| PlanAccount {
+                subscription_type: d.subscription_type.or_else(|| s("subscriptionType")),
+                ..d
+            });
+        };
         Some(PlanAccount {
-            key: account_key(s("orgId").as_deref(), email.as_deref())?,
+            key,
             email,
             org_name: s("orgName"),
             subscription_type: s("subscriptionType"),
@@ -400,6 +448,61 @@ mod tests {
             PlanAccount::from_auth_status(&json!({ "loggedIn": true })),
             None
         );
+    }
+
+    #[test]
+    fn conta_declarada_tem_a_mesma_chave_do_auth_status() {
+        let d = PlanAccount::declared(Some(" conta-a "), Some("Fulano@Example.com")).unwrap();
+        let a = PlanAccount::from_auth_status(&json!({
+            "loggedIn": true, "orgId": "conta-a", "email": "fulano@example.com"
+        }))
+        .unwrap();
+        assert_eq!(d.key, a.key);
+        assert_eq!(d.email.as_deref(), Some("Fulano@Example.com"));
+        assert_eq!(
+            PlanAccount::declared(Some("conta-a"), Some(" "))
+                .unwrap()
+                .key,
+            "conta-a"
+        );
+        assert_eq!(
+            PlanAccount::declared(None, Some("fulano@example.com")),
+            None
+        );
+        assert_eq!(PlanAccount::declared(Some(" "), None), None);
+    }
+
+    #[test]
+    fn login_por_token_usa_a_conta_declarada() {
+        let declared = PlanAccount::declared(Some("conta-a"), Some("fulano@example.com"));
+        // Saída do `claude auth status` com CLAUDE_CODE_OAUTH_TOKEN: sem conta.
+        let token = json!({
+            "loggedIn": true, "authMethod": "oauth_token", "apiProvider": "firstParty"
+        });
+        assert_eq!(PlanAccount::from_auth_status(&token), None);
+        let a = PlanAccount::from_auth_status_or(&token, declared.as_ref()).unwrap();
+        assert_eq!(a.key, "conta-a/fulano@example.com");
+        assert_eq!(a.subscription_type, None);
+        // Sem login, nem a declarada vale.
+        assert_eq!(
+            PlanAccount::from_auth_status_or(&json!({ "loggedIn": false }), declared.as_ref()),
+            None
+        );
+        // Com a conta na saída, ela vence a declarada.
+        let b = PlanAccount::from_auth_status_or(
+            &json!({ "loggedIn": true, "orgId": "conta-b", "email": "beltrano@example.com",
+                     "subscriptionType": "max" }),
+            declared.as_ref(),
+        )
+        .unwrap();
+        assert_eq!(b.key, "conta-b/beltrano@example.com");
+        // A declarada pega o plano da saída, se vier.
+        let c = PlanAccount::from_auth_status_or(
+            &json!({ "loggedIn": true, "subscriptionType": "max" }),
+            declared.as_ref(),
+        )
+        .unwrap();
+        assert_eq!(c.subscription_type.as_deref(), Some("max"));
     }
 
     #[test]

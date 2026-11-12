@@ -19,7 +19,14 @@ import type {
   WorkItemStatus,
 } from "../protocol/gen";
 import type { HubTree } from "../protocol/hub-gen";
-import { CLAUDE_MODELS, DEFAULT_MODEL_VALUE, SESSION_MODES } from "../settings/session-options";
+import {
+  CLAUDE_EFFORTS,
+  CLAUDE_MODELS,
+  DEFAULT_EFFORT_VALUE,
+  DEFAULT_MODEL_VALUE,
+  issueAgentLabel,
+  SESSION_MODES,
+} from "../settings/session-options";
 import { templateTab } from "../settings/sections";
 import { shortcutLabel } from "../shell/layout";
 import { sessionReadiness } from "../hub/tracker";
@@ -28,6 +35,7 @@ import { useNav, type OpenTab, type Tab } from "../state/nav";
 import { useTower, type Tower } from "../state/tower";
 import { lastTermSize } from "../terminal/size";
 import { changeLabel, itemKey, itemShort, PROJECT_ITEM } from "../util/item";
+import { awaitingApproval, isApprovalRefusal } from "./approval";
 import { branchFor, branchFromPattern, patternOf, worktreeDirName } from "./branch";
 import { STATE_SUFFIX, hubClones, liveSessions, localClone, type Clone } from "./clones";
 import { projectAt } from "./sections";
@@ -36,6 +44,7 @@ import { renderGestorTemplate, renderTemplate, resolveTemplate, scopeText } from
 import { cachedTree } from "./ui-store";
 import { rcRequested } from "../web/envActions";
 import { PlanConfirm, PlanEnvChoices, PlanStartNote, usePlanGate } from "../plan/PlanStart";
+import { wipOf, wipReason } from "./wip";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -51,7 +60,13 @@ const STATE_TEXT: Record<string, string> = {
 /** Nó da árvore (local ou do hub) no que a modal precisa. */
 interface StartNode {
   issue: IssueRow;
-  work_item: { status: WorkItemStatus; branch: string | null } | null;
+  work_item: {
+    status: WorkItemStatus;
+    branch: string | null;
+    /** Modelo e esforço do agente na issue (#182), só na árvore do hub. */
+    model?: string | null;
+    effort?: string | null;
+  } | null;
   children: StartNode[];
 }
 
@@ -179,6 +194,24 @@ export function StartSessionModal(props: {
   );
 }
 
+/** Confirmação do início acima do limite de trabalho em andamento (#126). */
+function WipConfirm({ onBack, onConfirm, busy }: { onBack(): void; onConfirm(): void; busy: boolean }) {
+  return (
+    <>
+      <span className="plan-confirm-text" role="alert">
+        Limite de trabalho em andamento atingido. Iniciar mesmo assim?
+      </span>
+      <span className="sm-spacer" />
+      <button type="button" className="btn" onClick={onBack}>
+        Voltar
+      </button>
+      <button type="button" className="btn btn-danger" disabled={busy} onClick={onConfirm}>
+        {busy ? "Iniciando…" : "Iniciar mesmo assim"}
+      </button>
+    </>
+  );
+}
+
 /**
  * Modal de início de sessão (#317): substitui o painel `StartSessionPanel`.
  * Tipo e título; aviso de sessão já existente; no épico, o escopo e atalhos
@@ -222,6 +255,10 @@ function ItemStartModal({
     (target.model !== undefined ? target.model : config.session.model) ?? DEFAULT_MODEL_VALUE,
   );
   const [mode, setMode] = useState<SessionMode>(target.mode ?? config.session.mode);
+  const [effort, setEffort] = useState(DEFAULT_EFFORT_VALUE);
+  // Modelo e esforço da issue (#182) preenchem a modal até a pessoa mexer
+  // neles (o Reiniciar já traz o modelo da sessão anterior).
+  const [agentTouched, setAgentTouched] = useState(target.model !== undefined);
   // Web (fase 2): sempre marcado, porque pelo celular não há outro jeito de
   // conversar com a sessão (spec do épico #205 §6.2).
   const [remote, setRemote] = useState(web || config.session.remote_control);
@@ -230,10 +267,22 @@ function ItemStartModal({
   const infos = web ? webInfos : tower.infos;
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [openTerm, setOpenTerm] = useState(true);
+  // Sessão autônoma (#181): só no ambiente do modo autônomo do projeto.
+  const [autonomous, setAutonomous] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Plano da conta (#108): no crítico, iniciar passa por um passo de confirmação.
   const [confirming, setConfirming] = useState(false);
+  // Limite de trabalho em andamento (#126): no limite, iniciar pede confirmação.
+  const [wipConfirming, setWipConfirming] = useState(false);
+  // Rótulo de aprovação (#124): a recusa do ambiente e o "iniciar mesmo
+  // assim", confirmado pela pessoa (o gestor e as automações nunca o usam).
+  const [refused, setRefused] = useState<string | null>(null);
+  const [overrideApproval, setOverrideApproval] = useState(false);
+  useEffect(() => {
+    setRefused(null);
+    setOverrideApproval(false);
+  }, [gh]);
   const dialog = useRef<HTMLElement>(null);
 
   const all = useMemo(() => (roots ?? []).flatMap((r) => [r, ...r.children]), [roots]);
@@ -255,6 +304,13 @@ function ItemStartModal({
         }
       : null);
   const planning = gh === undefined;
+  const issueModel = node?.work_item?.model ?? null;
+  const issueEffort = node?.work_item?.effort ?? null;
+  useEffect(() => {
+    if (agentTouched || !issueModel) return;
+    setModel(issueModel);
+    setEffort(issueEffort ?? DEFAULT_EFFORT_VALUE);
+  }, [agentTouched, issueModel, issueEffort]);
   const clone =
     clones.find((c) => c.env === envChoice) ?? clones.find((c) => c.env === target.env) ?? clones[0] ?? null;
   const project = clone?.project ?? null;
@@ -284,10 +340,32 @@ function ItemStartModal({
       : project.base_branch
     : "";
   const cloneEnv = clone?.env;
+  // Modo autônomo ligado e este é o ambiente dele (daemon 2.16, #181).
+  const autonomy = project?.autonomy_runner && project.autonomy?.enabled ? project.autonomy : null;
+  const autonomyBranchName = autonomy ? autonomy.branch.trim() || "wip/autonoma" : null;
+  // Exigência do rótulo (#124): a do ambiente; ambiente anterior não manda, vale a do hub.
+  const approval =
+    project?.approval ??
+    tower.hub.projects.find(
+      (x) => same(x.project.gh_owner, project?.gh_owner ?? "") && same(x.project.gh_repo, project?.gh_repo ?? ""),
+    )?.project.approval ??
+    null;
+  // Só com os rótulos da árvore; fora dela, quem avisa é a recusa do ambiente.
+  const unapproved = (!planning && !!node && awaitingApproval(node, { approval })) || refused !== null;
+  const approvalLabel = approval?.label.trim() ?? "";
   // O ambiente define a conta: o alerta é o da conta dele.
   const now = Date.now();
   const plan = usePlanGate(cloneEnv, now);
   useEffect(() => setConfirming(false), [cloneEnv]);
+  // O uso vem do hub (todas as máquinas); só sessões de issue e épico contam.
+  const hubView = project
+    ? tower.hub.projects.find(
+        (v) =>
+          v.project.gh_owner.toLowerCase() === project.gh_owner.toLowerCase() &&
+          v.project.gh_repo.toLowerCase() === project.gh_repo.toLowerCase(),
+      )
+    : undefined;
+  const wipFullText = issue ? wipReason(wipOf(hubView)) : null;
   useEffect(() => {
     if (!web || !cloneEnv || webInfos[cloneEnv]) return;
     let alive = true;
@@ -388,10 +466,15 @@ function ItemStartModal({
     (focusables(el)[0] ?? el).focus();
   }, []);
 
-  const start = async () => {
+  const start = async (wipOk = false) => {
     if (!clone || !project || busy || blocked || loading || !prompt.trim()) return;
+    if (unapproved && !overrideApproval) return;
     if (plan.alert?.level === "critical" && !confirming) {
       setConfirming(true);
+      return;
+    }
+    if (wipFullText && !wipOk) {
+      setWipConfirming(true);
       return;
     }
     setBusy(true);
@@ -400,7 +483,12 @@ function ItemStartModal({
     // O PTY já nasce no tamanho da área do terminal (sem ele, 120×40).
     const size = lastTermSize() ?? {};
     // Sem `model`, o daemon não passa `--model` (padrão do Claude Code).
-    const agent = { ...(model ? { model } : {}), mode, ...(withRemote ? { remote_control: true } : {}) };
+    const agent = {
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
+      mode,
+      ...(withRemote ? { remote_control: true } : {}),
+    };
     try {
       await killReplaced(tower, target);
       const s = issue
@@ -412,13 +500,22 @@ function ItemStartModal({
             prompt,
             ...agent,
             ...size,
+            ...(autonomous && autonomy ? { autonomous: true } : {}),
+            // Só depois da confirmação da pessoa (#124).
+            ...(unapproved && overrideApproval ? { override_approval: true } : {}),
           })
         : await api.call<Session>(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
       // Web: o painel da sessão espera o id do Remote Control e abre o link.
       if (web && withRemote) rcRequested(s.id);
       onStarted(s, clone.env, clone.name, planning ? "Sessão de planejamento" : `Sessão de ${ref(gh ?? 0)}`, openTerm);
     } catch (e) {
-      setError(String(e));
+      const m = e instanceof Error ? e.message : String(e);
+      if (issue && isApprovalRefusal(m)) {
+        setRefused(m.replace(/^Error:\s*/, ""));
+        setOverrideApproval(false);
+      } else {
+        setError(String(e));
+      }
       setBusy(false);
     }
   };
@@ -583,11 +680,37 @@ function ItemStartModal({
             {field(
               "sm-model",
               "Modelo",
-              <select id="sm-model" value={model} onChange={(e) => setModel(e.target.value)}>
+              <select
+                id="sm-model"
+                value={model}
+                onChange={(e) => {
+                  setAgentTouched(true);
+                  setModel(e.target.value);
+                }}
+              >
                 <option value={DEFAULT_MODEL_VALUE}>Padrão do Claude Code</option>
                 {CLAUDE_MODELS.map((m) => (
                   <option key={m.value} value={m.value}>
                     {m.label}
+                  </option>
+                ))}
+              </select>,
+            )}
+            {field(
+              "sm-effort",
+              "Esforço",
+              <select
+                id="sm-effort"
+                value={effort}
+                onChange={(e) => {
+                  setAgentTouched(true);
+                  setEffort(e.target.value);
+                }}
+              >
+                <option value={DEFAULT_EFFORT_VALUE}>Padrão do Claude Code</option>
+                {CLAUDE_EFFORTS.map((x) => (
+                  <option key={x.value} value={x.value}>
+                    {x.label}
                   </option>
                 ))}
               </select>,
@@ -604,6 +727,13 @@ function ItemStartModal({
               </select>,
             )}
           </div>
+
+          {issueModel && (
+            <p className="muted small" role="note">
+              Definido na issue: {issueAgentLabel({ model: issueModel, effort: issueEffort })}
+              {agentTouched ? " (alterado aqui só para esta sessão)" : ""}.
+            </p>
+          )}
 
           <PlanEnvChoices
             envs={clones.map((c) => ({ env: c.env, name: c.name }))}
@@ -629,6 +759,18 @@ function ItemStartModal({
                     ? "Pelo navegador, a conversa com a sessão é pelo app Claude ou em claude.ai/code: o link abre ao conectar."
                     : "Continue a sessão pelo celular, no app Claude ou em claude.ai/code."
                   : rcStatus.reason}
+              </span>
+            </div>
+          )}
+
+          {autonomyBranchName && issue && (
+            <div className="sm-rc">
+              <label className="sm-check">
+                <input type="checkbox" checked={autonomous} onChange={(e) => setAutonomous(e.target.checked)} />
+                Sessão autônoma
+              </label>
+              <span className="muted small">
+                Alinha {autonomyBranchName} com a base, sai dela e abre o PR para ela. Em conflito com a base, a sessão não começa.
               </span>
             </div>
           )}
@@ -728,7 +870,35 @@ function ItemStartModal({
             </div>
           )}
 
+          {unapproved && issue && (
+            <div className="sm-note" role="alert" aria-label="Aguardando aprovação">
+              <span className="sp-dot" data-tone="attention" aria-hidden="true" />
+              <span className="sm-note-text">
+                {refused ?? (
+                  <>
+                    <strong>Aguardando aprovação:</strong> {ref(issue.gh_number)} não tem o rótulo{" "}
+                    <span className="mono">{approvalLabel}</span>, que o projeto exige para iniciar sessão.
+                  </>
+                )}
+                <label className="sm-check">
+                  <input
+                    type="checkbox"
+                    checked={overrideApproval}
+                    onChange={(e) => setOverrideApproval(e.target.checked)}
+                  />
+                  Iniciar mesmo assim (fica registrado como decisão orientada no item)
+                </label>
+              </span>
+            </div>
+          )}
+
           {plan.account && plan.alert && <PlanStartNote account={plan.account} alert={plan.alert} now={now} />}
+
+          {wipFullText && (
+            <p className="sm-blocked" role="note">
+              {project?.name ?? "O projeto"} está no {wipFullText}. Termine ou mescle algo antes, ou inicie mesmo assim.
+            </p>
+          )}
 
           {error && (
             <p role="alert" className="start-error">
@@ -738,7 +908,9 @@ function ItemStartModal({
         </div>
 
         <div className="sm-foot">
-          {confirming ? (
+          {wipConfirming ? (
+            <WipConfirm onBack={() => setWipConfirming(false)} onConfirm={() => void start(true)} busy={busy} />
+          ) : confirming ? (
             <PlanConfirm onBack={() => setConfirming(false)} onConfirm={() => void start()} busy={busy} />
           ) : (
             <>
@@ -757,10 +929,10 @@ function ItemStartModal({
                 type="button"
                 className="btn btn-primary"
                 aria-keyshortcuts="Meta+Enter Control+Enter"
-                disabled={busy || !!blocked || loading || !prompt.trim()}
+                disabled={busy || !!blocked || loading || !prompt.trim() || (unapproved && !overrideApproval)}
                 onClick={() => void start()}
               >
-                {busy ? "Iniciando…" : "Iniciar sessão"}
+                {busy ? "Iniciando…" : unapproved ? "Iniciar mesmo assim" : "Iniciar sessão"}
                 <kbd className="kbd sm-kbd" aria-hidden="true">
                   {shortcutLabel("↵")}
                 </kbd>

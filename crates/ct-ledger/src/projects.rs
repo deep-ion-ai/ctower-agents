@@ -73,6 +73,19 @@ pub struct Project {
     /// Templates do prompt inicial do projeto, como vieram do hub (#166);
     /// vazios no projeto local legado (o global do rastreador).
     pub session_templates: ct_core::SessionTemplates,
+    /// Modo autônomo do projeto, como veio do hub (#181); desligado no
+    /// projeto local legado e num hub anterior.
+    #[serde(default)]
+    pub autonomy: ct_core::AutonomyConfig,
+    /// Este ambiente é o que roda as sessões autônomas do projeto.
+    #[serde(default)]
+    pub autonomy_runner: bool,
+    /// Último relato da branch de integração feito por este ambiente.
+    #[serde(default)]
+    pub autonomy_report: Option<ct_core::AutonomyReport>,
+    /// Rótulo de aprovação do projeto, como veio do hub (#124); o padrão
+    /// (sem exigir) no projeto local legado e num hub anterior.
+    pub approval: ct_core::ApprovalConfig,
 }
 
 impl Default for Project {
@@ -99,6 +112,10 @@ impl Default for Project {
             sync_role: false,
             docs: ct_core::DocsConfig::default(),
             session_templates: ct_core::SessionTemplates::default(),
+            autonomy: ct_core::AutonomyConfig::default(),
+            autonomy_runner: false,
+            autonomy_report: None,
+            approval: ct_core::ApprovalConfig::default(),
         }
     }
 }
@@ -131,10 +148,11 @@ pub(crate) const COLS: &str =
     "id, name, gh_owner, gh_repo, repo_path, base_branch, protected_branches, created_at, \
      config_rev, unassigned_at, location_state, location_error, applied_rev, kind, \
      tracker_kind, tracker_config, forge_kind, forge_config, branch_pattern, attribution, \
-     sync_role, docs_config, session_templates";
+     sync_role, docs_config, session_templates, autonomy_config, autonomy_runner, \
+     autonomy_report, approval_config";
 
 /// Quantas colunas `COLS` tem (a seguinte é a primeira extra de uma consulta).
-pub(crate) const COLS_LEN: usize = 23;
+pub(crate) const COLS_LEN: usize = 27;
 
 pub(crate) fn location_state_col(r: &Row, idx: usize) -> rusqlite::Result<Option<LocationState>> {
     let s: Option<String> = r.get(idx)?;
@@ -168,6 +186,12 @@ pub(crate) fn row_to_project(r: &Row) -> rusqlite::Result<Project> {
         sync_role: r.get(20)?,
         docs: json_col(r, 21)?,
         session_templates: json_col(r, 22)?,
+        autonomy: json_col(r, 23)?,
+        autonomy_runner: r.get(24)?,
+        autonomy_report: r
+            .get::<_, Option<String>>(25)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        approval: json_col(r, 26)?,
     })
 }
 
