@@ -26,4 +26,9 @@ ci: string | null,
 /**
  * A branch está em conflito com a base (relato do ambiente).
  */
-conflict: boolean, };
+conflict: boolean, 
+/**
+ * Mensagem do relato `error` da branch (ex.: o push recusado); `None`
+ * sem erro. Com erro, o agendador não inicia issues no projeto.
+ */
+error: string | null, };

@@ -1807,6 +1807,7 @@ test("Visão geral do projeto autônomo (#185): wip/autonoma com as issues à fr
         pr_url: "https://github.example/acme/acme-web/pull/5",
         ci: null,
         conflict: false,
+        error: null,
       },
     ]);
   render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);

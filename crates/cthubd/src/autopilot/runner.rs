@@ -124,6 +124,10 @@ pub fn spawn(st: HubState) {
     });
 }
 
+/// `reason` do evento `started` da sessão sonda (conta sem leitura do
+/// plano, veja [`plan`]).
+pub const PROBE_REASON: &str = "sem_leitura_sonda";
+
 fn ledger_err(e: ct_ledger::LedgerError) -> String {
     e.to_string()
 }
@@ -198,6 +202,15 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
                     .clone()
                     .unwrap_or_else(|| format!("{} em conflito com a base", r.branch))
             });
+        let autonomy_error = p
+            .autonomy_report
+            .as_ref()
+            .filter(|r| r.state == AutonomyState::Error)
+            .map(|r| {
+                r.message
+                    .clone()
+                    .unwrap_or_else(|| format!("erro em {}", r.branch))
+            });
         let filter = RankingFilter {
             project: Some((p.gh_owner.clone(), p.gh_repo.clone())),
             priority: None,
@@ -224,6 +237,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
             repo: p.gh_repo,
             env_id,
             conflict,
+            autonomy_error,
             items,
         });
     }
@@ -373,12 +387,24 @@ pub async fn tick(hub: &SharedHub, port: &dyn EnvPort, now: i64) -> Result<usize
                 match port.call(i.env_id.clone(), "session.start", params).await {
                     Ok(v) => {
                         let sid = v.get("id").and_then(Value::as_str).map(String::from);
+                        // A sonda sem leitura do plano fica distinguível no
+                        // histórico: `reason` = `sem_leitura_sonda`.
+                        let (reason, extra) = if i.probe {
+                            (
+                                Some(PROBE_REASON.to_string()),
+                                " (sonda: a conta não tem leitura do plano; esta sessão traz a \
+                                 primeira)",
+                            )
+                        } else {
+                            (None, "")
+                        };
                         events.push(AutopilotEvent {
                             session_id: sid,
+                            reason,
                             ..event(
                                 "started",
                                 format!("project:{}/{}", i.owner, i.repo),
-                                format!("{slug}: sessão autônoma iniciada com {}", i.model),
+                                format!("{slug}: sessão autônoma iniciada com {}{extra}", i.model),
                                 now,
                             )
                             .merge(&base)
@@ -822,6 +848,98 @@ mod tests {
         port.calls.lock().unwrap().clear();
         tick(&hub, &port, SAB + 60_000).await.unwrap();
         assert!(port.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn conta_sem_leitura_inicia_uma_sonda_so() {
+        let hub = hub();
+        // O ambiente conhece a conta, mas nenhuma sessão gravou o plano.
+        hub.lock()
+            .set_env_plan(
+                "env-auto",
+                &EnvPlanReport {
+                    account: Some(PlanAccount {
+                        key: "conta-a".into(),
+                        email: None,
+                        org_name: None,
+                        subscription_type: None,
+                    }),
+                    statusline: Default::default(),
+                    latest: None,
+                },
+            )
+            .unwrap();
+        hub.lock().set_autopilot_max_per_env(2, SAB).unwrap();
+        let port = FakePort::default();
+        tick(&hub, &port, SAB).await.unwrap();
+        assert_eq!(port.calls.lock().unwrap().len(), 1);
+        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        assert_eq!(ev[0].kind, "started");
+        assert_eq!(ev[0].reason.as_deref(), Some(PROBE_REASON));
+        assert!(ev[0].message.contains("sonda"));
+        // Com a sonda viva (ainda não sincronizada), o ambiente tem vaga,
+        // mas a conta espera a leitura dela: nenhum outro início.
+        port.calls.lock().unwrap().clear();
+        tick(&hub, &port, SAB + 60_000).await.unwrap();
+        assert!(port.calls.lock().unwrap().is_empty());
+        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        assert_eq!(ev[0].kind, "refused");
+        assert_eq!(ev[0].reason.as_deref(), Some("budget:no_reading"));
+    }
+
+    #[tokio::test]
+    async fn erro_na_branch_de_integracao_recusa_uma_vez() {
+        use ct_ledger::{OutboxEntry, ProjectChange, SyncChange};
+        let hub = hub();
+        let report = OutboxEntry {
+            seq: 1,
+            created_at: 1,
+            change: SyncChange::Project(ProjectChange {
+                owner: "acme".into(),
+                repo: "acme-web".into(),
+                name: "acme-web".into(),
+                repo_path: "/tmp/acme-web".into(),
+                base_branch: "develop".into(),
+                protected_branches: vec![],
+                created_at: 1,
+                hlc: 1,
+                state: None,
+                error: None,
+                applied_rev: Some(1),
+                tracker: Default::default(),
+                forge: Default::default(),
+                branch_pattern: None,
+                attribution: true,
+                autonomy: Some(ct_core::AutonomyReport {
+                    state: AutonomyState::Error,
+                    branch: "wip/autonoma".into(),
+                    base: "develop".into(),
+                    message: Some("push de wip/autonoma recusado (403)".into()),
+                    conflicts: vec![],
+                    pr_url: None,
+                    at: 1,
+                }),
+            }),
+        };
+        hub.lock()
+            .ingest("env-auto", "env-auto", &[report])
+            .unwrap();
+        let port = FakePort::default();
+        for i in 0..3 {
+            tick(&hub, &port, SAB + i * 60_000).await.unwrap();
+        }
+        assert!(port.calls.lock().unwrap().is_empty());
+        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        assert_eq!(ev.len(), 1, "{ev:?}");
+        assert_eq!(ev[0].kind, "refused");
+        assert_eq!(ev[0].reason.as_deref(), Some("autonomy_error"));
+        assert_eq!(ev[0].scope, "project:acme/acme-web");
+        assert!(ev[0].message.contains("403"));
+        let w = hub.lock().autonomy_wip(None).unwrap();
+        assert_eq!(
+            w[0].error.as_deref(),
+            Some("push de wip/autonoma recusado (403)")
+        );
     }
 
     #[tokio::test]

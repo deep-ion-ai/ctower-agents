@@ -55,6 +55,18 @@ export function autonomyWarning(p: HubProject): string | null {
   return r.message ?? `${autonomyBranch(a)} em conflito com a base`;
 }
 
+/**
+ * Erro da branch de integração com o modo ligado (relato `error` do
+ * ambiente do modo, ex.: o push recusado); `null` sem erro. Com erro, o
+ * agendador não inicia issues no projeto.
+ */
+export function autonomyError(p: HubProject): string | null {
+  const a = autonomyOf(p);
+  const r = (p as Partial<HubProject>).autonomy_report ?? null;
+  if (!a?.enabled || r?.state !== "error") return null;
+  return r.message ?? `erro em ${autonomyBranch(a)}`;
+}
+
 /** Ambientes onde o modo pode rodar: atribuídos ao projeto e marcados como autônomos. */
 export function autonomyEnvChoices(assignments: HubAssignment[], envs: HubEnv[]): HubAssignment[] {
   const autonomous = new Set(envs.filter((e) => e.autonomous).map((e) => e.env_id));

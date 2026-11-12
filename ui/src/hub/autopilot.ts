@@ -10,6 +10,7 @@ import type {
   BudgetPolicy,
   DigestProject,
   DigestUsage,
+  ProjectPlan,
   TimeBand,
 } from "../protocol/hub-gen";
 
@@ -73,7 +74,7 @@ export function reasonText(r: BlockReason): string {
     case "weekly_over_limit":
       return `semanal em ${pct(r.used)}, limite agora ${pct(r.limit)}`;
     case "no_reading":
-      return `sem leitura da janela ${r.window === "five_hour" ? "de 5h" : "semanal"} (nenhuma sessão informou o uso)`;
+      return `sem leitura da janela ${r.window === "five_hour" ? "de 5h" : "semanal"} (nenhuma sessão informou o uso; sem sessão autônoma viva na conta, o agendador inicia uma sonda para obter a leitura)`;
   }
 }
 
@@ -141,10 +142,13 @@ export type PilotState = "paused" | "off" | "on" | "waiting_band" | "waiting_bud
  * política); ligado (alguma conta pode iniciar agora); aguardando faixa (o
  * horário não permite); ou aguardando orçamento (o uso está no limite).
  */
-export function pilotState(s: Pick<AutopilotStatus, "settings" | "accounts">): PilotState {
+export function pilotState(
+  s: Pick<AutopilotStatus, "settings" | "accounts"> & { projects?: Pick<ProjectPlan, "probe">[] },
+): PilotState {
   if (s.settings.paused) return "paused";
   if (s.accounts.length === 0) return "off";
-  if (s.accounts.some((a) => a.decision.can_start)) return "on";
+  // A sonda sem leitura do plano inicia mesmo com o orçamento em `no_reading`.
+  if (s.accounts.some((a) => a.decision.can_start) || s.projects?.some((p) => p.probe)) return "on";
   const byTime = (r: BlockReason) => r.kind === "band_closed" || r.kind === "no_band" || r.kind === "after_cutoff";
   if (s.accounts.some((a) => a.decision.reasons.some(byTime))) return "waiting_band";
   return "waiting_budget";

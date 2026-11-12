@@ -15,6 +15,7 @@ import {
   autonomyPatch,
   autonomyTemplatesPatch,
   autonomousTemplateOf,
+  autonomyError,
   autonomyWarning,
   type AutonomyForm,
 } from "../../hub/autonomy";
@@ -64,6 +65,7 @@ export function AutonomyCard({
   const envName = (id: string | null) => (id ? (p.assignments.find((a) => a.env_id === id)?.env_name ?? id) : null);
   const report = pr.autonomy_report ?? null;
   const warning = autonomyWarning(pr);
+  const error = autonomyError(pr);
   const branch = autonomyBranch(cur);
   const base = autonomyBase(cur, pr);
   const formError = form ? autonomyFormError(form, pr) : null;
@@ -106,6 +108,11 @@ export function AutonomyCard({
               Em conflito: <span className="mono">{report.conflicts.join(", ")}</span>
             </span>
           )}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="start-error">
+          Erro na branch de integração: {error}. Nenhuma issue autônoma começa até a branch voltar a alinhar.
         </p>
       )}
       {form === null ? (

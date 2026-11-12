@@ -1111,6 +1111,7 @@ mod tests {
                 pr_url: Some("https://github.example/acme/acme-web/pull/5".into()),
                 ci: None,
                 conflict: false,
+                error: None,
             }],
             usage: vec![crate::DigestUsage {
                 account: "conta-secreta".into(),
