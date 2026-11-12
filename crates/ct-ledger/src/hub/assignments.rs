@@ -370,6 +370,15 @@ impl Hub {
             "UPDATE project SET sync_env_id = NULL, rev = ?3 WHERE id = ?1 AND sync_env_id = ?2",
             params![a.project_id, a.env_id, rev],
         )?;
+        // Era o ambiente do modo autônomo (#181): o modo desliga, com as
+        // escolhas guardadas para ligar de novo.
+        self.conn.execute(
+            "UPDATE project SET autonomy_config = json_set(autonomy_config, '$.enabled', json('false')),
+                    rev = ?3
+             WHERE id = ?1 AND json_extract(autonomy_config, '$.env_id') = ?2
+               AND json_extract(autonomy_config, '$.enabled')",
+            params![a.project_id, a.env_id, rev],
+        )?;
         tx.commit()?;
         Ok(rev)
     }
@@ -466,7 +475,8 @@ impl Hub {
                 "SELECT p.gh_owner, p.gh_repo, p.name, p.base_branch, p.protected_branches,
                         a.repo_path, max(a.rev, p.rev), p.tracker_kind, p.tracker_config,
                         p.forge_kind, p.forge_config, p.branch_pattern, p.attribution,
-                        p.sync_env_id IS ?1, p.id, p.docs_config, p.session_templates
+                        p.sync_env_id IS ?1, p.id, p.docs_config, p.session_templates,
+                        p.autonomy_config, p.approval_config, p.release_config
                  FROM assignment a JOIN project p ON p.id = a.project_id
                  WHERE a.env_id = ?1 AND a.removed_at IS NULL AND p.deleted_at IS NULL
                  ORDER BY p.key",
@@ -489,6 +499,18 @@ impl Hub {
                     rules: Default::default(),
                     docs: crate::json_col(r, 15)?,
                     session_templates: crate::json_col(r, 16)?,
+                    autonomy: crate::json_col(r, 17)?,
+                    autonomy_runner: false,
+                    approval: crate::json_col(r, 18)?,
+                    release: crate::json_col(r, 19)?,
+                };
+                // O ambiente do modo, com ele ligado, é o que roda as
+                // sessões autônomas (#181); os outros só conhecem a branch
+                // (para o status das issues que entram nela).
+                let p = ConfigProject {
+                    autonomy_runner: p.autonomy.enabled
+                        && p.autonomy.env_id.as_deref() == Some(env_id),
+                    ..p
                 };
                 Ok((id, p))
             })?;

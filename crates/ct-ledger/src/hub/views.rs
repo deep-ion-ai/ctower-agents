@@ -37,6 +37,10 @@ pub struct HubProjectView {
     /// ambiente de sync (#348). Nulo no GitHub e até o primeiro relato.
     #[serde(default)]
     pub tracker_status: Option<super::HubTrackerStatus>,
+    /// Trabalho em andamento (#126): sessões vivas e PRs abertos do projeto,
+    /// com os limites do cadastro. Ausente num hub anterior.
+    #[serde(default)]
+    pub wip: Option<ct_core::WipUsage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -53,6 +57,11 @@ pub struct DecisionCounts {
 pub struct WorkItemSummary {
     /// PR mais recente da branch do work item.
     pub pr: Option<PrRow>,
+    /// Resumo dos checks do head desse PR, se ele está aberto e os checks
+    /// já foram lidos (#129). Ausente num hub ou ambiente anterior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub pr_checks: Option<crate::PrChecksSummary>,
     pub decisions: DecisionCounts,
     /// `ts` do último evento do work item, sem os de prioridade e ordem.
     pub last_activity_at: Option<i64>,
@@ -192,6 +201,7 @@ impl Hub {
             out.push(HubProjectView {
                 sync: self.sync_state(project.id)?,
                 tracker_status: self.tracker_status(project.id)?,
+                wip: Some(self.project_wip(project.id)?),
                 assignments: self.project_assignments(project.id)?,
                 project,
                 locations,
@@ -276,8 +286,10 @@ impl Hub {
             rows.collect::<rusqlite::Result<_>>()?
         };
         live_envs.sort();
+        let pr = self.prs_for_work_item(wi.id)?.into_iter().next();
         Ok(WorkItemSummary {
-            pr: self.prs_for_work_item(wi.id)?.into_iter().next(),
+            pr_checks: self.gh().pr_checks_summary(wi.project_id, pr.as_ref())?,
+            pr,
             decisions: DecisionCounts {
                 total: decisions.len(),
                 pending_autonomous,
@@ -602,6 +614,7 @@ mod tests {
                 synced_at: 1,
                 gone: Vec::new(),
                 me: None,
+                pr_checks: None,
             },
             "hub",
         )

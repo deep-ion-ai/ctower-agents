@@ -373,3 +373,27 @@ Pré-requisito: um ambiente 2.14 ou maior com uma sessão de issue rodando num p
 6. No console da sessão, com o caminho de um `.md` da worktree impresso (por exemplo, `ls docs/*.md` num shell ou a saída do agente), passe o mouse e dê Ctrl+clique (Cmd+clique no macOS). **Esperado:** o caminho fica sublinhado e abre no visualizador. Um caminho `.md` fora da worktree e da pasta de docs não vira link.
 7. Na tela **Projeto**, clique **Arquivos de docs**. **Esperado:** o diálogo lista os `.md` da pasta de docs do projeto (com tamanho e data), com filtro por nome; um clique abre no visualizador. No menu de contexto de um épico, **Arquivos .md do épico** lista só a pasta do épico. Com docs desligados, ambiente anterior à 2.14 ou `docs_root` inacessível, o botão fica desabilitado com o motivo na dica.
 8. Na PWA (celular), abra a sessão pela Sala de controle. **Esperado:** a seção **Arquivos** no painel da sessão; tocar num arquivo abre o mesmo visualizador, com Formatado/Raw e o diagrama. **Arquivos de docs** também funciona na tela Projeto.
+
+## 25. Visualizador de diff (#168)
+
+Pré-requisito: um ambiente 2.15 ou maior com uma sessão de issue rodando, com pelo menos dois commits na branch. Para o caso entre máquinas, a UI numa máquina e o ambiente em outra, registrado como remoto.
+
+1. Peça ao agente para alterar um arquivo já commitado, criar um arquivo novo (sem `git add`), apagar um arquivo, renomear outro com `git mv` e adicionar uma imagem `.png`. Clique no ícone **Ver diff** do cabeçalho da sessão. **Esperado:** abre a aba "Diff · #n" no modo **Branch**, com a base (`origin/<base>` e o merge-base) no cabeçalho; a lista mostra cada arquivo com a letra do status (A, M, D, R), os +/− e o novo marcado "não rastreado"; a renomeação aparece como "antigo → novo"; a imagem mostra "Arquivo binário". Confira no terminal: `git diff $(git merge-base origin/<base> HEAD) --stat` mais o arquivo novo.
+2. Clique num arquivo `.rs` ou `.ts`. **Esperado:** o diff unificado com números das linhas e realce de sintaxe, legível nos temas claro e escuro. Clique **Lado a lado**: a versão antiga à esquerda e a nova à direita. Feche e reabra a aba: continua lado a lado.
+3. Clique **Não commitado**. **Esperado:** só o que ainda não foi commitado (o mesmo que `git diff HEAD`, mais os arquivos novos).
+4. Clique **Commit** e escolha no seletor um commit da branch (hash curto, mensagem, autor e quando). **Esperado:** o diff igual ao `git show <commit>`. Peça ao agente para commitar algo e clique **Recarregar**: o commit novo aparece no topo da lista.
+5. Peça ao agente para gerar um arquivo com mais de 3000 linhas. **Esperado:** aparece "Diff grande" com o total de linhas; **Mostrar mesmo assim** abre o patch (ou, acima de 1 MiB, "grande demais para mostrar").
+6. Na tela **Projeto**, abra o item: **Ver diff** no painel do work item (um por ambiente, se houver mais de um). Na **Revisão**, um item com PR aberto mostra **Ver diff** ao lado de "Abrir PR". Com o ambiente desconectado ou anterior à 2.15, o botão fica desabilitado com o motivo na dica.
+7. Na PWA (celular), abra a sessão pela Sala de controle e toque **Ver diff**. **Esperado:** a mesma tela, com a lista de arquivos acima do diff.
+
+## 26. Sessão de release (#204)
+
+Pré-requisito: hub 1.24 e um ambiente 2.23 com um projeto GitHub de teste (por exemplo `acme/acme-web`, com o fluxo do release-please) atribuído. Não use um repositório de produção.
+
+1. Em **Configurações do projeto › Release**, clique **Editar release**, ligue a sessão de release e salve. **Esperado:** "ligada", o fluxo `develop → main` e o secret `CT_RELEASE_GH_TOKEN`: ausente. Troque o destino para `develop`: o formulário avisa que origem e destino precisam ser diferentes e não salva.
+2. Na tela do projeto, clique **Criar release**. **Esperado:** a modal "Sessão de release" com o estado (diferença de conteúdo, PRs abertos, última release) e o início bloqueado com "Cadastre o secret CT_RELEASE_GH_TOKEN...".
+3. Cadastre o token exclusivo em **Secrets e variáveis** do projeto e abra **Criar release** de novo. **Esperado:** o secret "cadastrado" (sem valor), o prompt do template de release e **Iniciar sessão** habilitado.
+4. Inicie. **Esperado:** a sessão roda no clone principal; na sessão, `echo $CTOWER_SESSION_KIND` mostra `release`, e `gh pr merge 1` e `git push origin main` são bloqueados pelo guarda-corpo. `ctower release status` imprime o estado em JSON.
+5. Abra **Criar release** com a sessão viva. **Esperado:** o início bloqueado com "já há uma sessão de release viva neste projeto".
+6. Inicie uma sessão de issue do mesmo projeto e rode `ctower secret get CT_RELEASE_GH_TOKEN`. **Esperado:** "não existe para o projeto da sessão" (saída 2); `ctower release status` responde que só roda na sessão de release.
+7. Num projeto Jira + GitLab, abra as Configurações. **Esperado:** sem a seção Release e sem o botão.

@@ -220,9 +220,11 @@ impl Sessions {
                 mode: LaunchMode::Resume(&tool_id),
                 prompt: prompt.unwrap_or(RESUME_PROMPT),
                 size: PtySize::DEFAULT,
-                // A retomada segue com o modelo e o modo da sessão original.
+                // A retomada segue com o modelo, o esforço (lido do argv,
+                // #182) e o modo da sessão original.
                 agent: &AgentOptions {
                     model: old.model.clone(),
+                    effort: crate::launch::effort_from_argv(&old.launch_cmd),
                     mode: old.mode,
                     remote_control,
                 },
@@ -585,6 +587,7 @@ mod tests {
         std::fs::write(&t, "conversa\n").unwrap();
         let agent = AgentOptions {
             model: Some("sonnet".into()),
+            effort: Some("max".into()),
             mode: ct_core::SessionMode::Subagents,
             ..AgentOptions::default()
         };
@@ -592,7 +595,7 @@ mod tests {
         let new = env.sessions.resume(&old.id, None, false).unwrap();
         let out = env.wait_fake_output(&new.id);
         assert!(
-            out.contains("\n--model\nsonnet\n--append-system-prompt\n"),
+            out.contains("\n--model\nsonnet\n--effort\nmax\n--append-system-prompt\n"),
             "{out}"
         );
         assert_eq!((new.model, new.mode), (agent.model, agent.mode));

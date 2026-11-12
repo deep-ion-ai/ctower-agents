@@ -15,7 +15,7 @@ pub const T: Duration = Duration::from_secs(10);
 
 /// `claude` falso: registra argv/env em `<tmp>/fake-out/<sessão>.txt` e
 /// depois executa o corpo (padrão: `sleep N; exit C`). Do ambiente, grava
-/// as `CTOWER_*`, as `CT_*` (docs), as `T_*` (secrets de teste), as `GITLAB_*` e `JIRA_*`
+/// as `CTOWER_*`, as `CT_*` (docs), as `T_*` (secrets de teste), `GH_*`, as `GITLAB_*` e `JIRA_*`
 /// (projetos Jira + GitLab) e `PATH`/`HOME` com o prefixo `ENV_`.
 pub struct FakeClaude {
     body: String,
@@ -41,7 +41,7 @@ impl FakeClaude {
         let script = format!(
             "#!/bin/bash\n\
              out=\"{out}/$CTOWER_SESSION.txt\"\n\
-             {{ printf '%s\\n' \"$@\"; echo \"PWD=$(pwd)\"; echo \"SIZE=$(stty size 2>/dev/null)\"; env | grep -E '^(CTOWER|CT|T|GITLAB|JIRA)_' | sort; echo \"ENV_PATH=$PATH\"; echo \"ENV_HOME=$HOME\"; }} > \"$out.tmp\"\n\
+             {{ printf '%s\\n' \"$@\"; echo \"PWD=$(pwd)\"; echo \"SIZE=$(stty size 2>/dev/null)\"; env | grep -E '^(CTOWER|CT|T|GITLAB|JIRA|GH)_' | sort; echo \"ENV_PATH=$PATH\"; echo \"ENV_HOME=$HOME\"; }} > \"$out.tmp\"\n\
              mv \"$out.tmp\" \"$out\"\n\
              {body}\n",
             out = out_dir.display(),
@@ -162,6 +162,7 @@ impl TestEnv {
             prompt: "prompt inicial".into(),
             size: None,
             agent: AgentOptions::default(),
+            override_approval: false,
         }
     }
 
@@ -281,6 +282,10 @@ impl TestEnv {
         let mut project = ConfigProject {
             docs: Default::default(),
             session_templates: Default::default(),
+            autonomy: Default::default(),
+            autonomy_runner: false,
+            approval: Default::default(),
+            release: Default::default(),
             owner: "deep-ion-ai".into(),
             repo: "demo".into(),
             name: "demo".into(),
@@ -324,6 +329,32 @@ impl TestEnv {
                 has_sub_issues: *subs,
                 url: String::new(),
                 updated_at: 0,
+                ..Default::default()
+            })
+            .collect();
+        self.sessions
+            .ledger()
+            .apply_github(&ct_ledger::GithubSnapshot {
+                project_id: self.project_id,
+                issues,
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    /// Grava no espelho as issues `(número, épico pai, rótulos)`, com
+    /// sub-issues no número que alguma outra tem como pai (#124).
+    pub fn mirror_labeled(&self, issues: &[(i64, Option<i64>, &[&str])]) {
+        let parents: Vec<i64> = issues.iter().filter_map(|(_, p, _)| *p).collect();
+        let issues = issues
+            .iter()
+            .map(|(n, parent, labels)| ct_ledger::IssueRow {
+                gh_number: *n,
+                title: format!("ACME-{n}"),
+                state: "open".into(),
+                labels: labels.iter().map(|s| s.to_string()).collect(),
+                parent_number: *parent,
+                has_sub_issues: parents.contains(n),
                 ..Default::default()
             })
             .collect();

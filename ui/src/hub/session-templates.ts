@@ -13,6 +13,7 @@ export const SESSION_TEMPLATE_LABEL: Record<SessionTemplateKind, string> = {
   issue: "Issue e sub-issue",
   epic: "Épico",
   project: "Sessão do projeto (sem issue)",
+  release: "Sessão de release",
 };
 
 /** Overrides do projeto; `null` = hub anterior à #166 (não edita templates). */

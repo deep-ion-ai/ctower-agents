@@ -792,6 +792,10 @@ pub async fn serve(dirs: Dirs) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = HubState::new(hub.clone(), &ui_token, &name, &hub_id);
     state.health = Arc::new(cfg.health.clone());
     state.gh_sync_interval_secs = cfg.gh_sync_interval_secs;
+    state.test_mode = cfg.test_mode;
+    if cfg.test_mode {
+        tracing::info!("hub de teste (test_mode = true)");
+    }
     state.docs_dir = cfg.docs_dir().map(|d| d.display().to_string().into());
     if let Some(d) = cfg.docs_dir() {
         ensure_docs_marker(&d);
@@ -953,6 +957,11 @@ pub async fn serve(dirs: Dirs) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     state.updates = Some(updates);
+
+    // Agendador do piloto automático (#183): no processo do hub, sem
+    // depender da UI. Sem política de orçamento em nenhuma conta, não
+    // inicia nada.
+    crate::autopilot::spawn(state.clone());
 
     ct_http::serve(crate::router(state), &cfg.bind, cfg.port, "cthubd").await?;
     tracing::info!("cthubd encerrado");

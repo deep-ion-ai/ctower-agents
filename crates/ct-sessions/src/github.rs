@@ -153,6 +153,7 @@ impl GithubSync {
                         json!({ "work_item_id": wi, "status": status }),
                     );
                 }
+                self.sync_reviews(&input.project)?;
                 ProjectSync {
                     project_id,
                     ok: true,
@@ -186,6 +187,33 @@ impl GithubSync {
                     "last_ok_at": last_ok_at, "error": result.error }),
         );
         Ok(result)
+    }
+}
+
+impl GithubSync {
+    /// Feedback de review dos PRs abertos dos work items (#130): só os que
+    /// mudaram (`updated_at`) desde a última leitura, sem o lock do ledger
+    /// durante a rede. A falha no GitHub não derruba o sync: fica no log, e
+    /// o que faltou é lido no próximo ciclo.
+    fn sync_reviews(&self, project: &Project) -> Result<()> {
+        let targets = self.sessions.ledger().pr_review_targets(project.id)?;
+        if targets.is_empty() {
+            return Ok(());
+        }
+        let (got, err) = ct_gh::reviews::fetch_reviews(
+            &self.client,
+            &project.gh_owner,
+            &project.gh_repo,
+            &targets,
+        );
+        self.sessions.ledger().apply_pr_reviews(project.id, &got)?;
+        if let Some(e) = err {
+            tracing::warn!(
+                "github: projeto {}: reviews dos PRs não lidas: {e}",
+                project.id
+            );
+        }
+        Ok(())
     }
 }
 
@@ -304,6 +332,122 @@ mod tests {
         assert_eq!((st.failures, st.failing_since), (2, Some(desde)));
     }
 
+    /// #130: o sync do ambiente lê as threads de review do PR aberto do
+    /// work item: a resolvida fica de fora, a não resolvida vem com arquivo
+    /// e linha, a de autor externo vem marcada; sem mudança no PR, não relê.
+    #[test]
+    fn threads_de_review_no_espelho_do_ambiente() {
+        let (env, gh, sync) = setup();
+        let (o, r) = ("acme", "acme-web");
+        let p = env
+            .sessions
+            .ledger()
+            .add_project(&NewProject {
+                name: "acme-web".into(),
+                gh_owner: o.into(),
+                gh_repo: r.into(),
+                repo_path: "/srv/acme-web".into(),
+                base_branch: "develop".into(),
+                protected_branches: vec![],
+            })
+            .unwrap();
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        let wi = {
+            let l = env.sessions.ledger();
+            let wi = l.ensure_work_item(p.id, 7, WorkItemKind::Issue).unwrap();
+            l.set_work_item_branch(wi.id, "feat/7-x", "/wt").unwrap();
+            wi.id
+        };
+        gh.set(&pulls_path(o, r, "feat/7-x"), json!([pr(30, "feat/7-x")]));
+        let thread = |id: &str, resolved: bool, path: &str, line: i64, assoc: &str| {
+            json!({
+                "id": id, "isResolved": resolved, "isOutdated": false,
+                "path": path, "line": line, "originalLine": line,
+                "comments": { "totalCount": 2, "nodes": [{
+                    "author": { "login": "fulano" }, "authorAssociation": assoc,
+                    "body": "renomeie a função",
+                    "url": format!("https://github.com/acme/acme-web/pull/30#discussion_{id}"),
+                    "createdAt": "2026-10-15T10:00:00Z",
+                }]},
+            })
+        };
+        gh.set_graphql(
+            json!({ "owner": o, "repo": r, "number": 30 }),
+            json!({ "data": { "repository": { "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null },
+                    "nodes": [
+                        thread("T1", true, "src/lib.rs", 3, "MEMBER"),
+                        thread("T2", false, "src/main.rs", 21, "COLLABORATOR"),
+                        thread("T3", false, "docs/x.md", 4, "FIRST_TIME_CONTRIBUTOR"),
+                    ],
+                },
+                "latestOpinionatedReviews": { "nodes": [{
+                    "id": "R1", "state": "CHANGES_REQUESTED",
+                    "author": { "login": "beltrano" }, "authorAssociation": "OWNER",
+                    "body": "faltou teste",
+                    "url": "https://github.com/acme/acme-web/pull/30#pullrequestreview-1",
+                    "submittedAt": "2026-10-15T10:30:00Z",
+                }]},
+            }}}}),
+        );
+
+        let res = sync.sync_project(p.id).unwrap();
+        assert!(res.ok, "{res:?}");
+        let f = env.sessions.ledger().pr_feedback_for_work_item(wi).unwrap();
+        assert_eq!(f.len(), 1);
+        let threads: Vec<(&str, &str, Option<i64>, bool, i64)> = f[0]
+            .threads
+            .iter()
+            .map(|t| {
+                (
+                    t.id.as_str(),
+                    t.path.as_str(),
+                    t.line,
+                    t.external,
+                    t.replies,
+                )
+            })
+            .collect();
+        assert_eq!(
+            threads,
+            [
+                ("T2", "src/main.rs", Some(21), false, 1),
+                ("T3", "docs/x.md", Some(4), true, 1)
+            ]
+        );
+        assert_eq!(f[0].changes_requested.len(), 1);
+        assert_eq!(f[0].changes_requested[0].author, "beltrano");
+        assert_eq!(gh.graphql_calls().len(), 1);
+
+        // Nada mudou no PR: nenhuma consulta GraphQL nova.
+        assert!(sync.sync_project(p.id).unwrap().ok);
+        assert_eq!(gh.graphql_calls().len(), 1);
+    }
+
+    /// Falha no GraphQL não derruba o sync; o PR fica para o próximo ciclo.
+    #[test]
+    fn falha_nas_reviews_nao_derruba_o_sync() {
+        let (env, gh, sync) = setup();
+        let wi = work_item_with_branch(&env, 7, "feat/7-x");
+        gh.set(
+            &pulls_path("deep-ion-ai", "demo", "feat/7-x"),
+            json!([pr(30, "feat/7-x")]),
+        );
+        gh.fail_next("/graphql", 502, &[]);
+        assert!(sync.sync_project(env.project_id).unwrap().ok);
+        let l = env.sessions.ledger();
+        assert_eq!(
+            l.pr_feedback_for_work_item(wi).unwrap()[0].read_at_updated,
+            None
+        );
+        assert_eq!(l.pr_review_targets(env.project_id).unwrap().len(), 1);
+    }
+
     /// O espelho do GitHub do ambiente só sincroniza projetos atribuídos.
     #[test]
     fn projeto_desatribuido_fica_fora_do_espelho() {
@@ -342,6 +486,10 @@ mod tests {
                     projects: Some(vec![ct_ledger::ConfigProject {
                         docs: Default::default(),
                         session_templates: Default::default(),
+                        autonomy: Default::default(),
+                        autonomy_runner: false,
+                        approval: Default::default(),
+                        release: Default::default(),
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),

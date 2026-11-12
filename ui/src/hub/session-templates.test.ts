@@ -2,7 +2,7 @@ import type { HubProject } from "../protocol/hub-gen";
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
 import { customizeStart, hasOverride, sessionTemplatesOf, templatesPatch } from "./session-templates";
 
-const none = { issue: "", epic: "", project: "" };
+const none = { issue: "", epic: "", project: "", autonomous: "", release: "" };
 const proj = (extra: Partial<HubProject> = {}) => ({ tracker: { kind: "github" }, ...extra }) as unknown as HubProject;
 
 test("hub anterior à #166 não traz session_templates: não edita", () => {
@@ -27,7 +27,7 @@ test("Personalizar parte do global do rastreador do projeto", () => {
 
 test("patch troca só a chave, manda o objeto inteiro e volta ao global com vazio", () => {
   const cur = { ...none, project: "Planeje" };
-  expect(templatesPatch(cur, "issue", "Issue {{key}}")).toEqual({ issue: "Issue {{key}}", epic: "", project: "Planeje" });
+  expect(templatesPatch(cur, "issue", "Issue {{key}}")).toEqual({ issue: "Issue {{key}}", epic: "", project: "Planeje", autonomous: "", release: "" });
   expect(templatesPatch(cur, "project", "")).toEqual(none);
   expect(templatesPatch(cur, "project", "   ")).toEqual(none);
   expect(templatesPatch(cur, "project", "Planeje")).toBeNull();

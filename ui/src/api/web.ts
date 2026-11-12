@@ -26,7 +26,8 @@ export const HUB_PROTOCOL_MAJOR = 1;
  * Métodos do ambiente que a web chama pelo hub (`hub.env.call`): a lista do
  * canal reverso (`ct_http::sync::CHANNEL_METHODS`, spec §5.2). O hub confere
  * de novo; aqui só evita a ida. `file.read`, `files.shared` e `docs.list`:
- * visualizador de markdown (#167). Sem comentários dentro da lista: o teste
+ * visualizador de markdown (#167). `git.diff`, `git.diff_file` e
+ * `git.commits`: visualizador de diff (#168). Sem comentários dentro da lista: o teste
  * do `cthubd` a compara com a do canal.
  */
 export const ENV_METHODS: ReadonlySet<string> = new Set([
@@ -46,7 +47,9 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "session.start",
   "session.start_project",
   "session.start_gestor",
+  "session.start_release",
   "session.resume",
+  "session.continue",
   "session.kill",
   "session.archive",
   "session.remote_control.enable",
@@ -58,6 +61,10 @@ export const ENV_METHODS: ReadonlySet<string> = new Set([
   "file.read",
   "files.shared",
   "docs.list",
+  "git.diff",
+  "git.diff_file",
+  "git.commits",
+  "autonomy.align",
 ]);
 
 /** O método do ambiente existe na web? */

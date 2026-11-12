@@ -43,6 +43,8 @@ const TREE: HubTree = {
         closed_at: null,
         priority: "P2",
         rank: 1,
+        model: null,
+        effort: null,
       },
       summary: { pr: null, decisions: { total: 0, pending_autonomous: 0 }, last_activity_at: now, live_envs: [] },
       children: [],
@@ -324,7 +326,8 @@ describe.each([360, 414])("celular, %i px", (width) => {
     const drawer = await screen.findByRole("region", { name: "Painel lateral" });
     // Segurança fica no índice, avisando que é do desktop (#26).
     expect(within(drawer).getByText("Segurança")).toBeInTheDocument();
-    expect(within(drawer).getAllByText("Só no app desktop")).toHaveLength(3);
+    // E o orçamento do piloto automático (#180).
+    expect(within(drawer).getAllByText("Só no app desktop")).toHaveLength(4);
     expect(within(drawer).getByText("Propostas do gestor")).toBeInTheDocument();
   });
 });

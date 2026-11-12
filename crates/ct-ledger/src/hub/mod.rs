@@ -8,7 +8,8 @@
 //!
 //! - **status do work item** = `to` do evento `status_changed` ou
 //!   `status_set_manual` (mudança manual pela UI do hub) mais recente por HLC, com desempate por `env_id`; evento atrasado fica no histórico
-//!   mas não sobrescreve um status mais novo;
+//!   mas não sobrescreve um status mais novo; um `needs_human` só vale se o
+//!   status anterior o aceita ([`ct_core::next_status`]);
 //! - **atributos de work item** seguem a fotografia mais recente (HLC);
 //! - **sessão**: vale a cópia com `last_event_at` maior (só o dono a altera);
 //! - **revisão de decisão**: vale a primeira.
@@ -21,33 +22,54 @@
 //! `push_quarantine`, reaplicada quando o projeto for cadastrado.
 
 mod agent;
+mod approval;
 mod assignments;
+mod autonomy;
+mod autopilot;
+mod autopilot_run;
 mod config;
+mod digest;
 mod env_keys;
 mod health;
 mod legacy;
+mod model;
 mod priority;
 mod proposals;
 mod push;
+mod release;
 mod rules;
 mod tracker;
 mod views;
 mod web_sessions;
+mod wip;
 
 pub use agent::{
     AgentAssignment, AgentDecision, AgentDecisionFilter, AgentDecisions, AgentEnv, AgentEvent,
     AgentItemRef, AgentNode, AgentOverview, AgentPr, AgentProject, AgentProjectSummary,
     AgentSession, AgentWorkItem,
 };
+pub use approval::ApprovalStatus;
 pub use assignments::{AssignmentAdded, AssignmentFilter, AssignmentState, HubAssignment};
+pub use autopilot_run::{
+    AutopilotEvent, AutopilotSession, AutopilotSettings, CloseState, IdleSession, ParkedSession,
+    WaitingSession, AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN,
+    AUTOPILOT_IDLE_TIMEOUT_MAX_MIN, AUTOPILOT_MAX_CI_ATTEMPTS_CEILING,
+    AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT, AUTOPILOT_MAX_PER_ENV_CEILING,
+    AUTOPILOT_MAX_PER_ENV_DEFAULT, AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN,
+    AUTOPILOT_WAITING_TIMEOUT_MAX_MIN,
+};
 pub use config::{
     DeleteImpact, HubProjectPatch, NewHubProject, ProjectAdded, ProjectProvider, QuarantineGroup,
+};
+pub use digest::{
+    digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
 };
 pub use env_keys::{EnvAssignmentRev, EnvPubkey, EnvSecretsInput};
 pub use health::{
     HealthCounts, HealthFilter, HealthKind, HealthSignal, HealthThresholds, HubHealth, Severity,
 };
 pub use legacy::LegacyAdoption;
+pub use model::IssueAgent;
 pub use priority::{
     HubRanking, HubRankingItem, Placement, RankingFilter, RANKING_LIMIT, RANKING_MAX,
 };
@@ -72,7 +94,7 @@ pub use views::{
     HubHistory, HubLocation, HubProjectView, HubTree, HubTreeItem, HubTreeNode, WorkItemSummary,
 };
 
-use crate::github::{sub_issue_pr_trigger, GhMirror, PrRoute};
+use crate::github::{autonomy_pr_trigger, sub_issue_pr_trigger, GhMirror, PrRoute};
 use crate::schema::migrate_with;
 use crate::sync::project_key;
 use crate::{
@@ -624,6 +646,218 @@ ALTER TABLE sync_state ADD COLUMN me TEXT;
     r#"
 ALTER TABLE project ADD COLUMN session_templates TEXT NOT NULL DEFAULT '{}';
 "#,
+    // 31: política de orçamento do piloto automático por conta do Claude
+    // Code (#180, épico #178): JSON de `ct_core::plan::budget::BudgetPolicy`.
+    // Sem linha = piloto automático desligado para a conta.
+    r#"
+CREATE TABLE autopilot_policy (
+  account_key TEXT PRIMARY KEY,
+  policy      TEXT NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+"#,
+    // 32: modo autônomo (#181): a marca do ambiente que pode rodar sessões
+    // autônomas, o modo no cadastro do projeto (JSON de `AutonomyConfig`,
+    // `{}` = desligado) e o último relato da branch de integração de cada
+    // ambiente (JSON de `AutonomyReport`; vale o do ambiente do modo).
+    r#"
+ALTER TABLE env ADD COLUMN autonomous INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE project ADD COLUMN autonomy_config TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE project_location ADD COLUMN autonomy TEXT;
+"#,
+    // 33: modelo e esforço do agente por work item (#182), colunas só do
+    // hub como a prioridade (a ingestão nunca as escreve; histórico no
+    // evento `model_set`). A proposta ganha o tipo `model` e o valor que o
+    // usuário aprovou quando o alterou (`decided_value`; nulo = o proposto):
+    // o CHECK do `kind` só muda recriando a tabela, com os mesmos índices e
+    // gatilhos da migração 13.
+    r#"
+ALTER TABLE work_item ADD COLUMN model TEXT;
+ALTER TABLE work_item ADD COLUMN effort TEXT;
+
+CREATE TABLE proposal_new (
+  id                INTEGER PRIMARY KEY,
+  uid               TEXT NOT NULL UNIQUE,
+  kind              TEXT NOT NULL CHECK (kind IN ('priority', 'status', 'model')),
+  project_id        INTEGER NOT NULL REFERENCES project(id),
+  gh_number         INTEGER NOT NULL,
+  current_value     TEXT NOT NULL,
+  proposed_value    TEXT NOT NULL,
+  justification     TEXT NOT NULL,
+  state             TEXT NOT NULL DEFAULT 'pendente'
+                    CHECK (state IN ('pendente', 'aprovada', 'rejeitada', 'obsoleta')),
+  env_id            TEXT NOT NULL,
+  session_id        TEXT,
+  created_at        INTEGER NOT NULL,
+  decided_at        INTEGER,
+  decision_note     TEXT,
+  applied_event_uid TEXT,
+  decided_value     TEXT
+);
+INSERT INTO proposal_new (id, uid, kind, project_id, gh_number, current_value, proposed_value,
+                          justification, state, env_id, session_id, created_at, decided_at,
+                          decision_note, applied_event_uid)
+SELECT id, uid, kind, project_id, gh_number, current_value, proposed_value, justification,
+       state, env_id, session_id, created_at, decided_at, decision_note, applied_event_uid
+FROM proposal;
+DROP TABLE proposal;
+ALTER TABLE proposal_new RENAME TO proposal;
+CREATE INDEX proposal_target_idx ON proposal(project_id, gh_number, kind, state);
+CREATE INDEX proposal_state_idx ON proposal(state, created_at);
+CREATE TRIGGER proposal_immutable
+BEFORE UPDATE OF id, uid, kind, project_id, gh_number, current_value, proposed_value,
+  justification, env_id, session_id, created_at ON proposal
+BEGIN SELECT RAISE(ABORT, 'proposta só pode ter a decisão alterada'); END;
+CREATE TRIGGER proposal_decided_once
+BEFORE UPDATE OF state ON proposal
+WHEN OLD.state <> 'pendente'
+BEGIN SELECT RAISE(ABORT, 'proposta já decidida'); END;
+"#,
+    // 34: limite de trabalho em andamento do projeto (#126, épico #178):
+    // JSON de `ct_core::WipLimits` (`max_sessions`, `max_prs`). `{}` = sem
+    // limite.
+    r#"
+ALTER TABLE project ADD COLUMN wip_limits TEXT NOT NULL DEFAULT '{}';
+"#,
+    // 35: rótulo de aprovação do projeto (#124): JSON de
+    // `ct_core::ApprovalConfig` (`label`, `required`). `{}` = o rótulo
+    // padrão (`aprovada`), sem exigir.
+    r#"
+ALTER TABLE project ADD COLUMN approval_config TEXT NOT NULL DEFAULT '{}';
+"#,
+    // 36: agendador do piloto automático (#183, épico #178): o estado
+    // (pausado, sessões autônomas por ambiente), os eventos que o painel
+    // (#185) lê e as sessões estacionadas pelo limite real do plano, que
+    // o agendador retoma depois do `resets_at`.
+    r#"
+CREATE TABLE autopilot_state (
+  id                   INTEGER PRIMARY KEY CHECK (id = 1),
+  paused               INTEGER NOT NULL DEFAULT 0,
+  paused_at            INTEGER,
+  max_sessions_per_env INTEGER NOT NULL DEFAULT 1,
+  updated_at           INTEGER NOT NULL
+);
+CREATE TABLE autopilot_event (
+  id          INTEGER PRIMARY KEY,
+  at          INTEGER NOT NULL,
+  kind        TEXT NOT NULL,
+  scope       TEXT NOT NULL,
+  reason      TEXT,
+  message     TEXT NOT NULL,
+  account_key TEXT,
+  env_id      TEXT,
+  owner       TEXT,
+  repo        TEXT,
+  gh_number   INTEGER,
+  session_id  TEXT
+);
+CREATE INDEX autopilot_event_scope_idx ON autopilot_event(scope, id);
+CREATE INDEX autopilot_event_at_idx ON autopilot_event(at);
+CREATE TABLE autopilot_parked (
+  session_id  TEXT PRIMARY KEY,
+  env_id      TEXT NOT NULL,
+  account_key TEXT NOT NULL,
+  owner       TEXT NOT NULL,
+  repo        TEXT NOT NULL,
+  gh_number   INTEGER NOT NULL,
+  window      TEXT NOT NULL,
+  resume_at   INTEGER NOT NULL,
+  parked_at   INTEGER NOT NULL
+);
+"#,
+    // 37: resumo da manhã do piloto automático (#185, épico #178): um por
+    // dia local (no fuso da política), para nunca sair duas vezes no mesmo
+    // dia. `content` é o JSON de `MorningDigest` (só números, títulos do
+    // espelho, contagens, uso e links; nunca texto do agente).
+    r#"
+CREATE TABLE autopilot_digest (
+  id        INTEGER PRIMARY KEY,
+  local_day INTEGER NOT NULL UNIQUE,
+  at        INTEGER NOT NULL,
+  since     INTEGER NOT NULL,
+  content   TEXT NOT NULL
+);
+"#,
+    // 38: sessão autônoma ociosa (#183, épico #178): minutos que uma
+    // sessão autônoma pode ficar ociosa sem PR antes de o agendador a
+    // encerrar (0 = nunca).
+    r#"
+ALTER TABLE autopilot_state ADD COLUMN idle_timeout_min INTEGER NOT NULL DEFAULT 30;
+"#,
+    // 39: checks do head dos PRs abertos (#129, épico #136), no mesmo
+    // espelho do `ledger.db` (migração 23 de lá), também para o PR da
+    // branch de integração do modo autônomo, que não fica no `pr_cache`.
+    r#"
+CREATE TABLE pr_checks (
+  project_id  INTEGER NOT NULL,
+  pr_number   INTEGER NOT NULL,
+  head        TEXT NOT NULL,
+  base        TEXT NOT NULL,
+  head_sha    TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  checks      TEXT NOT NULL DEFAULT '[]',
+  synced_at   INTEGER NOT NULL,
+  runs_etag   TEXT,
+  status_etag TEXT,
+  PRIMARY KEY (project_id, pr_number)
+);
+"#,
+    // 40: feedback de review dos PRs abertos dos work items (#130, épico
+    // #136): threads não resolvidas e reviews que pedem mudanças
+    // (`pr_review_item`), como a migração 24 do `ledger.db`.
+    // `reviews_updated_at` é o `updated_at` do PR na última leitura (nulo =
+    // nunca lido): o sync só relê o PR que mudou. O gatilho leva os itens
+    // junto quando o PR sai do `pr_cache`.
+    r#"
+CREATE TABLE pr_review_item (
+  project_id         INTEGER NOT NULL,
+  pr_number          INTEGER NOT NULL,
+  kind               TEXT NOT NULL CHECK (kind IN ('thread', 'changes_requested')),
+  node_id            TEXT NOT NULL,
+  path               TEXT,
+  line               INTEGER,
+  outdated           INTEGER NOT NULL DEFAULT 0,
+  author             TEXT NOT NULL,
+  author_association TEXT NOT NULL,
+  body               TEXT NOT NULL,
+  url                TEXT NOT NULL,
+  replies            INTEGER NOT NULL DEFAULT 0,
+  created_at         INTEGER NOT NULL,
+  PRIMARY KEY (project_id, pr_number, kind, node_id)
+);
+ALTER TABLE pr_cache ADD COLUMN reviews_updated_at INTEGER;
+CREATE TRIGGER pr_review_item_cleanup AFTER DELETE ON pr_cache
+BEGIN
+  DELETE FROM pr_review_item WHERE project_id = OLD.project_id AND pr_number = OLD.number;
+END;
+"#,
+    // 41: fechamento autônomo da issue (#184, épico #178): tentativas de
+    // correção do CI por PR de issue autônoma (0 = bloqueia na primeira
+    // falha) e minutos em "Aguardando você" antes de bloquear (0 = nunca),
+    // mais o estado do fechamento por work item: tentativas, o head lido
+    // (e quando, para o repositório sem checks), o último head com o
+    // feedback de falha enviado, as threads de colaborador já enviadas
+    // (JSON), o head com o pedido de merge e o último envio.
+    r#"
+ALTER TABLE autopilot_state ADD COLUMN max_ci_attempts INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE autopilot_state ADD COLUMN waiting_timeout_min INTEGER NOT NULL DEFAULT 20;
+CREATE TABLE autopilot_close (
+  work_item_id  INTEGER PRIMARY KEY,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  head_sha      TEXT,
+  head_seen_at  INTEGER,
+  feedback_head TEXT,
+  threads_sent  TEXT NOT NULL DEFAULT '[]',
+  merge_head    TEXT,
+  last_sent_at  INTEGER,
+  updated_at    INTEGER NOT NULL
+);
+"#,
+    // 42: configuração de release do projeto (#204): JSON de
+    // `ct_core::ReleaseConfig`. `{}` = desligada, com os padrões.
+    r#"
+ALTER TABLE project ADD COLUMN release_config TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -826,6 +1060,25 @@ pub struct HubProject {
     /// rastreador. Ausente num hub anterior: nenhum override.
     #[serde(default)]
     pub session_templates: ct_core::SessionTemplates,
+    /// Modo autônomo do projeto (#181). Ausente num hub anterior: desligado.
+    #[serde(default)]
+    pub autonomy: ct_core::AutonomyConfig,
+    /// Último relato da branch de integração feito pelo ambiente do modo
+    /// (`autonomy.env_id`); `None` = ainda não relatou. Com `state:
+    /// "conflict"`, o projeto mostra o aviso e nenhuma issue autônoma começa.
+    #[serde(default)]
+    pub autonomy_report: Option<ct_core::AutonomyReport>,
+    /// Limite de trabalho em andamento (#126); vazio = sem limite. Ausente
+    /// num hub anterior: sem limite.
+    #[serde(default)]
+    pub wip_limits: ct_core::WipLimits,
+    /// Rótulo de aprovação do projeto (#124). Ausente num hub anterior: o
+    /// rótulo padrão, sem exigir.
+    #[serde(default)]
+    pub approval: ct_core::ApprovalConfig,
+    /// Configuração de release (#204). Ausente num hub anterior: desligada.
+    #[serde(default)]
+    pub release: ct_core::ReleaseConfig,
 }
 
 fn attribution_default() -> bool {
@@ -862,6 +1115,14 @@ pub struct HubWorkItem {
     /// Posição dentro de (projeto, prioridade); nulo = fim da classe.
     #[serde(default)]
     pub rank: Option<i64>,
+    /// Modelo do agente para a sessão da issue (#182): alias de
+    /// `ct_core::CLAUDE_MODELS`; nulo = não definido. Só do hub; ausente
+    /// em hubs anteriores.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Esforço (`ct_core::CLAUDE_EFFORTS`); nulo = padrão do Claude Code.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -940,6 +1201,10 @@ pub struct HubEnv {
     /// `hub.envs.list` e `hub.dashboard.get` (a leitura do banco dá `false`).
     #[serde(default)]
     pub online: bool,
+    /// Marcado como ambiente autônomo (#181): pode rodar as sessões
+    /// autônomas de um projeto. Ausente num hub anterior: não.
+    #[serde(default)]
+    pub autonomous: bool,
 }
 
 /// Resumo do último plano de limpeza de um ambiente (issue #287): vai a cada
@@ -958,9 +1223,12 @@ pub struct CleanupSummary {
 const PROJECT_COLS: &str =
     "id, gh_owner, gh_repo, name, base_branch, protected_branches, created_at, rank, \
      tracker_kind, tracker_config, forge_kind, forge_config, branch_pattern, attribution, \
-     sync_env_id, docs_config, session_templates";
-const WORK_ITEM_COLS: &str =
-    "id, project_id, gh_number, kind, status, branch, created_at, closed_at, priority, rank";
+     sync_env_id, docs_config, session_templates, autonomy_config, \
+     (SELECT l.autonomy FROM project_location l WHERE l.project_id = project.id \
+        AND l.env_id = json_extract(project.autonomy_config, '$.env_id')), \
+     wip_limits, approval_config, release_config";
+const WORK_ITEM_COLS: &str = "id, project_id, gh_number, kind, status, branch, created_at, \
+                              closed_at, priority, rank, model, effort";
 const SESSION_COLS: &str = "id, env_id, work_item_id, tool, tool_session_id, cwd, state, \
                             exit_code, started_at, last_event_at, ended_at, model, mode, \
                             rc_session_id";
@@ -986,6 +1254,13 @@ fn row_to_project(r: &Row) -> rusqlite::Result<HubProject> {
         sync_env_id: r.get(14)?,
         docs: json_col(r, 15)?,
         session_templates: json_col(r, 16)?,
+        autonomy: json_col(r, 17)?,
+        autonomy_report: r
+            .get::<_, Option<String>>(18)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        wip_limits: json_col(r, 19)?,
+        approval: json_col(r, 20)?,
+        release: json_col(r, 21)?,
     })
 }
 
@@ -1001,6 +1276,8 @@ fn row_to_work_item(r: &Row) -> rusqlite::Result<HubWorkItem> {
         closed_at: r.get(7)?,
         priority: opt_parse_col(r, 8)?,
         rank: r.get(9)?,
+        model: r.get(10)?,
+        effort: r.get(11)?,
     })
 }
 
@@ -1316,10 +1593,12 @@ impl Hub {
         // `applied_rev` nunca volta uma atribuição aplicada para pendente.
         self.conn.execute(
             "INSERT INTO project_location
-                (project_id, env_id, repo_path, hlc, state, error, applied_rev, reported_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                (project_id, env_id, repo_path, hlc, state, error, applied_rev, reported_at,
+                 autonomy)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (project_id, env_id) DO UPDATE SET
                 repo_path = excluded.repo_path, removed = 0, hlc = excluded.hlc,
+                autonomy = coalesce(excluded.autonomy, project_location.autonomy),
                 state = CASE WHEN excluded.applied_rev IS NULL
                              THEN project_location.state ELSE excluded.state END,
                 error = CASE WHEN excluded.applied_rev IS NULL
@@ -1337,7 +1616,10 @@ impl Hub {
                 p.state.map(|s| s.as_str()),
                 p.error,
                 p.applied_rev,
-                now_ms()
+                now_ms(),
+                p.autonomy
+                    .as_ref()
+                    .map(|a| serde_json::to_string(a).expect("AutonomyReport serializa"))
             ],
         )?;
         Ok(())
@@ -1486,17 +1768,44 @@ impl Hub {
     }
 
     /// Status = `to` do `status_changed`/`status_set_manual` mais recente por (HLC, env_id).
+    ///
+    /// Exceção: um `status_changed` de causa `needs_human` só vale se o
+    /// status que o hub já tinha o aceita ([`next_status`]); o `from` do
+    /// evento é o status local do ambiente, que pode não ter visto o PR
+    /// ainda. Assim o aviso de espera da sessão ociosa depois do PR não
+    /// volta uma issue `em_revisao` (ou `concluido`) para `aguardando_voce`.
     fn recompute_status(&self, work_item_id: i64) -> Result<()> {
-        let last: Option<(String, i64)> = self
-            .conn
-            .query_row(
-                "SELECT json_extract(payload, '$.to'), ts FROM event
-                 WHERE work_item_id = ?1 AND type IN ('status_changed', 'status_set_manual')
-                 ORDER BY hlc DESC, env_id DESC LIMIT 1",
-                [work_item_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT json_extract(payload, '$.to'), json_extract(payload, '$.cause'), ts FROM event
+             WHERE work_item_id = ?1 AND type IN ('status_changed', 'status_set_manual')
+             ORDER BY hlc DESC, env_id DESC",
+        )?;
+        let mut rows = stmt.query([work_item_id])?;
+        // Pedidos de atenção mais novos que o último status de outra causa.
+        let mut needs_human: Option<(String, i64)> = None;
+        let mut base: Option<(String, i64)> = None;
+        while let Some(r) = rows.next()? {
+            let (to, cause, ts): (String, Option<String>, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
+            if cause.as_deref() == Some(WorkItemTrigger::NeedsHuman.as_str()) {
+                needs_human.get_or_insert((to, ts));
+                continue;
+            }
+            base = Some((to, ts));
+            break;
+        }
+        drop(rows);
+        drop(stmt);
+        let last = match (base, needs_human) {
+            (Some((to, ts)), Some(nh)) => {
+                let current: WorkItemStatus = to.parse()?;
+                if next_status(current, WorkItemTrigger::NeedsHuman).is_some() {
+                    Some(nh)
+                } else {
+                    Some((to, ts))
+                }
+            }
+            (base, nh) => base.or(nh),
+        };
         let Some((to, ts)) = last else {
             return Ok(());
         };
@@ -1698,11 +2007,18 @@ impl Hub {
         // Como no ambiente: o PR para a branch de um épico é da sub-issue, e
         // o merge do PR do épico conclui no fim as que o aguardam (#454).
         let mut merged = Vec::new();
+        // E a branch de integração do modo autônomo (#181): o PR dela para a
+        // base, mesclado, conclui no fim as issues que entraram nela.
+        let mut integration = Vec::new();
         for pr in &s.prs {
             let route = self.gh().route_pr(s.project_id, pr, &s.issues)?;
             let pr = &match route {
-                PrRoute::Comum => pr.clone(),
+                PrRoute::Comum | PrRoute::Autonomia => pr.clone(),
                 PrRoute::Ignorado => continue,
+                PrRoute::Integracao => {
+                    integration.push(pr);
+                    continue;
+                }
                 PrRoute::SubIssue { sub } => {
                     let wi = self.ensure_work_item(&owner, &repo, sub)?;
                     self.conn.execute(
@@ -1719,6 +2035,7 @@ impl Hub {
             out.prs += 1;
             let trigger = match route {
                 PrRoute::SubIssue { .. } => sub_issue_pr_trigger(prev, pr.state),
+                PrRoute::Autonomia => autonomy_pr_trigger(prev, pr.state),
                 _ => pr_trigger(prev, pr.state),
             };
             let Some(trigger) = trigger else {
@@ -1794,6 +2111,30 @@ impl Hub {
                 }
             }
         }
+        for pr in integration {
+            if pr.state != ct_core::PrState::Merged {
+                continue;
+            }
+            for (wi, n) in self
+                .gh()
+                .merged_into(s.project_id, &pr.head, pr.updated_at)?
+            {
+                let trigger = WorkItemTrigger::AutonomyMerged;
+                let status = self.work_item_status(wi)?;
+                if let Some(next) = next_status(status, trigger) {
+                    self.gh_event(
+                        env_id,
+                        s.project_id,
+                        wi,
+                        &gh_epic_merged_uid(&owner, &repo, pr.number, n),
+                        "status_changed",
+                        json!({ "from": status, "to": next, "cause": trigger.as_str() }),
+                    )?;
+                    self.recompute_status(wi)?;
+                    out.status_changes.push((wi, next));
+                }
+            }
+        }
         // Como no ambiente (#89): a issue que sumiu do GitHub sai do espelho
         // do hub, e o work item dela conclui com o motivo no evento.
         for g in &s.gone {
@@ -1827,6 +2168,9 @@ impl Hub {
             )?;
             self.recompute_status(wi)?;
             out.status_changes.push((wi, WorkItemStatus::Concluido));
+        }
+        if let Some(c) = &s.pr_checks {
+            self.gh().apply_checks(s.project_id, c, s.synced_at)?;
         }
         self.gh().finish_ok(s)?;
         tx.commit()?;
@@ -1919,6 +2263,39 @@ impl Hub {
 
     pub fn etag(&self, key: &str) -> Result<Option<String>> {
         self.gh().etag(key)
+    }
+
+    /// PRs abertos do projeto no espelho, por número.
+    pub fn open_prs(&self, project_id: i64) -> Result<Vec<PrRow>> {
+        self.gh().open_prs(project_id)
+    }
+
+    /// Checks do head do PR `number` no espelho do hub (#129); `None` = PR
+    /// fechado, fora do espelho ou ainda não lido.
+    pub fn pr_checks(&self, project_id: i64, number: i64) -> Result<Option<crate::PrChecks>> {
+        self.gh().pr_checks(project_id, number)
+    }
+
+    /// Checks dos PRs abertos do work item, do PR mais recente ao mais
+    /// antigo (#129).
+    pub fn pr_checks_for_work_item(&self, work_item_id: i64) -> Result<Vec<crate::PrChecks>> {
+        self.gh().pr_checks_for_work_item(work_item_id)
+    }
+
+    /// Checks de todos os PRs abertos do projeto no espelho, por número.
+    pub fn list_pr_checks(&self, project_id: i64) -> Result<Vec<crate::PrChecks>> {
+        self.gh().list_pr_checks(project_id)
+    }
+
+    /// Checks do PR aberto `head → base` (#129): o da branch de integração
+    /// do modo autônomo para a base, que não fica no `pr_cache`.
+    pub fn pr_checks_by_head(
+        &self,
+        project_id: i64,
+        head: &str,
+        base: &str,
+    ) -> Result<Option<crate::PrChecks>> {
+        self.gh().pr_checks_by_head(project_id, head, base)
     }
 
     /// Registra quantas mudanças o ambiente ainda tem no outbox.
@@ -2412,7 +2789,7 @@ impl Hub {
     pub fn list_envs(&self) -> Result<Vec<HubEnv>> {
         let mut stmt = self.conn.prepare(
             "SELECT env_id, name, created_at, last_seen_at, last_seq, pending,
-                    cleanup_checked_at, cleanup_items, cleanup_bytes FROM env
+                    cleanup_checked_at, cleanup_items, cleanup_bytes, autonomous FROM env
              WHERE last_seen_at IS NOT NULL ORDER BY name",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -2430,6 +2807,7 @@ impl Hub {
                     bytes: r.get::<_, Option<i64>>(8).ok().flatten().unwrap_or(0),
                 }),
                 online: false,
+                autonomous: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -3027,6 +3405,119 @@ mod tests {
     }
 
     #[test]
+    fn needs_human_do_ambiente_nao_volta_a_issue_em_revisao() {
+        use ct_core::WorkItemStatus::*;
+        let hub = hub_com("o", "r");
+        let mk = |hlc, env: &str, from: &str, to: &str, cause: &str| OutboxEntry {
+            seq: 1,
+            created_at: 0,
+            change: SyncChange::Event(EventChange {
+                uid: format!("u{hlc}"),
+                env_id: env.into(),
+                hlc,
+                ts: 1_000,
+                owner: "o".into(),
+                repo: "r".into(),
+                gh_number: Some(1),
+                session_id: None,
+                kind: "status_changed".into(),
+                payload: serde_json::json!({ "from": from, "to": to, "cause": cause }),
+            }),
+        };
+        let status = || hub.find_work_item("o", "r", 1).unwrap().unwrap().status;
+        hub.ingest(
+            "env-a",
+            "a",
+            &[mk(
+                hlc::from_ms(1_000),
+                "env-a",
+                "backlog",
+                "em_execucao",
+                "session_active",
+            )],
+        )
+        .unwrap();
+        // O hub viu o PR aberto (R3-1, #178).
+        hub.ingest(
+            "env-hub",
+            "hub",
+            &[mk(
+                hlc::from_ms(2_000),
+                "env-hub",
+                "em_execucao",
+                "em_revisao",
+                "pr_opened",
+            )],
+        )
+        .unwrap();
+        // O aviso de espera da sessão ociosa chega depois, com o `from` do
+        // ambiente, que ainda não viu o PR: não volta a issue.
+        let aviso = mk(
+            hlc::from_ms(3_000),
+            "env-a",
+            "em_execucao",
+            "aguardando_voce",
+            "needs_human",
+        );
+        hub.ingest("env-a", "a", &[aviso]).unwrap();
+        assert_eq!(status(), EmRevisao);
+        // A pessoa retoma a sessão: a atividade reabre a execução, e o
+        // pedido seguinte vale de novo.
+        hub.ingest(
+            "env-a",
+            "a",
+            &[mk(
+                hlc::from_ms(4_000),
+                "env-a",
+                "aguardando_voce",
+                "em_execucao",
+                "session_active",
+            )],
+        )
+        .unwrap();
+        assert_eq!(status(), EmExecucao);
+        hub.ingest(
+            "env-a",
+            "a",
+            &[mk(
+                hlc::from_ms(5_000),
+                "env-a",
+                "em_execucao",
+                "aguardando_voce",
+                "needs_human",
+            )],
+        )
+        .unwrap();
+        assert_eq!(status(), AguardandoVoce);
+        // Concluída também não volta.
+        hub.ingest(
+            "env-hub",
+            "hub",
+            &[mk(
+                hlc::from_ms(6_000),
+                "env-hub",
+                "aguardando_voce",
+                "concluido",
+                "pr_merged",
+            )],
+        )
+        .unwrap();
+        hub.ingest(
+            "env-a",
+            "a",
+            &[mk(
+                hlc::from_ms(7_000),
+                "env-a",
+                "em_execucao",
+                "aguardando_voce",
+                "needs_human",
+            )],
+        )
+        .unwrap();
+        assert_eq!(status(), Concluido);
+    }
+
+    #[test]
     fn revisao_de_decisao_vale_a_primeira() {
         let hub = hub_com("deep-ion-ai", "demo");
         let a = ledger("/a");
@@ -3495,6 +3986,7 @@ mod tests {
                 synced_at: 5,
                 gone: Vec::new(),
                 me: None,
+                pr_checks: None,
             },
             "hub",
         )
@@ -4015,6 +4507,7 @@ mod tests {
             synced_at: 5,
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         };
         let r = hub
             .apply_github(&snap(vec![pr(PrState::Open)], vec![issue("open")]), "hub")
@@ -4159,6 +4652,7 @@ mod tests {
                 forge: ForgeConfig::Github,
                 branch_pattern: None,
                 attribution: true,
+                autonomy: None,
             }),
         }
     }
@@ -4795,7 +5289,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 30);
+        assert_eq!(v, 42);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
@@ -4819,6 +5313,66 @@ mod tests {
         assert_eq!(contar(&hub, "agent_token"), 0);
         assert!(hub.env_pubkey("env-nb").unwrap().is_none());
         assert_eq!(contar(&hub, "env_token"), 0);
+    }
+
+    /// Migração 33 (#182) num `hub.db` da migração 32: as propostas
+    /// existentes ficam como estavam (com os gatilhos), o tipo `model` passa
+    /// a valer e os work items ficam sem modelo.
+    #[test]
+    fn migracao_33_mantem_as_propostas_e_aceita_o_tipo_model() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("hub.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            for m in &HUB_MIGRATIONS[..32] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.execute_batch(
+                "PRAGMA user_version = 32;
+                 INSERT INTO project (key, gh_owner, gh_repo, name, created_at, rev)
+                   VALUES ('acme/acme-web', 'acme', 'acme-web', 'acme-web', 1, 1);
+                 INSERT INTO work_item (project_id, gh_number, kind, status, created_at)
+                   SELECT id, 7, 'issue', 'backlog', 1 FROM project WHERE key = 'acme/acme-web';
+                 INSERT INTO proposal (uid, kind, project_id, gh_number, current_value,
+                                       proposed_value, justification, state, env_id, created_at,
+                                       decided_at)
+                   SELECT 'p-1', 'priority', id, 7, '{\"priority\":null}', '{\"priority\":\"P1\"}',
+                          'urgente', 'aprovada', 'env-a', 1, 2
+                   FROM project WHERE key = 'acme/acme-web';",
+            )
+            .unwrap();
+        }
+        let hub = Hub::open(&db).unwrap();
+        let p = hub.proposal(1).unwrap().unwrap();
+        assert_eq!(
+            (p.uid.as_str(), p.state, p.chosen),
+            ("p-1", ct_core::ProposalState::Aprovada, None)
+        );
+        let w = hub.find_work_item("acme", "acme-web", 7).unwrap().unwrap();
+        assert_eq!((w.model, w.effort), (None, None));
+        hub.conn
+            .execute(
+                "INSERT INTO proposal (uid, kind, project_id, gh_number, current_value,
+                                       proposed_value, justification, env_id, created_at)
+                 VALUES ('p-2', 'model', ?1, 7, '{}', '{}', 'j', 'env-a', 3)",
+                [w.project_id],
+            )
+            .unwrap();
+        // Gatilhos recriados.
+        assert!(hub
+            .conn
+            .execute(
+                "UPDATE proposal SET state = 'pendente' WHERE uid = 'p-1'",
+                []
+            )
+            .is_err());
+        assert!(hub
+            .conn
+            .execute(
+                "UPDATE proposal SET justification = 'x' WHERE uid = 'p-2'",
+                []
+            )
+            .is_err());
     }
 
     /// Migração 24 num `hub.db` da migração 23: as issues já espelhadas

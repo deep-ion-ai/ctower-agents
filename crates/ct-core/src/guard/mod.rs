@@ -8,6 +8,7 @@ pub mod closes;
 pub mod gestor;
 pub mod glab;
 pub mod jira;
+pub mod release;
 pub mod tokenize;
 
 use tokenize::split_segments;
@@ -48,6 +49,10 @@ pub struct GuardContext<'a> {
     /// em `git -C <dir>`, `--git-dir`, `--work-tree` ou `cd <dir>`; relativo ao
     /// cwd quando não absoluto). `None` se desconhecida ou HEAD destacado.
     pub head_of: &'a dyn Fn(&str) -> Option<String>,
+    /// Sessão autônoma (#184): a branch de integração do modo autônomo do
+    /// projeto (`CTOWER_AUTONOMY_BRANCH`). Com ela, `gh pr merge` só vale
+    /// para PR cuja base é esta branch. `None` = sessão comum.
+    pub integration: Option<&'a str>,
 }
 
 impl GuardContext<'_> {
@@ -361,7 +366,25 @@ fn check_gh(args: &[String], ctx: &GuardContext) -> Verdict {
                 ));
             }
         };
-        return match (ctx.pr_base)(target.as_deref()) {
+        let base = (ctx.pr_base)(target.as_deref());
+        if let Some(integration) = ctx.integration {
+            // Sessão autônoma (#184): o merge automático só vale na branch
+            // de integração. Sem número, `gh pr view` (o `pr_base`) resolve o
+            // mesmo PR da branch atual que o `gh pr merge` usaria; base
+            // desconhecida bloqueia.
+            return match base {
+                Some(b) if b == integration => Verdict::Allow,
+                Some(b) => Verdict::Block(format!(
+                    "numa sessão autônoma, `gh pr merge` só vale para PR com base `{integration}` \
+                     (a branch de integração do modo autônomo); este PR tem base `{b}`"
+                )),
+                None => Verdict::Block(format!(
+                    "numa sessão autônoma, `gh pr merge` só vale para PR com base \
+                     `{integration}`, e não foi possível conferir a base deste PR"
+                )),
+            };
+        }
+        return match base {
             Some(base) if !ctx.is_protected(&base) => Verdict::Allow,
             Some(base) => {
                 Verdict::Block(format!("`gh pr merge` em PR com base protegida `{base}`"))
@@ -422,6 +445,14 @@ fn check_gh_api(args: &[String]) -> Verdict {
             _ => merge_path |= a.trim_end_matches('/').ends_with("/merge"),
         }
     }
+    // Mutação GraphQL de merge (`gh api graphql -f query='mutation {
+    // mergePullRequest(...) }'`), em qualquer argumento.
+    if args
+        .iter()
+        .any(|a| a.contains("mergePullRequest") || a.contains("enablePullRequestAutoMerge"))
+    {
+        return Verdict::Block("merge de PR via `gh api graphql`".into());
+    }
     let non_get = method.is_some_and(|m| !m.eq_ignore_ascii_case("GET"));
     if merge_path && (non_get || writes) {
         Verdict::Block("merge de PR via `gh api`".into())
@@ -448,6 +479,7 @@ mod tests {
                 protected: &p,
                 pr_base: &base,
                 head_of: &|_| None,
+                integration: None,
             },
         )
     }
@@ -463,6 +495,7 @@ mod tests {
                 protected: &p,
                 pr_base: &base,
                 head_of: &|_| None,
+                integration: None,
             },
         )
     }
@@ -607,8 +640,58 @@ mod tests {
         )));
     }
 
+    fn check_autonomous(cmd: &str, pr_base: Option<&str>) -> Verdict {
+        let p = protected();
+        let b = pr_base.map(str::to_string);
+        let base = move |_: Option<&str>| b.clone();
+        check_command(
+            cmd,
+            &GuardContext {
+                head_branch: Some("feat/7-login"),
+                protected: &p,
+                pr_base: &base,
+                head_of: &|_| None,
+                integration: Some("wip/autonoma"),
+            },
+        )
+    }
+
+    /// #184: numa sessão autônoma, o merge só vale na branch de integração,
+    /// com ou sem o número do PR; base desconhecida bloqueia.
+    #[test]
+    fn sessao_autonoma_so_mescla_na_branch_de_integracao() {
+        for cmd in [
+            "gh pr merge 5 --rebase",
+            "gh pr merge --rebase",
+            "gh pr merge",
+        ] {
+            assert_eq!(
+                check_autonomous(cmd, Some("wip/autonoma")),
+                Verdict::Allow,
+                "{cmd}"
+            );
+        }
+        for base in ["develop", "main", "wip/12-auth"] {
+            match check_autonomous("gh pr merge 5 --rebase", Some(base)) {
+                Verdict::Block(m) => {
+                    assert!(m.contains("wip/autonoma") && m.contains(base), "{m}")
+                }
+                v => panic!("{base}: {v:?}"),
+            }
+        }
+        assert!(blocked(&check_autonomous("gh pr merge 5", None)));
+        assert!(blocked(&check_autonomous(
+            "gh api -X PUT repos/o/r/pulls/5/merge",
+            Some("wip/autonoma")
+        )));
+    }
+
     #[test]
     fn gh_api_de_merge_bloqueia() {
+        assert!(blocked(&check_on(
+            Some("wip/12-auth"),
+            "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'"
+        )));
         assert!(blocked(&check_on(
             Some("wip/12-auth"),
             "gh api -X PUT repos/o/r/pulls/5/merge"
@@ -639,6 +722,7 @@ mod tests {
                 protected: &p,
                 pr_base: &base,
                 head_of: &head_of,
+                integration: None,
             },
         )
     }
@@ -657,6 +741,7 @@ mod tests {
                 protected: &p,
                 pr_base: &base,
                 head_of: &|_| None,
+                integration: None,
             },
         );
         (v, seen.into_inner())

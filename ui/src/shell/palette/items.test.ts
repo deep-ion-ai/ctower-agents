@@ -36,6 +36,8 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Hub › Token do GitHub",
     "Hub › Sessões web",
     "Hub › Dispositivos",
+    "Hub › Painel do piloto",
+    "Hub › Orçamento do plano",
     // Seções da Manutenção (#335).
     "Manutenção › Visão geral",
     "Manutenção › Atualizações › Este app",
@@ -156,7 +158,7 @@ test("hub no ar: issues do hub completadas com o projeto local; projeto do gesto
     projects: [
       {
         project: hubProject({ gh_owner: "Deep-Ion-AI" }),
-        work_items: [{ ...workItem({ gh_number: 40, title: "Só no hub" }), priority: null, rank: null }],
+        work_items: [{ ...workItem({ gh_number: 40, title: "Só no hub" }), priority: null, rank: null, model: null, effort: null }],
       },
       { project: hubProject({ id: 2, gh_repo: "outro", name: "outro" }), work_items: [] },
     ],
@@ -210,6 +212,7 @@ test("web: sem os lugares e comandos exclusivos do desktop (#201)", () => {
     "Hub › Ambientes",
     "Hub › Sessões web",
     "Hub › Dispositivos",
+    "Hub › Painel do piloto",
     "Logs",
     "Configurações › Aparência",
     "Configurações › Plano da conta",

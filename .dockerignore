@@ -1,0 +1,8 @@
+**/target
+**/node_modules
+ui/dist
+ui/dist-web
+.git
+.superpowers
+**/*.log
+**/.DS_Store

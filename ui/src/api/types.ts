@@ -67,6 +67,8 @@ export interface Templates {
   jira_issue: string;
   jira_epic: string;
   jira_project: string;
+  /** Sessão de release (#204), só GitHub; ausente num ui.json antigo: o padrão. */
+  release: string;
 }
 
 export interface NotifyPrefs {

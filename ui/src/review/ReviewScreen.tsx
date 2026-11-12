@@ -1,6 +1,6 @@
 import "./review.css";
 import { GESTOR_LABEL } from "../control-room/attention";
-import { changeLabel, changeLabels, changeRef, forgeLabel, isGitlabProject, itemRef, itemShort, PROJECT_ITEM } from "../util/item";
+import { changeLabel, changeLabels, changeRef, forgeLabel, isGitlabProject, itemRef, itemShort, noIssue } from "../util/item";
 import { useCallback, useEffect, useId, useState } from "react";
 import type { Decision, PrComment, Review } from "../protocol/gen";
 import type { HubHistory } from "../protocol/hub-gen";
@@ -9,6 +9,7 @@ import { useTower } from "../state/tower";
 import { Icon } from "../shell/icons";
 import { SideContent, SideGroup, SidePanel, SideRow } from "../shell/SidePanel";
 import { prUrl } from "../terminal/TerminalScreen";
+import { diffBlocked, diffTab } from "../diff/diff";
 import { reviewKey, useReviewUi, useReviews, type ReviewFilter } from "./ui-store";
 import { entryName, markPr, markReviewed, openPr, projectEntries, useReviewEntries, type ReviewEntry } from "./entries";
 
@@ -81,7 +82,7 @@ export function ReviewScreen({ env, workItemId }: { env?: string; workItemId?: n
                   e,
                   e.gestor
                     ? "decisões autônomas do gestor"
-                    : e.ghNumber === PROJECT_ITEM
+                    : noIssue(e.ghNumber)
                       ? "sessões sem issue associada"
                       : `sem ${changeLabel(e.project)} aberto`,
                 ),
@@ -119,7 +120,8 @@ const FILTERS: { id: ReviewFilter; label: string }[] = [
 ];
 
 function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) {
-  const { api, dashboards, hub } = useTower();
+  const { api, dashboards, hub, infos, status, envs } = useTower();
+  const nav = useNav();
   const [review, setReview] = useState<Review | null>(null);
   const [history, setHistory] = useState<HubHistory | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +134,7 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
   const dwi = dproject?.work_items.find((w) => w.id === workItemId);
   const gestor = dashboards[env]?.gestor_work_item_id === workItemId;
   // Orientadas e revisadas só existem no histórico do hub (`review.get` traz as pendentes).
-  const withHistory = hub.up && !gestor && !!project && !!dwi && dwi.gh_number !== PROJECT_ITEM;
+  const withHistory = hub.up && !gestor && !!project && !!dwi && !noIssue(dwi.gh_number);
 
   const load = useCallback(async () => {
     try {
@@ -169,6 +171,7 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
   }, [loadHistory]);
 
   const pr = markPr(review ?? undefined);
+  const diffOff = diffBlocked(dwi, infos[env], status[env]?.connected !== false, envs.find((e) => e.id === env)?.name ?? env);
   const pending = review?.decisions ?? [];
   const n = pending.length;
   const guided = history?.decisions.filter((d) => d.origin === "orientada") ?? [];
@@ -237,7 +240,7 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
     <section className="review-detail" aria-label={name}>
       <div className="review-head">
         <h1>
-          {!gestor && dwi && dwi.gh_number !== PROJECT_ITEM ? (
+          {!gestor && dwi && !noIssue(dwi.gh_number) ? (
             <>
               <span className="mono review-num">{itemRef(dwi.gh_number, project)}</span> {dwi.title ?? ""}
             </>
@@ -246,6 +249,18 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
           )}
         </h1>
         <span className="review-spacer" />
+        {/* Diff do código ao lado das decisões (#168): o item com PR aberto. */}
+        {!gestor && pr?.state === "open" && dwi && (
+          <button
+            type="button"
+            className="btn"
+            disabled={diffOff !== null}
+            title={diffOff ?? "Ver o diff do código da worktree"}
+            onClick={() => nav.openTab(diffTab(env, workItemId, itemShort(project, dwi.gh_number)))}
+          >
+            Ver diff
+          </button>
+        )}
         {!gestor && (
           <button type="button" className="btn" onClick={() => void open(url)} disabled={!url}>
             {pr ? `Abrir ${changeRef(project, pr.number)}` : `Abrir ${change} no ${forge}`}

@@ -161,6 +161,8 @@ backlog → em_execucao → aguardando_voce → em_revisao → concluido
 
 Mudanças manuais prevalecem até o próximo gatilho automático de natureza diferente.
 
+O hook `Notification` não volta um item `em_revisao` ou `concluido` para `aguardando_voce`: com o PR aberto, a vez já é de quem revisa, e o aviso de espera que o Claude Code manda quando a sessão fica ociosa depois do PR não é uma pergunta pendente. O evento `needs_human` continua registrado (e avisa a pessoa). Se ela retoma a sessão (`UserPromptSubmit`), o item volta a `em_execucao` e o pedido seguinte vale de novo. O hub aplica a mesma regra contra o status que ele já tem, não contra o `from` do evento, que é o status local do ambiente e pode não ter visto o PR ainda.
+
 ### Sessão
 
 ```
@@ -267,8 +269,10 @@ Servidor MCP em `/mcp` (transporte HTTP streamable). A sessão é identificada p
 | `ledger_list_decisions` | `scope?` (`work_item` padrão \| `epic` \| `project`) | lista decisões |
 | `ledger_set_status` | `status` (`bloqueado`\|`pausado`\|`em_execucao`), `reason` | muda status do work item + evento |
 | `ledger_get_context` | — | retorna work item, branch, branch protegidas, issue pai (épico) |
+| `pr_feedback` | — | checks e review do PR do work item, do espelho (#133); sem PR, `has_pr: false` |
+| `pr_check_log` | `check` (nome ou `job_id`) \| `job_id`, `max_bytes?` (padrão 24 KiB, até 32 KiB) | trecho final do log de um check do espelho, lido na hora no Actions (#133) |
 
-Instruções do servidor MCP orientam o agente: usar `orientada` quando a decisão veio do humano na conversa, `autonoma` caso contrário.
+Instruções do servidor MCP orientam o agente: usar `orientada` quando a decisão veio do humano na conversa, `autonoma` caso contrário. A lista completa e atual das ferramentas está em docs/ambiente.md ("Ferramentas MCP do agente").
 
 ## 9. Protocolo UI ⇄ daemon
 

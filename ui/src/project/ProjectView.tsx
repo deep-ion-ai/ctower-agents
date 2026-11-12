@@ -23,7 +23,16 @@ import { itemTab } from "./tabs";
 import { DEFAULT_PAGE, PROJECT_PAGES, PROJECT_PAGE_LABEL, projectAt, type ProjectPage, type ProjectSettingsSection } from "./sections";
 import { TreeControls } from "./TreeControls";
 import { ProviderIcon } from "./ProviderIcon";
-import { decisionsTitle, mergedOpen, mergedOpenText, rowLabel } from "./TreeRow";
+import {
+  ApprovalBadge,
+  decisionsTitle,
+  MISSING_MODEL_TEXT,
+  mergedOpen,
+  mergedOpenText,
+  missingModel,
+  rowLabel,
+} from "./TreeRow";
+import { AWAITING_APPROVAL_TEXT, awaitingApproval, type ApprovalProject } from "./approval";
 import {
   ACTIVE_SPRINT,
   ALL_SPRINTS,
@@ -80,7 +89,7 @@ export interface ProjectViewProps<T extends ProjectNode> {
   uiKey: string;
   name: string;
   /** Com rastreador e forja, para as referências (#352); sem eles, GitHub. */
-  project: (ProviderProject & { base_branch: string; protected_branches: string[] }) | null;
+  project: (ProviderProject & ApprovalProject & { base_branch: string; protected_branches: string[] }) | null;
   /** Árvore do projeto atual (`null` enquanto carrega ou na troca de projeto). */
   roots: T[] | null;
   syncedAt: number | null;
@@ -256,6 +265,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     const prio = priorityOf(n);
     const sprint = jira ? currentSprint(n.issue) : null;
     const warn = mergedOpen(n, baseBranch);
+    const noModel = !epic && missingModel(n, prov);
     const change = changeRef(prov, n.summary.pr?.number ?? 0);
     const base = epic
       ? [
@@ -264,6 +274,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
           `${epic.done} de ${n.children.length} concluídas`,
           ...(n.summary.decisions.total > 0 ? [decisionsTitle(n.summary.decisions)] : []),
           ...(warn ? [mergedOpenText(prov)] : []),
+          ...(awaitingApproval(n, prov) ? [AWAITING_APPROVAL_TEXT] : []),
         ].join(", ")
       : rowLabel(n, now, baseBranch, prov);
     const label = live ? `${base}, sessão viva em ${live}` : base;
@@ -314,6 +325,16 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
               !
             </span>
           )}
+          {noModel && (
+            <span
+              className="pj-nomodel"
+              aria-hidden="true"
+              title="Projeto autônomo: defina o modelo e o esforço da issue para o piloto automático iniciá-la"
+            >
+              {MISSING_MODEL_TEXT}
+            </span>
+          )}
+          <ApprovalBadge node={n} project={prov} />
           {live && <span className="pj-live" aria-hidden="true" title={`sessão viva em ${live}`} />}
           <span className="sp-row-trailing" aria-hidden="true">
             {epic ? `${epic.done}/${n.children.length}` : (prio ?? "")}

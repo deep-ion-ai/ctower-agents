@@ -1,0 +1,373 @@
+/* Visualizador de diff (#168). As cores (--dv-*, --hl-*) ficam no theme.css. */
+.dv {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  font-size: 13px;
+}
+
+.dv-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 16px;
+  padding: 14px 24px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dv-id {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.dv-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dv-where {
+  margin: 4px 0 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.dv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dv-seg {
+  display: inline-flex;
+}
+
+.dv-seg .btn {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.dv-seg .btn:first-child {
+  border-radius: 6px 0 0 6px;
+  margin-left: 0;
+}
+
+.dv-seg .btn:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.dv-seg .btn[aria-pressed="true"] {
+  background: var(--selected);
+  border-color: var(--accent);
+}
+
+.dv-commit {
+  max-width: 420px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--btn-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.dv-error,
+.dv-note {
+  margin: 10px 24px 0;
+}
+
+.dv-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.dv-files {
+  flex: 0 0 300px;
+  min-width: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  padding: 10px 8px;
+}
+
+.dv-files ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dv-count {
+  margin: 0 6px 8px;
+  font-size: 12px;
+}
+
+.dv-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dv-file:hover {
+  background: var(--hover);
+}
+
+.dv-file[aria-current="true"] {
+  background: var(--selected);
+}
+
+.dv-fname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dv-fstat {
+  flex: none;
+  font-size: 11px;
+}
+
+.dv-st {
+  flex: none;
+  width: 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--muted);
+}
+
+.dv-st[data-status="added"] {
+  color: var(--dv-add-fg);
+}
+
+.dv-st[data-status="deleted"] {
+  color: var(--dv-del-fg);
+}
+
+.dv-st[data-status="renamed"],
+.dv-st[data-status="copied"],
+.dv-st[data-status="modified"] {
+  color: var(--attention);
+}
+
+.dv-add {
+  color: var(--dv-add-fg);
+}
+
+.dv-del {
+  color: var(--dv-del-fg);
+}
+
+.dv-patch {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.dv-fhead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.dv-fhead-path {
+  overflow-wrap: anywhere;
+}
+
+.dv-summary,
+.dv-empty {
+  margin: 0;
+  padding: 16px;
+}
+
+.dv-summary p {
+  margin: 0 0 8px;
+}
+
+.dv-patch .ib-error {
+  padding: 16px;
+}
+
+.dv-notes {
+  padding: 8px 16px 0;
+  font-size: 12px;
+}
+
+.dv-notes p {
+  margin: 0;
+}
+
+.dv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dv-split {
+  table-layout: fixed;
+}
+
+.dv-split col,
+.dv-split .dv-no {
+  width: 48px;
+}
+
+.dv-table td {
+  padding: 0 8px;
+  vertical-align: top;
+}
+
+.dv-no {
+  width: 1%;
+  min-width: 40px;
+  color: var(--faint);
+  text-align: right;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.dv-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.dv-code code {
+  font: inherit;
+}
+
+.dv-sign {
+  display: inline-block;
+  width: 1.2ch;
+  color: var(--faint);
+  user-select: none;
+}
+
+.dv-hunk td {
+  padding: 2px 8px;
+  background: var(--dv-hunk-bg);
+  color: var(--dv-hunk-fg);
+}
+
+tr.dv-add,
+td.dv-code.dv-add {
+  background: var(--dv-add-bg);
+}
+
+tr.dv-add .dv-no,
+td.dv-no.dv-add {
+  background: var(--dv-add-no);
+}
+
+tr.dv-del,
+td.dv-code.dv-del {
+  background: var(--dv-del-bg);
+}
+
+tr.dv-del .dv-no,
+td.dv-no.dv-del {
+  background: var(--dv-del-no);
+}
+
+td.dv-empty {
+  background: var(--dv-empty-bg);
+}
+
+.dv-meta {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Realce de sintaxe (classes do highlight.js). */
+.dv-code .hljs-keyword,
+.dv-code .hljs-selector-tag,
+.dv-code .hljs-built_in,
+.dv-code .hljs-literal {
+  color: var(--hl-keyword);
+}
+
+.dv-code .hljs-string,
+.dv-code .hljs-regexp,
+.dv-code .hljs-addition {
+  color: var(--hl-string);
+}
+
+.dv-code .hljs-number,
+.dv-code .hljs-symbol {
+  color: var(--hl-number);
+}
+
+.dv-code .hljs-comment,
+.dv-code .hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.dv-code .hljs-title,
+.dv-code .hljs-section {
+  color: var(--hl-title);
+}
+
+.dv-code .hljs-type,
+.dv-code .hljs-class {
+  color: var(--hl-type);
+}
+
+.dv-code .hljs-attr,
+.dv-code .hljs-attribute,
+.dv-code .hljs-variable,
+.dv-code .hljs-property,
+.dv-code .hljs-name {
+  color: var(--hl-attr);
+}
+
+.dv-code .hljs-meta,
+.dv-code .hljs-tag,
+.dv-code .hljs-deletion {
+  color: var(--hl-meta);
+}
+
+/* Tela estreita (celular): a lista vai para cima do diff. */
+@media (max-width: 720px) {
+  .dv-head {
+    padding: 12px 16px;
+  }
+
+  .dv-body {
+    flex-direction: column;
+  }
+
+  .dv-files {
+    flex: 0 0 auto;
+    max-height: 35vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}

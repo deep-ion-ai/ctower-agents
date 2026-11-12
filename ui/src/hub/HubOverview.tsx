@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
-import type { HealthSignal, HubHealth } from "../protocol/hub-gen";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import type { HealthSignal, HubHealth, MorningDigest } from "../protocol/hub-gen";
+import { ciText, digestCounts, usageText } from "./autopilot";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 import { ago } from "../util/time";
@@ -54,6 +55,7 @@ export function HubOverview({
       <div className="hub-cards">
         <Warnings />
         <PendingProposals data={proposals} open={open} />
+        <MorningDigestCard now={now} open={open} />
         {/* PWA (#444): sem Manutenção, o estado do backup dos docs fica aqui, só leitura. */}
         {web && <DocsBackupReadOnly now={now} />}
       </div>
@@ -145,6 +147,91 @@ function PendingProposals({ data, open }: { data: ProposalsData; open(s: HubSect
         </ul>
       )}
       <ProposalNote note={note} />
+    </Card>
+  );
+}
+
+/**
+ * Resumo da manhã do piloto automático (#185): o último que o hub gerou
+ * (`hub.autopilot.digest`), relido pelo push `hub.autopilot.changed`. Sem
+ * resumo (ou hub anterior à 1.20), o card não aparece.
+ */
+function MorningDigestCard({ now, open }: { now: number; open(s: HubSection): void }) {
+  const { api, hub } = useTower();
+  const [digest, setDigest] = useState<MorningDigest | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await api.hubCall<MorningDigest[]>("hub.autopilot.digest", { limit: 1 });
+      setDigest(d[0] ?? null);
+    } catch {
+      // Hub sem o resumo (anterior à 1.20): o card simplesmente não aparece.
+      setDigest(null);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    if (!hub.connected) return;
+    void load();
+    return api.onHubPush((e) => {
+      if (e.event === "hub.autopilot.changed") void load();
+    });
+  }, [api, load, hub.connected]);
+
+  if (!digest) return null;
+  return (
+    <Card
+      id="hub-ov-resumo"
+      title="Resumo da manhã"
+      more={{ label: "Painel do piloto", onClick: () => open("autopilot-panel") }}
+    >
+      <p className="hub-card-sub muted">
+        Gerado {ago(digest.at, now)}, cobre desde {ago(digest.since, now)}.
+      </p>
+      {digest.projects.length === 0 ? (
+        <p className="hub-card-empty muted">Nenhum projeto no modo autônomo.</p>
+      ) : (
+        <ul className="hub-card-list" aria-label="Projetos do resumo">
+          {digest.projects.map((p) => (
+            <li key={`${p.owner}/${p.repo}`} data-project={`${p.owner}/${p.repo}`}>
+              <span className="hub-card-text">
+                <span className="strong">{p.name}</span>: {digestCounts(p)}
+                {p.merged.length > 0 && (
+                  <span className="hub-card-sub">
+                    Mescladas na {p.branch}: {p.merged.map((i) => `#${i.number}`).join(", ")}
+                  </span>
+                )}
+                {p.blocked.length > 0 && (
+                  <span className="hub-card-sub">
+                    Bloqueadas: {p.blocked.map((i) => (i.reason ? `#${i.number} (${i.reason})` : `#${i.number}`)).join(", ")}
+                  </span>
+                )}
+                <span className="hub-card-sub muted">
+                  {p.pr_url ? (
+                    <a href={p.pr_url} target="_blank" rel="noreferrer">
+                      PR {p.branch} → {p.base}
+                    </a>
+                  ) : (
+                    `PR ${p.branch} → ${p.base} ainda sem link`
+                  )}{" "}
+                  · {ciText(p.ci)}
+                  {p.conflict && " · em conflito com a base"}
+                  {p.error && ` · erro na branch: ${p.error}`}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {digest.usage.length > 0 && (
+        <ul className="hub-card-list" aria-label="Uso da semanal no período">
+          {digest.usage.map((u) => (
+            <li key={u.account} className="muted small">
+              {usageText(u)}
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   );
 }

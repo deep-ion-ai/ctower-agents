@@ -5,7 +5,9 @@ import { useTower } from "../state/tower";
 import { ago } from "../util/time";
 import { assignmentText } from "../util/hub";
 import { humanBytes } from "../util/bytes";
-import type { HubAssignment } from "../protocol/hub-gen";
+import type { HubAssignment, HubEnv } from "../protocol/hub-gen";
+import { useState } from "react";
+import { errText } from "./calls";
 
 /**
  * Ambientes ligados ao hub (`hub.envs.list`) com as atribuições de cada um
@@ -17,7 +19,23 @@ import type { HubAssignment } from "../protocol/hub-gen";
  * na seção Hub, quando esta UI o conhece.
  */
 export function HubEnvs({ now }: { now: number }) {
-  const { hub, envs, status, web } = useTower();
+  const { api, hub, envs, status, web, refreshHub } = useTower();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Hub anterior à #181: sem a marca de ambiente autônomo.
+  const autonomy = hub.envs.some((e) => (e as Partial<HubEnv>).autonomous !== undefined);
+  const setAutonomous = async (env: HubEnv, on: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.hubCall("hub.envs.set_autonomous", { env: env.env_id, autonomous: on });
+      await refreshHub();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   const nav = useNav();
   const byEnv = new Map<string, HubAssignment[]>();
   for (const p of hub.projects) {
@@ -41,6 +59,7 @@ export function HubEnvs({ now }: { now: number }) {
                 <th>Último envio</th>
                 <th>Pendências</th>
                 <th>Limpezas</th>
+                {autonomy && <th>Autônomo</th>}
                 {/* Web: a UI não conecta aos ambientes (fase 1). */}
                 {!web && <th>Nesta UI</th>}
                 <th>Atribuições</th>
@@ -94,6 +113,24 @@ export function HubEnvs({ now }: { now: number }) {
                         </span>
                       )}
                     </td>
+                    {autonomy && (
+                      <td>
+                        {web ? (
+                          <span className={e.autonomous ? "strong" : "muted"}>{e.autonomous ? "sim" : "não"}</span>
+                        ) : (
+                          <label title="Só ambientes autônomos rodam o modo autônomo de um projeto (#181)">
+                            <input
+                              type="checkbox"
+                              checked={e.autonomous}
+                              disabled={busy}
+                              aria-label={`${e.name} é ambiente autônomo`}
+                              onChange={(ev) => void setAutonomous(e, ev.target.checked)}
+                            />{" "}
+                            {e.autonomous ? "sim" : "não"}
+                          </label>
+                        )}
+                      </td>
+                    )}
                     {!web && (
                       <td>
                         {uiEnv ? (
@@ -129,6 +166,11 @@ export function HubEnvs({ now }: { now: number }) {
             </tbody>
           </table>
         </div>
+      )}
+      {error && (
+        <p role="alert" className="start-error">
+          {error}
+        </p>
       )}
     </section>
   );

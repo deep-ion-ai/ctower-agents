@@ -11,7 +11,10 @@
 use crate::projects::{row_to_project, COLS, COLS_LEN};
 use crate::sync::project_key;
 use crate::{ConfigRules, Ledger, LocationState, Project, Result};
-use ct_core::{now_ms, DocsConfig, ForgeConfig, SessionTemplates, TrackerConfig};
+use ct_core::{
+    now_ms, ApprovalConfig, AutonomyConfig, DocsConfig, ForgeConfig, SessionTemplates,
+    TrackerConfig,
+};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -57,6 +60,22 @@ pub struct ConfigProject {
     /// anterior: nenhum override.
     #[serde(default, skip_serializing_if = "SessionTemplates::is_empty")]
     pub session_templates: SessionTemplates,
+    /// Modo autônomo do projeto (#181). Ausente num hub anterior, ou com
+    /// o modo nunca configurado: desligado.
+    #[serde(default, skip_serializing_if = "AutonomyConfig::is_default")]
+    pub autonomy: AutonomyConfig,
+    /// Este ambiente é o que roda as sessões autônomas do projeto (o
+    /// `autonomy.env_id`, com o modo ligado). Ausente = não é.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autonomy_runner: bool,
+    /// Rótulo de aprovação do projeto (#124). Ausente num hub anterior: o
+    /// padrão (rótulo `aprovada`, sem exigir); o padrão não vai no JSON.
+    #[serde(default, skip_serializing_if = "ApprovalConfig::is_default")]
+    pub approval: ApprovalConfig,
+    /// Configuração de release (#204). Ausente num hub anterior:
+    /// desligada; o padrão não vai no JSON.
+    #[serde(default, skip_serializing_if = "ct_core::ReleaseConfig::is_default")]
+    pub release: ct_core::ReleaseConfig,
 }
 
 fn attribution_default() -> bool {
@@ -238,6 +257,11 @@ impl Ledger {
                             && cur.attribution == p.attribution
                             && cur.sync_role == p.sync
                             && cur.docs == p.docs
+                            && cur.session_templates == p.session_templates
+                            && cur.autonomy == p.autonomy
+                            && cur.autonomy_runner == p.autonomy_runner
+                            && cur.approval == p.approval
+                            && cur.release == p.release
                             && cur.unassigned_at.is_none()
                             && self.hub_repo_path(cur.id)?.as_deref() == Some(&p.repo_path);
                         if same {
@@ -329,7 +353,8 @@ impl Ledger {
         self.conn.execute(
             "UPDATE project SET tracker_kind = ?2, tracker_config = ?3, forge_kind = ?4,
                     forge_config = ?5, branch_pattern = ?6, attribution = ?7, sync_role = ?8,
-                    docs_config = ?9, session_templates = ?10
+                    docs_config = ?9, session_templates = ?10, autonomy_config = ?11,
+                    autonomy_runner = ?12, approval_config = ?13, release_config = ?14
              WHERE id = ?1",
             params![
                 id,
@@ -341,7 +366,11 @@ impl Ledger {
                 p.attribution,
                 p.sync,
                 p.docs.config_json(),
-                p.session_templates.config_json()
+                p.session_templates.config_json(),
+                p.autonomy.config_json(),
+                p.autonomy_runner,
+                p.approval.config_json(),
+                p.release.config_json()
             ],
         )?;
         Ok(())
@@ -402,6 +431,10 @@ impl Ledger {
                 rules: Default::default(),
                 docs: p.docs.clone(),
                 session_templates: p.session_templates.clone(),
+                autonomy: p.autonomy.clone(),
+                autonomy_runner: p.autonomy_runner,
+                approval: p.approval.clone(),
+                release: p.release.clone(),
             });
             if path != p.repo_path {
                 self.conn.execute(
@@ -486,6 +519,34 @@ impl Ledger {
             Ok(changed > 0)
         })
     }
+
+    /// Grava o relato da branch de integração do modo autônomo (#181) e,
+    /// se ele mudou (fora o horário), põe a fotografia do projeto no outbox
+    /// para o hub mostrar o estado (o aviso de conflito). Devolve se
+    /// enfileirou.
+    pub fn record_autonomy_report(
+        &self,
+        project_id: i64,
+        report: &ct_core::AutonomyReport,
+    ) -> Result<bool> {
+        self.atomic(|| {
+            let cur = self.get_project(project_id)?.autonomy_report;
+            let same = cur.as_ref().is_some_and(|c| {
+                let mut c = c.clone();
+                c.at = report.at;
+                &c == report
+            });
+            let json = serde_json::to_string(report).expect("AutonomyReport serializa");
+            self.conn.execute(
+                "UPDATE project SET autonomy_report = ?2 WHERE id = ?1",
+                params![project_id, json],
+            )?;
+            if !same {
+                self.enqueue_project(project_id)?;
+            }
+            Ok(!same)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -498,6 +559,10 @@ mod tests {
         ConfigProject {
             docs: Default::default(),
             session_templates: Default::default(),
+            autonomy: Default::default(),
+            autonomy_runner: false,
+            approval: Default::default(),
+            release: Default::default(),
             owner: "deep-ion-ai".into(),
             repo: repo.into(),
             name: repo.into(),
@@ -886,6 +951,8 @@ mod tests {
         // Voltou ao global no hub.
         let p2 = ConfigProject {
             session_templates: SessionTemplates::default(),
+            autonomy: Default::default(),
+            autonomy_runner: false,
             rev: 2,
             ..p.clone()
         };
@@ -952,5 +1019,109 @@ mod tests {
         // E o JSON de hoje leva o campo.
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(v["docs"]["project_dirs"][0], "analises");
+    }
+
+    /// Rótulo de aprovação (#124): vem no pull e muda com ele; um hub
+    /// anterior (sem o campo) dá o padrão, sem exigir, e o padrão não vai no
+    /// JSON. Com a exigência ligada, a sessão do épico não começa a
+    /// sub-issue sem o rótulo dela (`ledger_start_sub_issue`).
+    #[test]
+    fn pull_com_e_sem_rotulo_de_aprovacao() {
+        let l = Ledger::open_in_memory().unwrap();
+        let exige = ApprovalConfig {
+            label: "aprovada".into(),
+            required: true,
+        };
+        let p = ConfigProject {
+            approval: exige.clone(),
+            ..cp("acme-web", 1)
+        };
+        l.apply_hub_config(&resp(1, vec![p.clone()]), path).unwrap();
+        let pid = l.list_projects().unwrap()[0].id;
+        assert_eq!(l.get_project(pid).unwrap().approval, exige);
+        assert_eq!(
+            serde_json::to_value(&p).unwrap()["approval"]["required"],
+            true
+        );
+
+        // Sub-issue sem o rótulo: a sessão do épico não a começa.
+        let issue = |n: i64, parent: Option<i64>, labels: &[&str]| crate::IssueRow {
+            gh_number: n,
+            title: format!("ACME-{n}"),
+            state: "open".into(),
+            labels: labels.iter().map(|s| s.to_string()).collect(),
+            parent_number: parent,
+            has_sub_issues: parent.is_none(),
+            ..Default::default()
+        };
+        l.apply_github(&crate::GithubSnapshot {
+            project_id: pid,
+            issues: vec![
+                issue(10, None, &["aprovada"]),
+                issue(11, Some(10), &[]),
+                issue(12, Some(10), &["aprovada"]),
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+        let epic = l
+            .ensure_work_item(pid, 10, ct_core::WorkItemKind::Epic)
+            .unwrap();
+        let err = l.start_sub_issue(epic.id, 11, None, None).unwrap_err();
+        assert!(err.to_string().contains("aguardando aprovação"), "{err}");
+        assert!(l.find_work_item(pid, 11).unwrap().is_none());
+        assert!(l.start_sub_issue(epic.id, 12, None, None).unwrap().1);
+
+        // Desligado no hub: a mesma sub-issue começa.
+        let p2 = ConfigProject {
+            approval: ApprovalConfig::default(),
+            rev: 2,
+            ..p.clone()
+        };
+        let r = l
+            .apply_hub_config(&resp(2, vec![p2.clone()]), path)
+            .unwrap();
+        assert_eq!(r.updated, vec!["deep-ion-ai/acme-web"]);
+        assert!(!l.get_project(pid).unwrap().approval.required);
+        assert!(serde_json::to_value(&p2).unwrap().get("approval").is_none());
+        assert!(l.start_sub_issue(epic.id, 11, None, None).unwrap().1);
+
+        // Hub anterior à #124: sem o campo.
+        let v = serde_json::json!({
+            "owner": "deep-ion-ai", "repo": "acme-web", "name": "acme-web",
+            "base_branch": "develop", "protected_branches": [], "repo_path": "", "rev": 3
+        });
+        let antigo: ConfigProject = serde_json::from_value(v).unwrap();
+        assert_eq!(antigo.approval, ApprovalConfig::default());
+    }
+
+    /// Configuração de release (#204): vem no pull, muda com ele, e o
+    /// padrão (desligada) não vai no JSON.
+    #[test]
+    fn pull_com_configuracao_de_release() {
+        let l = Ledger::open_in_memory().unwrap();
+        let on = ct_core::ReleaseConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let p = ConfigProject {
+            release: on.clone(),
+            ..cp("acme-web", 1)
+        };
+        l.apply_hub_config(&resp(1, vec![p.clone()]), path).unwrap();
+        let pid = l.list_projects().unwrap()[0].id;
+        assert_eq!(l.get_project(pid).unwrap().release, on);
+
+        let p2 = ConfigProject {
+            release: Default::default(),
+            rev: 2,
+            ..p
+        };
+        let r = l
+            .apply_hub_config(&resp(2, vec![p2.clone()]), path)
+            .unwrap();
+        assert_eq!(r.updated.len(), 1);
+        assert!(!l.get_project(pid).unwrap().release.enabled);
+        assert!(serde_json::to_value(&p2).unwrap().get("release").is_none());
     }
 }

@@ -28,7 +28,7 @@ ts-rs = { workspace = true, optional = true }
 # Ambiente de teste (repo git temporário + claude falso) para outros crates.
 test-support = ["dep:tempfile"]
 # Tipos TypeScript para a UI (ts-rs).
-ts = ["dep:ts-rs", "ct-core/ts", "ct-ledger/ts", "ct-update/ts"]
+ts = ["dep:ts-rs", "ct-core/ts", "ct-git/ts", "ct-ledger/ts", "ct-update/ts"]
 
 [dev-dependencies]
 ct-gh = { workspace = true, features = ["test-support"] }

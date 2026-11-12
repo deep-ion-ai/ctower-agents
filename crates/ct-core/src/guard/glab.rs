@@ -100,6 +100,7 @@ mod tests {
                 protected: &p,
                 pr_base: &base,
                 head_of: &|_| None,
+                integration: None,
             },
         )
     }

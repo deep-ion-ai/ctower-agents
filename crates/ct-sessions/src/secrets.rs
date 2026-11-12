@@ -217,7 +217,14 @@ impl Sessions {
     /// Variáveis de ambiente que os secrets e variáveis do hub dão à sessão
     /// (`owner/repo` do projeto) e o mascaramento dos secrets. Nunca falha:
     /// problemas viram aviso e a sessão sobe sem (parte dos) secrets.
-    pub(crate) fn session_secrets(&self, project: &Project, session_id: &str) -> SessionSecrets {
+    /// Na sessão de release (`release`, #204), o secret do token exclusivo
+    /// também vai como `GH_TOKEN`; nas outras, ele não vai.
+    pub(crate) fn session_secrets(
+        &self,
+        project: &Project,
+        session_id: &str,
+        release: bool,
+    ) -> SessionSecrets {
         let none = || SessionSecrets {
             env: Vec::new(),
             mask: SessionMask::default(),
@@ -239,7 +246,7 @@ impl Sessions {
             }
         };
         self.warn_if_stale(session_id);
-        let env = injected(&secrets, project, session_id);
+        let env = injected(&secrets, project, session_id, release);
         let mask = mask_of(&secrets, project);
         SessionSecrets { env, mask }
     }
@@ -274,7 +281,7 @@ impl Sessions {
 
     /// Sessão dona do token. Comparação em tempo constante com cada token
     /// guardado: são poucas sessões vivas.
-    fn session_of_token(&self, token: &str) -> Option<String> {
+    pub(crate) fn session_of_token(&self, token: &str) -> Option<String> {
         if token.is_empty() {
             return None;
         }
@@ -302,13 +309,20 @@ impl Sessions {
                 "{name} é um nome reservado do ambiente; não vem do hub"
             )));
         }
-        let project = {
+        let (project, wi) = {
             let l = self.ledger();
             l.get_session(&session_id)
                 .and_then(|s| l.get_work_item(s.work_item_id))
-                .and_then(|wi| l.get_project(wi.project_id))
+                .and_then(|wi| Ok((l.get_project(wi.project_id)?, wi)))
         }
         .map_err(|e| SecretGetError::Unavailable(e.to_string()))?;
+        // O token exclusivo da release (#204) só vale na sessão de release:
+        // nas outras, o nome não existe.
+        if project.release.reserved_secret().as_deref() == Some(name)
+            && !crate::release::is_release_item(&wi)
+        {
+            return Err(not_found());
+        }
         let secrets = match self.env_cache().load() {
             Ok(Some(s)) => s,
             Ok(None) => {
@@ -452,10 +466,19 @@ impl Sessions {
 }
 
 /// (nome, valor) das entradas que vão para o ambiente da sessão: globais e
-/// do projeto, sem os nomes reservados (com aviso).
-fn injected(secrets: &EnvSecrets, project: &Project, session_id: &str) -> Vec<(String, String)> {
+/// do projeto, sem os nomes reservados (com aviso). O secret do token
+/// exclusivo da release (#204) só vai para a sessão de release, que o
+/// recebe também como `GH_TOKEN` (no lugar de um `GH_TOKEN` do hub).
+fn injected(
+    secrets: &EnvSecrets,
+    project: &Project,
+    session_id: &str,
+    release: bool,
+) -> Vec<(String, String)> {
     let key = scope_of(project);
+    let reserved = project.release.reserved_secret();
     let mut env = Vec::new();
+    let mut release_token = None;
     for (name, entry) in secrets.resolve(key.as_deref()) {
         if is_reserved_name(&name) {
             tracing::warn!(
@@ -463,10 +486,23 @@ fn injected(secrets: &EnvSecrets, project: &Project, session_id: &str) -> Vec<(S
             );
             continue;
         }
+        if reserved.as_deref() == Some(name.as_str()) {
+            if !release {
+                continue;
+            }
+            release_token = Some(entry.value.expose().to_string());
+        }
         env.push((name, entry.value.expose().to_string()));
+    }
+    if let Some(t) = release_token {
+        env.retain(|(n, _)| n != RELEASE_GH_TOKEN_ENV);
+        env.push((RELEASE_GH_TOKEN_ENV.to_string(), t));
     }
     env
 }
+
+/// Variável que o `gh` e o `ctower release` leem para o token (#204).
+pub(crate) const RELEASE_GH_TOKEN_ENV: &str = "GH_TOKEN";
 
 /// Projeto (`owner/repo`) cujas entradas a sessão recebe além das globais.
 /// `None` no gestor, que não está preso a um projeto: só as globais.

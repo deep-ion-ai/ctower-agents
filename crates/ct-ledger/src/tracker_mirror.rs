@@ -180,6 +180,7 @@ mod tests {
             synced_at: 100,
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         }
     }
 

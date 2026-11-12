@@ -116,7 +116,7 @@ test("variáveis novas: chave neutra e prefixos com JIRA_CONFIG_FILE e caminho c
 // Templates por projeto (#166): projeto > global do rastreador > padrão de fábrica.
 describe("resolveTemplate", () => {
   const t = DEFAULT_UI_CONFIG.templates;
-  const none = { issue: "", epic: "", project: "" };
+  const none = { issue: "", epic: "", project: "", autonomous: "", release: "" };
 
   test("sem override: idêntico ao de hoje, no GitHub e no Jira", () => {
     for (const ov of [undefined, null, none]) {

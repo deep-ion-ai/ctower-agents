@@ -8,11 +8,19 @@
 //!
 //! Cada decisão do usuário vira também uma decisão `orientada` no work item
 //! do alvo (autor = o hub), para o gestor e a revisão do épico a acharem.
+//!
+//! A proposta `model` (#182) sugere o modelo e o esforço do agente na
+//! issue. Só nela o usuário pode aprovar com outro valor (`chosen`): o hub
+//! grava o escolhido, não o proposto. Como a sessão de planejamento propõe
+//! logo depois de criar a issue, ela aceita issue ainda fora do espelho
+//! (só a fechada é recusada).
 
-use super::{Hub, HubWorkItem, Placement};
+use super::{Hub, HubWorkItem, IssueAgent, Placement};
 use crate::sync::project_key;
 use crate::{LedgerError, Result};
-use ct_core::{Priority, ProposalKind, ProposalState, WorkItemStatus};
+use ct_core::{
+    Priority, ProposalKind, ProposalState, WorkItemStatus, CLAUDE_EFFORTS, CLAUDE_MODELS,
+};
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -48,12 +56,12 @@ pub struct HubProposal {
     pub item_ref: String,
     /// Título da issue no espelho, se houver.
     pub title: Option<String>,
-    /// Valor do alvo lido pelo hub ao criar: `{ "priority": .. }` ou
-    /// `{ "status": .. }`.
+    /// Valor do alvo lido pelo hub ao criar: `{ "priority": .. }`,
+    /// `{ "status": .. }` ou `{ "model": .., "effort": .. }`.
     #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub current: Value,
-    /// `{ "priority": "P1" | null, "before"?: n, "after"?: n }` ou
-    /// `{ "status": .. }`.
+    /// `{ "priority": "P1" | null, "before"?: n, "after"?: n }`,
+    /// `{ "status": .. }` ou `{ "model": "opus", "effort": "high" | null }`.
     #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub proposed: Value,
     pub justification: String,
@@ -68,6 +76,11 @@ pub struct HubProposal {
     pub decision_note: Option<String>,
     /// Evento que aplicou a mudança (aprovada com algo a mudar).
     pub applied_event_uid: Option<String>,
+    /// Valor que o usuário aprovou no lugar do proposto (só `model`, #182);
+    /// nulo = aprovada como proposta. Ausente em hubs anteriores.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
+    pub chosen: Option<Value>,
 }
 
 /// O que o agente pede em `POST /agent/v1/proposals`.
@@ -111,7 +124,8 @@ pub struct ProposalDecided {
 const COLS: &str = "pr.id, pr.uid, pr.kind, p.gh_owner, p.gh_repo, pr.gh_number, i.title, \
                     pr.current_value, pr.proposed_value, pr.justification, pr.state, pr.env_id, \
                     coalesce(e.name, pr.env_id), pr.session_id, pr.created_at, pr.decided_at, \
-                    pr.decision_note, pr.applied_event_uid, p.tracker_kind, p.tracker_config";
+                    pr.decision_note, pr.applied_event_uid, p.tracker_kind, p.tracker_config, \
+                    pr.decided_value";
 const FROM: &str = "FROM proposal pr
      JOIN project p ON p.id = pr.project_id
      LEFT JOIN issue_cache i ON i.project_id = pr.project_id AND i.gh_number = pr.gh_number
@@ -140,6 +154,13 @@ fn row(r: &Row) -> rusqlite::Result<HubProposal> {
         decided_at: r.get(15)?,
         decision_note: r.get(16)?,
         applied_event_uid: r.get(17)?,
+        chosen: r
+            .get::<_, Option<String>>(20)?
+            .map(|v| serde_json::from_str(&v))
+            .transpose()
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(20, rusqlite::types::Type::Text, e.into())
+            })?,
     })
 }
 
@@ -196,6 +217,27 @@ fn normalize(kind: ProposalKind, proposed: &Value) -> Result<Value> {
                 })?;
             Ok(json!({ "status": status }))
         }
+        ProposalKind::Model => {
+            let field = |k: &str, allowed: &[&str]| match obj.get(k) {
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::String(v)) if allowed.contains(&v.as_str()) => Ok(Some(v.clone())),
+                Some(_) => Err(invalid(format!(
+                    "proposed.{k} deve ser um de: {}",
+                    allowed.join(", ")
+                ))),
+            };
+            let agent = IssueAgent {
+                model: field("model", CLAUDE_MODELS)?,
+                effort: field("effort", CLAUDE_EFFORTS)?,
+            };
+            if agent.model.is_none() {
+                return Err(invalid(format!(
+                    "proposed.model é obrigatório ({})",
+                    CLAUDE_MODELS.join(", ")
+                )));
+            }
+            Ok(agent.to_json())
+        }
     }
 }
 
@@ -214,18 +256,28 @@ impl Hub {
                 super::row_to_work_item,
             )
             .optional()?;
-        if wi.is_none()
-            && !self
-                .get_issue(pid, number)?
-                .is_some_and(|i| i.state == "open")
-        {
-            return Ok(None);
+        if wi.is_none() {
+            let issue = self.get_issue(pid, number)?;
+            // `model`: a issue recém-criada pela sessão de planejamento pode
+            // ainda não estar no espelho; só a fechada não serve.
+            let ok = match kind {
+                ProposalKind::Model => issue.is_none_or(|i| i.state == "open"),
+                _ => issue.is_some_and(|i| i.state == "open"),
+            };
+            if !ok {
+                return Ok(None);
+            }
         }
         Ok(Some(match kind {
             ProposalKind::Priority => json!({ "priority": wi.as_ref().and_then(|w| w.priority) }),
             ProposalKind::Status => json!({
                 "status": wi.map(|w| w.status).unwrap_or(WorkItemStatus::Backlog)
             }),
+            ProposalKind::Model => wi
+                .as_ref()
+                .map(IssueAgent::from)
+                .unwrap_or_default()
+                .to_json(),
         }))
     }
 
@@ -331,7 +383,7 @@ impl Hub {
         let positioned = proposed.get("before").is_some() || proposed.get("after").is_some();
         let same = match np.kind {
             ProposalKind::Priority => current["priority"] == proposed["priority"] && !positioned,
-            ProposalKind::Status => current == proposed,
+            ProposalKind::Status | ProposalKind::Model => current == proposed,
         };
         if same {
             return Err(invalid(format!("nada a mudar: {target} já está assim")));
@@ -428,15 +480,42 @@ impl Hub {
         hub_id: &str,
         now: i64,
     ) -> Result<HubProposal> {
+        self.decide_proposal_with(id, approve, None, note, hub_id, now)
+    }
+
+    /// [`Hub::decide_proposal`] aprovando, na proposta `model` (#182), com
+    /// o valor que o usuário escolheu (`chosen`, mesma forma do `proposed`)
+    /// no lugar do proposto. Igual ao proposto = aprovada como veio.
+    pub fn decide_proposal_with(
+        &self,
+        id: i64,
+        approve: bool,
+        chosen: Option<&Value>,
+        note: Option<&str>,
+        hub_id: &str,
+        now: i64,
+    ) -> Result<HubProposal> {
         let note = note.map(str::trim).filter(|n| !n.is_empty());
         let tx = self.tx()?;
         self.expire_proposals(now)?;
-        let p = self
+        let mut p = self
             .proposal(id)?
             .ok_or_else(|| LedgerError::NotFound("proposta", format!("#{id}")))?;
         if p.state != ProposalState::Pendente {
             return Err(invalid(format!("a proposta #{id} já está {}", p.state)));
         }
+        let chosen = match chosen {
+            None => None,
+            Some(_) if !approve => {
+                return Err(invalid("valor escolhido só vale para aprovar"));
+            }
+            Some(_) if p.kind != ProposalKind::Model => {
+                return Err(invalid(
+                    "só a proposta de modelo pode ser aprovada com outro valor",
+                ));
+            }
+            Some(v) => Some(normalize(ProposalKind::Model, v)?).filter(|v| *v != p.proposed),
+        };
         let pid: i64 =
             self.conn
                 .query_row("SELECT project_id FROM proposal WHERE id = ?1", [id], |r| {
@@ -454,9 +533,18 @@ impl Hub {
             ProposalState::Rejeitada
         };
         self.conn.execute(
-            "UPDATE proposal SET state = ?2, decided_at = ?3, decision_note = ?4 WHERE id = ?1",
-            params![id, state.as_str(), now, note],
+            "UPDATE proposal SET state = ?2, decided_at = ?3, decision_note = ?4,
+                                 decided_value = ?5
+             WHERE id = ?1",
+            params![
+                id,
+                state.as_str(),
+                now,
+                note,
+                chosen.as_ref().map(Value::to_string)
+            ],
         )?;
+        p.chosen = chosen;
         let (owner, repo, n) = (p.owner.as_str(), p.repo.as_str(), p.number);
         let applied = if approve {
             self.apply_proposal(&p, note, hub_id)?
@@ -478,6 +566,9 @@ impl Hub {
         let mut payload = json!({ "proposal_id": id, "state": state });
         if let Some(n) = note {
             payload["note"] = json!(n);
+        }
+        if let Some(c) = &p.chosen {
+            payload["chosen"] = c.clone();
         }
         self.hub_event(hub_id, pid, Some(wi), "proposal_decided", &payload)?;
         self.proposal_decision(&p, state, note, wi, hub_id, now)?;
@@ -533,12 +624,18 @@ impl Hub {
                     p.proposed["status"].as_str().unwrap_or_default().parse()?;
                 self.set_status_with(owner, repo, n, status, reason, Some(p.id), hub_id)?;
             }
+            ProposalKind::Model => {
+                let agent: IssueAgent =
+                    serde_json::from_value(p.chosen.as_ref().unwrap_or(&p.proposed).clone())
+                        .map_err(|e| LedgerError::Corrupt(e.to_string()))?;
+                self.set_model(owner, repo, n, &agent, reason, Some(p.id), hub_id)?;
+            }
         }
         Ok(self
             .conn
             .query_row(
                 "SELECT uid FROM event
-                 WHERE type IN ('priority_set', 'rank_moved', 'status_set_manual')
+                 WHERE type IN ('priority_set', 'rank_moved', 'status_set_manual', 'model_set')
                    AND json_extract(payload, '$.proposal_id') = ?1
                  ORDER BY hlc DESC LIMIT 1",
                 [p.id],
@@ -565,6 +662,7 @@ impl Hub {
             ProposalKind::Status => {
                 format!("status {}", p.proposed["status"].as_str().unwrap_or("?"))
             }
+            ProposalKind::Model => format!("modelo {}", model_label(&p.proposed)),
         };
         let verb = if state == ProposalState::Aprovada {
             "aprovada"
@@ -576,6 +674,12 @@ impl Hub {
             "O usuário {verb} na tela Hub a proposta #{} ({what} para {target}).",
             p.id
         );
+        if let Some(c) = &p.chosen {
+            decision.push_str(&format!(
+                " Aprovada com valor alterado: modelo {} no lugar do proposto.",
+                model_label(c)
+            ));
+        }
         if let Some(n) = note {
             decision.push_str(&format!(" Nota: {n}"));
         }
@@ -599,9 +703,19 @@ impl Hub {
     }
 }
 
+/// "opus, esforço high" a partir de `{ model, effort }`.
+fn model_label(v: &Value) -> String {
+    serde_json::from_value::<IssueAgent>(v.clone())
+        .map(|a| a.label())
+        .unwrap_or_else(|_| v.to_string())
+}
+
 fn changed_note(now: Option<&Value>) -> String {
     match now {
         None => "o alvo saiu do hub ou a issue foi fechada".into(),
+        Some(v) if v.get("model").is_some() => {
+            format!("valor atual mudou: modelo {}", model_label(v))
+        }
         Some(v) => {
             let (k, x) = v
                 .as_object()
@@ -662,6 +776,7 @@ mod tests {
                 synced_at: 1,
                 gone: Vec::new(),
                 me: None,
+                pr_checks: None,
             },
             HUB,
         )
@@ -1048,5 +1163,178 @@ mod tests {
             .query_row("SELECT count(*) FROM proposal", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    fn model(hub: &Hub, n: i64, proposed: Value) -> Result<HubProposal> {
+        propose(hub, ProposalKind::Model, n, proposed)
+    }
+
+    #[test]
+    fn proposta_de_modelo_aprovada_como_veio() {
+        let hub = hub();
+        let p = model(&hub, 1, json!({ "model": "opus", "effort": "high" })).unwrap();
+        assert_eq!(p.current, json!({ "model": null, "effort": null }));
+        assert_eq!(p.proposed, json!({ "model": "opus", "effort": "high" }));
+        let d = decide(&hub, p.id, true).unwrap();
+        assert_eq!(d.state, ProposalState::Aprovada);
+        assert_eq!(d.chosen, None);
+        let w = hub.find_work_item("o", "a", 1).unwrap().unwrap();
+        assert_eq!(
+            (w.model.as_deref(), w.effort.as_deref()),
+            (Some("opus"), Some("high"))
+        );
+        let ev = hub.list_events(w.id, 10).unwrap();
+        let set = ev.iter().find(|e| e.kind == "model_set").unwrap();
+        assert_eq!(set.payload["cause"], "proposal");
+        assert_eq!(d.applied_event_uid.as_deref(), Some(set.uid.as_str()));
+        let dec = decisions(&hub, 1);
+        assert_eq!(dec[0].origin, DecisionOrigin::Orientada);
+        assert!(
+            dec[0].title.contains("modelo opus, esforço high"),
+            "{}",
+            dec[0].title
+        );
+
+        // Sem esforço vale; valores fora da lista e sem modelo, não.
+        model(&hub, 2, json!({ "model": "sonnet" })).unwrap();
+        for v in [
+            json!({ "model": "gpt-4" }),
+            json!({ "model": "opus", "effort": "turbo" }),
+            json!({ "effort": "high" }),
+            json!({ "model": null }),
+            json!({ "model": "opus", "effort": "high" }), // já está assim (#1)
+        ] {
+            let n = if v["effort"] == "high" && v["model"] == "opus" {
+                1
+            } else {
+                3
+            };
+            assert!(
+                matches!(model(&hub, n, v.clone()), Err(LedgerError::Conflict(_))),
+                "{v}"
+            );
+        }
+    }
+
+    #[test]
+    fn proposta_de_modelo_aprovada_com_valor_alterado_grava_o_escolhido() {
+        let hub = hub();
+        let p = model(&hub, 1, json!({ "model": "opus", "effort": "high" })).unwrap();
+        // Valor alterado só ao aprovar, e só na proposta de modelo.
+        let s = propose(
+            &hub,
+            ProposalKind::Status,
+            2,
+            json!({ "status": "pausado" }),
+        )
+        .unwrap();
+        let alt = json!({ "model": "sonnet", "effort": "medium" });
+        assert!(matches!(
+            hub.decide_proposal_with(s.id, true, Some(&alt), None, HUB, ct_core::now_ms()),
+            Err(LedgerError::Conflict(_))
+        ));
+        assert!(matches!(
+            hub.decide_proposal_with(p.id, false, Some(&alt), None, HUB, ct_core::now_ms()),
+            Err(LedgerError::Conflict(_))
+        ));
+        assert!(matches!(
+            hub.decide_proposal_with(
+                p.id,
+                true,
+                Some(&json!({ "model": "gpt-4" })),
+                None,
+                HUB,
+                ct_core::now_ms()
+            ),
+            Err(LedgerError::Conflict(_))
+        ));
+        let d = hub
+            .decide_proposal_with(
+                p.id,
+                true,
+                Some(&alt),
+                Some("cabe no sonnet"),
+                HUB,
+                ct_core::now_ms(),
+            )
+            .unwrap();
+        assert_eq!(d.state, ProposalState::Aprovada);
+        assert_eq!(d.chosen, Some(alt.clone()));
+        assert_eq!(d.proposed, json!({ "model": "opus", "effort": "high" }));
+        let w = hub.find_work_item("o", "a", 1).unwrap().unwrap();
+        assert_eq!(
+            (w.model.as_deref(), w.effort.as_deref()),
+            (Some("sonnet"), Some("medium"))
+        );
+        let ev = hub.list_events(w.id, 10).unwrap();
+        assert!(ev
+            .iter()
+            .any(|e| e.kind == "proposal_decided" && e.payload["chosen"] == alt));
+        let dec = decisions(&hub, 1);
+        assert!(
+            dec[0]
+                .decision
+                .contains("valor alterado: modelo sonnet, esforço medium"),
+            "{}",
+            dec[0].decision
+        );
+
+        // Escolher o mesmo que o proposto = aprovada como veio.
+        let q = model(&hub, 3, json!({ "model": "haiku" })).unwrap();
+        let d = hub
+            .decide_proposal_with(
+                q.id,
+                true,
+                Some(&json!({ "model": "haiku", "effort": null })),
+                None,
+                HUB,
+                ct_core::now_ms(),
+            )
+            .unwrap();
+        assert_eq!(d.chosen, None);
+    }
+
+    #[test]
+    fn proposta_de_modelo_aceita_issue_fora_do_espelho_e_fica_obsoleta_se_mudar() {
+        let hub = hub();
+        // Recém-criada pela sessão de planejamento: ainda fora do espelho.
+        let p = model(&hub, 42, json!({ "model": "opus" })).unwrap();
+        assert_eq!(p.title, None);
+        // Fechada sem work item continua recusada.
+        assert!(matches!(
+            model(&hub, 9, json!({ "model": "opus" })),
+            Err(LedgerError::NotFound("issue", _))
+        ));
+        // Aprovar antes do espelho: a issue não está no hub, nada muda.
+        assert!(matches!(
+            decide(&hub, p.id, true),
+            Err(LedgerError::NotFound("issue", _))
+        ));
+        assert_eq!(
+            hub.proposal(p.id).unwrap().unwrap().state,
+            ProposalState::Pendente
+        );
+
+        // A pessoa define o modelo na tela da issue: a pendente fica obsoleta.
+        let q = model(&hub, 1, json!({ "model": "opus" })).unwrap();
+        hub.set_model(
+            "o",
+            "a",
+            1,
+            &IssueAgent {
+                model: Some("haiku".into()),
+                effort: None,
+            },
+            None,
+            None,
+            HUB,
+        )
+        .unwrap();
+        let q = hub.proposal(q.id).unwrap().unwrap();
+        assert_eq!(q.state, ProposalState::Obsoleta);
+        assert_eq!(
+            q.decision_note.as_deref(),
+            Some("valor atual mudou: modelo haiku")
+        );
     }
 }

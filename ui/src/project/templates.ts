@@ -84,24 +84,34 @@ export function renderTemplate(template: string, v: TemplateVars): string {
  * Template do tipo de sessão pelo rastreador do projeto (spec do Jira e
  * GitLab §9.1): os `jira_*` nos projetos Jira; os de hoje no GitHub.
  */
-export function templateFor(t: Templates, kind: WorkItemKind | "project", tracker: TrackerConfig["kind"] = "github"): string {
+export function templateFor(t: Templates, kind: SessionKind, tracker: TrackerConfig["kind"] = "github"): string {
   return t[templateKeyFor(kind, tracker)];
 }
 
 /** Chave do template de `templateFor` (o "Editar template" da modal de início abre a aba dela). */
-export function templateKeyFor(kind: WorkItemKind | "project", tracker: TrackerConfig["kind"] = "github"): TemplateKey {
+export function templateKeyFor(kind: SessionKind, tracker: TrackerConfig["kind"] = "github"): TemplateKey {
+  // Release (#204): só GitHub, um template só.
+  if (kind === "release") return "release";
   if (tracker === "jira") return kind === "epic" ? "jira_epic" : kind === "project" ? "jira_project" : "jira_issue";
   return kind === "epic" ? "epic" : kind === "project" ? "project" : "issue";
 }
 
-/** Tipo de sessão com override por projeto (#166): a chave de `SessionTemplates`. */
-export type SessionTemplateKind = keyof SessionTemplates;
+/**
+ * Tipo de sessão com override por projeto (#166): a chave de
+ * `SessionTemplates`. O `autonomous` (#191) fica de fora: quem renderiza é o
+ * ambiente, e ele se edita no cartão do modo autônomo.
+ */
+export type SessionTemplateKind = Exclude<keyof SessionTemplates, "autonomous">;
 
-export const SESSION_TEMPLATE_KINDS: SessionTemplateKind[] = ["issue", "epic", "project"];
+/** Tipos com override no projeto; `release` (#204) só nos projetos GitHub. */
+export const SESSION_TEMPLATE_KINDS: SessionTemplateKind[] = ["issue", "epic", "project", "release"];
+
+/** Tipo de sessão de um template: o do work item, a do projeto (sem issue) ou a de release (#204). */
+export type SessionKind = WorkItemKind | "project" | "release";
 
 /** Chave do override do projeto para o tipo da sessão (sub-issue e sub-tarefa usam o de issue). */
-export const sessionTemplateKind = (kind: WorkItemKind | "project"): SessionTemplateKind =>
-  kind === "epic" ? "epic" : kind === "project" ? "project" : "issue";
+export const sessionTemplateKind = (kind: SessionKind): SessionTemplateKind =>
+  kind === "epic" ? "epic" : kind === "project" ? "project" : kind === "release" ? "release" : "issue";
 
 /** De onde veio o template: override do projeto, global do rastreador (`ui.json`) ou padrão de fábrica. */
 export type TemplateSource = "project" | "global" | "default";
@@ -114,7 +124,7 @@ export interface ResolvedTemplate {
 }
 
 /** O template global do tipo e do rastreador, ou o padrão de fábrica se o global está vazio. */
-export function globalTemplate(t: Templates, kind: WorkItemKind | "project", tracker: TrackerConfig["kind"] = "github") {
+export function globalTemplate(t: Templates, kind: SessionKind, tracker: TrackerConfig["kind"] = "github") {
   const key = templateKeyFor(kind, tracker);
   const global = t[key] ?? "";
   return global.trim()
@@ -129,7 +139,7 @@ export function globalTemplate(t: Templates, kind: WorkItemKind | "project", tra
  */
 export function resolveTemplate(
   t: Templates,
-  kind: WorkItemKind | "project",
+  kind: SessionKind,
   tracker: TrackerConfig["kind"] = "github",
   overrides?: SessionTemplates | null,
 ): ResolvedTemplate {
@@ -137,6 +147,29 @@ export function resolveTemplate(
   const key = templateKeyFor(kind, tracker);
   if (own.trim()) return { text: own, source: "project", key };
   return globalTemplate(t, kind, tracker);
+}
+
+/** Variáveis do template de release (#204). */
+export interface ReleaseTemplateVars {
+  owner: string;
+  repo: string;
+  source: string;
+  target: string;
+  release_pr_branch: string;
+  protected: string[];
+}
+
+/** Prompt inicial da sessão de release: `{{owner}}`, `{{repo}}`, `{{source}}`, `{{target}}`, `{{release_pr_branch}}`, `{{protected}}`. */
+export function renderReleaseTemplate(template: string, v: ReleaseTemplateVars): string {
+  const values: Record<string, string> = {
+    owner: v.owner,
+    repo: v.repo,
+    source: v.source,
+    target: v.target,
+    release_pr_branch: v.release_pr_branch.replace("{target}", v.target),
+    protected: v.protected.join(", "),
+  };
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (all, name: string) => values[name] ?? all);
 }
 
 /** Nota acrescentada quando a sessão interrompida recomeça do zero (sem o transcript, ou por escolha). */

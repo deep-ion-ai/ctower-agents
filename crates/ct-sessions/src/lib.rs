@@ -1,11 +1,13 @@
 //! Ciclo de vida das sessões: lançamento, hooks, backup de transcripts e
 //! recuperação. Síncrono; o servidor chama daqui via `spawn_blocking`.
 
+pub mod autonomy;
 pub mod cleanup;
 pub mod cleanup_branches;
 pub mod cleanup_sessions;
 pub mod cleanup_worktree;
 pub mod config;
+pub mod diff;
 pub mod docs;
 pub mod files;
 pub mod github;
@@ -15,6 +17,7 @@ mod launch;
 pub mod paths;
 mod prune;
 mod recovery;
+pub mod release;
 pub mod remote;
 mod secrets;
 pub mod shell;
@@ -66,6 +69,18 @@ pub enum SessionsError {
     /// O ambiente efetivo da sessão impede o Remote Control (issue #197).
     #[error("{0}")]
     RemoteControl(String),
+    /// A branch de integração do modo autônomo não alinha com a base sem
+    /// conflito (#181): a issue autônoma não começa.
+    #[error("{0}")]
+    AutonomyConflict(String),
+    /// A issue não tem o rótulo de aprovação que o projeto exige para
+    /// iniciar sessão (#124). A mensagem começa com
+    /// `ct_core::APPROVAL_REFUSAL_PREFIX`.
+    #[error("{0}")]
+    ApprovalRequired(String),
+    /// Já há uma sessão de release viva no projeto (#204).
+    #[error("{0}")]
+    ReleaseBusy(String),
 }
 
 pub type Result<T> = std::result::Result<T, SessionsError>;
@@ -125,6 +140,9 @@ struct Inner {
     session_tokens: Mutex<HashMap<String, String>>,
     /// Shells livres vivos (#428), só em memória.
     shells: Mutex<HashMap<String, shell::LiveShell>>,
+    /// Serializa a conferência "uma sessão de release viva por projeto" com
+    /// a criação da sessão (#204).
+    release_start: Mutex<()>,
     notify: Notifier,
 }
 
@@ -145,6 +163,7 @@ impl Sessions {
                 masks: Mutex::new(HashMap::new()),
                 session_tokens: Mutex::new(HashMap::new()),
                 shells: Mutex::new(HashMap::new()),
+                release_start: Mutex::new(()),
                 notify,
             }),
         }

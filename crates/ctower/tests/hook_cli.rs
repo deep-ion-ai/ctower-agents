@@ -21,6 +21,7 @@ fn ctower() -> Command {
         "CTOWER_ISSUE",
         "CTOWER_TRACKER",
         "CTOWER_ISSUE_KEY",
+        "CTOWER_AUTONOMY_BRANCH",
         "CLAUDE_CODE_BRIDGE_SESSION_ID",
     ] {
         c.env_remove(v);
@@ -568,6 +569,48 @@ fn gh_recebe_ambiente_nao_interativo() {
         .success();
 }
 
+/// #184: na sessão autônoma, `gh pr merge` só passa com o PR na branch de
+/// integração (com ou sem número); outra base, mesmo não protegida, bloqueia.
+#[test]
+fn sessao_autonoma_so_mescla_na_branch_de_integracao() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = repo_on("feat/7-login");
+    let spool = TempDir::new().unwrap();
+    let bin = TempDir::new().unwrap();
+    let gh_with = |base: &str| {
+        let gh = bin.path().join(format!("gh-{}", base.replace('/', "-")));
+        std::fs::write(&gh, format!("#!/bin/sh\necho {base}\n")).unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        gh
+    };
+    let run = |gh: &Path, cmd: &str| {
+        ctower()
+            .args(["hook", "pre-tool-use"])
+            .env("CTOWER_SESSION", "s1")
+            .env("CTOWER_SPOOL_DIR", spool.path())
+            .env("CTOWER_AUTONOMY_BRANCH", "wip/autonoma")
+            .env("CTOWER_GH", gh)
+            .write_stdin(bash_payload(cmd, r.path()))
+            .assert()
+    };
+    let wip = gh_with("wip/autonoma");
+    run(&wip, "gh pr merge 9 --rebase").success();
+    run(&wip, "gh pr merge --rebase").success();
+    let other = gh_with("feature-x");
+    run(&other, "gh pr merge 9 --rebase")
+        .code(2)
+        .stderr(contains("wip/autonoma").and(contains("feature-x")));
+    // Sem a variável (sessão comum), a base não protegida passa.
+    ctower()
+        .args(["hook", "pre-tool-use"])
+        .env("CTOWER_SESSION", "s1")
+        .env("CTOWER_SPOOL_DIR", spool.path())
+        .env("CTOWER_GH", &other)
+        .write_stdin(bash_payload("gh pr merge 9 --rebase", r.path()))
+        .assert()
+        .success();
+}
+
 #[test]
 fn erro_de_argumento_sai_com_zero() {
     ctower()
@@ -730,6 +773,47 @@ fn gestor_bloqueia_escritas_e_tokens_e_pede_confirmacao_para_issue() {
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
+}
+
+/// Sessão de release (#204): `gh pr merge` e `git push` para main/develop
+/// bloqueados mesmo com a branch de feature no clone; `ctower release` e a
+/// leitura passam.
+#[test]
+fn release_bloqueia_merge_e_push_e_libera_ctower_release() {
+    let r = repo_on("develop");
+    let spool = TempDir::new().unwrap();
+    let run = |cmd: &str| {
+        ctower()
+            .args(["hook", "pre-tool-use"])
+            .env("CTOWER_SESSION", "s-release")
+            .env("CTOWER_SESSION_KIND", "release")
+            .env("CTOWER_PROTECTED", "develop,main")
+            .env("CTOWER_SPOOL_DIR", spool.path())
+            // Base do PR desconhecida: o perfil release bloqueia de qualquer forma.
+            .env("CTOWER_GH", "false")
+            .write_stdin(bash_payload(cmd, r.path()))
+            .assert()
+    };
+    for cmd in [
+        "gh pr merge 12 --merge",
+        "gh pr merge 12 --squash",
+        "gh pr merge 12 --rebase --admin",
+        "git push origin main",
+        "git push origin HEAD:develop",
+        "git merge main",
+        "gh api -X PUT repos/acme/acme-web/pulls/12/merge -f merge_method=merge",
+    ] {
+        run(cmd).code(2).stderr(contains("Bloqueado"));
+    }
+    for cmd in [
+        "ctower release merge-promotion --sha abc1234",
+        "ctower release approve-runs 12",
+        "gh pr view 12 --json headRefOid",
+        "gh run rerun 99 --failed",
+        "git fetch origin",
+    ] {
+        run(cmd).success().stdout(predicate::str::is_empty());
+    }
 }
 
 #[test]

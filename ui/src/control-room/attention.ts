@@ -7,7 +7,7 @@ import type { HubUpdateStatus, Warning } from "../protocol/hub-gen";
 import { isBackupWarning, type MaintenanceSection } from "../maintenance/sections";
 import { askKey, type Alert, type Ask } from "../state/tower";
 import { duration } from "../util/time";
-import { isJiraProject, itemShort, PROJECT_ITEM, trackerLabel } from "../util/item";
+import { isJiraProject, itemShort, trackerLabel, itemRef, noIssue } from "../util/item";
 import { permissionText } from "../terminal/permission";
 import { rcOn, rcUrl } from "../terminal/remote";
 import { DOCS_HELP_URL } from "../project/docs";
@@ -169,7 +169,7 @@ export function lookup(
 export function itemLabel(project?: Project, wi?: DashboardWorkItem, gestor = false, scope?: GestorScope): string {
   if (gestor) return gestorLabel(scope);
   if (!wi) return "sessão sem work item";
-  if (wi.gh_number === PROJECT_ITEM) return `${project ? project.name + " · " : ""}sessão do projeto`;
+  if (noIssue(wi.gh_number)) return `${project ? project.name + " · " : ""}${itemRef(wi.gh_number)}`;
   const t = wi.title ? ` ${wi.title}` : "";
   return `${project ? project.name + " " : ""}${itemShort(project, wi.gh_number)}${t}`;
 }
@@ -180,7 +180,7 @@ export function issueRef(
   wi?: Pick<DashboardWorkItem, "gh_number">,
   gestor = false,
 ): { owner: string; repo: string; number: number } | null {
-  return !gestor && wi && project && wi.gh_number !== PROJECT_ITEM
+  return !gestor && wi && project && !noIssue(wi.gh_number)
     ? { owner: project.gh_owner, repo: project.gh_repo, number: wi.gh_number }
     : null;
 }

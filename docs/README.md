@@ -8,6 +8,7 @@ Um documento por linha, com quem deve ler. A visão geral do projeto está no [R
 | --- | --- | --- |
 | [`ambiente.md`](ambiente.md) | quem instala e opera um ambiente (`ctowerd`) | instalação, `config.toml`, permissões pela UI, sync com GitHub, Jira e GitLab, logs, atualização e limpeza |
 | [`ambiente-macos.md`](ambiente-macos.md) | quem roda um ambiente nativo no macOS | LaunchAgent, login automático, montagem dos docs dos projetos |
+| [`ambiente-autonomo.md`](ambiente-autonomo.md) | quem roda as sessões autônomas (piloto automático) | ambiente em container no Linux: tokens restritos, subida automática, conta do plano com login por token, atualização e remoção |
 | [`app.md`](app.md) | quem usa o app desktop | instalação no macOS e compilação no Linux e no Windows |
 | [`acesso-remoto.md`](acesso-remoto.md) | quem quer a UI web (PWA) no celular | `tailscale serve` e Cloudflare Tunnel com Access |
 
@@ -25,4 +26,5 @@ Um documento por linha, com quem deve ler. A visão geral do projeto está no [R
 | [`ci.md`](ci.md) | quem mexe no CI | workflows, matriz de jobs e runners |
 | [`release.md`](release.md) | quem mantém o repositório | como uma versão é publicada pelo release-please |
 | [`ui-roteiro-manual.md`](ui-roteiro-manual.md) | quem testa a UI à mão | roteiro de teste manual do app |
+| [`../docker/test/README.md`](../docker/test/README.md) | quem testa uma branch de ponta a ponta | hub e ambiente de teste em Docker, isolados do ambiente de uso diário |
 | `superpowers/specs/` e `superpowers/plans/` | quem quer entender o desenho | specs, planos e roadmap |

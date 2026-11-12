@@ -3,14 +3,15 @@
 // gestor com o escopo do projeto, as propostas dele (#100) e as revisões
 // (#101). As regras ficam em overview.ts.
 import { useEffect, useId, useMemo, useState } from "react";
-import type { HubProject } from "../protocol/hub-gen";
+import type { AutonomyWip, HubProject } from "../protocol/hub-gen";
+import { aheadText, ciText } from "../hub/autopilot";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 import { GestorLauncher } from "../hub/HubGestor";
 import { kindText, SEVERITY_TEXT, SEVERITY_TONE, useHubHealth } from "../hub/HubHealth";
 import { hubTab } from "../hub/sections";
 import { plural } from "../shell/summary";
-import { itemShort } from "../util/item";
+import { itemShort, noIssue } from "../util/item";
 import { projectSignals } from "./overview";
 import { runProjectSync, useSyncRun, type ProjectSyncInfo } from "./sync-now";
 import { SYNC_DESKTOP_NOTE, SyncStatus } from "./SyncNow";
@@ -20,7 +21,7 @@ import { ProposalItem, ProposalNote, useHubProposals, useProposalBatch } from ".
 import { CARD_WIDTH_TEXT, CARD_WIDTHS, useCardWidth, type CardWidth } from "./ui-store";
 import { pendingInOrder } from "../hub/proposalOrder";
 import type { Review } from "../protocol/gen";
-import { changeLabel, changeRef, forgeLabel, PROJECT_ITEM } from "../util/item";
+import { changeLabel, changeRef, forgeLabel } from "../util/item";
 import type { Clone } from "./clones";
 import { entryName, markPr, markReviewed, openPr, projectEntries, useReviewEntries, type ReviewEntry } from "../review/entries";
 import { noteReviewed, reviewKey, useReviews, wasReviewed } from "../review/ui-store";
@@ -175,6 +176,84 @@ export function ProjectGestorCard({ owner, repo }: { owner: string; repo: string
       <div className="hub-card-msg">
         <GestorLauncher project={{ owner, repo }} />
       </div>
+    </section>
+  );
+}
+
+/**
+ * Modo autônomo (#185): a branch de integração (`wip/autonoma`) com o
+ * número de issues à frente da base (as mescladas nela que ainda estão em
+ * revisão), o link do PR rascunho para a base e o aviso de conflito. Lê
+ * `hub.autopilot.wip` e relê com o push `hub.autopilot.changed`; num hub
+ * anterior à 1.20 fica só com o aviso de conflito (`warning`).
+ */
+export function ProjectAutonomyCard({
+  owner,
+  repo,
+  warning,
+  onSettings,
+}: {
+  owner: string;
+  repo: string;
+  warning: string | null;
+  onSettings(): void;
+}) {
+  const { api, hub } = useTower();
+  const [wip, setWip] = useState<AutonomyWip | null>(null);
+
+  useEffect(() => {
+    if (!hub.connected) return;
+    let live = true;
+    const load = () =>
+      api
+        .hubCall<AutonomyWip[]>("hub.autopilot.wip", { owner, repo })
+        .then((w) => live && setWip(w[0] ?? null))
+        .catch(() => live && setWip(null));
+    void load();
+    const off = api.onHubPush((e) => {
+      if (e.event === "hub.autopilot.changed" || e.event === "hub_sync_status") void load();
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [api, hub.connected, owner, repo]);
+
+  if (!wip && !warning) return null;
+  return (
+    <section className="hub-card" aria-labelledby="pj-ov-auto">
+      <div className="hub-card-head">
+        <h2 id="pj-ov-auto">Modo autônomo</h2>
+        <button type="button" className="btn btn-sm" onClick={onSettings}>
+          Ver modo autônomo
+        </button>
+      </div>
+      {wip && (
+        <p className="hub-card-msg" aria-label="Branch de integração">
+          <span className="mono">{wip.branch}</span>: {aheadText(wip)}
+          {wip.ahead.length > 0 && (
+            <span className="hub-card-sub muted">{wip.ahead.map((i) => `#${i.number}`).join(", ")} em revisão</span>
+          )}
+          {wip.error && (
+            <span className="hub-card-sub" role="alert">
+              Erro na branch: {wip.error}. Nenhuma issue autônoma começa até a branch voltar a alinhar.
+            </span>
+          )}
+          {wip.pr_url && (
+            <span className="hub-card-sub">
+              <a href={wip.pr_url} target="_blank" rel="noreferrer">
+                PR {wip.branch} → {wip.base}
+              </a>{" "}
+              <span className="muted">({ciText(wip.ci)})</span>
+            </span>
+          )}
+        </p>
+      )}
+      {warning && (
+        <p role="alert" className="start-error">
+          {warning}: nenhuma issue autônoma começa até alguém resolver.
+        </p>
+      )}
     </section>
   );
 }
@@ -431,7 +510,7 @@ export function ProjectReviewsCard({ clones }: { clones: readonly Clone[] }) {
     const pr = openPr(e.review);
     return [
       plural(e.count, "decisão pendente", "decisões pendentes"),
-      e.ghNumber === PROJECT_ITEM
+      noIssue(e.ghNumber)
         ? "sessões sem issue associada"
         : pr
           ? `${changeRef(e.project, pr.number)} aberto`

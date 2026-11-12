@@ -2,12 +2,15 @@
 //! sessões, decisões e eventos (spec §5).
 
 mod backup;
+mod checks;
 mod decisions;
 mod error;
 mod events;
+mod feedback_text;
 mod github;
 mod hub;
 mod hub_config;
+mod pr_review;
 mod projects;
 mod prune;
 mod rules;
@@ -20,13 +23,25 @@ mod tree;
 mod work_items;
 
 pub use backup::{db_user_version, snapshot_db};
+pub use checks::{
+    checks_state, CheckSource, ChecksRead, ChecksState, PrCheck, PrChecks, PrChecksFetch,
+    PrChecksSnapshot, PrChecksSummary,
+};
 pub use decisions::{Decision, NewDecision};
 pub use error::{LedgerError, Result};
 pub use events::{Event, NewEvent};
+pub use feedback_text::{
+    check_log_text, neutralize, pr_feedback_text, CheckLogTail, FeedbackTextOptions, DATA_CLOSE,
+    DATA_NOTICE, DATA_OPEN, EXTERNAL_NOTICE, MAX_BODY_BYTES,
+};
 pub use github::{
     gh_epic_merged_uid, gh_issue_closed_uid, gh_issue_gone_uid, gh_pr_uid, GithubApplied,
     GithubSnapshot, GoneIssue, IssueMeta, IssueRow, PrRow, SyncState, GH_ISSUE_GONE_CAUSE,
     GH_ISSUE_GONE_REASON,
+};
+pub use hub::IssueAgent;
+pub use hub::{
+    digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
 };
 pub use hub::{list_snapshots, rotate_snapshots, IssuedEnvToken, AGENT_TOKEN_PREFIX};
 pub use hub::{
@@ -35,9 +50,17 @@ pub use hub::{
     AgentSession, AgentWorkItem,
 };
 pub use hub::{
-    AssignmentAdded, AssignmentFilter, AssignmentState, DeleteImpact, HubAssignment,
-    HubProjectPatch, HubTrackerStatus, LegacyAdoption, NewHubProject, ProjectAdded,
+    ApprovalStatus, AssignmentAdded, AssignmentFilter, AssignmentState, DeleteImpact,
+    HubAssignment, HubProjectPatch, HubTrackerStatus, LegacyAdoption, NewHubProject, ProjectAdded,
     ProjectProvider, QuarantineGroup,
+};
+pub use hub::{
+    AutopilotEvent, AutopilotSession, AutopilotSettings, CloseState, IdleSession, ParkedSession,
+    WaitingSession, AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN,
+    AUTOPILOT_IDLE_TIMEOUT_MAX_MIN, AUTOPILOT_MAX_CI_ATTEMPTS_CEILING,
+    AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT, AUTOPILOT_MAX_PER_ENV_CEILING,
+    AUTOPILOT_MAX_PER_ENV_DEFAULT, AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN,
+    AUTOPILOT_WAITING_TIMEOUT_MAX_MIN,
 };
 pub use hub::{
     ChannelStates, HubPushDevice, NewPushSubscription, PushEvent, PushNotice, PushTarget,
@@ -64,6 +87,10 @@ pub use hub::{
 pub use hub::{HubWebSession, IssuedWebSession, WEB_SESSION_TOUCH_MS};
 pub use hub_config::{
     ConfigApplied, ConfigDone, ConfigProject, ConfigRemoved, ConfigResponse, DoneResponse,
+};
+pub use pr_review::{
+    is_external_association, ChangesRequest, PrFeedback, PrReviews, ReviewTarget, ReviewThread,
+    TRUSTED_ASSOCIATIONS,
 };
 #[cfg(test)]
 pub(crate) use projects::ProjectPatch;

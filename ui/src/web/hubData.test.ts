@@ -37,6 +37,8 @@ const wi = (id: number, gh: number, project_id = 1) => ({
   closed_at: null,
   priority: null,
   rank: null,
+  model: null,
+  effort: null,
 });
 
 test("hub 1.3 (sem online): ambientes e estado pelo último envio ao hub", () => {

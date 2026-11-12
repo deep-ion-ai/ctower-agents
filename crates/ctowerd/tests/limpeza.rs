@@ -595,6 +595,7 @@ fn branch_local_de_pr_mesclado_sai_e_protegidas_ficam() {
             synced_at: 1,
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         })
         .unwrap();
     }

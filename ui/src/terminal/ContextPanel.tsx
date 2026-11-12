@@ -17,12 +17,13 @@ import { DecisionCard, EVENTS_PAGE, EventItem, pendingDecision, PR_TEXT, STATE_T
 import { Icon } from "../shell/icons";
 import { useNav, type Tab } from "../state/nav";
 import { useTower } from "../state/tower";
-import { changeLabel, changeRef, forgeLabel, itemTitle, PROJECT_ITEM } from "../util/item";
+import { changeLabel, changeRef, forgeLabel, itemShort, itemTitle, noIssue } from "../util/item";
 import { ago, duration } from "../util/time";
 import { prUrl } from "./actions";
 import type { TabInfo } from "./SessionTree";
 import { SessionUsageSection } from "./SessionUsageSection";
 import { SharedFiles } from "../files/SharedFiles";
+import { diffBlocked, diffTab } from "../diff/diff";
 
 /** Debounce da recarga por push (§3.1). */
 export const CONTEXT_RELOAD_MS = 1000;
@@ -97,14 +98,15 @@ interface PastSession {
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 export function ContextPanel({ tab, info, onClose }: { tab: Tab; info: TabInfo; onClose: () => void }) {
-  const { api, hub, infos, dashboards } = useTower();
+  const { api, hub, infos, dashboards, status, envs } = useTower();
   const nav = useNav();
   const now = useNow();
   const { s, wi, project, gestor, scope } = info;
   const env = tab.env;
   const d = dashboards[env];
   const wiId = s?.work_item_id ?? wi?.id ?? null;
-  const zero = wi?.gh_number === PROJECT_ITEM;
+  const zero = noIssue(wi?.gh_number);
+  const diffOff = diffBlocked(wi, infos[env], status[env]?.connected !== false, envs.find((e) => e.id === env)?.name ?? env);
   // Sessões anteriores pelo hub (o ambiente não lista as sessões encerradas).
   const hubRef = !gestor && wi && project ? { owner: project.gh_owner, repo: project.gh_repo, number: wi.gh_number } : null;
   const hubKey = hub.up && hubRef ? `${hubRef.owner}/${hubRef.repo}#${hubRef.number}` : null;
@@ -343,6 +345,19 @@ export function ContextPanel({ tab, info, onClose }: { tab: Tab; info: TabInfo; 
                 {zero && worktree && <span className="pane-warn"> clone principal</span>}
               </dd>
             </dl>
+            {!zero && (
+              <p className="ctx-diff">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={diffOff !== null}
+                  title={diffOff ?? "Ver o diff do código da worktree"}
+                  onClick={() => nav.openTab(diffTab(env, wi.id, itemShort(project, wi.gh_number)))}
+                >
+                  Ver diff
+                </button>
+              </p>
+            )}
             <h4 className="ctx-sub">
               Sessões anteriores <span className="n">{sessions.length}</span>
             </h4>

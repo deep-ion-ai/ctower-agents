@@ -9,7 +9,14 @@ import type {
   WorkItemSummary,
 } from "../protocol/gen";
 import type { HubDecision, HubHistory, HubRanking, HubSession, Priority } from "../protocol/hub-gen";
-import { agentLabel } from "../settings/session-options";
+import {
+  agentLabel,
+  CLAUDE_EFFORTS,
+  CLAUDE_MODELS,
+  DEFAULT_EFFORT_VALUE,
+  DEFAULT_MODEL_VALUE,
+  issueAgentLabel,
+} from "../settings/session-options";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 import { useOpenShell } from "../terminal/shells";
@@ -30,7 +37,9 @@ import { IssueBodyModal } from "./IssueBodyModal";
 import { STATUS } from "./status";
 import { StatusMenu } from "./StatusMenu";
 import { mergedOpen, mergedOpenText } from "./TreeRow";
+import { AWAITING_APPROVAL_TEXT, awaitingApproval, type ApprovalProject } from "./approval";
 import { DesktopOnly } from "../web/DesktopOnly";
+import { diffBlocked, diffTab } from "../diff/diff";
 import { DISCARD_LABEL, useDiscard } from "../recovery/discard";
 
 export const PR_TEXT: Record<PrState, string> = { open: "aberto", merged: "mesclado", closed: "fechado" };
@@ -45,13 +54,22 @@ export const STATE_TEXT = {
 } as const;
 /** Eventos por página da linha do tempo. */
 export const EVENTS_PAGE = 5;
+/** Protocolo do hub com `hub.workitem.set_model` (modelo e esforço por issue, #182). */
+export const ISSUE_MODEL_PROTOCOL = "1.16";
 /** Protocolo do hub com `hub.workitem.body` ("Ver issue", #434). */
 export const WORKITEM_BODY_PROTOCOL = "1.10";
 
 /** Nó da árvore (hub ou local) que o painel mostra. Prioridade só no hub. */
 export interface PanelNode {
   issue: IssueRow;
-  work_item: { status: WorkItemStatus; branch: string | null; priority?: Priority | null } | null;
+  work_item: {
+    status: WorkItemStatus;
+    branch: string | null;
+    priority?: Priority | null;
+    /** Modelo e esforço do agente na issue (#182), só no hub. */
+    model?: string | null;
+    effort?: string | null;
+  } | null;
   summary: WorkItemSummary;
 }
 
@@ -127,7 +145,7 @@ export function WorkItemPanel({
 }: {
   node: PanelNode;
   /** O projeto do item: `owner`/`repo` e o provedor das referências (#352). */
-  project: ProviderProject;
+  project: ProviderProject & ApprovalProject;
   /** Base do projeto: PR mesclado nela com a issue aberta ganha aviso (#375). */
   baseBranch?: string;
   now: number;
@@ -147,7 +165,7 @@ export function WorkItemPanel({
   /** O status mudou no hub: a tela relê a árvore. */
   onStatusChanged?: () => void;
 }) {
-  const { api, hub, dashboards, web, envs, status } = useTower();
+  const { api, hub, dashboards, web, envs, status, infos } = useTower();
   const openShell = useOpenShell();
   const nav = useNav();
   const discard = useDiscard();
@@ -170,6 +188,16 @@ export function WorkItemPanel({
           ?.work_items.find((w) => w.gh_number === n);
         return wi?.worktree_path ? [{ env: e.id, name: e.name, workItemId: wi.id }] : [];
       });
+  // Diff do código (#168): nos ambientes online onde o item tem worktree,
+  // também na web (o daemon calcula, pelo hub).
+  const diffEnvs = envs.flatMap((e) => {
+    const wi = dashboards[e.id]?.projects
+      .find((p) => same(p.project.gh_owner, owner) && same(p.project.gh_repo, repo))
+      ?.work_items.find((w) => w.gh_number === n);
+    if (!wi?.worktree_path) return [];
+    const off = diffBlocked(wi, infos[e.id], status[e.id]?.connected !== false, e.name);
+    return [{ env: e.id, name: e.name, workItemId: wi.id, off }];
+  });
   // O que do hub diz respeito a este item: se mudar, o histórico é relido.
   const hubItem = hub.dashboard?.projects
     .find((p) => same(p.project.gh_owner, owner) && same(p.project.gh_repo, repo))
@@ -184,12 +212,18 @@ export function WorkItemPanel({
   // 0 é o espelho sem data: sem subtítulo.
   const updatedAt = node.issue.updated_at || null;
   const priority: Priority | null = (hubUp ? hubItem?.priority : undefined) ?? node.work_item?.priority ?? null;
+  // Modelo e esforço do agente (#182): do hub (ausentes num hub anterior).
+  const agentSrc = hubUp && hubItem && hubItem.model !== undefined ? hubItem : node.work_item;
+  const agent = { model: agentSrc?.model ?? null, effort: agentSrc?.effort ?? null };
 
   const [history, setHistory] = useState<HubHistory | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [pages, setPages] = useState(1);
   const [prioMenu, setPrioMenu] = useState(false);
+  const [modelMenu, setModelMenu] = useState(false);
+  const [modelDraft, setModelDraft] = useState(agent.model ?? DEFAULT_MODEL_VALUE);
+  const [effortDraft, setEffortDraft] = useState(agent.effort ?? DEFAULT_EFFORT_VALUE);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [viewing, setViewing] = useState(false);
@@ -244,6 +278,12 @@ export function WorkItemPanel({
       ? `Atualize o hub (protocolo ${hubProtocol}; ver a issue no app pede ${WORKITEM_BODY_PROTOCOL} ou maior)`
       : null;
 
+  // Modelo e esforço (#182): hub anterior ao método, desabilitado com o motivo.
+  const modelBlocked =
+    hubProtocol && versionNewer(ISSUE_MODEL_PROTOCOL, hubProtocol)
+      ? `Atualize o hub (protocolo ${hubProtocol}; modelo e esforço por issue pedem ${ISSUE_MODEL_PROTOCOL} ou maior)`
+      : null;
+
   const setStatus = async (status: WorkItemStatus, reason: string | undefined) => {
     if (!hubUp) return false;
     setBusy(true);
@@ -268,6 +308,7 @@ export function WorkItemPanel({
     try {
       await api.hubCall(method, { owner, repo, number: n, ...params });
       setPrioMenu(false);
+      setModelMenu(false);
       setTick((t) => t + 1);
       onStatusChanged?.();
     } catch (e) {
@@ -283,6 +324,24 @@ export function WorkItemPanel({
       return;
     }
     void hubChange("hub.workitem.set_priority", { priority: p });
+  };
+
+  /** Abre o editor do modelo com o valor atual. */
+  const toggleModelMenu = () => {
+    setModelDraft(agent.model ?? DEFAULT_MODEL_VALUE);
+    setEffortDraft(agent.effort ?? DEFAULT_EFFORT_VALUE);
+    setModelMenu((m) => !m);
+  };
+
+  /** Grava o modelo e o esforço (`hub.workitem.set_model`); sem modelo, limpa os dois. */
+  const saveModel = () => {
+    const model = modelDraft || null;
+    const effort = model ? effortDraft || null : null;
+    if (model === agent.model && effort === agent.effort) {
+      setModelMenu(false);
+      return;
+    }
+    void hubChange("hub.workitem.set_model", { model, effort });
   };
 
   /** Sobe ou desce uma posição dentro da classe (vizinho pelo `hub.ranking.get` do projeto). */
@@ -485,6 +544,11 @@ export function WorkItemPanel({
                 {priority}
               </span>
             )}
+            {agent.model && (
+              <span className="iv-chip" title="Modelo e esforço do agente nesta issue">
+                {issueAgentLabel(agent)}
+              </span>
+            )}
             {warn && (
               <span
                 className="badge"
@@ -492,6 +556,15 @@ export function WorkItemPanel({
                 title={`O ${change(pr?.number ?? 0)} foi mesclado em ${baseBranch} sem fechar a issue (faltou Closes ${ref(n)})`}
               >
                 {mergedOpenText(project)}
+              </span>
+            )}
+            {awaitingApproval(node, project) && (
+              <span
+                className="badge"
+                data-tone="attention"
+                title={`Sem o rótulo "${project.approval?.label.trim()}", que o projeto exige para iniciar sessão`}
+              >
+                {AWAITING_APPROVAL_TEXT}
               </span>
             )}
             {node.work_item?.branch && (
@@ -527,6 +600,18 @@ export function WorkItemPanel({
               onClick={() => void openShell(x.env, x.workItemId)}
             >
               {shellEnvs.length > 1 ? `Abrir shell no worktree · ${x.name}` : "Abrir shell no worktree"}
+            </button>
+          ))}
+          {diffEnvs.map((x) => (
+            <button
+              key={`diff:${x.env}`}
+              type="button"
+              className="btn"
+              disabled={x.off !== null}
+              title={x.off ?? `Ver o diff do código da worktree no ambiente ${x.name}`}
+              onClick={() => nav.openTab(diffTab(x.env, x.workItemId, ref(n)))}
+            >
+              {diffEnvs.length > 1 ? `Ver diff · ${x.name}` : "Ver diff"}
             </button>
           ))}
           <button type="button" className="btn" onClick={() => void open(node.issue.url)}>
@@ -600,6 +685,52 @@ export function WorkItemPanel({
                     note="Reordenar fica no app desktop"
                   />
                 )}
+              </div>
+            )}
+          </div>
+          <div className="status-menu">
+            <button
+              type="button"
+              className="btn"
+              aria-controls="model-pop"
+              aria-expanded={modelMenu}
+              disabled={!hubUp || modelBlocked !== null}
+              title={modelBlocked ?? "Modelo e esforço com que a sessão desta issue inicia"}
+              onClick={toggleModelMenu}
+            >
+              Modelo: {issueAgentLabel(agent)} ▾
+            </button>
+            {modelMenu && hubUp && (
+              <div id="model-pop" className="status-pop" role="group" aria-label="Mudar modelo e esforço">
+                <label className="opt">
+                  <span>Modelo</span>
+                  <select value={modelDraft} disabled={busy} onChange={(e) => setModelDraft(e.target.value)}>
+                    <option value={DEFAULT_MODEL_VALUE}>sem modelo</option>
+                    {CLAUDE_MODELS.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="opt">
+                  <span>Esforço</span>
+                  <select
+                    value={effortDraft}
+                    disabled={busy || !modelDraft}
+                    onChange={(e) => setEffortDraft(e.target.value)}
+                  >
+                    <option value={DEFAULT_EFFORT_VALUE}>padrão</option>
+                    {CLAUDE_EFFORTS.map((x) => (
+                      <option key={x.value} value={x.value}>
+                        {x.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button type="button" className="opt" disabled={busy} onClick={saveModel}>
+                  Salvar
+                </button>
               </div>
             )}
           </div>

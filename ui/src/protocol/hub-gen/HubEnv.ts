@@ -16,4 +16,9 @@ cleanup: CleanupSummary | null,
  * PWA §5.4, #198). Não fica no `hub.db`: o `cthubd` preenche em
  * `hub.envs.list` e `hub.dashboard.get` (a leitura do banco dá `false`).
  */
-online: boolean, };
+online: boolean, 
+/**
+ * Marcado como ambiente autônomo (#181): pode rodar as sessões
+ * autônomas de um projeto. Ausente num hub anterior: não.
+ */
+autonomous: boolean, };

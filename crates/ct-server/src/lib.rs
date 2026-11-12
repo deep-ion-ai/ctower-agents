@@ -17,6 +17,7 @@ pub mod hub_config;
 pub mod hub_sync;
 mod mcp;
 mod mcp_gestor;
+mod mcp_pr;
 pub mod permissions;
 pub mod plan;
 pub mod update;
@@ -61,8 +62,33 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// `hub.config.changed` (o hub avisa pelo canal que a configuração mudou, e
 /// o pull roda na hora). 2.14 (#167): `file.read`, `files.shared`,
 /// `docs.list` e o push `session_files` (visualizador de markdown, também
-/// pelo canal do hub).
-pub const PROTOCOL_VERSION: &str = "2.14";
+/// pelo canal do hub). 2.15 (#168): `git.diff`, `git.diff_file` e
+/// `git.commits` (visualizador de diff da worktree do work item, também pelo
+/// canal do hub). 2.16 (#181): modo autônomo — `autonomy`, `autonomy_runner`
+/// e `autonomy_report` em `Project`, `autonomous` no `session.start` (sessão
+/// autônoma, que sai da branch de integração), `autonomy.align` (também pelo
+/// canal do hub), o erro `AUTONOMY_CONFLICT` (-32050) e o alerta
+/// `autonomy_conflict`. 2.17 (#182): `effort` (`--effort`) em
+/// `session.start|start_project|start_gestor` e a ferramenta MCP
+/// `issue_propose_model`. 2.18 (#124): `approval` em `Project` (rótulo
+/// de aprovação, vindo do hub), `override_approval` no `session.start` e a
+/// recusa `APPROVAL_REQUIRED` (-32052) da issue sem o rótulo exigido. 2.19
+/// (#191): `prompt` opcional no `session.start` com `autonomous: true` (o
+/// ambiente monta com `session_templates.autonomous` ou o template padrão)
+/// e `autonomous` em `SessionTemplates`. 2.20 (#183): `session.continue`
+/// (também pelo canal do hub), que escreve um texto fixo na sessão viva
+/// parada pelo limite real do plano, para o agendador do piloto automático
+/// retomá-la depois do reset. 2.21 (#129): `pr_checks` (resumo dos checks
+/// do head do PR aberto) no `WorkItemSummary` da árvore do projeto. 2.22
+/// (#184): `text` opcional no `session.continue` (o pedido de correção ou de
+/// merge do piloto automático do hub, só numa sessão autônoma, até 16 KB) e
+/// a variável `CTOWER_AUTONOMY_BRANCH` da sessão autônoma (o `ctower hook`
+/// só deixa `gh pr merge` em PR com base na branch de integração).
+/// 2.23 (#204): sessão de release — `release` em `Project` e em
+/// `SessionTemplates`, `session.start_release` (também pelo canal do hub),
+/// o erro `RELEASE_BUSY` (-32053) e as rotas `/session/release/context` e
+/// `/session/release/event` do `ctower release`.
+pub const PROTOCOL_VERSION: &str = "2.23";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -78,6 +104,8 @@ pub struct AppState {
     pub tracker: Option<Arc<JiraGitlabSync>>,
     /// Nome legível deste ambiente (`env_name`).
     pub env_name: Arc<str>,
+    /// Ambiente de teste (`test_mode`, #176).
+    pub test_mode: bool,
     /// Envio deste ambiente ao hub; `None` = não envia.
     pub hub_sender: Option<Arc<hub_sync::HubSender>>,
     /// Atualização do ambiente (`env.check_update`); `None` = desativada.
@@ -123,6 +151,14 @@ pub fn router(state: AppState) -> Router {
             post(env_secrets::rotate_env_key_http),
         )
         .route("/session/secret", post(env_secrets::session_secret_http))
+        .route(
+            "/session/release/context",
+            post(env_secrets::release_context_http),
+        )
+        .route(
+            "/session/release/event",
+            post(env_secrets::release_event_http),
+        )
         .with_state(state)
 }
 
@@ -255,6 +291,7 @@ pub(crate) mod test_util {
                 github: None,
                 tracker: None,
                 env_name: "teste".into(),
+                test_mode: false,
                 hub_sender: None,
                 updates: None,
                 cleanup: None,

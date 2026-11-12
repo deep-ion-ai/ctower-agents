@@ -42,12 +42,17 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.workitem.history",
     // "Ver issue" (#434): só leitura, de passagem, sem gravar.
     "hub.workitem.body",
+    // Prévia do "Criar release" (#204): só leitura, com o token do hub.
+    "hub.release.status",
     // "Adicionar issue pelo ID" (#148): escreve só no espelho do Jira (a
     // issue que o Jira já mostra, que sai na poda sem work item), pelo
     // ambiente de sync.
     "hub.tracker.add_issue",
     "hub.workitem.set_status",
     "hub.workitem.set_priority",
+    // Modelo e esforço do agente na issue (#182): a mesma classe de escrita
+    // da prioridade, que a tela da issue da web também muda.
+    "hub.workitem.set_model",
     "hub.ranking.get",
     "hub.health.get",
     "hub.proposals.list",
@@ -84,6 +89,17 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.logs.tail",
     "hub.logs.follow",
     "hub.logs.unfollow",
+    // Piloto automático (#183, painel na PWA #185): o estado e os eventos
+    // (sem as chaves de conta) e o "pausar tudo", que só reduz o que o
+    // agendador faz; retomar volta ao que a política já permitia.
+    "hub.autopilot.status",
+    "hub.autopilot.events",
+    "hub.autopilot.pause",
+    "hub.autopilot.resume",
+    // Resumo da manhã e branch de integração (#185): só leitura, sem a
+    // chave da conta.
+    "hub.autopilot.digest",
+    "hub.autopilot.wip",
 ];
 
 /// Sensíveis da decisão do épico #205: nunca na web, mesmo com sessão válida.
@@ -105,8 +121,15 @@ pub const WEB_REFUSED: &[&str] = &[
     "hub.projects.move",
     "hub.assignments.add",
     "hub.assignments.remove",
+    // Marca de ambiente autônomo (#181): configuração, só no desktop.
+    "hub.envs.set_autonomous",
+    // Sessões autônomas por ambiente (#183): configuração, só no desktop.
+    "hub.autopilot.set",
     "hub.quarantine.discard",
     "hub.workitem.move",
+    // Feedback de review dos PRs do item (#130): leitura, entra na web
+    // quando a tela da revisão (#131) o usar.
+    "hub.workitem.pr_feedback",
     "hub.rules.set",
     "hub.rules.import",
     "hub.rules.proposals.decide",
@@ -133,6 +156,7 @@ pub const WEB_PUSHES: &[&str] = &[
     "env.online",
     "env.push",
     "hub.update.status",
+    "hub.autopilot.changed",
 ];
 
 /// Erro de método fora da lista do `/web/ws`.

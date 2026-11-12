@@ -431,6 +431,34 @@ impl HubSender {
                 Ok(false) => {}
                 Err(e) => tracing::warn!("hub: relato de {}/{} falhou: {e}", p.gh_owner, p.gh_repo),
             }
+            // Modo autônomo ligado e este é o ambiente dele (#181): a branch
+            // de integração e o PR rascunho, a cada aplicação (o modo mudar
+            // muda o `rev`). A falha vira relato `error` e não impede nada.
+            if r.is_ok() && p.autonomy.enabled && p.autonomy_runner {
+                let pr = self
+                    .config
+                    .github
+                    .as_deref()
+                    .map(|g| g as &dyn ct_sessions::autonomy::PrOpener);
+                match self.sessions.autonomy_setup(p.id, pr) {
+                    Ok(r) => {
+                        if r.state != ct_core::AutonomyState::Ok {
+                            tracing::warn!(
+                                "hub: modo autônomo de {}/{}: {}",
+                                p.gh_owner,
+                                p.gh_repo,
+                                r.message.unwrap_or_default()
+                            );
+                        }
+                        reports += 1;
+                    }
+                    Err(e) => tracing::warn!(
+                        "hub: modo autônomo de {}/{} falhou: {e}",
+                        p.gh_owner,
+                        p.gh_repo
+                    ),
+                }
+            }
         }
         reports
     }
@@ -1039,6 +1067,10 @@ mod tests {
         let p = ConfigProject {
             docs: Default::default(),
             session_templates: Default::default(),
+            autonomy: Default::default(),
+            autonomy_runner: false,
+            approval: Default::default(),
+            release: Default::default(),
             owner: "o".into(),
             repo: "r".into(),
             name: "r".into(),

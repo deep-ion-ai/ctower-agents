@@ -10,7 +10,8 @@ import { STATUS } from "../project/status";
 import { itemTab } from "../project/tabs";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
-import { PROJECT_ITEM } from "../util/item";
+import { itemShort, noIssue } from "../util/item";
+import { diffTab } from "../diff/diff";
 import { ago } from "../util/time";
 import type { Session } from "../protocol/gen";
 import { RESUME_PROMPT } from "../recovery/RecoveryScreen";
@@ -166,14 +167,14 @@ export function WebReview() {
   const rows = envs.flatMap((e) =>
     (dashboards[e.id]?.projects ?? []).flatMap((p) =>
       p.work_items
-        .filter((w) => w.gh_number !== PROJECT_ITEM && (w.status === "em_revisao" || w.pending_decisions > 0))
+        .filter((w) => !noIssue(w.gh_number) && (w.status === "em_revisao" || w.pending_decisions > 0))
         .filter((w) => {
           const k = `${p.project.gh_owner}/${p.project.gh_repo}#${w.gh_number}`.toLowerCase();
           if (seen.has(k)) return false;
           seen.add(k);
           return true;
         })
-        .map((w) => ({ project: p.project, wi: w })),
+        .map((w) => ({ project: p.project, wi: w, env: e })),
     ),
   );
   return (
@@ -189,7 +190,7 @@ export function WebReview() {
         <p className="empty">Nada para revisar.</p>
       ) : (
         <ul className="web-list">
-          {rows.map(({ project, wi }) => {
+          {rows.map(({ project, wi, env }) => {
             const key = `${project.id}:${wi.id}`;
             const canMark = wi.pending_decisions > 0 && onlineFor(project.gh_owner, project.gh_repo).length > 0;
             return (
@@ -221,6 +222,16 @@ export function WebReview() {
                 >
                   Abrir item
                 </button>
+                {/* Diff do código (#168), pelo ambiente online onde está a worktree. */}
+                {wi.worktree_path && status[env.id]?.connected && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => nav.openTab(diffTab(env.id, wi.id, itemShort(project, wi.gh_number)))}
+                  >
+                    Ver diff
+                  </button>
+                )}
                 {canMark && (
                   <button
                     type="button"

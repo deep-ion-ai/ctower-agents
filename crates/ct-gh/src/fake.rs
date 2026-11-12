@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Falha programada: status e cabeçalhos.
-type Failure = (u16, Vec<(String, String)>);
+/// Falha programada: status, cabeçalhos e corpo (`None` = o padrão,
+/// `{"message": "falha programada"}`).
+type Failure = (u16, Vec<(String, String)>, Option<Value>);
 
 struct Route {
     body: Value,
@@ -30,8 +31,14 @@ struct State {
     requests: Vec<(String, Option<String>)>,
     /// (método, caminho) de cada requisição.
     calls: Vec<(String, String)>,
-    /// (caminho, corpo JSON) de cada `POST`.
+    /// (caminho, corpo JSON) de cada `POST`, `PUT` e `PATCH`.
     posted: Vec<(String, Value)>,
+    /// `GET` que responde `302` para outro caminho deste servidor.
+    redirects: HashMap<String, String>,
+    /// Texto servido sem exigir token (o endereço temporário do log).
+    raw: HashMap<String, String>,
+    /// Respostas do `POST /graphql`: (variáveis esperadas, resposta).
+    graphql: Vec<(Value, Value)>,
 }
 
 /// Servidor GitHub falso. As rotas são casadas pelo caminho completo com a
@@ -39,7 +46,10 @@ struct State {
 /// remove (`204`); o de `.../git/refs/heads/<b>` remove também a leitura
 /// `.../git/ref/heads/<b>`, como no GitHub. `DELETE` do que não existe dá o
 /// `422` "Reference does not exist". `POST` numa rota publicada responde
-/// `201` com o corpo dela e guarda o enviado ([`FakeGitHub::posted`]).
+/// `201` com o corpo dela e guarda o enviado ([`FakeGitHub::posted`]);
+/// `PUT` e `PATCH`, o mesmo com `200`. `POST /graphql` responde `200` com a
+/// resposta publicada por [`FakeGitHub::set_graphql`] para as variáveis
+/// enviadas.
 #[derive(Clone)]
 pub struct FakeGitHub {
     addr: SocketAddr,
@@ -118,6 +128,26 @@ impl FakeGitHub {
             .link = Some(next.to_string());
     }
 
+    /// `GET path` (com token) responde `302` para `to`, outro caminho deste
+    /// servidor (o log do job do Actions, #129).
+    pub fn set_redirect(&self, path: &str, to: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .redirects
+            .insert(path.to_string(), to.to_string());
+    }
+
+    /// Publica `text` em `path` como texto, sem exigir token (como o
+    /// endereço temporário para onde o GitHub redireciona o log).
+    pub fn set_text(&self, path: &str, text: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .raw
+            .insert(path.to_string(), text.to_string());
+    }
+
     /// A próxima requisição a `path` recebe `status` com estes cabeçalhos.
     pub fn fail_next(&self, path: &str, status: u16, headers: &[(&str, &str)]) {
         let h = headers
@@ -130,7 +160,41 @@ impl FakeGitHub {
             .fails
             .entry(path.to_string())
             .or_default()
-            .push_back((status, h));
+            .push_back((status, h, None));
+    }
+
+    /// A próxima requisição a `path` recebe `status` com este corpo JSON
+    /// (ex.: o `422` de validação do GitHub, com `errors`).
+    pub fn fail_next_with(&self, path: &str, status: u16, body: Value) {
+        self.state
+            .lock()
+            .unwrap()
+            .fails
+            .entry(path.to_string())
+            .or_default()
+            .push_back((status, vec![], Some(body)));
+    }
+
+    /// Publica a resposta GraphQL (`{"data": ...}` inteiro) das consultas
+    /// cujas `variables` têm todos os campos de `variables` (a última
+    /// publicada vence). Sem resposta publicada, o `POST /graphql` responde
+    /// `200` com o erro `NOT_FOUND`, como o GitHub.
+    pub fn set_graphql(&self, variables: Value, response: Value) {
+        let mut st = self.state.lock().unwrap();
+        st.graphql.retain(|(v, _)| v != &variables);
+        st.graphql.push((variables, response));
+    }
+
+    /// Consultas GraphQL recebidas: as `variables` de cada uma.
+    pub fn graphql_calls(&self) -> Vec<Value> {
+        self.state
+            .lock()
+            .unwrap()
+            .posted
+            .iter()
+            .filter(|(p, _)| p == "/graphql")
+            .map(|(_, b)| b.get("variables").cloned().unwrap_or(Value::Null))
+            .collect()
     }
 
     /// Atraso antes de cada resposta.
@@ -154,10 +218,17 @@ impl FakeGitHub {
         self.state.lock().unwrap().calls.clone()
     }
 
-    /// Corpos dos `POST` recebidos: (caminho, JSON).
+    /// Corpos dos `POST`, `PUT` e `PATCH` recebidos: (caminho, JSON).
     pub fn posted(&self) -> Vec<(String, Value)> {
         self.state.lock().unwrap().posted.clone()
     }
+}
+
+fn out_addr(stream: &TcpStream) -> String {
+    stream
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default()
 }
 
 fn etag_of(v: &Value) -> String {
@@ -202,18 +273,25 @@ fn handle(stream: TcpStream, st: &Mutex<State>) -> std::io::Result<()> {
     let (status, extra, body) = {
         let mut s = st.lock().unwrap();
         let auth_ok = headers.get("authorization") == Some(&format!("Bearer {}", s.token));
-        if let Some((code, h)) = s.fails.get_mut(&path).and_then(VecDeque::pop_front) {
-            (
-                code,
-                h,
-                json!({ "message": "falha programada" }).to_string(),
-            )
+        if let Some((code, h, body)) = s.fails.get_mut(&path).and_then(VecDeque::pop_front) {
+            let body = body.unwrap_or_else(|| json!({ "message": "falha programada" }));
+            (code, h, body.to_string())
+        } else if let Some(text) = s.raw.get(&path) {
+            // Endereço temporário: o cliente não manda o token aqui.
+            if headers.contains_key("authorization") {
+                (400, vec![], "token no redirecionamento".to_string())
+            } else {
+                (200, vec![], text.clone())
+            }
         } else if !auth_ok {
             (
                 401,
                 vec![],
                 json!({ "message": "Bad credentials" }).to_string(),
             )
+        } else if let Some(to) = s.redirects.get(&path) {
+            let loc = format!("http://{}{to}", out_addr(&stream));
+            (302, vec![("Location".to_string(), loc)], String::new())
         } else if method == "DELETE" {
             let read = path.replace("/git/refs/", "/git/ref/");
             let a = s.routes.remove(&path).is_some();
@@ -227,11 +305,28 @@ fn handle(stream: TcpStream, st: &Mutex<State>) -> std::io::Result<()> {
                     json!({ "message": "Reference does not exist" }).to_string(),
                 )
             }
-        } else if method == "POST" {
+        } else if method == "POST" && path == "/graphql" {
+            let sent: Value = serde_json::from_slice(&sent).unwrap_or(Value::Null);
+            let vars = sent.get("variables").cloned().unwrap_or(Value::Null);
+            s.posted.push((path.clone(), sent));
+            let found = s.graphql.iter().rev().find(|(want, _)| {
+                want.as_object()
+                    .is_some_and(|w| w.iter().all(|(k, v)| vars.get(k) == Some(v)))
+            });
+            let body = match found {
+                Some((_, r)) => r.clone(),
+                None => json!({
+                    "data": null,
+                    "errors": [{ "type": "NOT_FOUND", "message": "Could not resolve to a node" }],
+                }),
+            };
+            (200, vec![], body.to_string())
+        } else if matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
             let sent = serde_json::from_slice(&sent).unwrap_or(Value::Null);
             s.posted.push((path.clone(), sent));
+            let code = if method == "POST" { 201 } else { 200 };
             match s.routes.get(&path) {
-                Some(r) => (201, vec![], r.body.to_string()),
+                Some(r) => (code, vec![], r.body.to_string()),
                 None => (404, vec![], json!({ "message": "Not Found" }).to_string()),
             }
         } else if let Some(r) = s.routes.get(&path) {

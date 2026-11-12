@@ -49,14 +49,18 @@ pub enum PushEvent {
     ProposalNew,
     /// "Aguardando você" de sessão viva sem Remote Control.
     NeedsHuman,
+    /// Resumo da manhã do piloto automático (#185): só o projeto, as
+    /// contagens e o link.
+    MorningDigest,
 }
 
 impl PushEvent {
-    pub const ALL: [PushEvent; 4] = [
+    pub const ALL: [PushEvent; 5] = [
         PushEvent::SessionError,
         PushEvent::EnvStale,
         PushEvent::ProposalNew,
         PushEvent::NeedsHuman,
+        PushEvent::MorningDigest,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -65,6 +69,7 @@ impl PushEvent {
             PushEvent::EnvStale => "env_stale",
             PushEvent::ProposalNew => "proposal_new",
             PushEvent::NeedsHuman => "needs_human",
+            PushEvent::MorningDigest => "morning_digest",
         }
     }
 
@@ -568,10 +573,10 @@ impl Hub {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, kind, owner, repo, n, title, jira_key) in rows {
-            let what = if kind == "priority" {
-                "prioridade"
-            } else {
-                "status"
+            let what = match kind.as_str() {
+                "priority" => "prioridade",
+                "model" => "modelo",
+                _ => "status",
             };
             all.push(PushNotice {
                 key: format!("proposal_new:{id}"),
@@ -644,6 +649,19 @@ impl Hub {
             }
         }
         drop(stmt);
+
+        // Resumo da manhã do piloto automático (#185): só o projeto, as
+        // contagens e o link para a Visão geral, nunca texto do agente.
+        for d in self.digests_since(since)? {
+            all.push(PushNotice {
+                key: format!("morning_digest:{}", d.id),
+                event: PushEvent::MorningDigest,
+                title: "Resumo da manhã do piloto automático".into(),
+                body: super::digest_push_body(&d),
+                url: "/?go=hub".into(),
+                tag: "morning_digest".into(),
+            });
+        }
 
         let mut out = Vec::new();
         for n in all {
@@ -1062,6 +1080,68 @@ mod tests {
         assert_eq!(
             service_of("https://web.push.apple.com/abc?x"),
             "web.push.apple.com"
+        );
+    }
+
+    #[test]
+    fn resumo_da_manha_vira_push_so_com_projeto_contagens_e_link() {
+        let hub = Hub::open_in_memory().unwrap();
+        let now = now_ms();
+        // Primeira varredura: só marca.
+        assert!(hub.push_collect_at(now, WINDOW, 0).unwrap().is_empty());
+        let issue = |n: i64| crate::DigestIssue {
+            number: n,
+            title: Some(format!("ACME-{n}: texto que o agente escreveu")),
+            reason: None,
+        };
+        let d = crate::MorningDigest {
+            local_day: 20_000,
+            at: now,
+            since: now - 86_400_000,
+            projects: vec![crate::DigestProject {
+                owner: "acme".into(),
+                repo: "acme-web".into(),
+                name: "acme-web".into(),
+                branch: "wip/autonoma".into(),
+                base: "develop".into(),
+                merged: vec![issue(123), issue(124)],
+                blocked: vec![issue(125)],
+                decisions_pending: 3,
+                decisions_new: 1,
+                ahead: 2,
+                pr_url: Some("https://github.example/acme/acme-web/pull/5".into()),
+                ci: None,
+                conflict: false,
+                error: None,
+            }],
+            usage: vec![crate::DigestUsage {
+                account: "conta-secreta".into(),
+                weekly_used: Some(42.0),
+                resets_at: None,
+                weekly_before: None,
+                delta: None,
+            }],
+            ..Default::default()
+        };
+        hub.save_digest(&d).unwrap().unwrap();
+        let n = hub.push_collect_at(now + 1, WINDOW, 0).unwrap();
+        assert_eq!(n.len(), 1, "{n:?}");
+        assert_eq!(n[0].event, PushEvent::MorningDigest);
+        assert_eq!(n[0].url, "/?go=hub");
+        assert_eq!(
+            n[0].body,
+            "acme-web: 2 mescladas na wip, 1 bloqueada, 3 decisões para revisar, 2 à frente da \
+             base"
+        );
+        // Nada do texto das issues nem da conta.
+        let all = serde_json::to_string(&n[0]).unwrap();
+        assert!(!all.contains("ACME-") && !all.contains("agente"), "{all}");
+        assert!(!all.contains("conta-secreta"), "{all}");
+        // Uma vez só.
+        assert!(hub.push_collect_at(now + 2, WINDOW, 0).unwrap().is_empty());
+        assert_eq!(
+            PushEvent::parse("morning_digest"),
+            Some(PushEvent::MorningDigest)
         );
     }
 }

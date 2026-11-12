@@ -653,7 +653,7 @@ test("template do projeto (#166): override de issue na issue; épico no global; 
         {
           projects: [
             {
-              project: project({ session_templates: { issue: "Override {{key}}: {{title}} em {{branch}}", epic: "", project: "" } }),
+              project: project({ session_templates: { issue: "Override {{key}}: {{title}} em {{branch}}", epic: "", project: "", autonomous: "", release: "" } }),
               work_items: [WI28, WI30],
             },
           ],
@@ -684,6 +684,68 @@ test("template do projeto (#166): override de issue na issue; épico no global; 
   await user.click(within(dialog()).getByRole("button", { name: "Editar template ›" }));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.getByRole("tab", { name: /Configurações › Templates de sessão/, selected: true })).toBeInTheDocument();
+});
+
+describe("rótulo de aprovação (#124)", () => {
+  const EXIGE = { approval: { label: "aprovada", required: true } };
+  const ACME_TREE: ProjectTree = {
+    project: project(EXIGE),
+    sync: sync({ last_ok_at: NOW }),
+    roots: [
+      node(issue(123, "ACME-123 tela de login", { labels: ["bug"] })),
+      node(issue(124, "ACME-124 relatório", { labels: ["Aprovada"] })),
+    ],
+    untracked: [],
+  };
+  function setupAcme() {
+    const api = new FakeDaemonApi()
+      .on("dashboard.get", dashboard({ projects: [{ project: project(EXIGE), work_items: [] }] }))
+      .on("tree.get", ACME_TREE)
+      .on("env.info", { protocol: "2.16", version: "0.1.0", hostname: "ct", worktrees_root: "/home/user/worktrees" })
+      .on("session.start", session({ id: "dddddddd-0000-0000-0000-000000000123", work_item_id: 123 }));
+    render(<App api={api} initial={LOCAL} />);
+    return { api, user: userEvent.setup() };
+  }
+
+  test("selo na linha da issue sem o rótulo; a aprovada não leva", async () => {
+    setupAcme();
+    await screen.findByText("ACME-123 tela de login");
+    expect(rowBtn(/^#123 ACME-123 tela de login, .*aguardando aprovação/)).toBeInTheDocument();
+    expect(rowBtn(/^#124 ACME-124 relatório/).getAttribute("aria-label")).not.toMatch(/aguardando aprovação/);
+  });
+
+  test("modal avisa e só inicia com o 'mesmo assim' confirmado, mandando override_approval", async () => {
+    const { api, user } = setupAcme();
+    await screen.findByText("ACME-123 tela de login");
+    await user.click(play(123));
+    const aviso = within(dialog()).getByRole("alert", { name: "Aguardando aprovação" });
+    expect(aviso).toHaveTextContent(/#123 não tem o rótulo\s*aprovada/);
+    const iniciar = within(dialog()).getByRole("button", { name: /^Iniciar mesmo assim/ });
+    expect(iniciar).toBeDisabled();
+    await user.click(within(aviso).getByRole("checkbox", { name: /Iniciar mesmo assim/ }));
+    await user.click(iniciar);
+    await waitFor(() => expect(api.callsTo("session.start")).toHaveLength(1));
+    expect(api.callsTo("session.start")[0].params).toMatchObject({ gh_number: 123, override_approval: true });
+  });
+
+  test("issue aprovada vai sem override; a recusa do ambiente vira o aviso com o 'mesmo assim'", async () => {
+    const { api, user } = setupAcme();
+    await screen.findByText("ACME-124 relatório");
+    await user.click(play(124));
+    expect(within(dialog()).queryByRole("alert", { name: "Aguardando aprovação" })).toBeNull();
+    api.on("session.start", () => {
+      throw new Error('aguardando aprovação: #124 não tem o rótulo "aprovada", que o projeto exige para iniciar sessão');
+    });
+    await user.click(within(dialog()).getByRole("button", { name: /^Iniciar sessão/ }));
+    const aviso = await within(dialog()).findByRole("alert", { name: "Aguardando aprovação" });
+    expect(aviso).toHaveTextContent(/^aguardando aprovação: #124/);
+    expect(api.callsTo("session.start")[0].params.override_approval).toBeUndefined();
+    api.on("session.start", session({ id: "dddddddd-0000-0000-0000-000000000124", work_item_id: 124 }));
+    await user.click(within(aviso).getByRole("checkbox", { name: /Iniciar mesmo assim/ }));
+    await user.click(within(dialog()).getByRole("button", { name: /^Iniciar mesmo assim/ }));
+    await waitFor(() => expect(api.callsTo("session.start")).toHaveLength(2));
+    expect(api.callsTo("session.start")[1].params.override_approval).toBe(true);
+  });
 });
 
 describe("Só minhas (#151)", () => {

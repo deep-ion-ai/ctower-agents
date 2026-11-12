@@ -5,7 +5,8 @@ use crate::paths::{private_dir, write_private};
 use crate::{Result, Sessions, SessionsError};
 use ct_core::branch::{branch_from_pattern, worktree_dir_name};
 use ct_core::{
-    ProjectKind, SessionMode, SessionState, Tool, WorkItemKind, WorkItemTrigger, CLAUDE_MODELS,
+    ProjectKind, SessionMode, SessionState, Tool, WorkItemKind, WorkItemTrigger, CLAUDE_EFFORTS,
+    CLAUDE_MODELS,
 };
 use ct_git::{ensure_worktree, WorktreeSpec};
 use ct_ledger::{Ledger, NewEvent, NewSession, Project, Session, WorkItem};
@@ -25,6 +26,11 @@ pub struct StartRequest {
     /// Tamanho inicial do PTY; `None` = [`PtySize::DEFAULT`].
     pub size: Option<PtySize>,
     pub agent: AgentOptions,
+    /// "Iniciar mesmo assim" (#124): inicia a issue sem o rótulo de
+    /// aprovação exigido pelo projeto e grava uma decisão `orientada` no
+    /// work item. Só a UI manda, depois da confirmação da pessoa; o gestor e
+    /// as automações (o agendador do piloto automático, #183) nunca.
+    pub override_approval: bool,
 }
 
 /// Modelo e modo de execução do agente, escolhidos ao iniciar a sessão.
@@ -32,6 +38,9 @@ pub struct StartRequest {
 pub struct AgentOptions {
     /// Alias de [`CLAUDE_MODELS`]; `None` = padrão do Claude Code.
     pub model: Option<String>,
+    /// Nível de [`CLAUDE_EFFORTS`] (`--effort`, issue #182); `None` = padrão
+    /// do Claude Code.
+    pub effort: Option<String>,
     pub mode: SessionMode,
     /// Liga o Remote Control do Claude Code (`--remote-control "<nome>"`,
     /// issue #197). Recusado se o ambiente efetivo da sessão o impede.
@@ -39,12 +48,21 @@ pub struct AgentOptions {
 }
 
 impl AgentOptions {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         match &self.model {
             Some(m) if !CLAUDE_MODELS.contains(&m.as_str()) => {
-                Err(SessionsError::Invalid(format!(
+                return Err(SessionsError::Invalid(format!(
                     "modelo não suportado: {m} (aceitos: {})",
                     CLAUDE_MODELS.join(", ")
+                )))
+            }
+            _ => {}
+        }
+        match &self.effort {
+            Some(e) if !CLAUDE_EFFORTS.contains(&e.as_str()) => {
+                Err(SessionsError::Invalid(format!(
+                    "esforço não suportado: {e} (aceitos: {})",
+                    CLAUDE_EFFORTS.join(", ")
                 )))
             }
             _ => Ok(()),
@@ -60,6 +78,9 @@ impl AgentOptions {
         let mut args = Vec::new();
         if let Some(m) = &self.model {
             args.extend(["--model".to_string(), m.clone()]);
+        }
+        if let Some(e) = &self.effort {
+            args.extend(["--effort".to_string(), e.clone()]);
         }
         let mut append = Vec::new();
         if gestor {
@@ -81,6 +102,15 @@ impl AgentOptions {
     }
 }
 
+/// Esforço (`--effort`) do argv de uma sessão já lançada, para a retomada
+/// seguir com ele (#182): o ledger guarda o modelo, não o esforço.
+pub(crate) fn effort_from_argv(argv: &[String]) -> Option<String> {
+    argv.windows(2)
+        .find(|w| w[0] == "--effort")
+        .map(|w| w[1].clone())
+        .filter(|e| CLAUDE_EFFORTS.contains(&e.as_str()))
+}
+
 /// Instrução do modo `subagents`, somada ao system prompt do Claude Code.
 const SUBAGENTS_PROMPT: &str = "Modo subagents (Control Tower): delegue cada tarefa do trabalho \
 a um subagente (ferramenta Agent), com contexto suficiente para executá-la sozinho, em paralelo \
@@ -94,9 +124,10 @@ pub const GESTOR_LIMITS: &str = "Gestor de projetos (Control Tower): limites fix
 1. Leia o hub só pelas ferramentas portfolio_*. Não leia arquivos de token nem de \
 secrets (~/.config/ctower/*.token, ~/.config/ctower/env.key, secrets-cache.age, ~/.config/cthub/, \
 snapshots secrets-*.age) nem chame o hub ou o ambiente por HTTP.
-2. Prioridade e status mudam só por portfolio_propose, que cria uma proposta pendente; o usuário \
-aprova na tela Hub. Nunca diga que uma mudança foi aplicada antes da aprovação; confira com \
-portfolio_list_proposals.
+2. Prioridade, status e o modelo e esforço do agente na issue mudam só por portfolio_propose, que \
+cria uma proposta pendente; o usuário aprova na tela Hub. Nunca diga que uma mudança foi aplicada \
+antes da aprovação; confira com portfolio_list_proposals. Ao criar uma issue, sugira o modelo e o \
+esforço dela (kind model), justificando pelo tamanho, pelo risco e pelas áreas tocadas.
 3. Crie issue (gh issue create -R owner/repo; nos projetos Jira, jira issue create) só depois do \
 ok explícito do usuário nesta conversa. Não edite, feche, reabra, comente nem mude o status de \
 issues (no Jira, nada de jira issue move, edit ou comment); não crie, edite, revise nem mescle PRs \
@@ -105,6 +136,9 @@ ou MRs; não mexa em labels, milestones e repositórios.
 ambientes.
 5. Registre com ledger_record_decision as recomendações aceitas pelo usuário (orientada) e as suas \
 escolhas relevantes (autonoma).
+6. Projeto com wip_limit_reached em portfolio_overview está no limite de trabalho em andamento: \
+não recomende começar trabalho novo nele nem proponha prioridade para isso; mostre \
+\"limite de trabalho em andamento\" com o motivo (N de M).
 Esta sessão não tem repositório no cwd: use -R owner/repo em todo comando gh. Nos projetos Jira, \
 leia a issue pelo comando issue_view do projeto em portfolio_overview, que já traz o comando de \
 credencial (nunca a senha).";
@@ -311,6 +345,18 @@ impl Sessions {
 
     /// Inicia uma sessão nova para o work item, criando worktree e branch se preciso.
     pub fn start(&self, req: StartRequest) -> Result<Session> {
+        self.start_with_base(req, None)
+    }
+
+    /// [`Sessions::start`] com outra base para a worktree: `Some((branch,
+    /// base))` = sessão autônoma (#181), que sai da branch de integração
+    /// `branch` (já alinhada com `base`) e grava o evento
+    /// [`crate::autonomy::AUTONOMY_SESSION`] no work item.
+    pub(crate) fn start_with_base(
+        &self,
+        req: StartRequest,
+        autonomy: Option<(&str, &str)>,
+    ) -> Result<Session> {
         if req.gh_number <= PROJECT_WORK_ITEM {
             return Err(SessionsError::Invalid(format!(
                 "número de issue inválido: {} (sessão sem issue: start_project)",
@@ -323,6 +369,7 @@ impl Sessions {
         if req.agent.remote_control {
             self.check_remote_control(&project)?;
         }
+        let unapproved = self.check_approval(&project, &req)?;
         let wi = self
             .ledger()
             .ensure_work_item(req.project_id, req.gh_number, req.kind)?;
@@ -365,9 +412,18 @@ impl Sessions {
         ensure_worktree(&WorktreeSpec {
             repo_path: Path::new(&project.repo_path),
             branch: &branch,
-            base: &project.base_branch,
+            base: autonomy.map_or(project.base_branch.as_str(), |(b, _)| b),
             worktree_path: &worktree,
         })?;
+        if let Some((integration, base)) = autonomy {
+            self.ledger().append_event(NewEvent {
+                project_id: project.id,
+                work_item_id: Some(wi.id),
+                session_id: None,
+                kind: crate::autonomy::AUTONOMY_SESSION,
+                payload: json!({ "branch": integration, "base": base }),
+            })?;
+        }
         let worktree_str = worktree.to_string_lossy().to_string();
         if wi.branch.as_deref() != Some(&branch)
             || wi.worktree_path.as_deref() != Some(&worktree_str)
@@ -375,24 +431,84 @@ impl Sessions {
             self.ledger()
                 .set_work_item_branch(wi.id, &branch, &worktree_str)?;
         }
+        // Sessão autônoma sem prompt (#191): o ambiente monta, com a branch
+        // já decidida.
+        let auto_prompt = match autonomy {
+            Some((integration, _)) if req.prompt.trim().is_empty() => {
+                Some(crate::autonomy::autonomous_prompt(
+                    &project,
+                    wi.kind,
+                    req.gh_number,
+                    &req.title,
+                    &branch,
+                    integration,
+                ))
+            }
+            _ => None,
+        };
         let tool_session_id = uuid::Uuid::new_v4().to_string();
         let remote_name = req
             .agent
             .remote_control
             .then(|| self.remote_name(&project, &wi, Some(&req.title)));
-        self.launch(
+        let session = self.launch(
             &project,
             &wi,
             LaunchSpec {
                 cwd: &worktree_str,
                 mode: LaunchMode::New(&tool_session_id),
-                prompt: &req.prompt,
+                prompt: auto_prompt.as_deref().unwrap_or(&req.prompt),
                 size: req.size.unwrap_or(PtySize::DEFAULT),
                 agent: &req.agent,
                 remote_name,
                 title: &req.title,
             },
-        )
+        )?;
+        if let Some(label) = unapproved {
+            let item = ct_core::item_short(&project.tracker_ref(), req.gh_number);
+            self.ledger().record_decision(&ct_ledger::NewDecision {
+                work_item_id: wi.id,
+                session_id: Some(session.id.clone()),
+                origin: ct_core::DecisionOrigin::Orientada,
+                title: "Sessão iniciada sem o rótulo de aprovação".into(),
+                context: format!(
+                    "O projeto exige o rótulo \"{label}\" para iniciar sessão e {item} não o tem."
+                ),
+                decision: "A pessoa confirmou \"iniciar mesmo assim\" na UI.".into(),
+                consequences: None,
+            })?;
+        }
+        Ok(session)
+    }
+
+    /// Rótulo de aprovação (#124): com a exigência ligada no projeto e a
+    /// issue sem o rótulo, recusa com [`SessionsError::ApprovalRequired`],
+    /// a não ser com `override_approval` (aí devolve o rótulo, para a
+    /// decisão). Os rótulos são os do espelho; fora dele, os do pedido. O
+    /// item conta pelos próprios rótulos (o épico pelo dele, a sub-issue
+    /// pelo dela).
+    pub(crate) fn check_approval(
+        &self,
+        project: &Project,
+        req: &StartRequest,
+    ) -> Result<Option<String>> {
+        if !project.approval.enforced() {
+            return Ok(None);
+        }
+        let labels = match self.ledger().get_issue(project.id, req.gh_number)? {
+            Some(i) => i.labels,
+            None => req.labels.clone(),
+        };
+        if !project.approval.blocks_start(&labels) {
+            return Ok(None);
+        }
+        if !req.override_approval {
+            let item = ct_core::item_short(&project.tracker_ref(), req.gh_number);
+            return Err(SessionsError::ApprovalRequired(
+                project.approval.refusal(&item),
+            ));
+        }
+        Ok(Some(project.approval.label.trim().to_string()))
     }
 
     /// Cria a sessão no ledger e faz o spawn. Comum a iniciar e retomar.
@@ -413,6 +529,9 @@ impl Sessions {
         } = spec;
         let cfg = self.config().clone();
         let gestor = project.kind == ProjectKind::Gestor;
+        // Sessão de release (#204): perfil próprio do guarda-corpo e o token
+        // exclusivo da release.
+        let release = !gestor && crate::release::is_release_item(wi);
         // Antes de criar a sessão no ledger: sem token, nada a desfazer.
         let session_token = crate::secrets::new_session_token()?;
         // Pastas de docs do projeto e do épico (o próprio ou o pai da
@@ -421,7 +540,7 @@ impl Sessions {
         let docs = if gestor {
             crate::docs::SessionDocs::default()
         } else {
-            let item = (wi.gh_number != PROJECT_WORK_ITEM).then_some(wi);
+            let item = (wi.gh_number > PROJECT_WORK_ITEM).then_some(wi);
             self.ensure_docs(project, item, title)
         };
         let session = self.ledger().create_session(&NewSession {
@@ -475,11 +594,29 @@ impl Sessions {
         // e retomada (spec do Jira e GitLab §10.1).
         // Issue fora do espelho (#143): o épico é desconhecido; a sessão sobe
         // com o aviso, para o agente parar e perguntar.
-        let (rules, epic_unresolved) = {
+        let (rules, epic_unresolved, autonomy) = {
             let l = self.ledger();
             let rules = l.session_rules(project, wi)?.system_prompt(project);
-            (rules, l.epic_resolution(project, wi)?)
+            // Sessão autônoma da issue (#181): a instrução da base do PR
+            // vale também na retomada e nas sessões seguintes da issue.
+            let autonomy = l
+                .list_events_of_kind(wi.id, crate::autonomy::AUTONOMY_SESSION)?
+                .into_iter()
+                .next()
+                .and_then(|e| {
+                    let branch = e.payload["branch"].as_str()?;
+                    Some((
+                        crate::autonomy::agent_instruction(
+                            project,
+                            branch,
+                            e.payload["base"].as_str()?,
+                        ),
+                        branch.to_string(),
+                    ))
+                });
+            (rules, l.epic_resolution(project, wi)?, autonomy)
         };
+        let (autonomy, autonomy_branch) = autonomy.unzip();
         let rules = match &epic_unresolved {
             None => rules,
             Some(reason) => Some(
@@ -493,10 +630,12 @@ impl Sessions {
         // Secrets e variáveis do hub (só no ambiente do processo, nunca no
         // `launch_cmd` nem no ledger), resolvidos antes dos args: a
         // instrução ao agente cita os nomes (#165).
-        let secrets = self.session_secrets(project, &session.id);
+        let secrets = self.session_secrets(project, &session.id, release);
         let docs_line = [
+            release.then(|| crate::release::RELEASE_LIMITS.to_string()),
             docs.instruction(),
             crate::secrets::agent_instruction(&secrets.names()),
+            autonomy,
         ]
         .into_iter()
         .flatten()
@@ -547,6 +686,18 @@ impl Sessions {
         if gestor {
             // Perfil `gestor` do guarda-corpo no `ctower hook` (§10.2).
             env.push(("CTOWER_SESSION_KIND".to_string(), "gestor".to_string()));
+        }
+        if release {
+            // Perfil `release` do guarda-corpo e do `ctower release` (#204).
+            env.push((
+                "CTOWER_SESSION_KIND".to_string(),
+                ct_core::RELEASE_SESSION_KIND.to_string(),
+            ));
+        }
+        if let Some(branch) = autonomy_branch {
+            // Sessão autônoma (#184): o guarda-corpo só deixa `gh pr merge`
+            // em PR com base na branch de integração.
+            env.push((ct_core::autonomy::AUTONOMY_BRANCH_ENV.to_string(), branch));
         }
         env.extend(provider_env(project, wi, gestor));
         env.extend(docs.env());
@@ -791,7 +942,8 @@ fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, 
     if gestor {
         return env;
     }
-    let item = wi.gh_number != PROJECT_WORK_ITEM;
+    // Sessão do projeto (#0) e de release (#-1) não têm issue.
+    let item = wi.gh_number > PROJECT_WORK_ITEM;
     match &project.tracker {
         ct_core::TrackerConfig::Github => {
             if item && wi.kind == WorkItemKind::Issue {
@@ -896,6 +1048,10 @@ mod tests {
                 projects: Some(vec![ct_ledger::ConfigProject {
                     docs: Default::default(),
                     session_templates: Default::default(),
+                    autonomy: Default::default(),
+                    autonomy_runner: false,
+                    approval: Default::default(),
+                    release: Default::default(),
                     owner: p.gh_owner.clone(),
                     repo: p.gh_repo.clone(),
                     name: p.name.clone(),
@@ -1203,9 +1359,14 @@ mod tests {
         assert!(out.contains("CTOWER_TOKEN=hook-secreto"));
         assert!(out.contains("CTOWER_PROTECTED=develop,main"));
         assert!(out.contains("CTOWER_ISSUE=12\n"), "{out}");
-        // Projeto GitHub: nada das variáveis do Jira e do GitLab (#351), e o
-        // settings.json só com os hooks.
-        for v in ["CTOWER_TRACKER", "CTOWER_ISSUE_KEY", "GITLAB_HOST="] {
+        // Projeto GitHub: nada das variáveis do Jira e do GitLab (#351) nem da
+        // sessão autônoma (#184), e o settings.json só com os hooks.
+        for v in [
+            "CTOWER_TRACKER",
+            "CTOWER_ISSUE_KEY",
+            "GITLAB_HOST=",
+            "CTOWER_AUTONOMY_BRANCH",
+        ] {
             assert!(!out.contains(v), "{v}: {out}");
         }
         let settings: Value =
@@ -1305,6 +1466,7 @@ mod tests {
         let mut req = env.request(16, "Modelo");
         req.agent = AgentOptions {
             model: Some("opus".into()),
+            effort: Some("high".into()),
             mode: SessionMode::Subagents,
             ..AgentOptions::default()
         };
@@ -1313,6 +1475,8 @@ mod tests {
         let tail = [
             "--model".to_string(),
             "opus".into(),
+            "--effort".into(),
+            "high".into(),
             "--append-system-prompt".into(),
             SUBAGENTS_PROMPT.into(),
             "prompt inicial".into(),
@@ -1332,8 +1496,10 @@ mod tests {
         assert!(!p
             .launch_cmd
             .iter()
-            .any(|a| a == "--model" || a == "--append-system-prompt"));
+            .any(|a| a == "--model" || a == "--effort" || a == "--append-system-prompt"));
         assert_eq!((p.model, p.mode), (None, SessionMode::Native));
+        assert_eq!(effort_from_argv(&s.launch_cmd).as_deref(), Some("high"));
+        assert_eq!(effort_from_argv(&p.launch_cmd), None);
     }
 
     fn rules(project: Option<(i64, &str)>, epics: &[(i64, i64, &str)]) -> ct_ledger::ConfigRules {
@@ -1889,6 +2055,15 @@ mod tests {
                 .start_project(env.project_id, "planejar", None, &bad),
             Err(SessionsError::Invalid(_))
         ));
+        let effort = AgentOptions {
+            effort: Some("turbo".into()),
+            ..AgentOptions::default()
+        };
+        assert!(matches!(
+            env.sessions
+                .start_project(env.project_id, "planejar", None, &effort),
+            Err(SessionsError::Invalid(m)) if m.contains("turbo")
+        ));
         assert!(
             !env.cfg.worktrees_root.join("demo").exists(),
             "nenhum worktree"
@@ -2278,8 +2453,13 @@ mod tests {
     #[test]
     fn secrets_impressos_saem_mascarados_no_scrollback_e_no_broadcast() {
         use ct_secrets::Kind;
+        // O valor sai partido em duas escritas. As metades vêm de builtins do
+        // bash (`${T_TOKEN:0:5}`), não de `| head`/`| tail`: o fork e o exec
+        // de dois pipelines num runner carregado passavam do `MASK_HOLD`
+        // (50ms), a cauda "token" saía como está e o teste esperava um
+        // `***T_TOKEN***` que nunca vinha.
         let env = TestEnv::new(FakeClaude::script(
-            "echo \"antes=$T_TOKEN\"; read x; printf 'depois=%s/%s/%s\\n' \"$T_TOKEN\" \"$T_CURTO\" \"$T_VAR\"; printf '%s' \"$T_TOKEN\" | head -c 5; sleep 0.01; printf '%s' \"$T_TOKEN\" | tail -c +6; echo; read y",
+            "echo \"antes=$T_TOKEN\"; read x; printf 'depois=%s/%s/%s\\n' \"$T_TOKEN\" \"$T_CURTO\" \"$T_VAR\"; printf '%s' \"${T_TOKEN:0:5}\"; sleep 0.01; printf '%s\\n' \"${T_TOKEN:5}\"; read y",
         ));
         env.write_secrets_cache_kinds(&[
             (None, "T_TOKEN", Kind::Secret, "token-muito-secreto"),
@@ -2327,5 +2507,129 @@ mod tests {
         env.sessions.kill(&s.id).unwrap();
         env.wait_state(&s.id, SessionState::Exited);
         assert!(env.sessions.kill(&s.id).is_err());
+    }
+
+    /// Rótulo de aprovação (#124): com a exigência ligada, a issue sem o
+    /// rótulo é recusada sem deixar rastro; o "mesmo assim" inicia e grava a
+    /// decisão `orientada`; o épico conta pelo próprio rótulo e a sub-issue
+    /// pelo dela; a sessão de planejamento não passa pela regra.
+    #[test]
+    fn rotulo_de_aprovacao_exigido_para_iniciar() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        env.assign_config(2, |p| {
+            p.approval = ct_core::ApprovalConfig {
+                label: "aprovada".into(),
+                required: true,
+            };
+        });
+        let pid = env.project_id;
+        env.mirror_labeled(&[
+            (10, None, &["Aprovada"]),
+            (11, Some(10), &[]),
+            (123, None, &["bug"]),
+        ]);
+
+        // Sem o rótulo: recusa, sem work item. Os labels do pedido não
+        // valem com a issue no espelho.
+        let err = env
+            .sessions
+            .start(StartRequest {
+                labels: vec!["aprovada".into()],
+                ..env.request(123, "ACME-123")
+            })
+            .unwrap_err();
+        assert!(matches!(err, SessionsError::ApprovalRequired(_)), "{err}");
+        let msg = err.to_string();
+        assert!(msg.starts_with(ct_core::APPROVAL_REFUSAL_PREFIX), "{msg}");
+        assert!(
+            msg.contains("#123") && msg.contains("\"aprovada\""),
+            "{msg}"
+        );
+        assert!(env
+            .sessions
+            .ledger()
+            .find_work_item(pid, 123)
+            .unwrap()
+            .is_none());
+
+        // A sub-issue não herda o rótulo do épico.
+        let err = env.sessions.start(env.request(11, "ACME-11")).unwrap_err();
+        assert!(matches!(err, SessionsError::ApprovalRequired(_)), "{err}");
+
+        // O épico conta pelo próprio rótulo.
+        let s = env
+            .sessions
+            .start(StartRequest {
+                kind: WorkItemKind::Epic,
+                ..env.request(10, "ACME-10")
+            })
+            .unwrap();
+        let wi = env
+            .sessions
+            .ledger()
+            .find_work_item(pid, 10)
+            .unwrap()
+            .unwrap();
+        assert!(env
+            .sessions
+            .ledger()
+            .list_decisions(&[wi.id], false)
+            .unwrap()
+            .is_empty());
+        env.wait_state(&s.id, SessionState::Exited);
+
+        // "Iniciar mesmo assim": inicia e grava a decisão orientada.
+        let s = env
+            .sessions
+            .start(StartRequest {
+                override_approval: true,
+                ..env.request(123, "ACME-123")
+            })
+            .unwrap();
+        let wi = env
+            .sessions
+            .ledger()
+            .find_work_item(pid, 123)
+            .unwrap()
+            .unwrap();
+        let d = env
+            .sessions
+            .ledger()
+            .list_decisions(&[wi.id], false)
+            .unwrap();
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].origin, ct_core::DecisionOrigin::Orientada);
+        assert_eq!(d[0].session_id.as_deref(), Some(s.id.as_str()));
+        assert!(d[0].context.contains("\"aprovada\""), "{:?}", d[0]);
+        assert!(d[0].reviewed_at.is_some());
+        env.wait_state(&s.id, SessionState::Exited);
+
+        // Issue fora do espelho: valem os labels do pedido.
+        let s = env
+            .sessions
+            .start(StartRequest {
+                labels: vec!["aprovada".into()],
+                ..env.request(200, "ACME-200")
+            })
+            .unwrap();
+        env.wait_state(&s.id, SessionState::Exited);
+        assert!(env.sessions.start(env.request(201, "ACME-201")).is_err());
+
+        // Sessão de planejamento: sem issue, sem a regra.
+        let s = env
+            .sessions
+            .start_project(pid, "planejar", None, &AgentOptions::default())
+            .unwrap();
+        env.wait_state(&s.id, SessionState::Exited);
+
+        // Sem exigir: inicia sem o rótulo e sem decisão.
+        env.assign_config(3, |p| {
+            p.approval = ct_core::ApprovalConfig {
+                label: "aprovada".into(),
+                required: false,
+            };
+        });
+        let s = env.sessions.start(env.request(124, "ACME-124")).unwrap();
+        env.wait_state(&s.id, SessionState::Exited);
     }
 }

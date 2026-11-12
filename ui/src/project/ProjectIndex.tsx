@@ -19,6 +19,7 @@ import { keyOf, plural, projectState, syncText, useSettingsRun, type Tone } from
 import { SYNC_FAIL_ALERT, syncAlert, syncFailures } from "./overview";
 import { projectSyncInfo, syncAction, useSyncRun } from "./sync-now";
 import { DesktopOnly } from "../web/DesktopOnly";
+import { wipOf, wipParts, wipReason } from "./wip";
 
 /**
  * Índice da atividade Projetos (#16): `{ name: "project" }` sem chave. Lista
@@ -282,6 +283,9 @@ function IndexRow({
     : r.env?.name ?? null;
   const counts = health ? projectCounts(health, r.project.gh_owner, r.project.gh_repo) : null;
   const hub = r.view?.project;
+  // Limite de trabalho em andamento (#126): "N de M" e o selo no limite.
+  const wip = wipOf(r.view);
+  const wipFullText = wipReason(wip);
   const main = (e: MouseEvent<HTMLElement>) => e.currentTarget.closest("li")?.querySelector<HTMLElement>(".pidx-main");
 
   return (
@@ -328,12 +332,18 @@ function IndexRow({
               sync falhando
             </span>
           )}
+          {wipFullText && (
+            <span className="badge" data-tone="attention" title={wipFullText}>
+              limite de trabalho em andamento
+            </span>
+          )}
         </span>
         <span id={`${id}-d`} className="pidx-meta">
           <span>
             <span className="hub-dot" data-tone={state.tone} aria-hidden="true" /> {state.text}
           </span>
           <span>{sessions}</span>
+          {wip && <span>{wipParts(wip).join(" · ")}</span>}
           {where && <span>{r.view ? `atribuído a: ${where}` : `ambiente: ${where}`}</span>}
           {run.busy && <span>Buscando issues…</span>}
           {counts && (

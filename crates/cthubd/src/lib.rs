@@ -17,6 +17,7 @@
 //! Não roda sessões, PTY, hooks nem MCP: esses são do `ctowerd`.
 
 mod agent;
+pub mod autopilot;
 pub mod backup;
 pub mod channel;
 pub mod cli;
@@ -25,12 +26,14 @@ pub mod docs_backup;
 pub mod github;
 pub mod migrate;
 pub mod push;
+pub mod release;
 pub mod remote;
 pub mod secrets;
 mod sync;
 pub mod update;
 pub mod web;
 pub mod web_auth;
+pub mod wip;
 pub mod ws;
 
 use axum::response::IntoResponse;
@@ -63,8 +66,42 @@ use tokio::sync::broadcast;
 /// do sync do projeto). 1.12 (#148): `hub.tracker.add_issue` (issue do
 /// Jira pelo ID, pelo ambiente de sync). 1.13 (#166): `session_templates`
 /// em `HubProject` e em `hub.projects.add|update` (templates do prompt
-/// inicial do projeto).
-pub const PROTOCOL_VERSION: &str = "1.13";
+/// inicial do projeto). 1.14 (#180): `hub.autopilot.policy.get|set|preview`
+/// (política de orçamento do piloto automático por conta). 1.15 (#181): modo
+/// autônomo — `autonomy` e `autonomy_report` em `HubProject`, `autonomy` em
+/// `hub.projects.update`, `HubEnv.autonomous` e `hub.envs.set_autonomous`.
+/// 1.16 (#182): modelo e esforço por issue — `model` e `effort` em
+/// `HubWorkItem`, `hub.workitem.set_model`, a proposta `model` e o `value`
+/// (com `chosen` na proposta) em `hub.proposals.decide`.
+/// 1.17 (#126): `wip_limits` em `HubProject` e em `hub.projects.update`,
+/// `wip` em `HubProjectView` e o erro `WIP_LIMIT_REACHED` (-32051) no
+/// `session.start` automático pelo canal (limite de trabalho em andamento).
+/// 1.18 (#124): `approval` em `HubProject` e em `hub.projects.add|update`
+/// (rótulo de aprovação do projeto, exigido ou não para iniciar sessão).
+/// 1.19 (#183): agendador do piloto automático —
+/// `hub.autopilot.status|events|pause|resume|set` e o push
+/// `hub.autopilot.changed`.
+/// 1.20 (#185): painel e resumo da manhã do piloto automático —
+/// `hub.autopilot.digest|wip`, `wip` em `AutopilotStatus`,
+/// `digest_at_min` em `BudgetPolicy` e o evento `morning_digest` da Web
+/// Push.
+/// 1.21 (#129): checks do head do PR no espelho — `pr_checks` (resumo:
+/// situação, contagens e texto) no `WorkItemSummary` do `hub.tree.get`, e o
+/// `ci` de `AutonomyWip` e `DigestProject` preenchido com o resumo dos checks
+/// do PR da branch de integração.
+/// 1.22 (#130): `hub.workitem.pr_feedback` (threads de review não
+/// resolvidas e pedidos de mudança dos PRs do item, do espelho, com a marca
+/// de autor externo).
+/// 1.23 (#184): fechamento autônomo da issue — `max_ci_attempts` e
+/// `waiting_timeout_min` em `AutopilotSettings` e no `hub.autopilot.set`, os
+/// eventos `feedback_sent`, `merge_requested`, `blocked` e `continue_failed`
+/// do agendador (e o escopo `env:`), e `reason` em `DigestIssue` (o motivo da
+/// issue bloqueada).
+/// 1.24 (#204): sessão de release — `release` em `HubProject` e em
+/// `hub.projects.update` (só GitHub + GitHub), `release` em
+/// `SessionTemplates` e `hub.release.status` (prévia do botão "Criar
+/// release", com o token do hub, só leitura).
+pub const PROTOCOL_VERSION: &str = "1.24";
 
 #[derive(Clone)]
 pub struct HubState {
@@ -95,6 +132,11 @@ pub struct HubState {
     pub updates: Option<Arc<update::HubUpdates>>,
     /// Pasta dos docs dos projetos (`docs_dir`, #440); `None` = desligada.
     pub docs_dir: Option<Arc<str>>,
+    /// Hub de teste (`test_mode`, #176).
+    pub test_mode: bool,
+    /// Agendador do piloto automático (#183): o aviso de ciclo já e o
+    /// último ciclo. O laço só sobe com [`autopilot::spawn`].
+    pub autopilot: Arc<autopilot::Scheduler>,
 }
 
 impl HubState {
@@ -122,6 +164,8 @@ impl HubState {
             )),
             updates: None,
             docs_dir: None,
+            test_mode: false,
+            autopilot: Arc::default(),
         }
     }
 }
@@ -141,6 +185,14 @@ impl HubState {
         if let Some(p) = &self.push {
             p.kick();
         }
+    }
+
+    /// Avisa as UIs que o piloto automático mudou (evento novo, pausa):
+    /// `hub.autopilot.changed`, sem dados (a UI relê `hub.autopilot.status`).
+    pub(crate) fn autopilot_changed(&self) {
+        let _ = self
+            .events
+            .send(json!({ "event": "hub.autopilot.changed", "data": {} }));
     }
 
     /// Avisa as UIs que regras do agente ou propostas de regras mudaram

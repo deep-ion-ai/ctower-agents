@@ -31,6 +31,8 @@ export interface StartTarget {
   kill?: boolean;
   /** Gestor de projetos (sem projeto): `session.start_gestor` no `env`, com este escopo. */
   gestor?: GestorScope;
+  /** Sessão de release do projeto (#204): `session.start_release`, sem `ghNumber`. */
+  release?: boolean;
 }
 
 /** Abre a modal no alvo; o foco volta para `origin` (ou o elemento em foco) ao fechar. */

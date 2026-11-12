@@ -16,4 +16,13 @@ epic: string,
 /**
  * Sessão do projeto, sem issue.
  */
-project: string, };
+project: string, 
+/**
+ * Sessão autônoma (#191); vazio = [`DEFAULT_AUTONOMOUS_TEMPLATE`]. O
+ * ambiente renderiza, não a UI.
+ */
+autonomous: string, 
+/**
+ * Sessão de release (#204), sem issue; vazio = o template global.
+ */
+release: string, };

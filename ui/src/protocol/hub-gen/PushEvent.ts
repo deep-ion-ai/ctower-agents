@@ -3,4 +3,4 @@
 /**
  * Evento que um dispositivo pode receber (spec §7.1).
  */
-export type PushEvent = "session_error" | "env_stale" | "proposal_new" | "needs_human";
+export type PushEvent = "session_error" | "env_stale" | "proposal_new" | "needs_human" | "morning_digest";

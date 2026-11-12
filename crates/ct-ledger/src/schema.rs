@@ -354,6 +354,73 @@ CREATE TABLE shared_file (
   UNIQUE (session_id, path)
 );
 "#,
+    // 21: modo autônomo do projeto, como vem do hub (#181): JSON de
+    // `AutonomyConfig` (`{}` = desligado), se este ambiente é o que roda as
+    // sessões autônomas, e o último relato da branch de integração (JSON de
+    // `AutonomyReport`, nulo = nenhum), que sobe na fotografia do projeto.
+    r#"
+ALTER TABLE project ADD COLUMN autonomy_config TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE project ADD COLUMN autonomy_runner INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE project ADD COLUMN autonomy_report TEXT;
+"#,
+    // 22: rótulo de aprovação do projeto, como vem do hub (#124): JSON de
+    // `ApprovalConfig` (`label`, `required`). `{}` = o rótulo padrão, sem
+    // exigir.
+    r#"
+ALTER TABLE project ADD COLUMN approval_config TEXT NOT NULL DEFAULT '{}';
+"#,
+    // 23: checks do head dos PRs abertos (#129, épico #136): por PR, o SHA
+    // lido, a situação geral (`pending`, `success`, `failure`), os checks
+    // (JSON de `Vec<PrCheck>`) e o ETag de cada leitura do SHA. Vazio até o
+    // primeiro sync; o sync tira o PR que fecha.
+    r#"
+CREATE TABLE pr_checks (
+  project_id  INTEGER NOT NULL,
+  pr_number   INTEGER NOT NULL,
+  head        TEXT NOT NULL,
+  base        TEXT NOT NULL,
+  head_sha    TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  checks      TEXT NOT NULL DEFAULT '[]',
+  synced_at   INTEGER NOT NULL,
+  runs_etag   TEXT,
+  status_etag TEXT,
+  PRIMARY KEY (project_id, pr_number)
+);
+"#,
+    // 24: feedback de review dos PRs abertos dos work items (#130, épico
+    // #136): threads não resolvidas e reviews que pedem mudanças
+    // (`pr_review_item`). `reviews_updated_at` é o `updated_at` do PR na
+    // última leitura (nulo = nunca lido): o sync só relê o PR que mudou. O
+    // gatilho leva os itens junto quando o PR sai do `pr_cache`.
+    r#"
+CREATE TABLE pr_review_item (
+  project_id         INTEGER NOT NULL,
+  pr_number          INTEGER NOT NULL,
+  kind               TEXT NOT NULL CHECK (kind IN ('thread', 'changes_requested')),
+  node_id            TEXT NOT NULL,
+  path               TEXT,
+  line               INTEGER,
+  outdated           INTEGER NOT NULL DEFAULT 0,
+  author             TEXT NOT NULL,
+  author_association TEXT NOT NULL,
+  body               TEXT NOT NULL,
+  url                TEXT NOT NULL,
+  replies            INTEGER NOT NULL DEFAULT 0,
+  created_at         INTEGER NOT NULL,
+  PRIMARY KEY (project_id, pr_number, kind, node_id)
+);
+ALTER TABLE pr_cache ADD COLUMN reviews_updated_at INTEGER;
+CREATE TRIGGER pr_review_item_cleanup AFTER DELETE ON pr_cache
+BEGIN
+  DELETE FROM pr_review_item WHERE project_id = OLD.project_id AND pr_number = OLD.number;
+END;
+"#,
+    // 25: configuração de release do projeto, como vem do hub (#204): JSON
+    // de `ReleaseConfig`. `{}` = desligada.
+    r#"
+ALTER TABLE project ADD COLUMN release_config TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo
