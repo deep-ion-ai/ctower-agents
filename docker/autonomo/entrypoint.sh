@@ -126,8 +126,12 @@ EOF
 
 # Claude Code sem as telas da primeira execução e, por padrão, sem prompts de
 # permissão (o container é o isolamento). O statusline leva o uso ao hub.
+# `hasSeenAutoDefaultNudge` cala a oferta "Make auto mode your default
+# permission mode?", que o Claude Code mostra depois da primeira resposta
+# quando o `defaultMode` do usuário não é `auto`: numa sessão sem ninguém no
+# terminal, ela prenderia a sessão.
 setup_claude() {
-  json_merge "$HOME/.claude.json" '.hasCompletedOnboarding = true'
+  json_merge "$HOME/.claude.json" '.hasCompletedOnboarding = true | .hasSeenAutoDefaultNudge = true'
   if [[ ${CT_AUTONOMO_SEM_PROMPTS:-1} == 1 ]]; then
     json_merge "$CLAUDE_DIR/settings.json" \
       '.permissions.defaultMode = "bypassPermissions" | .skipDangerousModePermissionPrompt = true'
