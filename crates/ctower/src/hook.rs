@@ -2,7 +2,9 @@
 //! `PermissionRequest`, devolve a resposta dada na UI) e aplica o
 //! guarda-corpo de branch protegida e, nas sessões do gestor
 //! (`CTOWER_SESSION_KIND=gestor`), o perfil `gestor`. Nas sessões de issue
-//! (`CTOWER_ISSUE`), exige `Closes #n` no `gh pr create` (#375). O
+//! (`CTOWER_ISSUE`), exige `Closes #n` no `gh pr create` (#375). Nas
+//! sessões autônomas (`CTOWER_AUTONOMY_BRANCH`, #184), `gh pr merge` só vale
+//! para PR com base na branch de integração. O
 //! `glab mr merge` é sempre bloqueado (#350), sem variável da sessão: o glab
 //! só fala com o GitLab. Nos projetos Jira (`CTOWER_TRACKER=jira`, #351),
 //! o perfil Jira bloqueia transição e edição e pede confirmação para criar
@@ -123,11 +125,14 @@ fn pre_tool_use(session: &str, payload: &Value) -> i32 {
     let gh = env_nonempty("CTOWER_GH").unwrap_or_else(|| "gh".to_string());
     let pr_base = |target: Option<&str>| gh_pr_base(&gh, cwd.as_deref(), target);
     let head_of = |path: &str| resolve_dir(cwd.as_deref(), path).and_then(|d| git_head(&d));
+    // Sessão autônoma (#184): `gh pr merge` só na branch de integração.
+    let integration = env_nonempty(ct_core::autonomy::AUTONOMY_BRANCH_ENV);
     let ctx = GuardContext {
         head_branch: head.as_deref(),
         protected: &protected,
         pr_base: &pr_base,
         head_of: &head_of,
+        integration: integration.as_deref().map(str::trim),
     };
 
     let branch = check_command(cmd, &ctx);

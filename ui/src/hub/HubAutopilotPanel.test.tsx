@@ -39,7 +39,15 @@ function decision(d: Partial<BudgetDecision> = {}): BudgetDecision {
 
 function status(account: string, settings: Partial<AutopilotSettings> = {}): AutopilotStatus {
   return {
-    settings: { paused: false, paused_at: null, max_sessions_per_env: 1, idle_timeout_min: 30, ...settings },
+    settings: {
+      paused: false,
+      paused_at: null,
+      max_sessions_per_env: 1,
+      idle_timeout_min: 30,
+      max_ci_attempts: 3,
+      waiting_timeout_min: 20,
+      ...settings,
+    },
     last_tick_at: NOW - 30_000,
     now: NOW,
     accounts: [{ account, decision: decision(), exhausted_window: null, exhausted_until: null }],
@@ -110,8 +118,8 @@ function status(account: string, settings: Partial<AutopilotSettings> = {}): Aut
         branch: "wip/autonoma",
         base: "develop",
         ahead: [
-          { number: 118, title: "ACME-118" },
-          { number: 119, title: "ACME-119" },
+          { number: 118, title: "ACME-118", reason: null },
+          { number: 119, title: "ACME-119", reason: null },
         ],
         pr_url: "https://github.example/acme/acme-web/pull/5",
         ci: null,
@@ -124,7 +132,14 @@ function status(account: string, settings: Partial<AutopilotSettings> = {}): Aut
 
 /** `hub.autopilot.*` como o hub: pausar e retomar mudam o estado e avisam pelo push. */
 function withAutopilot<T extends FakeDaemonApi>(api: T, account: string) {
-  let settings: AutopilotSettings = { paused: false, paused_at: null, max_sessions_per_env: 1, idle_timeout_min: 30 };
+  let settings: AutopilotSettings = {
+    paused: false,
+    paused_at: null,
+    max_sessions_per_env: 1,
+    idle_timeout_min: 30,
+    max_ci_attempts: 3,
+    waiting_timeout_min: 20,
+  };
   const set = (paused: boolean) => {
     settings = { ...settings, paused, paused_at: paused ? NOW : null };
     queueMicrotask(() => api.hubPush("hub.autopilot.changed"));
@@ -133,7 +148,11 @@ function withAutopilot<T extends FakeDaemonApi>(api: T, account: string) {
   return api
     .onHub("hub.autopilot.status", () => status(account, settings))
     .onHub("hub.autopilot.pause", () => set(true))
-    .onHub("hub.autopilot.resume", () => set(false));
+    .onHub("hub.autopilot.resume", () => set(false))
+    .onHub("hub.autopilot.set", (p: unknown) => {
+      settings = { ...settings, ...(p as Partial<AutopilotSettings>) };
+      return settings;
+    });
 }
 
 function desktop() {
@@ -296,10 +315,10 @@ function digest(account: string): MorningDigest {
         branch: "wip/autonoma",
         base: "develop",
         merged: [
-          { number: 123, title: "ACME-123" },
-          { number: 124, title: "ACME-124" },
+          { number: 123, title: "ACME-123", reason: null },
+          { number: 124, title: "ACME-124", reason: null },
         ],
-        blocked: [{ number: 125, title: "ACME-125" }],
+        blocked: [{ number: 125, title: "ACME-125", reason: "piloto automático: o CI do PR #9 falhou depois de 3 tentativas de correção" }],
         decisions_pending: 3,
         decisions_new: 1,
         ahead: 2,
@@ -336,6 +355,10 @@ test("resumo da manhã: card na Visão geral com contagens, PR e uso; relido pel
     "acme-web: 2 mescladas na wip · 1 bloqueada · 3 decisões para revisar · 2 à frente da base",
   );
   expect(projects).toHaveTextContent("Mescladas na wip/autonoma: #123, #124");
+  // O motivo da bloqueada (#184).
+  expect(projects).toHaveTextContent(
+    "Bloqueadas: #125 (piloto automático: o CI do PR #9 falhou depois de 3 tentativas de correção)",
+  );
   expect(projects).toHaveTextContent("CI sem dados no espelho");
   expect(within(card).getByRole("link", { name: "PR wip/autonoma → develop" })).toHaveAttribute(
     "href",
@@ -354,4 +377,34 @@ test("resumo da manhã na web: a conta chega anonimizada; o link da notificaçã
   expect(card).not.toHaveTextContent("example.com");
   expect(deepLinkTab("?go=hub")).toEqual(hubTab("overview"));
   expect(deepLinkTab("?go=hub:autopilot-panel")).toEqual(hubTab("autopilot-panel"));
+});
+
+test("ajustes do agendador: tentativas do CI e “Aguardando você” pelo hub.autopilot.set (#184)", async () => {
+  const { api, user } = desktop();
+  const panel = await screen.findByRole("region", { name: "Painel do piloto automático" });
+  expect(
+    await within(panel).findByText(/devolve a falha do CI ao agente até 3 vezes/),
+  ).toBeInTheDocument();
+  await user.click(within(panel).getByText("Ajustes do agendador"));
+  const attempts = within(panel).getByLabelText("Tentativas de correção do CI (0 = bloqueia na primeira falha)");
+  const waiting = within(panel).getByLabelText("Minutos em “Aguardando você” (0 = nunca)");
+  expect(attempts).toHaveValue(3);
+  expect(waiting).toHaveValue(20);
+  await user.clear(attempts);
+  await user.type(attempts, "11");
+  await user.click(within(panel).getByRole("button", { name: "Salvar ajustes" }));
+  expect(await within(panel).findByRole("alert")).toHaveTextContent("de 0 a 10");
+  await user.clear(attempts);
+  await user.type(attempts, "5");
+  await user.clear(waiting);
+  await user.type(waiting, "0");
+  await user.click(within(panel).getByRole("button", { name: "Salvar ajustes" }));
+  await waitFor(() =>
+    expect(api.calls.find((c) => c.method === "hub.autopilot.set")?.params).toEqual({
+      max_ci_attempts: 5,
+      waiting_timeout_min: 0,
+    }),
+  );
+  expect(await within(panel).findByText(/Ajustes do piloto automático salvos/)).toBeInTheDocument();
+  expect(within(panel).getByText(/não é bloqueada/)).toBeInTheDocument();
 });

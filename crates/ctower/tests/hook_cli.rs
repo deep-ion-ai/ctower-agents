@@ -21,6 +21,7 @@ fn ctower() -> Command {
         "CTOWER_ISSUE",
         "CTOWER_TRACKER",
         "CTOWER_ISSUE_KEY",
+        "CTOWER_AUTONOMY_BRANCH",
         "CLAUDE_CODE_BRIDGE_SESSION_ID",
     ] {
         c.env_remove(v);
@@ -564,6 +565,48 @@ fn gh_recebe_ambiente_nao_interativo() {
         .env("CTOWER_SPOOL_DIR", spool.path())
         .env("CTOWER_GH", &gh)
         .write_stdin(bash_payload("gh pr merge 5", r.path()))
+        .assert()
+        .success();
+}
+
+/// #184: na sessão autônoma, `gh pr merge` só passa com o PR na branch de
+/// integração (com ou sem número); outra base, mesmo não protegida, bloqueia.
+#[test]
+fn sessao_autonoma_so_mescla_na_branch_de_integracao() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = repo_on("feat/7-login");
+    let spool = TempDir::new().unwrap();
+    let bin = TempDir::new().unwrap();
+    let gh_with = |base: &str| {
+        let gh = bin.path().join(format!("gh-{}", base.replace('/', "-")));
+        std::fs::write(&gh, format!("#!/bin/sh\necho {base}\n")).unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        gh
+    };
+    let run = |gh: &Path, cmd: &str| {
+        ctower()
+            .args(["hook", "pre-tool-use"])
+            .env("CTOWER_SESSION", "s1")
+            .env("CTOWER_SPOOL_DIR", spool.path())
+            .env("CTOWER_AUTONOMY_BRANCH", "wip/autonoma")
+            .env("CTOWER_GH", gh)
+            .write_stdin(bash_payload(cmd, r.path()))
+            .assert()
+    };
+    let wip = gh_with("wip/autonoma");
+    run(&wip, "gh pr merge 9 --rebase").success();
+    run(&wip, "gh pr merge --rebase").success();
+    let other = gh_with("feature-x");
+    run(&other, "gh pr merge 9 --rebase")
+        .code(2)
+        .stderr(contains("wip/autonoma").and(contains("feature-x")));
+    // Sem a variável (sessão comum), a base não protegida passa.
+    ctower()
+        .args(["hook", "pre-tool-use"])
+        .env("CTOWER_SESSION", "s1")
+        .env("CTOWER_SPOOL_DIR", spool.path())
+        .env("CTOWER_GH", &other)
+        .write_stdin(bash_payload("gh pr merge 9 --rebase", r.path()))
         .assert()
         .success();
 }

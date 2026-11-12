@@ -202,7 +202,9 @@ function MorningDigestCard({ now, open }: { now: number; open(s: HubSection): vo
                   </span>
                 )}
                 {p.blocked.length > 0 && (
-                  <span className="hub-card-sub">Bloqueadas: {p.blocked.map((i) => `#${i.number}`).join(", ")}</span>
+                  <span className="hub-card-sub">
+                    Bloqueadas: {p.blocked.map((i) => (i.reason ? `#${i.number} (${i.reason})` : `#${i.number}`)).join(", ")}
+                  </span>
                 )}
                 <span className="hub-card-sub muted">
                   {p.pr_url ? (

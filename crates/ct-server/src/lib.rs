@@ -79,8 +79,12 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// (também pelo canal do hub), que escreve um texto fixo na sessão viva
 /// parada pelo limite real do plano, para o agendador do piloto automático
 /// retomá-la depois do reset. 2.21 (#129): `pr_checks` (resumo dos checks
-/// do head do PR aberto) no `WorkItemSummary` da árvore do projeto.
-pub const PROTOCOL_VERSION: &str = "2.21";
+/// do head do PR aberto) no `WorkItemSummary` da árvore do projeto. 2.22
+/// (#184): `text` opcional no `session.continue` (o pedido de correção ou de
+/// merge do piloto automático do hub, só numa sessão autônoma, até 16 KB) e
+/// a variável `CTOWER_AUTONOMY_BRANCH` da sessão autônoma (o `ctower hook`
+/// só deixa `gh pr merge` em PR com base na branch de integração).
+pub const PROTOCOL_VERSION: &str = "2.22";
 
 #[derive(Clone)]
 pub struct AppState {

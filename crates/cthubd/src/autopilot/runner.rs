@@ -3,10 +3,17 @@
 //! executa as ações pelo canal reverso ([`EnvPort`]), gravando os eventos.
 //! Roda a cada minuto e a cada leitura nova do plano ([`Scheduler::kick`]),
 //! sem depender da UI aberta.
+//!
+//! No fechamento autônomo (#184), o ciclo pergunta o protocolo
+//! (`env.info`) dos ambientes com sessão ociosa e PR na branch de
+//! integração, manda os pedidos por `session.continue` com `text`, guarda o
+//! que enviou (`autopilot_close`) e, ao bloquear, encerra a sessão e põe a
+//! issue em `bloqueado` pelo mesmo caminho da mudança manual de status
+//! (`status_set_manual` com o `hub_id`).
 
-use super::plan::{self, Action, Outcome, ProjectPlan, ResumeVia, Snapshot};
+use super::plan::{self, Action, Outcome, ProjectPlan, ResumeVia, SendKind, Snapshot};
 use crate::HubState;
-use ct_core::{AutonomyState, SessionState};
+use ct_core::{AutonomyState, PrState, SessionState, WorkItemStatus};
 use ct_http::rpc::{invalid, RpcResult};
 use ct_ledger::{
     AutonomyWip, AutopilotEvent, AutopilotSession, AutopilotSettings, Hub, ParkedSession,
@@ -95,7 +102,7 @@ pub fn spawn(st: HubState) {
         tokio::time::sleep(FIRST_TICK).await;
         loop {
             let now = ct_core::now_ms();
-            match tick(&st.hub, &port, now).await {
+            match tick(&st.hub, &port, &st.hub_id, now).await {
                 Ok(n) if n > 0 => st.autopilot_changed(),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("piloto automático: ciclo falhou: {e}"),
@@ -156,6 +163,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
                 autonomous: e.autonomous,
                 account: accounts.get(&e.env_id).cloned(),
                 name: e.name,
+                continue_text: None,
             },
         );
     }
@@ -199,7 +207,51 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
         .autopilot_recent_ends(now - PENDING_END_MS)?
         .into_iter()
         .collect();
-    for p in hub.list_projects()? {
+    s.waiting = hub
+        .autopilot_waiting_sessions()?
+        .into_iter()
+        .map(|w| (w.session_id.clone(), w))
+        .collect();
+    let projects = hub.list_projects()?;
+    // Fechamento autônomo (#184): o PR aberto da issue contra a branch de
+    // integração, de cada sessão autônoma ociosa.
+    let closes: std::collections::BTreeMap<i64, ct_ledger::CloseState> = hub
+        .autopilot_close_states()?
+        .into_iter()
+        .map(|c| (c.work_item_id, c))
+        .collect();
+    for i in s.idle.values().filter(|i| i.autonomous) {
+        let Some(x) = s.sessions.iter().find(|x| x.session_id == i.session_id) else {
+            continue;
+        };
+        let Some(p) = projects.iter().find(|p| {
+            p.autonomy.is_on()
+                && p.gh_owner.eq_ignore_ascii_case(&x.owner)
+                && p.gh_repo.eq_ignore_ascii_case(&x.repo)
+        }) else {
+            continue;
+        };
+        let integration = p.autonomy.branch().to_string();
+        let Some(pr) = hub
+            .prs_for_work_item(i.work_item_id)?
+            .into_iter()
+            .find(|pr| pr.state == PrState::Open && pr.base == integration)
+        else {
+            continue;
+        };
+        s.closing.insert(
+            i.session_id.clone(),
+            plan::Closing {
+                work_item_id: i.work_item_id,
+                checks: hub.pr_checks(p.id, pr.number)?,
+                feedback: hub.pr_feedback(p.id, pr.number)?,
+                state: closes.get(&i.work_item_id).cloned().unwrap_or_default(),
+                integration,
+                pr,
+            },
+        );
+    }
+    for p in projects {
         if !p.autonomy.is_on() {
             continue;
         }
@@ -298,12 +350,49 @@ fn start_error_reason(code: i64) -> &'static str {
     }
 }
 
-/// Executa um ciclo; devolve quantos eventos gravou.
-pub async fn tick(hub: &SharedHub, port: &dyn EnvPort, now: i64) -> Result<usize, String> {
-    let outcome = {
+/// O ambiente aceita texto no `session.continue`? Pelo `env.info`
+/// (`protocol`); `None` = não respondeu agora.
+async fn continue_text_supported(port: &dyn EnvPort, env_id: &str) -> Option<bool> {
+    let v = port
+        .call(env_id.to_string(), "env.info", json!({}))
+        .await
+        .ok()?;
+    Some(
+        v.get("protocol")
+            .and_then(Value::as_str)
+            .and_then(plan::parse_protocol)
+            .is_some_and(|p| p >= plan::CONTINUE_TEXT_PROTOCOL),
+    )
+}
+
+/// Executa um ciclo; devolve quantos eventos gravou. `hub_id` = a
+/// identidade do hub nos eventos de status que ele grava (o bloqueio,
+/// #184).
+pub async fn tick(
+    hub: &SharedHub,
+    port: &dyn EnvPort,
+    hub_id: &str,
+    now: i64,
+) -> Result<usize, String> {
+    let mut snap = {
         let h = hub.lock();
-        plan::decide(&snapshot(&h, port, now).map_err(ledger_err)?)
+        snapshot(&h, port, now).map_err(ledger_err)?
     };
+    // Só pergunta a versão aos ambientes com algo a fechar.
+    let envs: std::collections::BTreeSet<String> = snap
+        .sessions
+        .iter()
+        .filter(|x| snap.closing.contains_key(&x.session_id))
+        .map(|x| x.env_id.clone())
+        .filter(|id| snap.envs.get(id).is_some_and(|e| e.online))
+        .collect();
+    for id in envs {
+        let ok = continue_text_supported(port, &id).await;
+        if let Some(e) = snap.envs.get_mut(&id) {
+            e.continue_text = ok;
+        }
+    }
+    let outcome = plan::decide(&snap);
     let mut events: Vec<AutopilotEvent> = outcome
         .refusals
         .iter()
@@ -413,6 +502,105 @@ pub async fn tick(hub: &SharedHub, port: &dyn EnvPort, now: i64) -> Result<usize
                         format!("{slug}: o encerramento da sessão ociosa falhou: {m}"),
                     )),
                 }
+            }
+            Action::Track(c) => {
+                hub.lock()
+                    .save_autopilot_close(&c, now)
+                    .map_err(ledger_err)?;
+            }
+            Action::Send {
+                session: x,
+                kind,
+                close,
+                text,
+                message,
+            } => {
+                let slug = format!("{}/{}#{}", x.owner, x.repo, x.gh_number);
+                let (ev_kind, reason) = match kind {
+                    SendKind::Feedback(r) => ("feedback_sent", r),
+                    SendKind::Merge => ("merge_requested", plan::MERGE_GREEN),
+                };
+                let ev = |kind: &str, message: String| AutopilotEvent {
+                    env_id: Some(x.env_id.clone()),
+                    owner: Some(x.owner.clone()),
+                    repo: Some(x.repo.clone()),
+                    gh_number: Some(x.gh_number),
+                    session_id: Some(x.session_id.clone()),
+                    reason: Some(reason.into()),
+                    ..event(kind, format!("item:{slug}"), message, now)
+                };
+                match port
+                    .call(
+                        x.env_id.clone(),
+                        "session.continue",
+                        json!({ "session_id": x.session_id, "text": text }),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        hub.lock()
+                            .save_autopilot_close(&close, now)
+                            .map_err(ledger_err)?;
+                        events.push(ev(ev_kind, message));
+                    }
+                    Err((c, _))
+                        if c == ct_http::sync::CHANNEL_ENV_OFFLINE
+                            || c == ct_http::sync::CHANNEL_TIMEOUT => {}
+                    Err((_, m)) => events.push(ev(
+                        "continue_failed",
+                        format!("{slug}: o envio ao agente falhou (session.continue): {m}"),
+                    )),
+                }
+            }
+            Action::Block {
+                session: x,
+                work_item_id,
+                reason,
+                status_reason,
+                message,
+            } => {
+                let slug = format!("{}/{}#{}", x.owner, x.repo, x.gh_number);
+                let killed = port
+                    .call(
+                        x.env_id.clone(),
+                        "session.kill",
+                        json!({ "session_id": x.session_id }),
+                    )
+                    .await;
+                let message = match killed {
+                    // Canal caiu: tenta no próximo ciclo.
+                    Err((c, _))
+                        if c == ct_http::sync::CHANNEL_ENV_OFFLINE
+                            || c == ct_http::sync::CHANNEL_TIMEOUT =>
+                    {
+                        continue;
+                    }
+                    Ok(_) => message,
+                    // A sessão já não roda no ambiente: bloqueia mesmo assim.
+                    Err((_, m)) => format!("{message} (o encerramento falhou: {m})"),
+                };
+                {
+                    let h = hub.lock();
+                    h.set_status_manual(
+                        &x.owner,
+                        &x.repo,
+                        x.gh_number,
+                        WorkItemStatus::Bloqueado,
+                        Some(&status_reason),
+                        hub_id,
+                    )
+                    .map_err(ledger_err)?;
+                    h.clear_autopilot_close(work_item_id).map_err(ledger_err)?;
+                }
+                events.push(AutopilotEvent {
+                    env_id: Some(x.env_id.clone()),
+                    owner: Some(x.owner.clone()),
+                    repo: Some(x.repo.clone()),
+                    gh_number: Some(x.gh_number),
+                    session_id: Some(x.session_id.clone()),
+                    reason: Some(reason.into()),
+                    ..event("blocked", format!("item:{slug}"), message, now)
+                });
             }
             Action::Start(i) => {
                 let slug = format!("{}/{}#{}", i.owner, i.repo, i.number);
@@ -702,16 +890,39 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     };
                     let max = num("max_sessions_per_env")?;
                     let idle = num("idle_timeout_min")?;
-                    if max.is_none() && idle.is_none() {
+                    let attempts = num("max_ci_attempts")?;
+                    let waiting = num("waiting_timeout_min")?;
+                    if max.is_none() && idle.is_none() && attempts.is_none() && waiting.is_none() {
                         return Err(invalid(
-                            "parâmetro obrigatório: max_sessions_per_env ou idle_timeout_min",
+                            "parâmetro obrigatório: max_sessions_per_env, idle_timeout_min, \
+                             max_ci_attempts ou waiting_timeout_min",
                         ));
                     }
-                    // Confere os dois antes de gravar qualquer um.
+                    // Confere todos antes de gravar qualquer um.
+                    if max.is_some_and(|n| {
+                        !(1..=ct_ledger::AUTOPILOT_MAX_PER_ENV_CEILING).contains(&n)
+                    }) {
+                        return Err(invalid(format!(
+                            "sessões autônomas por ambiente: de 1 a {}",
+                            ct_ledger::AUTOPILOT_MAX_PER_ENV_CEILING
+                        )));
+                    }
                     if idle.is_some_and(|n| n > ct_ledger::AUTOPILOT_IDLE_TIMEOUT_MAX_MIN) {
                         return Err(invalid(format!(
                             "minutos de sessão ociosa: de 0 a {}",
                             ct_ledger::AUTOPILOT_IDLE_TIMEOUT_MAX_MIN
+                        )));
+                    }
+                    if attempts.is_some_and(|n| n > ct_ledger::AUTOPILOT_MAX_CI_ATTEMPTS_CEILING) {
+                        return Err(invalid(format!(
+                            "tentativas de correção do CI: de 0 a {}",
+                            ct_ledger::AUTOPILOT_MAX_CI_ATTEMPTS_CEILING
+                        )));
+                    }
+                    if waiting.is_some_and(|n| n > ct_ledger::AUTOPILOT_WAITING_TIMEOUT_MAX_MIN) {
+                        return Err(invalid(format!(
+                            "minutos em \"Aguardando você\": de 0 a {}",
+                            ct_ledger::AUTOPILOT_WAITING_TIMEOUT_MAX_MIN
                         )));
                     }
                     let mut s = hub.autopilot_settings().map_err(e)?;
@@ -720,6 +931,12 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     }
                     if let Some(n) = idle {
                         s = hub.set_autopilot_idle_timeout(n, now).map_err(e)?;
+                    }
+                    if let Some(n) = attempts {
+                        s = hub.set_autopilot_max_ci_attempts(n, now).map_err(e)?;
+                    }
+                    if let Some(n) = waiting {
+                        s = hub.set_autopilot_waiting_timeout(n, now).map_err(e)?;
                     }
                     Ok((json!(s), true))
                 }
@@ -756,6 +973,9 @@ mod tests {
         start_error: Option<(i64, String)>,
         /// Erro de `session.kill`; `None` = encerra.
         kill_error: Option<(i64, String)>,
+        /// `protocol` do `env.info`; `None` = a versão atual (com o texto no
+        /// `session.continue`).
+        protocol: Option<&'static str>,
     }
 
     impl EnvPort for FakePort {
@@ -779,6 +999,7 @@ mod tests {
                 (_, "session.kill") if self.kill_error.is_some() => {
                     Err(self.kill_error.clone().unwrap())
                 }
+                (_, "env.info") => Ok(json!({ "protocol": self.protocol.unwrap_or("2.22") })),
                 _ => Ok(json!({})),
             };
             Box::pin(async move { r })
@@ -903,7 +1124,7 @@ mod tests {
     async fn inicia_sem_prompt_e_registra_o_evento() {
         let hub = hub();
         let port = FakePort::default();
-        let n = tick(&hub, &port, SAB).await.unwrap();
+        let n = tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert_eq!(n, 1);
         let calls = port.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
@@ -926,7 +1147,7 @@ mod tests {
         // O ambiente ainda não sincronizou a sessão: o próximo ciclo não
         // inicia outra no mesmo ambiente.
         port.calls.lock().unwrap().clear();
-        tick(&hub, &port, SAB + 60_000).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
         assert!(port.calls.lock().unwrap().is_empty());
     }
 
@@ -951,7 +1172,7 @@ mod tests {
             .unwrap();
         hub.lock().set_autopilot_max_per_env(2, SAB).unwrap();
         let port = FakePort::default();
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert_eq!(port.calls.lock().unwrap().len(), 1);
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
         assert_eq!(ev[0].kind, "started");
@@ -960,7 +1181,7 @@ mod tests {
         // Com a sonda viva (ainda não sincronizada), o ambiente tem vaga,
         // mas a conta espera a leitura dela: nenhum outro início.
         port.calls.lock().unwrap().clear();
-        tick(&hub, &port, SAB + 60_000).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
         assert!(port.calls.lock().unwrap().is_empty());
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
         assert_eq!(ev[0].kind, "refused");
@@ -1007,7 +1228,7 @@ mod tests {
             .unwrap();
         let port = FakePort::default();
         for i in 0..3 {
-            tick(&hub, &port, SAB + i * 60_000).await.unwrap();
+            tick(&hub, &port, "hub-id", SAB + i * 60_000).await.unwrap();
         }
         assert!(port.calls.lock().unwrap().is_empty());
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
@@ -1028,10 +1249,10 @@ mod tests {
         let hub = hub();
         let port = FakePort::default();
         hub.lock().set_autopilot_paused(true, SAB).unwrap();
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert!(port.calls.lock().unwrap().is_empty());
         hub.lock().set_autopilot_paused(false, SAB).unwrap();
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert_eq!(port.calls.lock().unwrap().len(), 1);
     }
 
@@ -1041,7 +1262,7 @@ mod tests {
         reading(&hub.lock(), 96.0, SAB);
         let port = FakePort::default();
         for i in 0..3 {
-            tick(&hub, &port, SAB + i * 60_000).await.unwrap();
+            tick(&hub, &port, "hub-id", SAB + i * 60_000).await.unwrap();
         }
         assert!(port.calls.lock().unwrap().is_empty());
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
@@ -1061,8 +1282,8 @@ mod tests {
             )),
             ..Default::default()
         };
-        tick(&hub, &port, SAB).await.unwrap();
-        tick(&hub, &port, SAB + 60_000).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
         assert_eq!(ev.len(), 1, "{ev:?}");
         assert_eq!(ev[0].kind, "start_failed");
@@ -1087,7 +1308,7 @@ mod tests {
             reading(&h, 100.0, SAB);
         }
         let port = FakePort::default();
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         let parked = hub.lock().list_parked().unwrap();
         assert_eq!(parked.len(), 1);
         assert_eq!(parked[0].resume_at, SAB + 2 * H + plan::RESUME_MARGIN_MS);
@@ -1095,7 +1316,7 @@ mod tests {
 
         // Depois do reset: `session.continue` e nenhum início no ciclo.
         let after = parked[0].resume_at + 1;
-        tick(&hub, &port, after).await.unwrap();
+        tick(&hub, &port, "hub-id", after).await.unwrap();
         let calls = port.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1, "{calls:?}");
         assert_eq!(calls[0].1, "session.continue");
@@ -1139,7 +1360,7 @@ mod tests {
             offline: true,
             ..Default::default()
         };
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert!(port.calls.lock().unwrap().is_empty());
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
         assert_eq!(ev[0].reason.as_deref(), Some("env_offline"));
@@ -1230,7 +1451,7 @@ mod tests {
             )
             .unwrap();
         let port = FakePort::default();
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
         assert_eq!(ev[0].kind, "ended");
@@ -1240,7 +1461,7 @@ mod tests {
         // O ambiente ainda não sincronizou: o ciclo seguinte não encerra de
         // novo.
         port.calls.lock().unwrap().clear();
-        tick(&hub, &port, SAB + 60_000).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
         assert!(kills(&port).is_empty());
     }
 
@@ -1259,7 +1480,7 @@ mod tests {
             )
             .unwrap();
         let port = FakePort::default();
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert!(kills(&port).is_empty());
         // Ajuste pelo `hub.autopilot.set`: 15 minutos.
         let st = HubState::new(hub.clone(), "ui", "hub", "hub-id");
@@ -1291,7 +1512,7 @@ mod tests {
         assert!(call(&st, "hub.autopilot.set", json!({}), false)
             .await
             .is_err());
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
         assert_eq!(ev[0].kind, "ended");
@@ -1321,7 +1542,7 @@ mod tests {
             )
             .unwrap();
         let port = FakePort::default();
-        tick(&hub, &port, SAB).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert!(kills(&port).is_empty());
     }
 
@@ -1354,15 +1575,418 @@ mod tests {
         // Falhou: espera `PENDING_END_MS` antes de tentar de novo, e a falha
         // repetida não vira outro evento.
         for i in 0..3 {
-            tick(&hub, &port, SAB + i * 60_000).await.unwrap();
+            tick(&hub, &port, "hub-id", SAB + i * 60_000).await.unwrap();
         }
         assert_eq!(kills(&port).len(), 1);
-        tick(&hub, &port, SAB + PENDING_END_MS + 1).await.unwrap();
+        tick(&hub, &port, "hub-id", SAB + PENDING_END_MS + 1)
+            .await
+            .unwrap();
         assert_eq!(kills(&port).len(), 2);
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
         let failed: Vec<_> = ev.iter().filter(|e| e.kind == "end_failed").collect();
         assert_eq!(failed.len(), 1, "{ev:?}");
         assert_eq!(failed[0].reason.as_deref(), Some(plan::END_DONE));
         assert!(failed[0].message.contains("não está rodando"));
+    }
+    // --- Fechamento autônomo (#184) ---
+
+    use ct_ledger::{
+        CheckSource, ChecksRead, PrCheck, PrChecksFetch, PrChecksSnapshot, PrReviews, PrRow,
+    };
+
+    fn calls_of(port: &FakePort, method: &str) -> Vec<Value> {
+        port.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, m, _)| m == method)
+            .map(|(_, _, p)| p.clone())
+            .collect()
+    }
+
+    /// Sessão autônoma `s1` (iniciada pelo agendador) ociosa na issue 123.
+    fn autonomous_idle(hub: &SharedHub, since: i64) -> i64 {
+        let wi = idle_session(hub, "s1", SAB - H, since);
+        hub.lock()
+            .record_autopilot_event(&AutopilotEvent {
+                session_id: Some("s1".into()),
+                ..event(
+                    "started",
+                    "project:acme/acme-web".into(),
+                    "x".into(),
+                    SAB - H,
+                )
+            })
+            .unwrap();
+        wi
+    }
+
+    /// O espelho com o PR #9 da issue 123 (`base`, `state`, `head_sha`) e
+    /// os checks do head (`conclusions`; `None` = em andamento), com as
+    /// reviews lidas (sem nada pendente).
+    fn mirror_pr(
+        hub: &SharedHub,
+        wi: i64,
+        base: &str,
+        state: ct_core::PrState,
+        head_sha: &str,
+        conclusions: &[Option<&str>],
+    ) {
+        let h = hub.lock();
+        let p = h.find_project("acme", "acme-web").unwrap().unwrap();
+        let updated_at = SAB - 60_000;
+        let checks: Vec<PrCheck> = conclusions
+            .iter()
+            .enumerate()
+            .map(|(i, c)| PrCheck {
+                name: format!("job-{i}"),
+                source: CheckSource::CheckRun,
+                conclusion: c.map(String::from),
+                url: None,
+                job_id: Some(100 + i as i64),
+            })
+            .collect();
+        h.apply_github(
+            &GithubSnapshot {
+                project_id: p.id,
+                issues: vec![issue(123, &["aprovada"]), issue(124, &["aprovada"])],
+                prs: vec![PrRow {
+                    number: 9,
+                    work_item_id: wi,
+                    head: "feat/123-acme".into(),
+                    base: base.into(),
+                    state,
+                    url: "https://github.com/acme/acme-web/pull/9".into(),
+                    updated_at,
+                    head_sha: Some(head_sha.into()),
+                }],
+                pr_checks: Some(PrChecksSnapshot {
+                    open: if state == ct_core::PrState::Open {
+                        vec![9]
+                    } else {
+                        vec![]
+                    },
+                    updates: vec![PrChecksFetch {
+                        pr_number: 9,
+                        head: "feat/123-acme".into(),
+                        base: base.into(),
+                        head_sha: head_sha.into(),
+                        runs: Some(ChecksRead { checks, etag: None }),
+                        statuses: None,
+                    }],
+                }),
+                synced_at: SAB - 60_000,
+                ..Default::default()
+            },
+            "hub-id",
+        )
+        .unwrap();
+        if state == ct_core::PrState::Open {
+            h.apply_pr_reviews(
+                p.id,
+                &[PrReviews {
+                    number: 9,
+                    pr_updated_at: updated_at,
+                    threads: vec![],
+                    changes_requested: vec![],
+                }],
+            )
+            .unwrap();
+        }
+    }
+
+    fn kinds(hub: &SharedHub) -> Vec<(String, Option<String>)> {
+        hub.lock()
+            .list_autopilot_events(50, None)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.kind, e.reason))
+            .collect()
+    }
+
+    /// Critério de aceite: a falha volta ao agente sem ação humana; com o
+    /// head novo verde, o hub pede o merge na wip; mesclado, encerra.
+    #[tokio::test]
+    async fn falha_volta_ao_agente_verde_pede_merge_e_mesclado_encerra() {
+        use ct_core::PrState::{Merged, Open};
+        let hub = hub();
+        let wi = autonomous_idle(&hub, SAB - 2 * 60_000);
+        let port = FakePort::default();
+        // CI pendente: espera, não encerra (nem depois da folga do
+        // `pr_aberto`).
+        mirror_pr(&hub, wi, "wip/autonoma", Open, "a1b2c3d4e5", &[None]);
+        tick(&hub, &port, "hub-id", SAB + 10 * 60_000)
+            .await
+            .unwrap();
+        assert!(kills(&port).is_empty());
+        assert!(calls_of(&port, "session.continue").is_empty());
+
+        // Falhou: o pedido de correção vai ao agente.
+        mirror_pr(
+            &hub,
+            wi,
+            "wip/autonoma",
+            Open,
+            "a1b2c3d4e5",
+            &[Some("failure")],
+        );
+        tick(&hub, &port, "hub-id", SAB + 11 * 60_000)
+            .await
+            .unwrap();
+        let sent = calls_of(&port, "session.continue");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["session_id"], "s1");
+        let text = sent[0]["text"].as_str().unwrap();
+        assert!(text.starts_with(plan::FEEDBACK_REQUEST), "{text}");
+        assert!(
+            text.contains("<<<DADOS>>>") || text.contains("Falhou: `job-0`"),
+            "{text}"
+        );
+        assert!(kills(&port).is_empty());
+        assert!(kinds(&hub).contains(&("feedback_sent".into(), Some(plan::FEEDBACK_CI.into()))));
+        let ev = hub.lock().list_autopilot_events(1, None).unwrap();
+        assert!(ev[0].message.contains("a1b2c3d") && ev[0].message.contains("1 de 3"));
+        // O mesmo head não é reenviado.
+        tick(&hub, &port, "hub-id", SAB + 12 * 60_000)
+            .await
+            .unwrap();
+        assert_eq!(calls_of(&port, "session.continue").len(), 1);
+
+        // Corrigido: head novo, verde. O hub pede o merge uma vez.
+        mirror_pr(
+            &hub,
+            wi,
+            "wip/autonoma",
+            Open,
+            "f6e5d4c3b2",
+            &[Some("success")],
+        );
+        tick(&hub, &port, "hub-id", SAB + 13 * 60_000)
+            .await
+            .unwrap();
+        tick(&hub, &port, "hub-id", SAB + 14 * 60_000)
+            .await
+            .unwrap();
+        let sent = calls_of(&port, "session.continue");
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        let text = sent[1]["text"].as_str().unwrap();
+        assert!(
+            text.contains("gh pr merge 9 --rebase") && text.contains("wip/autonoma"),
+            "{text}"
+        );
+        assert!(kinds(&hub).contains(&("merge_requested".into(), Some(plan::MERGE_GREEN.into()))));
+        assert!(kills(&port).is_empty());
+
+        // Mesclado na wip: a issue fica em revisão e a sessão é encerrada.
+        mirror_pr(
+            &hub,
+            wi,
+            "wip/autonoma",
+            Merged,
+            "f6e5d4c3b2",
+            &[Some("success")],
+        );
+        hub.lock()
+            .conn()
+            .execute(
+                "UPDATE work_item SET status = 'em_revisao' WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        tick(&hub, &port, "hub-id", SAB + 15 * 60_000)
+            .await
+            .unwrap();
+        assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
+        assert!(kinds(&hub).contains(&("ended".into(), Some(plan::END_DONE.into()))));
+    }
+
+    /// Critério de aceite: depois de N tentativas, a issue fica bloqueada
+    /// com o motivo e o agendador inicia a próxima.
+    #[tokio::test]
+    async fn tentativas_esgotadas_bloqueiam_e_o_agendador_segue() {
+        use ct_core::PrState::Open;
+        let hub = hub();
+        let wi = autonomous_idle(&hub, SAB - 2 * 60_000);
+        hub.lock().set_autopilot_max_ci_attempts(1, SAB).unwrap();
+        let port = FakePort::default();
+        mirror_pr(
+            &hub,
+            wi,
+            "wip/autonoma",
+            Open,
+            "aaaaaaa1",
+            &[Some("failure")],
+        );
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
+        assert_eq!(calls_of(&port, "session.continue").len(), 1);
+        // A correção falhou de novo, com a tentativa esgotada.
+        mirror_pr(
+            &hub,
+            wi,
+            "wip/autonoma",
+            Open,
+            "aaaaaaa2",
+            &[Some("failure")],
+        );
+        tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
+        assert_eq!(calls_of(&port, "session.continue").len(), 1);
+        assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
+        let item = hub.lock().work_item(wi).unwrap();
+        assert_eq!(item.status, ct_core::WorkItemStatus::Bloqueado);
+        let ev = hub.lock().list_autopilot_events(1, None).unwrap();
+        assert_eq!(ev[0].kind, "blocked");
+        assert_eq!(ev[0].reason.as_deref(), Some(plan::BLOCK_ATTEMPTS));
+        assert!(ev[0].message.contains("1 tentativa"), "{}", ev[0].message);
+        assert!(hub.lock().autopilot_close_states().unwrap().is_empty());
+        // O motivo aparece no resumo da manhã.
+        let d = hub.lock().digest_projects(0, SAB + 2 * 60_000).unwrap();
+        assert_eq!(d[0].blocked.len(), 1);
+        assert!(
+            d[0].blocked[0]
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("CI do PR #9")),
+            "{:?}",
+            d[0].blocked
+        );
+        // O ambiente sincroniza o fim da sessão: a vaga abre e a próxima
+        // issue aprovada inicia (a bloqueada fica de fora).
+        hub.lock()
+            .conn()
+            .execute("UPDATE session SET state = 'exited' WHERE id = 's1'", [])
+            .unwrap();
+        tick(&hub, &port, "hub-id", SAB + 2 * 60_000).await.unwrap();
+        let starts = calls_of(&port, "session.start");
+        assert_eq!(starts.len(), 1, "{starts:?}");
+        assert_eq!(starts[0]["gh_number"], 124);
+        assert_eq!(
+            hub.lock().work_item(wi).unwrap().status,
+            ct_core::WorkItemStatus::Bloqueado
+        );
+    }
+
+    /// Critério de aceite: parada em "Aguardando você" além do prazo é
+    /// encerrada e a issue fica bloqueada com o motivo.
+    #[tokio::test]
+    async fn aguardando_voce_alem_do_prazo_bloqueia_com_o_motivo() {
+        let hub = hub();
+        let wi = autonomous_idle(&hub, SAB - H);
+        {
+            let h = hub.lock();
+            h.conn()
+                .execute("UPDATE session SET state = 'running' WHERE id = 's1'", [])
+                .unwrap();
+            h.conn()
+                .execute(
+                    "INSERT INTO event (uid, env_id, hlc, ts, project_id, work_item_id, type,
+                                        payload)
+                     SELECT 'u-nh', 'env-auto', 1, ?1, project_id, id, 'status_changed',
+                            '{\"from\":\"em_execucao\",\"to\":\"aguardando_voce\",\"cause\":\"needs_human\"}'
+                     FROM work_item WHERE id = ?2",
+                    rusqlite::params![SAB - 25 * 60_000, wi],
+                )
+                .unwrap();
+            h.conn()
+                .execute(
+                    "UPDATE work_item SET status = 'aguardando_voce' WHERE id = ?1",
+                    [wi],
+                )
+                .unwrap();
+        }
+        let port = FakePort::default();
+        // 30 min de prazo: ainda não.
+        hub.lock().set_autopilot_waiting_timeout(30, SAB).unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
+        assert!(kills(&port).is_empty());
+        // 20 min (o padrão): bloqueia.
+        hub.lock().set_autopilot_waiting_timeout(20, SAB).unwrap();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
+        assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
+        let item = hub.lock().work_item(wi).unwrap();
+        assert_eq!(item.status, ct_core::WorkItemStatus::Bloqueado);
+        let ev = hub.lock().list_autopilot_events(1, None).unwrap();
+        assert_eq!(ev[0].kind, "blocked");
+        assert_eq!(ev[0].reason.as_deref(), Some(plan::BLOCK_WAITING));
+        let d = hub.lock().digest_projects(0, SAB + 60_000).unwrap();
+        assert!(
+            d[0].blocked[0]
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("aguardando você há mais de 20 min")),
+            "{:?}",
+            d[0].blocked
+        );
+        // O encerramento ainda não sincronizou: não encerra de novo.
+        tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
+        assert_eq!(kills(&port).len(), 1);
+    }
+
+    /// Critério de aceite: o hub não pede merge de PR com outra base.
+    #[tokio::test]
+    async fn pr_com_outra_base_nao_recebe_pedido_de_merge() {
+        use ct_core::PrState::Open;
+        let hub = hub();
+        let wi = autonomous_idle(&hub, SAB - 10 * 60_000);
+        mirror_pr(&hub, wi, "develop", Open, "c0ffee01", &[Some("success")]);
+        let port = FakePort::default();
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
+        assert!(calls_of(&port, "session.continue").is_empty());
+        assert!(calls_of(&port, "env.info").is_empty());
+        // O comportamento anterior: encerra como `pr_aberto`.
+        assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
+    }
+
+    #[tokio::test]
+    async fn ambiente_antigo_encerra_como_antes_e_avisa_uma_vez() {
+        use ct_core::PrState::Open;
+        let hub = hub();
+        let wi = autonomous_idle(&hub, SAB - 10 * 60_000);
+        mirror_pr(
+            &hub,
+            wi,
+            "wip/autonoma",
+            Open,
+            "c0ffee01",
+            &[Some("failure")],
+        );
+        let port = FakePort {
+            protocol: Some("2.21"),
+            ..Default::default()
+        };
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
+        assert!(calls_of(&port, "session.continue").is_empty());
+        assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
+        tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
+        let outdated: Vec<_> = kinds(&hub)
+            .into_iter()
+            .filter(|(_, r)| r.as_deref() == Some(plan::ENV_OUTDATED))
+            .collect();
+        assert_eq!(outdated.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ajustes_do_fechamento_pelo_set() {
+        let hub = hub();
+        let st = HubState::new(hub.clone(), "ui", "hub", "hub-id");
+        let v = call(
+            &st,
+            "hub.autopilot.set",
+            json!({ "max_ci_attempts": 5, "waiting_timeout_min": 0 }),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["max_ci_attempts"], 5);
+        assert_eq!(v["waiting_timeout_min"], 0);
+        assert_eq!(v["idle_timeout_min"], 30);
+        for bad in [
+            json!({ "max_ci_attempts": 11 }),
+            json!({ "waiting_timeout_min": 2000, "max_ci_attempts": 1 }),
+            json!({ "max_sessions_per_env": 0, "max_ci_attempts": 1 }),
+        ] {
+            assert!(call(&st, "hub.autopilot.set", bad, false).await.is_err());
+        }
+        let s = hub.lock().autopilot_settings().unwrap();
+        assert_eq!((s.max_ci_attempts, s.waiting_timeout_min), (5, 0));
     }
 }

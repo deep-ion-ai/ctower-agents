@@ -601,14 +601,19 @@ impl Sessions {
                 .into_iter()
                 .next()
                 .and_then(|e| {
-                    Some(crate::autonomy::agent_instruction(
-                        project,
-                        e.payload["branch"].as_str()?,
-                        e.payload["base"].as_str()?,
+                    let branch = e.payload["branch"].as_str()?;
+                    Some((
+                        crate::autonomy::agent_instruction(
+                            project,
+                            branch,
+                            e.payload["base"].as_str()?,
+                        ),
+                        branch.to_string(),
                     ))
                 });
             (rules, l.epic_resolution(project, wi)?, autonomy)
         };
+        let (autonomy, autonomy_branch) = autonomy.unzip();
         let rules = match &epic_unresolved {
             None => rules,
             Some(reason) => Some(
@@ -677,6 +682,11 @@ impl Sessions {
         if gestor {
             // Perfil `gestor` do guarda-corpo no `ctower hook` (§10.2).
             env.push(("CTOWER_SESSION_KIND".to_string(), "gestor".to_string()));
+        }
+        if let Some(branch) = autonomy_branch {
+            // Sessão autônoma (#184): o guarda-corpo só deixa `gh pr merge`
+            // em PR com base na branch de integração.
+            env.push((ct_core::autonomy::AUTONOMY_BRANCH_ENV.to_string(), branch));
         }
         env.extend(provider_env(project, wi, gestor));
         env.extend(docs.env());
@@ -1336,9 +1346,14 @@ mod tests {
         assert!(out.contains("CTOWER_TOKEN=hook-secreto"));
         assert!(out.contains("CTOWER_PROTECTED=develop,main"));
         assert!(out.contains("CTOWER_ISSUE=12\n"), "{out}");
-        // Projeto GitHub: nada das variáveis do Jira e do GitLab (#351), e o
-        // settings.json só com os hooks.
-        for v in ["CTOWER_TRACKER", "CTOWER_ISSUE_KEY", "GITLAB_HOST="] {
+        // Projeto GitHub: nada das variáveis do Jira e do GitLab (#351) nem da
+        // sessão autônoma (#184), e o settings.json só com os hooks.
+        for v in [
+            "CTOWER_TRACKER",
+            "CTOWER_ISSUE_KEY",
+            "GITLAB_HOST=",
+            "CTOWER_AUTONOMY_BRANCH",
+        ] {
             assert!(!out.contains(v), "{v}: {out}");
         }
         let settings: Value =

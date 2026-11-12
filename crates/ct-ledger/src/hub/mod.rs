@@ -50,9 +50,12 @@ pub use agent::{
 pub use approval::ApprovalStatus;
 pub use assignments::{AssignmentAdded, AssignmentFilter, AssignmentState, HubAssignment};
 pub use autopilot_run::{
-    AutopilotEvent, AutopilotSession, AutopilotSettings, IdleSession, ParkedSession,
-    AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN, AUTOPILOT_IDLE_TIMEOUT_MAX_MIN,
-    AUTOPILOT_MAX_PER_ENV_CEILING, AUTOPILOT_MAX_PER_ENV_DEFAULT,
+    AutopilotEvent, AutopilotSession, AutopilotSettings, CloseState, IdleSession, ParkedSession,
+    WaitingSession, AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN,
+    AUTOPILOT_IDLE_TIMEOUT_MAX_MIN, AUTOPILOT_MAX_CI_ATTEMPTS_CEILING,
+    AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT, AUTOPILOT_MAX_PER_ENV_CEILING,
+    AUTOPILOT_MAX_PER_ENV_DEFAULT, AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN,
+    AUTOPILOT_WAITING_TIMEOUT_MAX_MIN,
 };
 pub use config::{
     DeleteImpact, HubProjectPatch, NewHubProject, ProjectAdded, ProjectProvider, QuarantineGroup,
@@ -826,6 +829,28 @@ CREATE TRIGGER pr_review_item_cleanup AFTER DELETE ON pr_cache
 BEGIN
   DELETE FROM pr_review_item WHERE project_id = OLD.project_id AND pr_number = OLD.number;
 END;
+"#,
+    // 41: fechamento autônomo da issue (#184, épico #178): tentativas de
+    // correção do CI por PR de issue autônoma (0 = bloqueia na primeira
+    // falha) e minutos em "Aguardando você" antes de bloquear (0 = nunca),
+    // mais o estado do fechamento por work item: tentativas, o head lido
+    // (e quando, para o repositório sem checks), o último head com o
+    // feedback de falha enviado, as threads de colaborador já enviadas
+    // (JSON), o head com o pedido de merge e o último envio.
+    r#"
+ALTER TABLE autopilot_state ADD COLUMN max_ci_attempts INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE autopilot_state ADD COLUMN waiting_timeout_min INTEGER NOT NULL DEFAULT 20;
+CREATE TABLE autopilot_close (
+  work_item_id  INTEGER PRIMARY KEY,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  head_sha      TEXT,
+  head_seen_at  INTEGER,
+  feedback_head TEXT,
+  threads_sent  TEXT NOT NULL DEFAULT '[]',
+  merge_head    TEXT,
+  last_sent_at  INTEGER,
+  updated_at    INTEGER NOT NULL
+);
 "#,
 ];
 
@@ -5254,7 +5279,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 40);
+        assert_eq!(v, 41);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
