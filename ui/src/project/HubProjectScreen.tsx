@@ -9,6 +9,8 @@ import { ProjectTrail } from "./ProjectIndex";
 import { ProjectView, useGoPage } from "./ProjectView";
 import { ProjectOverview } from "./ProjectOverview";
 import { autonomyOf, autonomyWarning } from "../hub/autonomy";
+import { releaseOf } from "../hub/release";
+import { useStartSession } from "../shell/start";
 import {
   ProjectAutonomyCard,
   ProjectGestorCard, ProjectHealthCard, ProjectProposalsCard, ProjectReviewsCard, ProjectSyncCard } from "./OverviewCards";
@@ -100,6 +102,9 @@ export function HubProjectScreen({
   // Pela chave do hub (`p`): o `owner` da rota pode diferir na caixa.
   const ref = { owner: p?.gh_owner ?? owner, repo: p?.gh_repo ?? repo };
   const hubProject = hub.projects.find((x) => same(x.project.gh_owner, owner) && same(x.project.gh_repo, repo)) ?? null;
+  // Criar release (#204): com a release ligada no cadastro (só GitHub + GitHub).
+  const startSession = useStartSession();
+  const releaseOn = hubProject ? (releaseOf(hubProject.project)?.enabled ?? false) : false;
 
   // Sessões do projeto (#17): as dos ambientes conectados e as que o hub relata.
   const sessions = () =>
@@ -228,6 +233,21 @@ export function HubProjectScreen({
           <button type="button" className="btn" onClick={() => goPage("settings")}>
             <Icon name="settings" size={14} /> Configurações do projeto
           </button>
+          {releaseOn && (
+            <button
+              type="button"
+              className="btn"
+              disabled={clones.length === 0}
+              title={
+                clones.length === 0
+                  ? "Nenhum ambiente conectado tem este projeto atribuído"
+                  : "Mostra o estado da release e inicia a sessão de release (merges determinísticos pelo ctower release)"
+              }
+              onClick={(e) => startSession({ ...ref, release: true }, e.currentTarget)}
+            >
+              Criar release
+            </button>
+          )}
         </>
       }
       banner={

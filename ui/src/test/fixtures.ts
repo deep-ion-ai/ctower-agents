@@ -26,6 +26,7 @@ import type {
   HubStatus,
   RecoveryStatus,
 } from "../protocol/hub-gen";
+import { DEFAULT_RELEASE_CONFIG } from "../hub/release";
 
 export const NOW = Date.UTC(2026, 9, 15, 15, 0, 0);
 
@@ -65,11 +66,12 @@ export function project(p: Partial<Project> = {}): Project {
     attribution: true,
     sync_role: false,
     docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-    session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+    session_templates: { issue: "", epic: "", project: "", autonomous: "", release: "" },
     autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
     autonomy_runner: false,
     autonomy_report: null,
     approval: { label: "aprovada", required: false },
+    release: DEFAULT_RELEASE_CONFIG,
     ...p,
   };
 }
@@ -331,11 +333,12 @@ export function hubProject(p: Partial<HubProject> = {}): HubProject {
     attribution: true,
     sync_env_id: null,
     docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-    session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+    session_templates: { issue: "", epic: "", project: "", autonomous: "", release: "" },
     autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
     autonomy_report: null,
     wip_limits: { max_sessions: null, max_prs: null },
     approval: { label: "aprovada", required: false },
+    release: DEFAULT_RELEASE_CONFIG,
     ...p,
   };
 }

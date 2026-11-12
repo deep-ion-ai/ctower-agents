@@ -5,6 +5,7 @@ import { FakeDaemonApi } from "../api/fake";
 import type { EnvInfo, IssueRow, PrRow, ProjectTree } from "../protocol/gen";
 import type { HubDashboard, HubDecision, HubEvent, HubHistory, HubProject, HubSession, HubTree, HubTreeNode, HubWorkItem } from "../protocol/hub-gen";
 import { HUB_CONFIG_UNLINKED, JIRA_META, dashboard, hubInfo, jiraHubProject, project, session, sync, workItem, RC_AVAILABLE } from "../test/fixtures";
+import { DEFAULT_RELEASE_CONFIG } from "../hub/release";
 
 const NOW = Date.now();
 const H = 3600_000;
@@ -56,11 +57,12 @@ const HUB_PROJECT: HubProject = {
   attribution: true,
   sync_env_id: null,
   docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-  session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+  session_templates: { issue: "", epic: "", project: "", autonomous: "", release: "" },
   autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
   autonomy_report: null,
   wip_limits: { max_sessions: null, max_prs: null },
   approval: { label: "aprovada", required: false },
+  release: DEFAULT_RELEASE_CONFIG,
 };
 
 const hubItem = (n: number, p: Partial<HubWorkItem> = {}): HubWorkItem => ({

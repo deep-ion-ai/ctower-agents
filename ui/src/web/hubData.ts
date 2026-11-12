@@ -15,6 +15,7 @@ import type {
   HubSession,
 } from "../protocol/hub-gen";
 import { ago } from "../util/time";
+import { DEFAULT_RELEASE_CONFIG } from "../hub/release";
 
 /**
  * Hub 1.3 (sem `HubEnv.online`): ambiente "no ar" pelo hub, enviou há menos disso. Os ambientes enviam a
@@ -81,13 +82,15 @@ function project(p: HubProject): Project {
     // Modelo de docs do cadastro (#440); o hub anterior não manda.
     docs: p.docs ?? { enabled: false, project_dirs: [], epic_dirs: [] },
     // Templates de sessão do cadastro (#166): a web inicia com o override; hub anterior não manda.
-    session_templates: p.session_templates ?? { issue: "", epic: "", project: "", autonomous: "" },
+    session_templates: p.session_templates ?? { issue: "", epic: "", project: "", autonomous: "", release: "" },
     // Modo autônomo (#181): o do cadastro; a web não sabe qual ambiente o roda.
     autonomy: p.autonomy ?? { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
     autonomy_runner: false,
     autonomy_report: null,
     // Rótulo de aprovação do cadastro (#124); hub anterior não manda (o padrão, sem exigir).
     approval: p.approval ?? { label: "aprovada", required: false },
+    // Release (#204); hub anterior não manda (desligada).
+    release: p.release ?? DEFAULT_RELEASE_CONFIG,
   };
 }
 

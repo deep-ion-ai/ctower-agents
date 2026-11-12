@@ -14,6 +14,7 @@ import { hubEnv } from "../test/fixtures";
 import { setViewport } from "../test/viewport";
 import { ENV, envCalls, hubItem, hubSession, now, webApi } from "../test/web";
 import { resetRcRequests } from "./envActions";
+import { DEFAULT_RELEASE_CONFIG } from "../hub/release";
 
 afterEach(() => {
   resetRcRequests();
@@ -283,11 +284,12 @@ describe("Revisão: marcar decisões como revisadas", () => {
             attribution: true,
             sync_role: false,
             docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-            session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+            session_templates: { issue: "", epic: "", project: "", autonomous: "", release: "" },
             autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
             autonomy_runner: false,
             autonomy_report: null,
             approval: { label: "aprovada", required: false },
+            release: DEFAULT_RELEASE_CONFIG,
           },
           work_items: [
             {

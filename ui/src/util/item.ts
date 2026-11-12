@@ -9,6 +9,8 @@ import type { ForgeConfig, TrackerConfig } from "../protocol/gen";
 
 // Rótulo de um work item. O #0 é o das sessões do projeto (sem issue).
 export const PROJECT_ITEM = 0;
+/** Work item da sessão de release do projeto (#204), sem issue. */
+export const RELEASE_ITEM = -1;
 
 /**
  * O que as referências precisam do projeto: `owner`/`repo` da forja (no

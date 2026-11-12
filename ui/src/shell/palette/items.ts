@@ -381,6 +381,10 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
       at("templates", "Templates de sessão", "templates prompt inicial sessão override", "settings", "templates"),
       at("docs", "Docs", "docs pasta documentação", "settings", "docs"),
     );
+    // Release (#204): só GitHub + GitHub.
+    if (p.provider.tracker?.kind !== "jira") {
+      out.push(at("release", "Release", "release criar release-please promoção back-merge token", "settings", "release"));
+    }
     // Só no projeto Jira (#150); também na web (o hub repassa ao ambiente de sync).
     if (p.provider.tracker?.kind === "jira") {
       out.push(

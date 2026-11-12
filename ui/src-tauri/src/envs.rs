@@ -91,6 +91,9 @@ pub struct Templates {
     pub jira_epic: String,
     #[serde(default = "default_jira_project_template")]
     pub jira_project: String,
+    /// Sessão de release (#204; ausente em ui.json antigos: o padrão).
+    #[serde(default = "default_release_template")]
+    pub release: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -280,6 +283,19 @@ Não faça commits nem mescle em {{protected}}: código vai em sessões de issue
 Siga as regras do projeto do system prompt; releia com `rules_get` e proponha mudanças com `rules_propose`.
 Consulte decisões anteriores com `ledger_list_decisions` e registre as relevantes com `ledger_record_decision`.";
 
+// Sessão de release (#204); espelha `DEFAULT_RELEASE_TEMPLATE` de defaults.ts.
+const RELEASE_TEMPLATE: &str = "Sessão de release de {{owner}}/{{repo}}: conduza a release de {{source}} para {{target}} até o fim, sem esperar por mim, só pelas etapas do `ctower release`.
+Comece por `ctower release status`. Sem diferença de conteúdo e sem PR do fluxo aberto, relate \"nada a lançar\" e termine. Com uma etapa já em andamento, continue dela (campo `next`).
+Promoção: escreva o corpo do PR (o que entra na release, a partir de `git log --oneline origin/{{target}}..origin/{{source}}` e dos PRs mesclados) num arquivo e rode `ctower release promote --body-file <arquivo>`.
+Depois, nesta ordem: `ctower release merge-promotion --sha <head conferido>`, `ctower release wait-release-pr`, `ctower release approve-runs <PR de release>`, `ctower release merge-release --sha <head conferido>`, `ctower release wait-publish` e `ctower release merge-back`.
+Saída 3 é recusa e 1 é falha: leia a mensagem. Reexecute jobs que falharam com `gh run rerun <id> --failed` e rode a etapa de novo. Diante de conflito, check obrigatório vermelho ou prazo esgotado, pare e relate. Não corrija código nem CI.
+Registre as decisões relevantes com `ledger_record_decision` (origin `autonoma`).
+Ao terminar, resuma: a versão, os links da release e dos três PRs (promoção, release e back-merge), os runs aprovados e as decisões registradas.";
+
+fn default_release_template() -> String {
+    RELEASE_TEMPLATE.into()
+}
+
 fn default_project_template() -> String {
     PROJECT_TEMPLATE.into()
 }
@@ -350,6 +366,7 @@ impl Default for UiConfig {
                 jira_issue: JIRA_ISSUE_TEMPLATE.into(),
                 jira_epic: JIRA_EPIC_TEMPLATE.into(),
                 jira_project: JIRA_PROJECT_TEMPLATE.into(),
+                release: RELEASE_TEMPLATE.into(),
             },
             prompts: default_prompts(),
             notify: NotifyPrefs {
@@ -665,6 +682,15 @@ mod tests {
         cfg.prompts.clear();
         s.save_ui_config(&cfg).unwrap();
         assert!(s.ui_config().prompts.is_empty());
+    }
+
+    #[test]
+    fn template_de_release_espelha_o_da_ui() {
+        let ts = include_str!("../../src/settings/defaults.ts");
+        for line in RELEASE_TEMPLATE.lines() {
+            let escaped = line.replace('"', "\\\"");
+            assert!(ts.contains(&escaped), "fora de defaults.ts: {line}");
+        }
     }
 
     #[test]
