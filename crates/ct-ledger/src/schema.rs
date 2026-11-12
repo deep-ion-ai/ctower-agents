@@ -369,6 +369,11 @@ ALTER TABLE project ADD COLUMN autonomy_report TEXT;
     r#"
 ALTER TABLE project ADD COLUMN approval_config TEXT NOT NULL DEFAULT '{}';
 "#,
+    // 23: configuração de release do projeto, como vem do hub (#204): JSON
+    // de `ReleaseConfig`. `{}` = desligada.
+    r#"
+ALTER TABLE project ADD COLUMN release_config TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo

@@ -285,6 +285,7 @@ impl TestEnv {
             autonomy: Default::default(),
             autonomy_runner: false,
             approval: Default::default(),
+            release: Default::default(),
             owner: "deep-ion-ai".into(),
             repo: "demo".into(),
             name: "demo".into(),

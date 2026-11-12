@@ -1029,6 +1029,7 @@ mod tests {
                     autonomy: Default::default(),
                     autonomy_runner: false,
                     approval: Default::default(),
+                    release: Default::default(),
                     owner: p.gh_owner.clone(),
                     repo: p.gh_repo.clone(),
                     name: p.name.clone(),

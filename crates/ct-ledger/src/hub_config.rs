@@ -72,6 +72,10 @@ pub struct ConfigProject {
     /// padrão (rótulo `aprovada`, sem exigir); o padrão não vai no JSON.
     #[serde(default, skip_serializing_if = "ApprovalConfig::is_default")]
     pub approval: ApprovalConfig,
+    /// Configuração de release (#204). Ausente num hub anterior:
+    /// desligada; o padrão não vai no JSON.
+    #[serde(default, skip_serializing_if = "ct_core::ReleaseConfig::is_default")]
+    pub release: ct_core::ReleaseConfig,
 }
 
 fn attribution_default() -> bool {
@@ -257,6 +261,7 @@ impl Ledger {
                             && cur.autonomy == p.autonomy
                             && cur.autonomy_runner == p.autonomy_runner
                             && cur.approval == p.approval
+                            && cur.release == p.release
                             && cur.unassigned_at.is_none()
                             && self.hub_repo_path(cur.id)?.as_deref() == Some(&p.repo_path);
                         if same {
@@ -349,7 +354,7 @@ impl Ledger {
             "UPDATE project SET tracker_kind = ?2, tracker_config = ?3, forge_kind = ?4,
                     forge_config = ?5, branch_pattern = ?6, attribution = ?7, sync_role = ?8,
                     docs_config = ?9, session_templates = ?10, autonomy_config = ?11,
-                    autonomy_runner = ?12, approval_config = ?13
+                    autonomy_runner = ?12, approval_config = ?13, release_config = ?14
              WHERE id = ?1",
             params![
                 id,
@@ -364,7 +369,8 @@ impl Ledger {
                 p.session_templates.config_json(),
                 p.autonomy.config_json(),
                 p.autonomy_runner,
-                p.approval.config_json()
+                p.approval.config_json(),
+                p.release.config_json()
             ],
         )?;
         Ok(())
@@ -428,6 +434,7 @@ impl Ledger {
                 autonomy: p.autonomy.clone(),
                 autonomy_runner: p.autonomy_runner,
                 approval: p.approval.clone(),
+                release: p.release.clone(),
             });
             if path != p.repo_path {
                 self.conn.execute(
@@ -555,6 +562,7 @@ mod tests {
             autonomy: Default::default(),
             autonomy_runner: false,
             approval: Default::default(),
+            release: Default::default(),
             owner: "deep-ion-ai".into(),
             repo: repo.into(),
             name: repo.into(),
@@ -1085,5 +1093,35 @@ mod tests {
         });
         let antigo: ConfigProject = serde_json::from_value(v).unwrap();
         assert_eq!(antigo.approval, ApprovalConfig::default());
+    }
+
+    /// Configuração de release (#204): vem no pull, muda com ele, e o
+    /// padrão (desligada) não vai no JSON.
+    #[test]
+    fn pull_com_configuracao_de_release() {
+        let l = Ledger::open_in_memory().unwrap();
+        let on = ct_core::ReleaseConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let p = ConfigProject {
+            release: on.clone(),
+            ..cp("acme-web", 1)
+        };
+        l.apply_hub_config(&resp(1, vec![p.clone()]), path).unwrap();
+        let pid = l.list_projects().unwrap()[0].id;
+        assert_eq!(l.get_project(pid).unwrap().release, on);
+
+        let p2 = ConfigProject {
+            release: Default::default(),
+            rev: 2,
+            ..p
+        };
+        let r = l
+            .apply_hub_config(&resp(2, vec![p2.clone()]), path)
+            .unwrap();
+        assert_eq!(r.updated.len(), 1);
+        assert!(!l.get_project(pid).unwrap().release.enabled);
+        assert!(serde_json::to_value(&p2).unwrap().get("release").is_none());
     }
 }

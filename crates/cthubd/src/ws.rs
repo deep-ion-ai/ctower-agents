@@ -1586,6 +1586,24 @@ fn approval_param(p: &Value) -> Result<Option<ct_core::ApprovalConfig>, (i64, St
     }
 }
 
+/// `release` (#204): o bloco de release do projeto, campos ausentes =
+/// padrão; o objeto inteiro substitui o anterior. A combinação (só GitHub +
+/// GitHub) o hub confere na gravação.
+fn release_param(p: &Value) -> Result<Option<ct_core::ReleaseConfig>, (i64, String)> {
+    match p.get("release") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => {
+            let r: ct_core::ReleaseConfig = serde_json::from_value(v.clone())
+                .map_err(|e| invalid(format!("release inválido: {e}")))?;
+            r.validate().map_err(invalid)?;
+            Ok(Some(r))
+        }
+        Some(_) => Err(invalid(
+            "release deve ser um objeto { enabled, source, target, ... }",
+        )),
+    }
+}
+
 fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(None),
@@ -1692,12 +1710,13 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         autonomy: autonomy_param(p)?,
         wip_limits: wip_param(p)?,
         approval: approval_param(p)?,
+        release: release_param(p)?,
     };
     if patch.is_empty() {
         return Err(invalid(
             "nada a mudar: informe name, base_branch, protected_branches, tracker, forge, \
-             branch_pattern, attribution, sync_env, docs, session_templates, autonomy, wip_limits \
-             ou approval",
+             branch_pattern, attribution, sync_env, docs, session_templates, autonomy, wip_limits, \
+             approval ou release",
         ));
     }
     let cur = st
@@ -1729,11 +1748,35 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
+    // As branches da release ligada (#204) precisam existir no GitHub. O
+    // projeto Jira + GitLab o hub recusa na gravação.
+    if let Some(r) = patch
+        .release
+        .as_ref()
+        .filter(|r| r.enabled && cur.forge.gitlab().is_none() && cur.tracker.jira().is_none())
+    {
+        let r = r.normalized();
+        for b in [&r.source, &r.target] {
+            github()?
+                .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+                .map_err(|m| (-32000, m))?;
+        }
+    }
     let updated = st
         .hub
         .lock()
         .update_project(owner, repo, &patch)
         .map_err(e)?;
+    if patch.release.is_some() {
+        let r = &updated.release;
+        tracing::info!(
+            "release de {owner}/{repo}: {} ({} → {}, secret {})",
+            if r.enabled { "ligada" } else { "desligada" },
+            r.source,
+            r.target,
+            r.token_secret
+        );
+    }
     if patch.approval.is_some() {
         let a = &updated.approval;
         tracing::info!(
