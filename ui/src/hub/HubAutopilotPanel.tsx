@@ -17,6 +17,7 @@ import {
   PILOT_STATE_TEXT,
   aheadText,
   ciText,
+  idleText,
   localTime,
   nextBandText,
   pilotState,
@@ -124,7 +125,8 @@ export function HubAutopilotPanel({ now }: { now: number }) {
             {status.last_tick_at != null
               ? `Último ciclo do agendador ${ago(status.last_tick_at, now)}.`
               : "O agendador ainda não rodou desde que o hub subiu."}{" "}
-            Até {status.settings.max_sessions_per_env} sessão(ões) autônoma(s) por ambiente.
+            Até {status.settings.max_sessions_per_env} sessão(ões) autônoma(s) por ambiente.{" "}
+            {idleText(status.settings.idle_timeout_min)}
           </p>
 
           <h3>Contas</h3>

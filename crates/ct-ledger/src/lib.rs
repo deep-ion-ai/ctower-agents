@@ -44,7 +44,8 @@ pub use hub::{
     ProjectProvider, QuarantineGroup,
 };
 pub use hub::{
-    AutopilotEvent, AutopilotSession, AutopilotSettings, ParkedSession, AUTOPILOT_EVENT_TTL_MS,
+    AutopilotEvent, AutopilotSession, AutopilotSettings, IdleSession, ParkedSession,
+    AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN, AUTOPILOT_IDLE_TIMEOUT_MAX_MIN,
     AUTOPILOT_MAX_PER_ENV_CEILING, AUTOPILOT_MAX_PER_ENV_DEFAULT,
 };
 pub use hub::{

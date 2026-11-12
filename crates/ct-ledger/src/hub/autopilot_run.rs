@@ -15,6 +15,11 @@ pub const AUTOPILOT_MAX_PER_ENV_DEFAULT: u32 = 1;
 pub const AUTOPILOT_MAX_PER_ENV_CEILING: u32 = 8;
 /// Eventos do agendador mais velhos que isto são apagados ao gravar.
 pub const AUTOPILOT_EVENT_TTL_MS: i64 = 90 * 86_400_000;
+/// Minutos que uma sessão autônoma pode ficar ociosa sem PR antes de o
+/// agendador a encerrar, padrão.
+pub const AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN: u32 = 30;
+/// Teto do ajuste acima (um dia).
+pub const AUTOPILOT_IDLE_TIMEOUT_MAX_MIN: u32 = 24 * 60;
 
 /// Estado do agendador do piloto automático (`hub.autopilot.status`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,6 +31,10 @@ pub struct AutopilotSettings {
     pub paused_at: Option<i64>,
     /// Sessões autônomas vivas ao mesmo tempo em cada ambiente.
     pub max_sessions_per_env: u32,
+    /// Minutos que uma sessão autônoma pode ficar ociosa sem PR antes de o
+    /// agendador a encerrar (`sessao_ociosa`); 0 = nunca. A ociosa com PR
+    /// aberto encerra sempre.
+    pub idle_timeout_min: u32,
 }
 
 impl Default for AutopilotSettings {
@@ -34,6 +43,7 @@ impl Default for AutopilotSettings {
             paused: false,
             paused_at: None,
             max_sessions_per_env: AUTOPILOT_MAX_PER_ENV_DEFAULT,
+            idle_timeout_min: AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN,
         }
     }
 }
@@ -47,11 +57,13 @@ pub struct AutopilotEvent {
     pub id: i64,
     pub at: i64,
     /// `started`, `start_failed`, `refused`, `parked`, `resumed`,
-    /// `resume_failed`, `unparked`, `paused` ou `unpaused`.
+    /// `resume_failed`, `unparked`, `ended`, `end_failed`, `paused` ou
+    /// `unpaused`.
     pub kind: String,
     /// De quem é o evento: `hub`, `account:<chave>`, `project:<owner/repo>`
-    /// ou `item:<owner/repo#n>`. A recusa (`refused`, `start_failed`) só é gravada de novo quando o
-    /// motivo (`reason`) muda no mesmo escopo.
+    /// ou `item:<owner/repo#n>`. A recusa (`refused`, `start_failed`,
+    /// `end_failed`) só é gravada de novo quando o motivo (`reason`) ou a
+    /// causa no texto (`message`, sem os números) muda no mesmo escopo.
     pub scope: String,
     /// Código estável do motivo (ex.: `budget:band_closed`, `wip_limit`).
     pub reason: Option<String>,
@@ -82,6 +94,20 @@ pub struct ParkedSession {
     pub parked_at: i64,
 }
 
+/// Sessão ociosa (`idle`) como o agendador a vê para decidir encerrá-la.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdleSession {
+    pub session_id: String,
+    /// Desde quando está ociosa: o `last_event_at` (o `Stop` que a deixou
+    /// ociosa, ou o aviso de espera do Claude Code depois dele).
+    pub since: i64,
+    /// Sessão autônoma: iniciada pelo agendador ou depois de um início
+    /// autônomo da issue no mesmo ambiente (evento `autonomy_session`).
+    pub autonomous: bool,
+    /// A issue já tem PR aberto ou está em `em_revisao` ou `concluido`.
+    pub done: bool,
+}
+
 /// Sessão de implementação como o hub a conhece, para o agendador.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -93,6 +119,27 @@ pub struct AutopilotSession {
     pub repo: String,
     pub gh_number: i64,
     pub started_at: i64,
+}
+
+/// A causa no texto de uma recusa, para a deduplicação: os números
+/// (percentuais, contagens, horários) viram `#`.
+fn message_cause(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut in_number = false;
+    for c in message.chars() {
+        if c.is_ascii_digit() {
+            if !in_number {
+                out.push('#');
+            }
+            in_number = true;
+        } else if in_number && matches!(c, '.' | ',') {
+            // Separador decimal dentro do número.
+        } else {
+            in_number = false;
+            out.push(c);
+        }
+    }
+    out
 }
 
 const EVENT_COLS: &str =
@@ -137,13 +184,15 @@ impl Hub {
         Ok(self
             .conn
             .query_row(
-                "SELECT paused, paused_at, max_sessions_per_env FROM autopilot_state WHERE id = 1",
+                "SELECT paused, paused_at, max_sessions_per_env, idle_timeout_min
+                 FROM autopilot_state WHERE id = 1",
                 [],
                 |r| {
                     Ok(AutopilotSettings {
                         paused: r.get(0)?,
                         paused_at: r.get(1)?,
                         max_sessions_per_env: r.get::<_, i64>(2)?.max(1) as u32,
+                        idle_timeout_min: r.get::<_, i64>(3)?.clamp(0, u32::MAX as i64) as u32,
                     })
                 },
             )
@@ -153,13 +202,21 @@ impl Hub {
 
     fn save_autopilot_settings(&self, s: &AutopilotSettings, now: i64) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO autopilot_state (id, paused, paused_at, max_sessions_per_env, updated_at)
-             VALUES (1, ?1, ?2, ?3, ?4)
+            "INSERT INTO autopilot_state (id, paused, paused_at, max_sessions_per_env,
+                                          idle_timeout_min, updated_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (id) DO UPDATE SET paused = excluded.paused,
                paused_at = excluded.paused_at,
                max_sessions_per_env = excluded.max_sessions_per_env,
+               idle_timeout_min = excluded.idle_timeout_min,
                updated_at = excluded.updated_at",
-            params![s.paused, s.paused_at, s.max_sessions_per_env, now],
+            params![
+                s.paused,
+                s.paused_at,
+                s.max_sessions_per_env,
+                s.idle_timeout_min,
+                now
+            ],
         )?;
         Ok(())
     }
@@ -195,6 +252,20 @@ impl Hub {
         Ok(s)
     }
 
+    /// Minutos de ociosidade sem PR antes de encerrar a sessão autônoma
+    /// (0 a [`AUTOPILOT_IDLE_TIMEOUT_MAX_MIN`]; 0 = nunca).
+    pub fn set_autopilot_idle_timeout(&self, min: u32, now: i64) -> Result<AutopilotSettings> {
+        if min > AUTOPILOT_IDLE_TIMEOUT_MAX_MIN {
+            return Err(LedgerError::Conflict(format!(
+                "minutos de sessão ociosa: de 0 a {AUTOPILOT_IDLE_TIMEOUT_MAX_MIN}"
+            )));
+        }
+        let mut s = self.autopilot_settings()?;
+        s.idle_timeout_min = min;
+        self.save_autopilot_settings(&s, now)?;
+        Ok(s)
+    }
+
     /// Último evento do escopo.
     fn last_autopilot_event(&self, scope: &str) -> Result<Option<AutopilotEvent>> {
         Ok(self
@@ -210,15 +281,21 @@ impl Hub {
             .optional()?)
     }
 
-    /// Grava o evento. Uma recusa (`refused` ou `start_failed`) com o mesmo motivo
-    /// (`reason`) do último evento do mesmo escopo não é gravada de novo: o
-    /// agendador roda a cada minuto e só registra quando o motivo muda.
-    /// Devolve o evento gravado, ou `None` se repetido. Apaga os eventos
-    /// mais velhos que [`AUTOPILOT_EVENT_TTL_MS`].
+    /// Grava o evento. Uma recusa (`refused`, `start_failed` ou
+    /// `end_failed`) igual ao último evento do mesmo escopo não é gravada de
+    /// novo: o agendador roda a cada minuto e só registra quando a causa
+    /// muda. Igual = mesmo `reason` e mesma causa no texto: o `message` sem
+    /// os números ([`message_cause`]), para o limite de trabalho em
+    /// andamento que passa de sessões a PRs abertos virar evento, mas o uso
+    /// do plano que sobe 1% não. Devolve o evento gravado, ou `None` se
+    /// repetido. Apaga os eventos mais velhos que [`AUTOPILOT_EVENT_TTL_MS`].
     pub fn record_autopilot_event(&self, e: &AutopilotEvent) -> Result<Option<AutopilotEvent>> {
-        if matches!(e.kind.as_str(), "refused" | "start_failed") {
+        if matches!(e.kind.as_str(), "refused" | "start_failed" | "end_failed") {
             if let Some(last) = self.last_autopilot_event(&e.scope)? {
-                if last.kind == e.kind && last.reason == e.reason {
+                if last.kind == e.kind
+                    && last.reason == e.reason
+                    && message_cause(&last.message) == message_cause(&e.message)
+                {
                     return Ok(None);
                 }
             }
@@ -327,6 +404,48 @@ impl Hub {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Sessões de implementação ociosas, com o que o agendador precisa para
+    /// encerrar as autônomas que terminaram ou pararam ([`IdleSession`]).
+    pub fn autopilot_idle_sessions(&self) -> Result<Vec<IdleSession>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.last_event_at,
+                    EXISTS (SELECT 1 FROM autopilot_event a
+                            WHERE a.kind = 'started' AND a.session_id = s.id)
+                    OR EXISTS (SELECT 1 FROM event e
+                               WHERE e.work_item_id = s.work_item_id
+                                 AND e.env_id = s.env_id AND e.type = 'autonomy_session'
+                                 AND e.ts <= s.started_at),
+                    w.status IN ('em_revisao', 'concluido')
+                    OR EXISTS (SELECT 1 FROM pr_cache c
+                               WHERE c.work_item_id = w.id AND c.state = 'open')
+             FROM session s
+             JOIN work_item w ON w.id = s.work_item_id
+             WHERE w.gh_number > 0 AND s.state = 'idle'
+             ORDER BY s.started_at, s.id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(IdleSession {
+                session_id: r.get(0)?,
+                since: r.get(1)?,
+                autonomous: r.get(2)?,
+                done: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Sessões que o agendador encerrou (ou tentou encerrar) desde `since`
+    /// (eventos `ended` e `end_failed`): até o ambiente sincronizar, o hub
+    /// ainda as vê ociosas; a que falhou espera antes de tentar de novo.
+    pub fn autopilot_recent_ends(&self, since: i64) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id FROM autopilot_event
+             WHERE kind IN ('ended', 'end_failed') AND at >= ?1 AND session_id IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([since], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Estaciona a sessão (substitui um estacionamento anterior dela).
     pub fn park_session(&self, p: &ParkedSession) -> Result<()> {
         self.conn.execute(
@@ -422,6 +541,141 @@ mod tests {
         let (s, _) = h.set_autopilot_paused(false, 40).unwrap();
         assert!(!s.paused && s.paused_at.is_none());
         assert_eq!(s.max_sessions_per_env, 2);
+        assert_eq!(s.idle_timeout_min, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN);
+        let s = h.set_autopilot_idle_timeout(0, 50).unwrap();
+        assert_eq!((s.idle_timeout_min, s.max_sessions_per_env), (0, 2));
+        assert!(h
+            .set_autopilot_idle_timeout(AUTOPILOT_IDLE_TIMEOUT_MAX_MIN + 1, 50)
+            .is_err());
+        assert_eq!(h.autopilot_settings().unwrap().idle_timeout_min, 0);
+    }
+
+    #[test]
+    fn recusa_grava_de_novo_quando_a_causa_no_texto_muda() {
+        let h = hub();
+        let wip = |m: &str, at| AutopilotEvent {
+            scope: "project:acme/acme-web".into(),
+            message: format!("acme/acme-web: limite de trabalho em andamento ({m})"),
+            ..refused("wip_limit", at)
+        };
+        assert!(h
+            .record_autopilot_event(&wip("2 de 2 sessões", 1))
+            .unwrap()
+            .is_some());
+        assert!(h
+            .record_autopilot_event(&wip("2 de 2 sessões", 2))
+            .unwrap()
+            .is_none());
+        // Mesmo `reason`, outra causa: grava.
+        assert!(h
+            .record_autopilot_event(&wip("3 de 3 PRs abertos", 3))
+            .unwrap()
+            .is_some());
+        // Só os números mudaram (o limite subiu, o uso do plano andou): não.
+        assert!(h
+            .record_autopilot_event(&wip("4 de 4 PRs abertos", 4))
+            .unwrap()
+            .is_none());
+        let budget = |m: &str, at| AutopilotEvent {
+            message: format!("a política do plano não permite iniciar agora: {m}"),
+            ..refused("budget:weekly_over_limit", at)
+        };
+        assert!(h
+            .record_autopilot_event(&budget("semanal em 41%, limite 40.2%", 5))
+            .unwrap()
+            .is_some());
+        assert!(h
+            .record_autopilot_event(&budget("semanal em 42%, limite 40.7%", 6))
+            .unwrap()
+            .is_none());
+        assert_eq!(message_cause("5h em 41.5%, teto 60%"), "#h em #%, teto #%");
+    }
+
+    #[test]
+    fn sessoes_ociosas_com_autonomia_e_pr() {
+        let h = hub();
+        h.conn
+            .execute(
+                "INSERT INTO work_item (project_id, gh_number, created_at)
+                 SELECT id, 7, 1 FROM project",
+                [],
+            )
+            .unwrap();
+        let wi = h.conn.last_insert_rowid();
+        let insert = |id: &str, started: i64, state: &str| {
+            h.conn
+                .execute(
+                    "INSERT INTO session (id, env_id, work_item_id, tool, cwd, state, started_at,
+                                          last_event_at)
+                     VALUES (?1, 'env-auto', ?2, 'claude', '/tmp/x', ?3, ?4, ?4 + 5)",
+                    params![id, wi, state, started],
+                )
+                .unwrap();
+        };
+        insert("antes", 100, "idle");
+        insert("depois", 300, "idle");
+        insert("rodando", 300, "running");
+        h.conn
+            .execute(
+                "INSERT INTO event (uid, env_id, hlc, ts, project_id, work_item_id, type, payload)
+                 SELECT 'u1', 'env-auto', 1, 200, project_id, id, 'autonomy_session', '{}'
+                 FROM work_item WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        let idle = h.autopilot_idle_sessions().unwrap();
+        let view: Vec<_> = idle
+            .iter()
+            .map(|i| (i.session_id.as_str(), i.since, i.autonomous, i.done))
+            .collect();
+        assert_eq!(
+            view,
+            vec![("antes", 105, false, false), ("depois", 305, true, false)]
+        );
+        // PR aberto da issue: terminou.
+        h.conn
+            .execute(
+                "INSERT INTO pr_cache (project_id, number, work_item_id, head, base, state, url,
+                                       updated_at, synced_at)
+                 SELECT project_id, 9, id, 'feat/7', 'wip/autonoma', 'open', '', 1, 1
+                 FROM work_item WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        assert!(h.autopilot_idle_sessions().unwrap().iter().all(|i| i.done));
+        // Iniciada pelo agendador: autônoma mesmo sem o evento do ambiente.
+        h.record_autopilot_event(&AutopilotEvent {
+            at: 1,
+            kind: "started".into(),
+            scope: "project:acme/acme-web".into(),
+            session_id: Some("antes".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(h
+            .autopilot_idle_sessions()
+            .unwrap()
+            .iter()
+            .all(|i| i.autonomous));
+
+        assert!(h.autopilot_recent_ends(0).unwrap().is_empty());
+        for (kind, sid, at) in [
+            ("ended", "a", 10),
+            ("end_failed", "b", 20),
+            ("ended", "c", 5),
+        ] {
+            h.record_autopilot_event(&AutopilotEvent {
+                at,
+                kind: kind.into(),
+                scope: format!("item:{sid}"),
+                session_id: Some(sid.into()),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        let mut ends = h.autopilot_recent_ends(10).unwrap();
+        ends.sort();
+        assert_eq!(ends, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]

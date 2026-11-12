@@ -12,4 +12,10 @@ paused: boolean, paused_at: number | null,
 /**
  * Sessões autônomas vivas ao mesmo tempo em cada ambiente.
  */
-max_sessions_per_env: number, };
+max_sessions_per_env: number, 
+/**
+ * Minutos que uma sessão autônoma pode ficar ociosa sem PR antes de o
+ * agendador a encerrar (`sessao_ociosa`); 0 = nunca. A ociosa com PR
+ * aberto encerra sempre.
+ */
+idle_timeout_min: number, };
