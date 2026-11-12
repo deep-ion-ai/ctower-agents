@@ -10,7 +10,7 @@ import { STATUS } from "../project/status";
 import { itemTab } from "../project/tabs";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
-import { itemShort, PROJECT_ITEM } from "../util/item";
+import { itemShort, noIssue } from "../util/item";
 import { diffTab } from "../diff/diff";
 import { ago } from "../util/time";
 import type { Session } from "../protocol/gen";
@@ -167,7 +167,7 @@ export function WebReview() {
   const rows = envs.flatMap((e) =>
     (dashboards[e.id]?.projects ?? []).flatMap((p) =>
       p.work_items
-        .filter((w) => w.gh_number !== PROJECT_ITEM && (w.status === "em_revisao" || w.pending_decisions > 0))
+        .filter((w) => !noIssue(w.gh_number) && (w.status === "em_revisao" || w.pending_decisions > 0))
         .filter((w) => {
           const k = `${p.project.gh_owner}/${p.project.gh_repo}#${w.gh_number}`.toLowerCase();
           if (seen.has(k)) return false;

@@ -147,13 +147,21 @@ export function jiraProjectUrl(p: MaybeProject): string | null {
   return j ? `${j.url.replace(/\/+$/, "")}/browse/${j.project_key}` : null;
 }
 
-/** "#31", "PROJ-31" ou "sessão do projeto". */
+/** Work item sem issue: a sessão do projeto (#0) ou a de release (#-1, #204). Roda no clone principal. */
+export const noIssue = (n: number | null | undefined): boolean => n !== null && n !== undefined && n <= PROJECT_ITEM;
+
+/** "planejamento" ou "release": o item sem issue nos rótulos curtos. */
+export const noIssueLabel = (n: number): string => (n === RELEASE_ITEM ? "release" : "planejamento");
+
+/** "#31", "PROJ-31", "sessão do projeto" ou "sessão de release". */
 export function itemRef(n: number, p?: MaybeProject): string {
+  if (n === RELEASE_ITEM) return "sessão de release";
   return n === PROJECT_ITEM ? "sessão do projeto" : itemShort(p, n);
 }
 
-/** "#31 Título", "PROJ-31 Título" ou "Sessão do projeto". */
+/** "#31 Título", "PROJ-31 Título", "Sessão do projeto" ou "Sessão de release". */
 export function itemTitle(wi: { gh_number: number; title?: string | null }, p?: MaybeProject): string {
+  if (wi.gh_number === RELEASE_ITEM) return "Sessão de release";
   return wi.gh_number === PROJECT_ITEM ? "Sessão do projeto" : `${itemShort(p, wi.gh_number)} ${wi.title ?? ""}`.trim();
 }
 

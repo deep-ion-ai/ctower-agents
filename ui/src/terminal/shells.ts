@@ -9,7 +9,7 @@ import type { DaemonApi } from "../api/daemon";
 import type { Dashboard, DashboardWorkItem, Project, Shell } from "../protocol/gen";
 import { isShell, useNav, type Pane, type ShellTab, type Tab } from "../state/nav";
 import { useTower } from "../state/tower";
-import { itemShort, PROJECT_ITEM } from "../util/item";
+import { itemShort, itemRef, noIssue } from "../util/item";
 import { lastTermSize } from "./size";
 
 export { shellEndText } from "./adapter";
@@ -43,7 +43,7 @@ export function shellTarget(
 /** "#87", "PROJ-87" ou "sessão do projeto" (#0, clone principal). */
 export function shellRef(wi: DashboardWorkItem | undefined, project: Project | undefined): string {
   if (!wi) return "item";
-  return wi.gh_number === PROJECT_ITEM ? "sessão do projeto" : itemShort(project, wi.gh_number);
+  return noIssue(wi.gh_number) ? itemRef(wi.gh_number) : itemShort(project, wi.gh_number);
 }
 
 /** Título da aba: "Shell · #87" ou "Shell · sessão do projeto". */

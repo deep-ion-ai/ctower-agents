@@ -91,3 +91,9 @@ test("busca por número: #43, 43 e a chave do Jira", () => {
   expect(numberQuery("OUTRO-43", jiraProject())).toBeNull();
   expect(numberQuery("PROJ-43")).toBeNull();
 });
+
+test("sessão de release (#204): rótulos do item sem issue", () => {
+  expect(itemRef(-1)).toBe("sessão de release");
+  expect(itemRef(0)).toBe("sessão do projeto");
+  expect(itemLabel(project(), workItem({ gh_number: -1 }))).toBe("ctower-agents · sessão de release");
+});

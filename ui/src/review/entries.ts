@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { GESTOR_LABEL } from "../control-room/attention";
 import type { DashboardWorkItem, Marked, Project, Review } from "../protocol/gen";
 import type { DaemonApi } from "../api/daemon";
-import { itemRef, PROJECT_ITEM } from "../util/item";
+import { itemRef, RELEASE_ITEM, noIssue } from "../util/item";
 import { noteReviewed, reviewKey, useReviews } from "./ui-store";
 
 /** Item com decisões a revisar (ou em revisão), num ambiente. */
@@ -46,7 +46,8 @@ export const markPr = (r?: Review) => openPr(r) ?? r?.prs[r.prs.length - 1];
 /** Nome do item: "#28 título", "Planejamento · projeto" ou o gestor. */
 export function entryName(e: Pick<ReviewEntry, "gestor" | "ghNumber" | "title" | "project">): string {
   if (e.gestor) return GESTOR_LABEL;
-  if (e.ghNumber === PROJECT_ITEM) return `Planejamento · ${e.project?.name ?? ""}`.trim();
+  if (e.ghNumber === RELEASE_ITEM) return `Release · ${e.project?.name ?? ""}`.trim();
+  if (noIssue(e.ghNumber)) return `Planejamento · ${e.project?.name ?? ""}`.trim();
   return `${e.ghNumber !== undefined ? itemRef(e.ghNumber, e.project) : ""} ${e.title}`.trim();
 }
 
