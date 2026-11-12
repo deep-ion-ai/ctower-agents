@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 /// Nome padrão da branch de integração.
 pub const DEFAULT_AUTONOMY_BRANCH: &str = "wip/autonoma";
 
+/// Variável de ambiente da sessão autônoma com a branch de integração
+/// (#184): o guarda-corpo do `ctower hook` só deixa `gh pr merge` em PR com
+/// esta base.
+pub const AUTONOMY_BRANCH_ENV: &str = "CTOWER_AUTONOMY_BRANCH";
+
+/// Tamanho máximo (bytes) do texto livre do `session.continue` (#184): o
+/// pedido de correção ou de merge que o piloto automático do hub manda à
+/// sessão autônoma.
+pub const CONTINUE_TEXT_MAX_BYTES: usize = 16 * 1024;
+
 /// Como o ambiente traz a base para a branch de integração antes de iniciar
 /// uma issue.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

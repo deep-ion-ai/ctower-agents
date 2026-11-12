@@ -1,7 +1,10 @@
 //! Agendador do piloto automático no hub (#183, épico #178): o estado dele
 //! (pausado, sessões autônomas por ambiente), os eventos que o painel
 //! (#185) lê e as sessões estacionadas pelo limite real do plano
-//! (migração 36). A decisão fica em `cthubd::autopilot`; aqui só se guarda.
+//! (migração 36). O fechamento autônomo da issue (#184, migração 41) guarda
+//! aqui as tentativas de correção do CI e o que já foi enviado ao agente
+//! ([`CloseState`]). A decisão fica em `cthubd::autopilot`; aqui só se
+//! guarda.
 
 use super::Hub;
 use crate::{LedgerError, Result};
@@ -20,6 +23,23 @@ pub const AUTOPILOT_EVENT_TTL_MS: i64 = 90 * 86_400_000;
 pub const AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN: u32 = 30;
 /// Teto do ajuste acima (um dia).
 pub const AUTOPILOT_IDLE_TIMEOUT_MAX_MIN: u32 = 24 * 60;
+/// Tentativas de correção do CI de um PR de issue autônoma (#184), padrão.
+pub const AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT: u32 = 3;
+/// Teto do ajuste acima; 0 = não reenvia (bloqueia na primeira falha).
+pub const AUTOPILOT_MAX_CI_ATTEMPTS_CEILING: u32 = 10;
+/// Minutos em "Aguardando você" antes de o agendador encerrar a sessão
+/// autônoma e bloquear a issue (#184), padrão.
+pub const AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN: u32 = 20;
+/// Teto do ajuste acima (um dia); 0 = nunca.
+pub const AUTOPILOT_WAITING_TIMEOUT_MAX_MIN: u32 = 24 * 60;
+
+fn default_max_ci_attempts() -> u32 {
+    AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT
+}
+
+fn default_waiting_timeout_min() -> u32 {
+    AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN
+}
 
 /// Estado do agendador do piloto automático (`hub.autopilot.status`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,8 +53,19 @@ pub struct AutopilotSettings {
     pub max_sessions_per_env: u32,
     /// Minutos que uma sessão autônoma pode ficar ociosa sem PR antes de o
     /// agendador a encerrar (`sessao_ociosa`); 0 = nunca. A ociosa com PR
-    /// aberto encerra sempre.
+    /// aberto encerra sempre. Com o PR da issue na branch de integração
+    /// (#184), é também o prazo da sessão ociosa sem progresso (nada novo a
+    /// enviar ao agente) antes de bloquear a issue.
     pub idle_timeout_min: u32,
+    /// Tentativas de correção do CI de um PR de issue autônoma (#184): o
+    /// hub devolve a falha ao agente até este número de heads; com a falha
+    /// seguinte, a issue fica bloqueada. 0 = bloqueia na primeira falha.
+    #[serde(default = "default_max_ci_attempts")]
+    pub max_ci_attempts: u32,
+    /// Minutos que uma sessão autônoma pode ficar em "Aguardando você"
+    /// antes de o agendador encerrá-la e bloquear a issue (#184); 0 = nunca.
+    #[serde(default = "default_waiting_timeout_min")]
+    pub waiting_timeout_min: u32,
 }
 
 impl Default for AutopilotSettings {
@@ -44,6 +75,8 @@ impl Default for AutopilotSettings {
             paused_at: None,
             max_sessions_per_env: AUTOPILOT_MAX_PER_ENV_DEFAULT,
             idle_timeout_min: AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN,
+            max_ci_attempts: AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT,
+            waiting_timeout_min: AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN,
         }
     }
 }
@@ -57,13 +90,18 @@ pub struct AutopilotEvent {
     pub id: i64,
     pub at: i64,
     /// `started`, `start_failed`, `refused`, `parked`, `resumed`,
-    /// `resume_failed`, `unparked`, `ended`, `end_failed`, `paused` ou
-    /// `unpaused`.
+    /// `resume_failed`, `unparked`, `ended`, `end_failed`, `paused`,
+    /// `unpaused` e, no fechamento autônomo (#184), `feedback_sent`
+    /// (`reason` `ci_falhou` ou `review`, com o head), `merge_requested`,
+    /// `blocked` (`reason` `ci_tentativas_esgotadas`, `aguardando_voce` ou
+    /// `sem_progresso`) e `continue_failed`.
     pub kind: String,
-    /// De quem é o evento: `hub`, `account:<chave>`, `project:<owner/repo>`
-    /// ou `item:<owner/repo#n>`. A recusa (`refused`, `start_failed`,
-    /// `end_failed`) só é gravada de novo quando o motivo (`reason`) ou a
-    /// causa no texto (`message`, sem os números) muda no mesmo escopo.
+    /// De quem é o evento: `hub`, `account:<chave>`, `project:<owner/repo>`,
+    /// `item:<owner/repo#n>` ou `env:<env_id>` (ambiente sem o
+    /// `session.continue` com texto, #184). A recusa (`refused`,
+    /// `start_failed`, `end_failed`, `continue_failed`) só é gravada de novo
+    /// quando o motivo (`reason`) ou a causa no texto (`message`, sem os
+    /// números) muda no mesmo escopo.
     pub scope: String,
     /// Código estável do motivo (ex.: `budget:band_closed`, `wip_limit`).
     pub reason: Option<String>,
@@ -109,6 +147,43 @@ pub struct IdleSession {
     pub autonomous: bool,
     /// A issue já tem PR aberto ou está em `em_revisao` ou `concluido`.
     pub done: bool,
+    /// Work item da sessão.
+    pub work_item_id: i64,
+}
+
+/// Sessão viva cujo work item está em `aguardando_voce` (a sessão parou
+/// pedindo atenção humana: hook `Notification` ou pedido de permissão),
+/// para o agendador bloquear a issue autônoma parada demais (#184).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingSession {
+    pub session_id: String,
+    /// Desde quando o work item está em `aguardando_voce` (o evento de
+    /// status mais recente para ele, não antes do início da sessão).
+    pub since: i64,
+    /// Sessão autônoma (o mesmo critério de [`IdleSession::autonomous`]).
+    pub autonomous: bool,
+    pub work_item_id: i64,
+}
+
+/// Estado do fechamento autônomo do PR de uma issue (#184): o que o hub já
+/// mandou ao agente. Um por work item; sai quando a issue é bloqueada.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CloseState {
+    pub work_item_id: i64,
+    /// Heads com falha do CI já devolvidos ao agente.
+    pub attempts: u32,
+    /// Head do PR com checks lidos no espelho e quando o hub o viu (o
+    /// repositório sem checks conta como verde um tempo depois).
+    pub head_sha: Option<String>,
+    pub head_seen_at: Option<i64>,
+    /// Último head com a falha do CI enviada.
+    pub feedback_head: Option<String>,
+    /// Ids das threads e reviews de colaborador já enviados, em ordem.
+    pub threads_sent: Vec<String>,
+    /// Head com o pedido de merge enviado.
+    pub merge_head: Option<String>,
+    /// Último envio ao agente (ms).
+    pub last_sent_at: Option<i64>,
 }
 
 /// Sessão de implementação como o hub a conhece, para o agendador.
@@ -187,15 +262,21 @@ impl Hub {
         Ok(self
             .conn
             .query_row(
-                "SELECT paused, paused_at, max_sessions_per_env, idle_timeout_min
+                "SELECT paused, paused_at, max_sessions_per_env, idle_timeout_min,
+                        max_ci_attempts, waiting_timeout_min
                  FROM autopilot_state WHERE id = 1",
                 [],
                 |r| {
+                    let n = |i: usize| -> rusqlite::Result<u32> {
+                        Ok(r.get::<_, i64>(i)?.clamp(0, u32::MAX as i64) as u32)
+                    };
                     Ok(AutopilotSettings {
                         paused: r.get(0)?,
                         paused_at: r.get(1)?,
                         max_sessions_per_env: r.get::<_, i64>(2)?.max(1) as u32,
-                        idle_timeout_min: r.get::<_, i64>(3)?.clamp(0, u32::MAX as i64) as u32,
+                        idle_timeout_min: n(3)?,
+                        max_ci_attempts: n(4)?,
+                        waiting_timeout_min: n(5)?,
                     })
                 },
             )
@@ -206,18 +287,23 @@ impl Hub {
     fn save_autopilot_settings(&self, s: &AutopilotSettings, now: i64) -> Result<()> {
         self.conn.execute(
             "INSERT INTO autopilot_state (id, paused, paused_at, max_sessions_per_env,
-                                          idle_timeout_min, updated_at)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5)
+                                          idle_timeout_min, max_ci_attempts,
+                                          waiting_timeout_min, updated_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT (id) DO UPDATE SET paused = excluded.paused,
                paused_at = excluded.paused_at,
                max_sessions_per_env = excluded.max_sessions_per_env,
                idle_timeout_min = excluded.idle_timeout_min,
+               max_ci_attempts = excluded.max_ci_attempts,
+               waiting_timeout_min = excluded.waiting_timeout_min,
                updated_at = excluded.updated_at",
             params![
                 s.paused,
                 s.paused_at,
                 s.max_sessions_per_env,
                 s.idle_timeout_min,
+                s.max_ci_attempts,
+                s.waiting_timeout_min,
                 now
             ],
         )?;
@@ -269,6 +355,35 @@ impl Hub {
         Ok(s)
     }
 
+    /// Tentativas de correção do CI por PR de issue autônoma (0 a
+    /// [`AUTOPILOT_MAX_CI_ATTEMPTS_CEILING`]; 0 = bloqueia na primeira
+    /// falha).
+    pub fn set_autopilot_max_ci_attempts(&self, n: u32, now: i64) -> Result<AutopilotSettings> {
+        if n > AUTOPILOT_MAX_CI_ATTEMPTS_CEILING {
+            return Err(LedgerError::Conflict(format!(
+                "tentativas de correção do CI: de 0 a {AUTOPILOT_MAX_CI_ATTEMPTS_CEILING}"
+            )));
+        }
+        let mut s = self.autopilot_settings()?;
+        s.max_ci_attempts = n;
+        self.save_autopilot_settings(&s, now)?;
+        Ok(s)
+    }
+
+    /// Minutos em "Aguardando você" antes de bloquear a issue autônoma (0 a
+    /// [`AUTOPILOT_WAITING_TIMEOUT_MAX_MIN`]; 0 = nunca).
+    pub fn set_autopilot_waiting_timeout(&self, min: u32, now: i64) -> Result<AutopilotSettings> {
+        if min > AUTOPILOT_WAITING_TIMEOUT_MAX_MIN {
+            return Err(LedgerError::Conflict(format!(
+                "minutos em \"Aguardando você\": de 0 a {AUTOPILOT_WAITING_TIMEOUT_MAX_MIN}"
+            )));
+        }
+        let mut s = self.autopilot_settings()?;
+        s.waiting_timeout_min = min;
+        self.save_autopilot_settings(&s, now)?;
+        Ok(s)
+    }
+
     /// Último evento do escopo.
     fn last_autopilot_event(&self, scope: &str) -> Result<Option<AutopilotEvent>> {
         Ok(self
@@ -284,8 +399,8 @@ impl Hub {
             .optional()?)
     }
 
-    /// Grava o evento. Uma recusa (`refused`, `start_failed` ou
-    /// `end_failed`) igual ao último evento do mesmo escopo não é gravada de
+    /// Grava o evento. Uma recusa (`refused`, `start_failed`, `end_failed`
+    /// ou `continue_failed`) igual ao último evento do mesmo escopo não é gravada de
     /// novo: o agendador roda a cada minuto e só registra quando a causa
     /// muda. Igual = mesmo `reason` e mesma causa no texto: o `message` sem
     /// os números ([`message_cause`]), para o limite de trabalho em
@@ -293,7 +408,10 @@ impl Hub {
     /// do plano que sobe 1% não. Devolve o evento gravado, ou `None` se
     /// repetido. Apaga os eventos mais velhos que [`AUTOPILOT_EVENT_TTL_MS`].
     pub fn record_autopilot_event(&self, e: &AutopilotEvent) -> Result<Option<AutopilotEvent>> {
-        if matches!(e.kind.as_str(), "refused" | "start_failed" | "end_failed") {
+        if matches!(
+            e.kind.as_str(),
+            "refused" | "start_failed" | "end_failed" | "continue_failed"
+        ) {
             if let Some(last) = self.last_autopilot_event(&e.scope)? {
                 if last.kind == e.kind
                     && last.reason == e.reason
@@ -425,7 +543,8 @@ impl Hub {
                                  AND e.ts <= s.started_at),
                     w.status IN ('em_revisao', 'concluido')
                     OR EXISTS (SELECT 1 FROM pr_cache c
-                               WHERE c.work_item_id = w.id AND c.state = 'open')
+                               WHERE c.work_item_id = w.id AND c.state = 'open'),
+                    w.id
              FROM session s
              JOIN work_item w ON w.id = s.work_item_id
              WHERE w.gh_number > 0 AND s.state = 'idle'
@@ -437,18 +556,117 @@ impl Hub {
                 since: r.get(1)?,
                 autonomous: r.get(2)?,
                 done: r.get(3)?,
+                work_item_id: r.get(4)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Sessões de implementação vivas cujo work item está em
+    /// `aguardando_voce` ([`WaitingSession`]), para o agendador (#184).
+    pub fn autopilot_waiting_sessions(&self) -> Result<Vec<WaitingSession>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id,
+                    max(s.started_at,
+                        coalesce((SELECT max(e.ts) FROM event e
+                                  WHERE e.work_item_id = w.id
+                                    AND e.type IN ('status_changed', 'status_set_manual')
+                                    AND json_extract(e.payload, '$.to') = 'aguardando_voce'),
+                                 s.last_event_at)),
+                    EXISTS (SELECT 1 FROM autopilot_event a
+                            WHERE a.kind = 'started' AND a.session_id = s.id)
+                    OR EXISTS (SELECT 1 FROM event e
+                               WHERE e.work_item_id = s.work_item_id
+                                 AND e.env_id = s.env_id AND e.type = 'autonomy_session'
+                                 AND e.ts <= s.started_at),
+                    w.id
+             FROM session s
+             JOIN work_item w ON w.id = s.work_item_id
+             WHERE w.gh_number > 0 AND w.status = 'aguardando_voce'
+               AND s.state IN ('starting', 'running', 'idle')
+             ORDER BY s.started_at, s.id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(WaitingSession {
+                session_id: r.get(0)?,
+                since: r.get(1)?,
+                autonomous: r.get(2)?,
+                work_item_id: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Estado do fechamento autônomo de cada work item que tem um (#184).
+    pub fn autopilot_close_states(&self) -> Result<Vec<CloseState>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT work_item_id, attempts, head_sha, head_seen_at, feedback_head, threads_sent,
+                    merge_head, last_sent_at
+             FROM autopilot_close ORDER BY work_item_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let threads: String = r.get(5)?;
+            Ok(CloseState {
+                work_item_id: r.get(0)?,
+                attempts: r.get::<_, i64>(1)?.clamp(0, u32::MAX as i64) as u32,
+                head_sha: r.get(2)?,
+                head_seen_at: r.get(3)?,
+                feedback_head: r.get(4)?,
+                threads_sent: serde_json::from_str(&threads).unwrap_or_default(),
+                merge_head: r.get(6)?,
+                last_sent_at: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Grava o estado do fechamento autônomo do work item.
+    pub fn save_autopilot_close(&self, c: &CloseState, now: i64) -> Result<()> {
+        let threads = serde_json::to_string(&c.threads_sent).expect("Vec<String> serializa");
+        self.conn.execute(
+            "INSERT INTO autopilot_close (work_item_id, attempts, head_sha, head_seen_at,
+                                          feedback_head, threads_sent, merge_head, last_sent_at,
+                                          updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT (work_item_id) DO UPDATE SET attempts = excluded.attempts,
+               head_sha = excluded.head_sha, head_seen_at = excluded.head_seen_at,
+               feedback_head = excluded.feedback_head, threads_sent = excluded.threads_sent,
+               merge_head = excluded.merge_head, last_sent_at = excluded.last_sent_at,
+               updated_at = excluded.updated_at",
+            params![
+                c.work_item_id,
+                c.attempts,
+                c.head_sha,
+                c.head_seen_at,
+                c.feedback_head,
+                threads,
+                c.merge_head,
+                c.last_sent_at,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Apaga o estado do fechamento autônomo do work item (a issue foi
+    /// bloqueada: uma volta ao backlog recomeça as tentativas).
+    pub fn clear_autopilot_close(&self, work_item_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM autopilot_close WHERE work_item_id = ?1",
+            [work_item_id],
+        )?;
+        Ok(())
+    }
+
     /// Sessões que o agendador encerrou (ou tentou encerrar) desde `since`
-    /// (eventos `ended` e `end_failed`): até o ambiente sincronizar, o hub
-    /// ainda as vê ociosas; a que falhou espera antes de tentar de novo.
+    /// (eventos `ended`, `end_failed` e `blocked`): até o ambiente
+    /// sincronizar, o hub ainda as vê ociosas; a que falhou espera antes de
+    /// tentar de novo.
     pub fn autopilot_recent_ends(&self, since: i64) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT session_id FROM autopilot_event
-             WHERE kind IN ('ended', 'end_failed') AND at >= ?1 AND session_id IS NOT NULL",
+             WHERE kind IN ('ended', 'end_failed', 'blocked') AND at >= ?1
+               AND session_id IS NOT NULL",
         )?;
         let rows = stmt.query_map([since], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -556,6 +774,102 @@ mod tests {
             .set_autopilot_idle_timeout(AUTOPILOT_IDLE_TIMEOUT_MAX_MIN + 1, 50)
             .is_err());
         assert_eq!(h.autopilot_settings().unwrap().idle_timeout_min, 0);
+        // #184: tentativas do CI (0 a 10) e espera em "Aguardando você".
+        assert_eq!(s.max_ci_attempts, AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT);
+        assert_eq!(s.waiting_timeout_min, AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN);
+        let s = h.set_autopilot_max_ci_attempts(0, 60).unwrap();
+        assert_eq!((s.max_ci_attempts, s.idle_timeout_min), (0, 0));
+        assert!(h
+            .set_autopilot_max_ci_attempts(AUTOPILOT_MAX_CI_ATTEMPTS_CEILING + 1, 60)
+            .is_err());
+        let s = h.set_autopilot_waiting_timeout(45, 70).unwrap();
+        assert_eq!((s.waiting_timeout_min, s.max_ci_attempts), (45, 0));
+        assert!(h
+            .set_autopilot_waiting_timeout(AUTOPILOT_WAITING_TIMEOUT_MAX_MIN + 1, 70)
+            .is_err());
+        assert_eq!(h.autopilot_settings().unwrap().waiting_timeout_min, 45);
+        // JSON de um hub anterior, sem os campos novos: os padrões.
+        let old: AutopilotSettings = serde_json::from_str(
+            r#"{"paused":false,"paused_at":null,"max_sessions_per_env":1,"idle_timeout_min":30}"#,
+        )
+        .unwrap();
+        assert_eq!(old, AutopilotSettings::default());
+    }
+
+    #[test]
+    fn estado_do_fechamento_por_work_item() {
+        let h = hub();
+        assert!(h.autopilot_close_states().unwrap().is_empty());
+        let c = CloseState {
+            work_item_id: 7,
+            attempts: 2,
+            head_sha: Some("abc".into()),
+            head_seen_at: Some(10),
+            feedback_head: Some("abc".into()),
+            threads_sent: vec!["t1".into(), "t2".into()],
+            merge_head: None,
+            last_sent_at: Some(11),
+        };
+        h.save_autopilot_close(&c, 12).unwrap();
+        assert_eq!(h.autopilot_close_states().unwrap(), vec![c.clone()]);
+        let c2 = CloseState {
+            merge_head: Some("def".into()),
+            ..c.clone()
+        };
+        h.save_autopilot_close(&c2, 13).unwrap();
+        assert_eq!(h.autopilot_close_states().unwrap(), vec![c2]);
+        h.clear_autopilot_close(7).unwrap();
+        assert!(h.autopilot_close_states().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sessao_aguardando_voce_desde_o_status() {
+        let h = hub();
+        h.conn
+            .execute(
+                "INSERT INTO work_item (project_id, gh_number, created_at, status)
+                 SELECT id, 7, 1, 'aguardando_voce' FROM project",
+                [],
+            )
+            .unwrap();
+        let wi = h.conn.last_insert_rowid();
+        h.conn
+            .execute(
+                "INSERT INTO session (id, env_id, work_item_id, tool, cwd, state, started_at,
+                                      last_event_at)
+                 VALUES ('s1', 'env-auto', ?1, 'claude', '/tmp/x', 'idle', 100, 500)",
+                [wi],
+            )
+            .unwrap();
+        // Sem evento de status: o último evento da sessão.
+        let w = h.autopilot_waiting_sessions().unwrap();
+        assert_eq!(
+            w,
+            vec![WaitingSession {
+                session_id: "s1".into(),
+                since: 500,
+                autonomous: false,
+                work_item_id: wi,
+            }]
+        );
+        h.conn
+            .execute(
+                "INSERT INTO event (uid, env_id, hlc, ts, project_id, work_item_id, type, payload)
+                 SELECT 'u1', 'env-auto', 1, 300, project_id, id, 'status_changed',
+                        '{\"from\":\"em_execucao\",\"to\":\"aguardando_voce\",\"cause\":\"needs_human\"}'
+                 FROM work_item WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        assert_eq!(h.autopilot_waiting_sessions().unwrap()[0].since, 300);
+        // Outro status: fora.
+        h.conn
+            .execute(
+                "UPDATE work_item SET status = 'em_revisao' WHERE id = ?1",
+                [wi],
+            )
+            .unwrap();
+        assert!(h.autopilot_waiting_sessions().unwrap().is_empty());
     }
 
     #[test]

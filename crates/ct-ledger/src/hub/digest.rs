@@ -36,6 +36,12 @@ pub struct DigestIssue {
     pub number: i64,
     /// `None` = fora do espelho.
     pub title: Option<String>,
+    /// Só nas bloqueadas: o motivo da última mudança de status feita pelo
+    /// hub (`status_set_manual`: a pessoa na UI do hub ou o piloto
+    /// automático, #184), nunca o de um evento do ambiente (que pode vir do
+    /// agente). `None` = sem motivo.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// A branch de integração de um projeto autônomo
@@ -200,6 +206,11 @@ impl Hub {
             Ok(DigestIssue {
                 number: r.get(0)?,
                 title: r.get(1)?,
+                reason: if r.as_ref().column_count() > 2 {
+                    r.get(2)?
+                } else {
+                    None
+                },
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -278,7 +289,12 @@ impl Hub {
                 params![p.id, branch, since, now],
             )?;
             let blocked = self.digest_issues(
-                "SELECT w.gh_number, ic.title FROM work_item w
+                "SELECT w.gh_number, ic.title,
+                        (SELECT json_extract(e.payload, '$.reason') FROM event e
+                         WHERE e.work_item_id = w.id AND e.type = 'status_set_manual'
+                           AND json_extract(e.payload, '$.to') = 'bloqueado'
+                         ORDER BY e.hlc DESC LIMIT 1)
+                 FROM work_item w
                  LEFT JOIN issue_cache ic ON ic.project_id = w.project_id
                                          AND ic.gh_number = w.gh_number
                  WHERE w.project_id = ?1 AND w.status = ?2
@@ -679,7 +695,8 @@ mod tests {
             p.merged,
             vec![DigestIssue {
                 number: 123,
-                title: Some("ACME-123".into())
+                title: Some("ACME-123".into()),
+                reason: None,
             }]
         );
         assert_eq!(

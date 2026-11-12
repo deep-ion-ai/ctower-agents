@@ -201,10 +201,35 @@ export const SKIP_TEXT: Record<string, string> = {
 export const skipText = (s: string) => SKIP_TEXT[s] ?? s;
 
 /** Encerramento da sessão autônoma ociosa; `undefined` = hub anterior. */
-export function idleText(min: number | undefined): string {
+export function idleText(min: number | undefined, closing = false): string {
   if (min === undefined) return "";
-  const pr = "A sessão autônoma ociosa com PR aberto é encerrada (dá para retomá-la)";
+  const pr = closing
+    ? "A sessão autônoma ociosa é encerrada depois do merge do PR na branch de integração (ou com o PR contra outra base; dá para retomá-la)"
+    : "A sessão autônoma ociosa com PR aberto é encerrada (dá para retomá-la)";
   return min === 0 ? `${pr}.` : `${pr}, e a sem PR depois de ${min} min ociosa.`;
+}
+
+/**
+ * Fechamento autônomo (#184): tentativas do CI e "Aguardando você";
+ * `""` = hub anterior ao protocolo 1.23 (sem os campos).
+ */
+export function closingText(s: {
+  max_ci_attempts?: number;
+  waiting_timeout_min?: number;
+  idle_timeout_min?: number;
+}): string {
+  if (s.max_ci_attempts === undefined || s.waiting_timeout_min === undefined) return "";
+  const tries =
+    s.max_ci_attempts === 0
+      ? "a primeira falha do CI bloqueia a issue"
+      : `o hub devolve a falha do CI ao agente até ${s.max_ci_attempts} ${
+          s.max_ci_attempts === 1 ? "vez" : "vezes"
+        } antes de bloquear a issue`;
+  const wait =
+    s.waiting_timeout_min === 0
+      ? "a sessão parada em “Aguardando você” não é bloqueada"
+      : `a sessão parada em “Aguardando você” por mais de ${s.waiting_timeout_min} min é encerrada e a issue fica bloqueada`;
+  return `Com o PR na branch de integração, ${tries} e pede o merge com o CI verde; ${wait}.`;
 }
 
 /** Contagens de um projeto do resumo: "2 mescladas na wip · 1 bloqueada". */

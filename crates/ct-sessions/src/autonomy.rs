@@ -720,6 +720,8 @@ mod tests {
         let s = env.sessions.start_autonomous(req, Some(&pr)).unwrap();
         let out = env.wait_fake_output(&s.id);
         assert!(out.contains("gh pr create --base wip/autonoma"), "{out}");
+        // O guarda-corpo do hook recebe a branch de integração (#184).
+        assert!(out.contains("CTOWER_AUTONOMY_BRANCH=wip/autonoma"), "{out}");
         assert!(out.contains("--model\nopus\n--effort\nhigh\n"), "{out}");
         let wi = env
             .sessions

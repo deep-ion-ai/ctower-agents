@@ -16,6 +16,19 @@ max_sessions_per_env: number,
 /**
  * Minutos que uma sessão autônoma pode ficar ociosa sem PR antes de o
  * agendador a encerrar (`sessao_ociosa`); 0 = nunca. A ociosa com PR
- * aberto encerra sempre.
+ * aberto encerra sempre. Com o PR da issue na branch de integração
+ * (#184), é também o prazo da sessão ociosa sem progresso (nada novo a
+ * enviar ao agente) antes de bloquear a issue.
  */
-idle_timeout_min: number, };
+idle_timeout_min: number, 
+/**
+ * Tentativas de correção do CI de um PR de issue autônoma (#184): o
+ * hub devolve a falha ao agente até este número de heads; com a falha
+ * seguinte, a issue fica bloqueada. 0 = bloqueia na primeira falha.
+ */
+max_ci_attempts: number, 
+/**
+ * Minutos que uma sessão autônoma pode ficar em "Aguardando você"
+ * antes de o agendador encerrá-la e bloquear a issue (#184); 0 = nunca.
+ */
+waiting_timeout_min: number, };

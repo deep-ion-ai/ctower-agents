@@ -3,6 +3,7 @@ import {
   bandSummary,
   endInput,
   hhmmToMin,
+  closingText,
   idleText,
   localTime,
   minToHHMM,
@@ -102,4 +103,15 @@ test("sessão autônoma ociosa", () => {
   );
   expect(idleText(0)).toBe("A sessão autônoma ociosa com PR aberto é encerrada (dá para retomá-la).");
   expect(idleText(undefined)).toBe("");
+  expect(idleText(30, true)).toContain("depois do merge do PR na branch de integração");
+});
+
+test("fechamento autônomo: tentativas do CI e “Aguardando você” (#184)", () => {
+  expect(closingText({ idle_timeout_min: 30 })).toBe("");
+  expect(closingText({ max_ci_attempts: 3, waiting_timeout_min: 20 })).toBe(
+    "Com o PR na branch de integração, o hub devolve a falha do CI ao agente até 3 vezes antes de bloquear a issue e pede o merge com o CI verde; a sessão parada em “Aguardando você” por mais de 20 min é encerrada e a issue fica bloqueada.",
+  );
+  expect(closingText({ max_ci_attempts: 0, waiting_timeout_min: 0 })).toBe(
+    "Com o PR na branch de integração, a primeira falha do CI bloqueia a issue e pede o merge com o CI verde; a sessão parada em “Aguardando você” não é bloqueada.",
+  );
 });

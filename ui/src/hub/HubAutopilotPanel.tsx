@@ -17,6 +17,7 @@ import {
   PILOT_STATE_TEXT,
   aheadText,
   ciText,
+  closingText,
   idleText,
   localTime,
   nextBandText,
@@ -126,8 +127,18 @@ export function HubAutopilotPanel({ now }: { now: number }) {
               ? `Último ciclo do agendador ${ago(status.last_tick_at, now)}.`
               : "O agendador ainda não rodou desde que o hub subiu."}{" "}
             Até {status.settings.max_sessions_per_env} sessão(ões) autônoma(s) por ambiente.{" "}
-            {idleText(status.settings.idle_timeout_min)}
+            {idleText(status.settings.idle_timeout_min, status.settings.max_ci_attempts !== undefined)}{" "}
+            {closingText(status.settings)}
           </p>
+          {!web && (
+            <PilotSettingsForm
+              settings={status.settings}
+              onSaved={(s) => {
+                setStatus((cur) => (cur ? { ...cur, settings: s } : cur));
+                setMsg("Ajustes do piloto automático salvos.");
+              }}
+            />
+          )}
 
           <h3>Contas</h3>
           {status.accounts.length === 0 ? (
@@ -207,6 +218,89 @@ export function HubAutopilotPanel({ now }: { now: number }) {
         </>
       )}
     </section>
+  );
+}
+
+/** Campos de `hub.autopilot.set`; os do fechamento (#184) só com hub 1.23+. */
+type SettingKey = "max_sessions_per_env" | "idle_timeout_min" | "max_ci_attempts" | "waiting_timeout_min";
+
+const SETTING_FIELDS: { key: SettingKey; label: string; min: number; max: number }[] = [
+  { key: "max_sessions_per_env", label: "Sessões autônomas por ambiente", min: 1, max: 8 },
+  { key: "idle_timeout_min", label: "Minutos ociosa sem PR (0 = nunca)", min: 0, max: 1440 },
+  { key: "max_ci_attempts", label: "Tentativas de correção do CI (0 = bloqueia na primeira falha)", min: 0, max: 10 },
+  { key: "waiting_timeout_min", label: "Minutos em “Aguardando você” (0 = nunca)", min: 0, max: 1440 },
+];
+
+function PilotSettingsForm({
+  settings,
+  onSaved,
+}: {
+  settings: AutopilotSettings;
+  onSaved: (s: AutopilotSettings) => void;
+}) {
+  const { api } = useTower();
+  const fields = SETTING_FIELDS.filter((f) => settings[f.key] !== undefined);
+  const initial = () => Object.fromEntries(fields.map((f) => [f.key, String(settings[f.key])]));
+  const [draft, setDraft] = useState<Record<string, string>>(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const changed = fields.filter((f) => draft[f.key] !== String(settings[f.key]));
+
+  const save = async () => {
+    const params: Record<string, number> = {};
+    for (const f of changed) {
+      const n = Number(draft[f.key]);
+      if (!Number.isInteger(n) || n < f.min || n > f.max) {
+        setError(`${f.label}: de ${f.min} a ${f.max}.`);
+        return;
+      }
+      params[f.key] = n;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const s = await api.hubCall<AutopilotSettings>("hub.autopilot.set", params);
+      setDraft(Object.fromEntries(fields.map((f) => [f.key, String(s[f.key])])));
+      onSaved(s);
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <details className="pilot-settings">
+      <summary>Ajustes do agendador</summary>
+      <div className="field-pair">
+        {fields.map((f) => (
+          <div className="field" key={f.key}>
+            <label htmlFor={`pilot-${f.key}`}>{f.label}</label>
+            <input
+              id={`pilot-${f.key}`}
+              type="number"
+              min={f.min}
+              max={f.max}
+              value={draft[f.key] ?? ""}
+              onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+            />
+          </div>
+        ))}
+      </div>
+      {error && (
+        <p role="alert" className="start-error">
+          {error}
+        </p>
+      )}
+      <button
+        type="button"
+        className="btn btn-sm btn-primary"
+        disabled={busy || changed.length === 0}
+        onClick={() => void save()}
+      >
+        Salvar ajustes
+      </button>
+    </details>
   );
 }
 

@@ -55,9 +55,12 @@ pub use hub::{
     ProjectProvider, QuarantineGroup,
 };
 pub use hub::{
-    AutopilotEvent, AutopilotSession, AutopilotSettings, IdleSession, ParkedSession,
-    AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN, AUTOPILOT_IDLE_TIMEOUT_MAX_MIN,
-    AUTOPILOT_MAX_PER_ENV_CEILING, AUTOPILOT_MAX_PER_ENV_DEFAULT,
+    AutopilotEvent, AutopilotSession, AutopilotSettings, CloseState, IdleSession, ParkedSession,
+    WaitingSession, AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN,
+    AUTOPILOT_IDLE_TIMEOUT_MAX_MIN, AUTOPILOT_MAX_CI_ATTEMPTS_CEILING,
+    AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT, AUTOPILOT_MAX_PER_ENV_CEILING,
+    AUTOPILOT_MAX_PER_ENV_DEFAULT, AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN,
+    AUTOPILOT_WAITING_TIMEOUT_MAX_MIN,
 };
 pub use hub::{
     ChannelStates, HubPushDevice, NewPushSubscription, PushEvent, PushNotice, PushTarget,

@@ -91,7 +91,12 @@ use tokio::sync::broadcast;
 /// 1.22 (#130): `hub.workitem.pr_feedback` (threads de review não
 /// resolvidas e pedidos de mudança dos PRs do item, do espelho, com a marca
 /// de autor externo).
-pub const PROTOCOL_VERSION: &str = "1.22";
+/// 1.23 (#184): fechamento autônomo da issue — `max_ci_attempts` e
+/// `waiting_timeout_min` em `AutopilotSettings` e no `hub.autopilot.set`, os
+/// eventos `feedback_sent`, `merge_requested`, `blocked` e `continue_failed`
+/// do agendador (e o escopo `env:`), e `reason` em `DigestIssue` (o motivo da
+/// issue bloqueada).
+pub const PROTOCOL_VERSION: &str = "1.23";
 
 #[derive(Clone)]
 pub struct HubState {
