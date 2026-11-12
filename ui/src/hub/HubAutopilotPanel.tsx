@@ -221,7 +221,9 @@ function ProjectQueue({ p, status }: { p: ProjectPlan; status: AutopilotStatus }
       </div>
       <p className={p.blocked ? "muted" : "state-on"}>
         {p.next != null
-          ? `Próxima a iniciar: #${p.next}`
+          ? p.probe
+            ? `Próxima a iniciar: #${p.next} (sonda: a conta não tem leitura do plano; esta sessão traz a primeira)`
+            : `Próxima a iniciar: #${p.next}`
           : p.blocked_message
             ? `Nada inicia agora: ${p.blocked_message}`
             : "Nada inicia agora."}
@@ -230,6 +232,7 @@ function ProjectQueue({ p, status }: { p: ProjectPlan; status: AutopilotStatus }
         <p className="muted small">
           <span className="mono">{wip.branch}</span>: {aheadText(wip)}
           {wip.conflict && " · em conflito com a base"}
+          {wip.error && ` · erro na branch: ${wip.error}`}
           {wip.pr_url && (
             <>
               {" · "}

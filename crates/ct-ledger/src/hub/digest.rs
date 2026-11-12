@@ -57,6 +57,10 @@ pub struct AutonomyWip {
     pub ci: Option<String>,
     /// A branch está em conflito com a base (relato do ambiente).
     pub conflict: bool,
+    /// Mensagem do relato `error` da branch (ex.: o push recusado); `None`
+    /// sem erro. Com erro, o agendador não inicia issues no projeto.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// Um projeto autônomo no resumo da manhã.
@@ -81,6 +85,9 @@ pub struct DigestProject {
     pub pr_url: Option<String>,
     pub ci: Option<String>,
     pub conflict: bool,
+    /// Mensagem do relato `error` da branch de integração; `None` sem erro.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// Uso da semanal de uma conta com política no período do resumo.
@@ -96,7 +103,9 @@ pub struct DigestUsage {
     /// Uso no resumo anterior, se houve.
     pub weekly_before: Option<f64>,
     /// Quanto subiu no período: a diferença, com o mesmo reset; renovada
-    /// no meio, o uso atual (desde o reset). `None` sem leitura.
+    /// no meio, o uso atual (desde o reset). No primeiro resumo (sem
+    /// anterior) não há base para a diferença: também o uso atual da
+    /// semanal. `None` sem leitura.
     pub delta: Option<f64>,
 }
 
@@ -163,6 +172,15 @@ pub fn digest_push_body(d: &MorningDigest) -> String {
     }
 }
 
+/// Mensagem do relato `error` da branch de integração (`None` sem erro).
+fn report_error(report: Option<&ct_core::AutonomyReport>) -> Option<String> {
+    report.filter(|r| r.state == AutonomyState::Error).map(|r| {
+        r.message
+            .clone()
+            .unwrap_or_else(|| format!("erro em {}", r.branch))
+    })
+}
+
 /// Branch de integração (normalizada) e base do projeto autônomo.
 fn branches(p: &HubProject) -> (String, String) {
     (
@@ -220,6 +238,7 @@ impl Hub {
                 pr_url: report.and_then(|r| r.pr_url.clone()),
                 ci: None,
                 conflict: report.is_some_and(|r| r.state == AutonomyState::Conflict),
+                error: report_error(report),
                 owner: p.gh_owner,
                 repo: p.gh_repo,
                 name: p.name,
@@ -273,6 +292,7 @@ impl Hub {
                 pr_url: report.and_then(|r| r.pr_url.clone()),
                 ci: None,
                 conflict: report.is_some_and(|r| r.state == AutonomyState::Conflict),
+                error: report_error(report),
                 owner: p.gh_owner,
                 repo: p.gh_repo,
                 name: p.name,
@@ -500,7 +520,57 @@ mod tests {
         );
         assert_eq!(w.ci, None);
         assert!(!w.conflict);
+        assert_eq!(w.error, None);
         assert_eq!(hub.autonomy_wip(Some(("acme", "outro"))).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn erro_da_branch_aparece_na_wip_e_no_resumo() {
+        let hub = hub();
+        let report = OutboxEntry {
+            seq: 2,
+            created_at: 2,
+            change: SyncChange::Project(ProjectChange {
+                owner: "acme".into(),
+                repo: "acme-web".into(),
+                name: "acme-web".into(),
+                repo_path: "/tmp/acme-web".into(),
+                base_branch: "develop".into(),
+                protected_branches: vec![],
+                created_at: 1,
+                hlc: 2,
+                state: None,
+                error: None,
+                applied_rev: Some(1),
+                tracker: Default::default(),
+                forge: Default::default(),
+                branch_pattern: None,
+                attribution: true,
+                autonomy: Some(AutonomyReport {
+                    state: AutonomyState::Error,
+                    branch: "wip/autonoma".into(),
+                    base: "develop".into(),
+                    message: Some("push de wip/autonoma recusado (403)".into()),
+                    conflicts: vec![],
+                    pr_url: None,
+                    at: 2,
+                }),
+            }),
+        };
+        hub.ingest("env-auto", "env-auto", &[report]).unwrap();
+        let w = &hub.autonomy_wip(None).unwrap()[0];
+        assert!(!w.conflict);
+        assert_eq!(
+            w.error.as_deref(),
+            Some("push de wip/autonoma recusado (403)")
+        );
+        let d = &hub.digest_projects(20, 200).unwrap()[0];
+        assert_eq!(d.error, w.error);
+        // Resumo gravado antes do campo continua legível (sem `error`).
+        let mut v = serde_json::to_value(d).unwrap();
+        v.as_object_mut().unwrap().remove("error");
+        let old: DigestProject = serde_json::from_value(v).unwrap();
+        assert_eq!(old.error, None);
     }
 
     #[test]

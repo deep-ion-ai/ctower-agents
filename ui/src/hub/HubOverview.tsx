@@ -214,6 +214,7 @@ function MorningDigestCard({ now, open }: { now: number; open(s: HubSection): vo
                   )}{" "}
                   · {ciText(p.ci)}
                   {p.conflict && " · em conflito com a base"}
+                  {p.error && ` · erro na branch: ${p.error}`}
                 </span>
               </span>
             </li>

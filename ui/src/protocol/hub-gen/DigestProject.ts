@@ -21,4 +21,8 @@ decisions_pending: number, decisions_new: number,
 /**
  * Issues à frente da base (mescladas na branch, ainda não na base).
  */
-ahead: number, pr_url: string | null, ci: string | null, conflict: boolean, };
+ahead: number, pr_url: string | null, ci: string | null, conflict: boolean, 
+/**
+ * Mensagem do relato `error` da branch de integração; `None` sem erro.
+ */
+error: string | null, };

@@ -54,6 +54,7 @@ function status(account: string, settings: Partial<AutopilotSettings> = {}): Aut
         blocked: "budget:band_closed",
         blocked_message: "a política da conta não permite iniciar agora: faixa fechada (Horário comercial)",
         next: null,
+        probe: false,
         queue: [
           { number: 123, title: "ACME-123 login", priority: "P1", model: "opus", skip: null },
           { number: 124, title: "ACME-124 busca", priority: "P1", model: null, skip: "no_model" },
@@ -115,6 +116,7 @@ function status(account: string, settings: Partial<AutopilotSettings> = {}): Aut
         pr_url: "https://github.example/acme/acme-web/pull/5",
         ci: null,
         conflict: false,
+        error: null,
       },
     ],
   };
@@ -162,6 +164,9 @@ test("estado: pausado, desligado, ligado, aguardando faixa ou orçamento", () =>
     decision: decision({ reasons: [{ kind: "weekly_over_limit", used: 50, limit: 45 }] }),
   };
   expect(pilotState({ ...s, accounts: [over] })).toBe("waiting_budget");
+  const noReading = { ...s.accounts[0], decision: decision({ reasons: [{ kind: "no_reading", window: "five_hour" }] }) };
+  const probe = { ...s.projects[0], probe: true };
+  expect(pilotState({ ...s, accounts: [noReading], projects: [probe] })).toBe("on");
 });
 
 test("painel: estado, limite da semanal, fila com os motivos, wip e sessões", async () => {
@@ -194,6 +199,28 @@ test("painel: estado, limite da semanal, fila com os motivos, wip e sessões", a
   expect(within(panel).getByRole("list", { name: "Eventos recentes" })).toHaveTextContent("limite do plano atingido");
   // No desktop, o atalho para o Orçamento.
   expect(within(panel).getByRole("button", { name: "Orçamento do plano" })).toBeInTheDocument();
+});
+
+test("painel: a sonda sem leitura do plano e o erro da branch de integração", async () => {
+  const base = status("org-a/fulano@example.com");
+  const s: AutopilotStatus = {
+    ...base,
+    projects: [{ ...base.projects[0], blocked: null, blocked_message: null, next: 123, probe: true }],
+    wip: base.wip.map((w) => ({ ...w, error: "push de wip/autonoma recusado (403)" })),
+  };
+  const api = new FakeDaemonApi()
+    .on("dashboard.get", dashboard({ projects: [] }))
+    .withHub("ws://mac-mini:7879/ws")
+    .onHub("hub.info", hubInfo({ protocol: "1.20" }))
+    .onHub("hub.status", hubStatus())
+    .onHub("hub.projects.list", [hubProjectView(hubProject())])
+    .onHub("hub.envs.list", [hubEnv()])
+    .onHub("hub.dashboard.get", HUB_DASHBOARD)
+    .onHub("hub.autopilot.status", () => s);
+  render(<App api={api} initial={{ name: "hub", section: "autopilot-panel" }} />);
+  const queue = await screen.findByRole("region", { name: "Fila de acme/acme-web" });
+  expect(queue).toHaveTextContent("Próxima a iniciar: #123 (sonda: a conta não tem leitura do plano");
+  expect(queue).toHaveTextContent("erro na branch: push de wip/autonoma recusado (403)");
 });
 
 test("pausar tudo e retomar: chama o hub e relê pelo push", async () => {
@@ -279,6 +306,7 @@ function digest(account: string): MorningDigest {
         pr_url: "https://github.example/acme/acme-web/pull/5",
         ci: null,
         conflict: false,
+        error: null,
       },
     ],
     usage: [{ account, weekly_used: 35, resets_at: NOW + 86_400_000, weekly_before: 20, delta: 15 }],

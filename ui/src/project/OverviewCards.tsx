@@ -234,6 +234,11 @@ export function ProjectAutonomyCard({
           {wip.ahead.length > 0 && (
             <span className="hub-card-sub muted">{wip.ahead.map((i) => `#${i.number}`).join(", ")} em revisão</span>
           )}
+          {wip.error && (
+            <span className="hub-card-sub" role="alert">
+              Erro na branch: {wip.error}. Nenhuma issue autônoma começa até a branch voltar a alinhar.
+            </span>
+          )}
           {wip.pr_url && (
             <span className="hub-card-sub">
               <a href={wip.pr_url} target="_blank" rel="noreferrer">

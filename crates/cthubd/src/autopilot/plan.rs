@@ -16,8 +16,13 @@
 //!   com prioridade, com modelo e sem sessão viva.
 //! - **Projeto:** modo autônomo ligado, ambiente do modo online, conta do
 //!   ambiente com política que permite agora, branch de integração sem
-//!   conflito, ambiente com vaga (padrão: uma sessão autônoma por vez) e
-//!   projeto com vaga no limite de trabalho em andamento.
+//!   conflito nem erro, ambiente com vaga (padrão: uma sessão autônoma por
+//!   vez) e projeto com vaga no limite de trabalho em andamento.
+//! - **Sonda sem leitura:** conta sem nenhuma leitura de uma janela (o
+//!   orçamento recusa só por `no_reading`) e sem sessão autônoma viva pode
+//!   iniciar uma sessão, a sonda (`StartItem::probe`): é o statusline dela
+//!   que traz a primeira leitura. Com uma sessão viva na conta, espera a
+//!   leitura dela; no máximo uma sonda por vez.
 //! - **Uma por conta por ciclo:** a decisão do orçamento é de antes do
 //!   início; o ciclo seguinte reavalia com a leitura nova.
 //! - **Limite real:** conta com a janela de 5h ou a semanal em 100% (ou
@@ -84,6 +89,9 @@ pub struct ProjectSnap {
     pub env_id: String,
     /// Mensagem do relato com a branch de integração em conflito.
     pub conflict: Option<String>,
+    /// Mensagem do relato `error` da branch de integração (ex.: o push
+    /// recusado).
+    pub autonomy_error: Option<String>,
     pub wip: WipUsage,
     /// Rótulo de aprovação ativo do projeto; `None` = desligado.
     pub approval_label: Option<String>,
@@ -156,6 +164,8 @@ pub struct StartItem {
     pub repo: String,
     pub number: i64,
     pub model: String,
+    /// Sessão sonda: a conta não tem leitura do plano (veja o módulo).
+    pub probe: bool,
 }
 
 /// Recusa relevante, gravada como evento `refused` (só quando o motivo
@@ -197,13 +207,17 @@ pub struct ProjectPlan {
     pub account: Option<String>,
     /// Por que nada inicia agora; `None` = pode iniciar (ou iniciou).
     /// `paused`, `env_offline`, `unknown_account`, `no_policy`, `parked`,
-    /// `budget:<motivos>`, `conflict`, `env_busy`, `wip_limit`,
-    /// `account_turn` (a conta já iniciou neste ciclo) ou `no_eligible`.
+    /// `budget:<motivos>`, `conflict`, `autonomy_error`, `env_busy`,
+    /// `wip_limit`, `account_turn` (a conta já iniciou neste ciclo) ou
+    /// `no_eligible`.
     pub blocked: Option<String>,
     /// Texto do motivo, para a pessoa.
     pub blocked_message: Option<String>,
     /// Item que inicia agora.
     pub next: Option<i64>,
+    /// O início é a sonda sem leitura do plano (`next` sai mesmo com o
+    /// orçamento em `no_reading`).
+    pub probe: bool,
     pub queue: Vec<QueueItem>,
 }
 
@@ -366,6 +380,14 @@ pub fn decide(s: &Snapshot) -> Outcome {
                 && x.repo.eq_ignore_ascii_case(repo)
         })
     };
+    // Sessões vivas nos ambientes autônomos de cada conta (a sonda só
+    // inicia sem nenhuma).
+    let live_on_account = |key: &str| {
+        s.sessions.iter().any(|x| {
+            x.state.is_live()
+                && env(&x.env_id).is_some_and(|e| e.autonomous && e.account.as_deref() == Some(key))
+        })
+    };
     let mut started_envs: BTreeMap<String, u32> = BTreeMap::new();
     let mut started_accounts: BTreeSet<String> = BTreeSet::new();
     for p in &s.projects {
@@ -398,6 +420,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
             blocked: None,
             blocked_message: None,
             next: None,
+            probe: false,
             queue,
         };
         let project_refusal = |reason: &str, message: String| Refusal {
@@ -409,6 +432,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
             owner: Some(p.owner.clone()),
             repo: Some(p.repo.clone()),
         };
+        let mut probe = false;
         let blocked = (|| -> Option<(String, String, Option<Refusal>)> {
             if s.settings.paused {
                 return Some(("paused".into(), "piloto automático pausado".into(), None));
@@ -462,9 +486,12 @@ pub fn decide(s: &Snapshot) -> Outcome {
                     None,
                 ));
             }
-            if !decision.can_start {
+            // Só falta a leitura e a conta não tem sessão autônoma viva: a
+            // sonda inicia (as outras condições abaixo continuam valendo).
+            probe = decision.only_no_reading() && !live_on_account(key);
+            if !decision.can_start && !probe {
                 let reason = budget_reason(&decision.reasons);
-                let m = format!(
+                let mut m = format!(
                     "a política do plano não permite iniciar agora: {}",
                     decision
                         .reasons
@@ -473,6 +500,12 @@ pub fn decide(s: &Snapshot) -> Outcome {
                         .collect::<Vec<_>>()
                         .join("; ")
                 );
+                if decision.only_no_reading() {
+                    m.push_str(
+                        " (a sessão autônoma em andamento na conta traz a leitura; a sonda \
+                         espera por ela)",
+                    );
+                }
                 return Some((reason.clone(), m.clone(), Some(acc_refusal(&reason, m))));
             }
             if let Some(c) = &p.conflict {
@@ -481,6 +514,17 @@ pub fn decide(s: &Snapshot) -> Outcome {
                     "conflict".into(),
                     m.clone(),
                     Some(project_refusal("conflict", m)),
+                ));
+            }
+            if let Some(err) = &p.autonomy_error {
+                let m = format!(
+                    "{slug}: a branch de integração falhou ({err}); nenhuma issue autônoma \
+                     começa até resolver e alinhar de novo"
+                );
+                return Some((
+                    "autonomy_error".into(),
+                    m.clone(),
+                    Some(project_refusal("autonomy_error", m)),
                 ));
             }
             let busy = live_on_env(&p.env_id) + started_envs.get(&p.env_id).copied().unwrap_or(0);
@@ -528,6 +572,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
                     Some(i) => {
                         let key = account.clone().expect("conferida acima");
                         plan.next = Some(i.number);
+                        plan.probe = probe;
                         *started_envs.entry(p.env_id.clone()).or_default() += 1;
                         started_accounts.insert(key.clone());
                         out.actions.push(Action::Start(StartItem {
@@ -537,6 +582,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
                             repo: p.repo.clone(),
                             number: i.number,
                             model: i.model.clone().expect("elegível tem modelo"),
+                            probe,
                         }));
                     }
                     None => {
@@ -610,6 +656,7 @@ mod tests {
             repo: repo.into(),
             env_id: env.into(),
             conflict: None,
+            autonomy_error: None,
             wip: WipUsage::default(),
             approval_label: Some("aprovada".into()),
             items,
@@ -981,5 +1028,134 @@ mod tests {
             budget_reason(&[BlockReason::NoBand, BlockReason::AfterCutoff]),
             "budget:after_cutoff+no_band"
         );
+    }
+
+    fn account_view(v: PlanView, now: i64) -> AccountSnap {
+        AccountSnap {
+            decision: Some(evaluate(&BudgetPolicy::default(), &v, now)),
+            exhausted: exhausted(&v),
+        }
+    }
+
+    fn probes(o: &Outcome) -> Vec<(i64, bool)> {
+        o.actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Start(i) => Some((i.number, i.probe)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const SEM_LEITURA: PlanView = PlanView {
+        five_hour: WindowView::None,
+        seven_day: WindowView::None,
+        read_at: None,
+    };
+
+    #[test]
+    fn sem_leitura_e_sem_sessao_viva_inicia_a_sonda() {
+        let mut s = snap(SAB);
+        s.accounts
+            .insert("conta-a".into(), account_view(SEM_LEITURA, SAB));
+        let o = decide(&s);
+        assert_eq!(probes(&o), vec![(123, true)]);
+        assert!(o.refusals.is_empty(), "{:?}", o.refusals);
+        assert!(o.projects[0].probe);
+        assert_eq!(o.projects[0].blocked, None);
+        // Leitura normal: início comum, sem sonda.
+        let o = decide(&snap(SAB));
+        assert_eq!(probes(&o), vec![(123, false)]);
+        assert!(!o.projects[0].probe);
+    }
+
+    #[test]
+    fn sem_leitura_com_sessao_viva_na_conta_espera_a_leitura() {
+        let mut s = snap(SAB);
+        s.accounts
+            .insert("conta-a".into(), account_view(SEM_LEITURA, SAB));
+        // Outro ambiente autônomo da mesma conta, com vaga própria: a sonda
+        // é uma por conta, não por ambiente.
+        s.envs.insert(
+            "env-auto-2".into(),
+            EnvSnap {
+                name: "autonomo-2".into(),
+                online: true,
+                autonomous: true,
+                account: Some("conta-a".into()),
+            },
+        );
+        s.sessions
+            .push(session("s1", "env-auto-2", 99, SessionState::Starting));
+        let o = decide(&s);
+        assert!(starts(&o).is_empty());
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("budget:no_reading"));
+        assert!(!o.projects[0].probe);
+        assert_eq!(o.refusals[0].scope, "account:conta-a");
+        assert!(o.refusals[0].message.contains("sonda espera"));
+        // A sessão encerrada não conta: a sonda volta a poder.
+        s.sessions[0].state = SessionState::Archived;
+        assert_eq!(probes(&decide(&s)), vec![(123, true)]);
+    }
+
+    #[test]
+    fn sonda_respeita_o_resto_da_politica() {
+        // Depois do corte de início, sem leitura: nada inicia.
+        let mut s = snap(TER_CORTE);
+        s.accounts
+            .insert("conta-a".into(), account_view(SEM_LEITURA, TER_CORTE));
+        let o = decide(&s);
+        assert!(starts(&o).is_empty());
+        assert_eq!(
+            o.projects[0].blocked.as_deref(),
+            Some("budget:after_cutoff+no_reading")
+        );
+        // Pausado: nada inicia.
+        let mut s = snap(SAB);
+        s.accounts
+            .insert("conta-a".into(), account_view(SEM_LEITURA, SAB));
+        s.settings.paused = true;
+        assert!(starts(&decide(&s)).is_empty());
+    }
+
+    #[test]
+    fn janela_renovada_sem_leitura_nova_conta_como_zero() {
+        // A 5h estava em 99% e renovou; a semanal segue válida e baixa.
+        let mut s = snap(SAB);
+        let mut v = plan(10.0, 10.0, SAB);
+        v.five_hour = WindowView::Renewed {
+            resets_at: SAB - H,
+            read_at: SAB - 4 * H,
+        };
+        s.accounts.insert("conta-a".into(), account_view(v, SAB));
+        let o = decide(&s);
+        assert_eq!(probes(&o), vec![(123, false)]);
+        assert_eq!(
+            s.accounts["conta-a"]
+                .decision
+                .as_ref()
+                .unwrap()
+                .five_hour_used,
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn erro_na_branch_de_integracao_bloqueia_o_projeto() {
+        let mut s = snap(SAB);
+        s.projects[0].autonomy_error = Some("push recusado: 403".into());
+        let o = decide(&s);
+        assert!(starts(&o).is_empty());
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("autonomy_error"));
+        assert_eq!(o.refusals[0].reason, "autonomy_error");
+        assert_eq!(o.refusals[0].scope, "project:acme/acme-web");
+        assert!(o.refusals[0].message.contains("403"));
+        // Sem leitura, o erro também barra a sonda.
+        s.accounts
+            .insert("conta-a".into(), account_view(SEM_LEITURA, SAB));
+        let o = decide(&s);
+        assert!(starts(&o).is_empty());
+        assert!(!o.projects[0].probe);
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("autonomy_error"));
     }
 }

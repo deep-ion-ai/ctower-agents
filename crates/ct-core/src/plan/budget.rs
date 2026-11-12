@@ -30,10 +30,14 @@
 //!   já passadas. Assim a parte autônoma se distribui pela semana em vez de
 //!   ir toda na primeira noite. `p` conta a ocorrência da faixa elegível
 //!   atual até o fim dela (a cota da faixa fica disponível desde o início).
-//! - **Leitura:** vale a mais recente, sem sonda. Janela renovada
-//!   (`agora >= resets_at`) conta como 0%; a semanal renovada estima o
-//!   próximo reset somando semanas ao último conhecido. Janela sem nenhuma
-//!   leitura bloqueia ([`BlockReason::NoReading`]).
+//! - **Leitura:** vale a mais recente. Janela renovada
+//!   (`agora >= resets_at`) conta como 0% (ela renovou: o uso só cresce a
+//!   partir daí, e a sessão autônoma traz a leitura nova); a semanal
+//!   renovada estima o próximo reset somando semanas ao último conhecido.
+//!   Janela sem nenhuma leitura bloqueia ([`BlockReason::NoReading`]); o
+//!   agendador pode, mesmo assim, iniciar **uma** sessão sonda quando só
+//!   falta a leitura ([`BudgetDecision::only_no_reading`]) e a conta não
+//!   tem sessão autônoma viva: é ela que traz a primeira leitura.
 //!
 //! O fuso é um deslocamento fixo do UTC (sem horário de verão).
 
@@ -431,10 +435,27 @@ pub struct BudgetDecision {
     pub weekly_used: Option<f64>,
     /// `None` sem leitura da semanal.
     pub weekly: Option<WeeklyLimit>,
-    /// Quando o horário volta a permitir iniciar (`now` se já permite);
-    /// `None` = a política não tem faixa aberta.
+    /// Quando o **horário** volta a permitir iniciar (`now` se já permite);
+    /// `None` = a política não tem faixa aberta. Só faixas e corte: o uso
+    /// não entra (bloqueada só pela semanal, fica `now`; o reset dela está
+    /// em `weekly.resets_at`).
     pub next_open_at: Option<i64>,
     pub now: i64,
+}
+
+impl BudgetDecision {
+    /// Só falta a leitura: todos os motivos são [`BlockReason::NoReading`]
+    /// (faixa, corte e o uso das janelas com leitura permitem). O
+    /// agendador (#183) usa para a sessão sonda, que traz a primeira
+    /// leitura da conta.
+    pub fn only_no_reading(&self) -> bool {
+        !self.can_start
+            && !self.reasons.is_empty()
+            && self
+                .reasons
+                .iter()
+                .all(|r| matches!(r, BlockReason::NoReading { .. }))
+    }
 }
 
 /// Uso considerado da janela e o reset: renovada conta como 0%.
@@ -731,6 +752,36 @@ mod tests {
         let d = evaluate(&p, &view(Some((99.0, now - 1)), seven, now), now);
         assert!(d.can_start);
         assert_eq!(d.five_hour_used, Some(0.0));
+        assert!(!d.only_no_reading());
+    }
+
+    #[test]
+    fn sem_leitura_so_falta_a_leitura() {
+        let p = BudgetPolicy::default();
+        // Terça 20:00, faixa aberta: sem leitura nenhuma, só a leitura falta.
+        let now = at(1, 20, 0);
+        let d = evaluate(&p, &view(None, None, now), now);
+        assert!(!d.can_start);
+        assert!(d.only_no_reading());
+        assert_eq!(d.five_hour_used, None);
+        // Só a 5h sem leitura, com a semanal abaixo do limite: idem.
+        let d = evaluate(&p, &view(None, Some((0.0, at(7, 0, 0))), now), now);
+        assert!(d.only_no_reading());
+        // Faixa fechada (terça 10:00): a sonda também não inicia.
+        let now = at(1, 10, 0);
+        let d = evaluate(&p, &view(None, None, now), now);
+        assert!(!d.only_no_reading());
+        // Semanal acima do limite com a 5h sem leitura: não é só a leitura.
+        let now = at(1, 20, 0);
+        let d = evaluate(&p, &view(None, Some((79.0, at(7, 0, 0))), now), now);
+        assert!(!d.only_no_reading());
+        // Leitura normal, abaixo dos tetos: pode, sem sonda.
+        let d = evaluate(
+            &p,
+            &view(Some((10.0, now + H)), Some((10.0, at(7, 0, 0))), now),
+            now,
+        );
+        assert!(d.can_start && !d.only_no_reading());
     }
 
     #[test]

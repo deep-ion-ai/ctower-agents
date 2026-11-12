@@ -12,8 +12,9 @@ account: string | null,
 /**
  * Por que nada inicia agora; `None` = pode iniciar (ou iniciou).
  * `paused`, `env_offline`, `unknown_account`, `no_policy`, `parked`,
- * `budget:<motivos>`, `conflict`, `env_busy`, `wip_limit`,
- * `account_turn` (a conta já iniciou neste ciclo) ou `no_eligible`.
+ * `budget:<motivos>`, `conflict`, `autonomy_error`, `env_busy`,
+ * `wip_limit`, `account_turn` (a conta já iniciou neste ciclo) ou
+ * `no_eligible`.
  */
 blocked: string | null, 
 /**
@@ -23,4 +24,9 @@ blocked_message: string | null,
 /**
  * Item que inicia agora.
  */
-next: number | null, queue: Array<QueueItem>, };
+next: number | null, 
+/**
+ * O início é a sonda sem leitura do plano (`next` sai mesmo com o
+ * orçamento em `no_reading`).
+ */
+probe: boolean, queue: Array<QueueItem>, };

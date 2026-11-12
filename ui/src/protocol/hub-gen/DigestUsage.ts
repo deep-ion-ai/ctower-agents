@@ -22,6 +22,8 @@ resets_at: number | null,
 weekly_before: number | null, 
 /**
  * Quanto subiu no período: a diferença, com o mesmo reset; renovada
- * no meio, o uso atual (desde o reset). `None` sem leitura.
+ * no meio, o uso atual (desde o reset). No primeiro resumo (sem
+ * anterior) não há base para a diferença: também o uso atual da
+ * semanal. `None` sem leitura.
  */
 delta: number | null, };

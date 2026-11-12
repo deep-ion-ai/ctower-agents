@@ -9,6 +9,7 @@ import {
   autonomyOf,
   autonomyPatch,
   autonomyTemplatesPatch,
+  autonomyError,
   autonomyWarning,
 } from "./autonomy";
 
@@ -45,6 +46,22 @@ test("aviso só com o modo ligado e a branch em conflito", () => {
   expect(autonomyWarning(project({ enabled: true, env_id: "env-auto" }, conflito))).toBe("wip/autonoma em conflito com a base");
   expect(autonomyWarning(project({ enabled: false }, conflito))).toBeNull();
   expect(autonomyWarning(project({ enabled: true, env_id: "e" }, { ...conflito, state: "ok" }))).toBeNull();
+});
+
+test("erro da branch: só com o modo ligado e o relato error", () => {
+  const erro = {
+    state: "error" as const,
+    branch: "wip/autonoma",
+    base: "develop",
+    message: "push recusado (403)",
+    conflicts: [],
+    pr_url: null,
+    at: 1,
+  };
+  expect(autonomyError(project({ enabled: true, env_id: "e" }, erro))).toBe("push recusado (403)");
+  expect(autonomyWarning(project({ enabled: true, env_id: "e" }, erro))).toBeNull();
+  expect(autonomyError(project({ enabled: false }, erro))).toBeNull();
+  expect(autonomyError(project({ enabled: true, env_id: "e" }, { ...erro, state: "ok" }))).toBeNull();
 });
 
 test("formulário: padrões vazios no patch e erros", () => {

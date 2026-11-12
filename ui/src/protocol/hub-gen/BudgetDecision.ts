@@ -31,7 +31,9 @@ five_hour_used: number | null, weekly_used: number | null,
  */
 weekly: WeeklyLimit | null, 
 /**
- * Quando o horário volta a permitir iniciar (`now` se já permite);
- * `None` = a política não tem faixa aberta.
+ * Quando o **horário** volta a permitir iniciar (`now` se já permite);
+ * `None` = a política não tem faixa aberta. Só faixas e corte: o uso
+ * não entra (bloqueada só pela semanal, fica `now`; o reset dela está
+ * em `weekly.resets_at`).
  */
 next_open_at: number | null, now: number, };
