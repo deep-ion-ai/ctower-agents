@@ -71,6 +71,22 @@ pub fn sanitize_continue_text(text: &str) -> String {
         .collect()
 }
 
+/// Início e fim do bracketed paste do terminal.
+const PASTE_START: &[u8] = b"\x1b[200~";
+const PASTE_END: &[u8] = b"\x1b[201~";
+
+/// Bytes do `session.continue` antes do Enter: o texto fixo como sempre;
+/// o texto livre (já limpo por [`sanitize_continue_text`], sem ESC, então
+/// não fecha o paste) dentro de um bracketed paste, para as quebras de
+/// linha não enviarem só a primeira linha nem virarem outro prompt no TUI
+/// do Claude Code (#184).
+pub(crate) fn continue_bytes(custom: Option<&str>) -> Vec<u8> {
+    match custom {
+        None => CONTINUE_TEXT.as_bytes().to_vec(),
+        Some(t) => [PASTE_START, t.as_bytes(), PASTE_END].concat(),
+    }
+}
+
 /// O que `session.continue` escreve na sessão parada pelo limite do plano
 /// (#183), depois do reset da janela.
 pub const CONTINUE_TEXT: &str =
@@ -383,8 +399,9 @@ impl Sessions {
     /// aceito só numa sessão autônoma (o work item tem o evento
     /// [`crate::autonomy::AUTONOMY_SESSION`]), com no máximo
     /// [`CONTINUE_TEXT_MAX_BYTES`] e sem caracteres de controle (fora quebra
-    /// de linha e tabulação): o texto não manda teclas ao terminal. O texto
-    /// não vai ao ledger, só o tamanho.
+    /// de linha e tabulação): o texto não manda teclas ao terminal. Vai num
+    /// bracketed paste ([`continue_bytes`]), para chegar como uma mensagem
+    /// só. O texto não vai ao ledger, só o tamanho.
     pub fn continue_session(&self, session_id: &str, text: Option<&str>) -> Result<()> {
         let s = self.ledger().get_session(session_id)?;
         let pty = match self.pty(session_id) {
@@ -399,8 +416,7 @@ impl Sessions {
             None => None,
             Some(t) => Some(self.continue_text(&s, t)?),
         };
-        let bytes = custom.as_deref().unwrap_or(CONTINUE_TEXT).as_bytes();
-        pty.write(bytes)?;
+        pty.write(&continue_bytes(custom.as_deref()))?;
         std::thread::sleep(TYPE_PAUSE);
         pty.write(b"\r")?;
         let payload = match &custom {
@@ -882,10 +898,20 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(&cmd).unwrap(),
-            "CI verde: mescle o PR #9[201~ agora"
+            "\u{1b}[200~CI verde: mescle o PR #9[201~ agora\u{1b}[201~"
         );
         env.sessions.kill(&s.id).ok();
         env.wait_state(&s.id, SessionState::Exited);
+    }
+
+    #[test]
+    fn bytes_do_continue_com_paste_so_no_texto_livre() {
+        assert_eq!(continue_bytes(None), CONTINUE_TEXT.as_bytes());
+        let t = sanitize_continue_text("linha A\nlinha B\u{1b}[201~\r\nfim");
+        assert_eq!(
+            continue_bytes(Some(&t)),
+            b"\x1b[200~linha A\nlinha B[201~\nfim\x1b[201~".to_vec()
+        );
     }
 
     #[test]
