@@ -34,13 +34,15 @@ import { StartCtx, type StartSession, type StartTarget } from "../shell/start";
 import { useNav, type OpenTab, type Tab } from "../state/nav";
 import { useTower, type Tower } from "../state/tower";
 import { lastTermSize } from "../terminal/size";
-import { changeLabel, itemKey, itemShort, PROJECT_ITEM } from "../util/item";
+import { changeLabel, itemKey, itemShort, PROJECT_ITEM, RELEASE_ITEM } from "../util/item";
 import { awaitingApproval, isApprovalRefusal } from "./approval";
 import { branchFor, branchFromPattern, patternOf, worktreeDirName } from "./branch";
 import { STATE_SUFFIX, hubClones, liveSessions, localClone, type Clone } from "./clones";
 import { projectAt } from "./sections";
 import { itemTab, projectKey } from "./tabs";
-import { renderGestorTemplate, renderTemplate, resolveTemplate, scopeText } from "./templates";
+import { renderGestorTemplate, renderReleaseTemplate, renderTemplate, resolveTemplate, scopeText } from "./templates";
+import { DEFAULT_RELEASE_CONFIG, releasePrHead, startBlocker, statusSummary, stepText } from "../hub/release";
+import type { HubReleaseStatus } from "../protocol/hub-gen";
 import { cachedTree } from "./ui-store";
 import { rcRequested } from "../web/envActions";
 import { PlanConfirm, PlanEnvChoices, PlanStartNote, usePlanGate } from "../plan/PlanStart";
@@ -247,8 +249,10 @@ function ItemStartModal({
       ? hubClones(tower, where.owner, where.repo)
       : [localClone(tower, where.env, where.projectId)].filter((c): c is Clone => c !== null);
 
+  // Sessão de release (#204): sem issue, com a prévia do hub.
+  const releaseMode = !!target.release;
   // Alvo dentro da modal: começa no pedido; os atalhos do épico trocam.
-  const [gh, setGh] = useState<number | undefined>(target.ghNumber);
+  const [gh, setGh] = useState<number | undefined>(releaseMode ? undefined : target.ghNumber);
   const [envChoice, setEnvChoice] = useState<string | null>(null);
   // Reiniciar (#424): o modelo e o modo da sessão anterior.
   const [model, setModel] = useState(
@@ -386,14 +390,31 @@ function ItemStartModal({
     ? (wi?.worktree_path ?? `${root ?? "<raiz dos worktrees>"}/${project.name}/${worktreeDirName(branch)}`)
     : "";
 
-  const editKey = String(gh ?? PROJECT_ITEM);
+  const editKey = releaseMode ? "release" : String(gh ?? PROJECT_ITEM);
   // Template pelo rastreador do projeto (#351): os `jira_*` no Jira; o
   // override do projeto, vindo do hub, vence (#166). Ambiente anterior à
   // 2.13 não traz `session_templates`: o global.
   const tracker = project?.tracker?.kind ?? "github";
-  const tpl = resolveTemplate(config.templates, issue ? kind : "project", tracker, project?.session_templates);
-  const base =
-    project && (planning || issue)
+  const tpl = resolveTemplate(
+    config.templates,
+    releaseMode ? "release" : issue ? kind : "project",
+    tracker,
+    project?.session_templates,
+  );
+  // Configuração de release: a do ambiente (2.21) ou, num ambiente anterior, a do hub.
+  const releaseCfg = project?.release ?? hubView?.project.release ?? DEFAULT_RELEASE_CONFIG;
+  const base = !project
+    ? ""
+    : releaseMode
+      ? renderReleaseTemplate(tpl.text, {
+          owner: project.gh_owner,
+          repo: project.gh_repo,
+          source: releaseCfg.source,
+          target: releaseCfg.target,
+          release_pr_branch: releasePrHead(releaseCfg),
+          protected: project.protected_branches,
+        })
+      : planning || issue
       ? renderTemplate(tpl.text, {
           kind,
           number: issue?.gh_number ?? 0,
@@ -407,6 +428,22 @@ function ItemStartModal({
           forge: project.forge,
         }) + (gh === target.ghNumber ? (target.note ?? "") : "")
       : "";
+  // Prévia do "Criar release" (#204): `hub.release.status`, com o token do hub.
+  const [releaseStatus, setReleaseStatus] = useState<HubReleaseStatus | null>(null);
+  const [releaseError, setReleaseError] = useState<string | null>(null);
+  const releaseOwner = project?.gh_owner ?? (where?.view === "hub" ? where.owner : "");
+  const releaseRepo = project?.gh_repo ?? (where?.view === "hub" ? where.repo : "");
+  useEffect(() => {
+    if (!releaseMode || !releaseOwner) return;
+    let alive = true;
+    api.hubCall<HubReleaseStatus>("hub.release.status", { owner: releaseOwner, repo: releaseRepo }).then(
+      (s) => alive && setReleaseStatus(s),
+      (e) => alive && setReleaseError(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, releaseMode, releaseOwner, releaseRepo]);
   const prompt = edits[editKey] ?? base;
   const edited = edits[editKey] !== undefined && edits[editKey] !== base;
 
@@ -430,7 +467,7 @@ function ItemStartModal({
 
   // A sessão que o Reiniciar substitui não conta como "já existe".
   const replaced = target.replace;
-  const live = liveSessions(clones, gh ?? PROJECT_ITEM).filter(
+  const live = liveSessions(clones, releaseMode ? RELEASE_ITEM : (gh ?? PROJECT_ITEM)).filter(
     (l) => !replaced || l.env !== replaced.env || l.session.id !== replaced.session,
   );
   const subsTodo =
@@ -439,8 +476,14 @@ function ItemStartModal({
       : [];
   const repoText = project ? `${project.gh_owner}/${project.gh_repo}` : where?.view === "hub" ? `${where.owner}/${where.repo}` : "";
   const name = project?.name ?? (where?.view === "hub" ? where.repo : "projeto");
-  const heading = planning ? `Sessão de planejamento · ${name}` : issue ? `${ref(issue.gh_number)} ${issue.title}` : ref(gh ?? 0);
-  const kindLabel = planning ? "planejamento" : kind === "epic" ? "épico" : "issue";
+  const heading = releaseMode
+    ? `Sessão de release · ${name}`
+    : planning
+      ? `Sessão de planejamento · ${name}`
+      : issue
+        ? `${ref(issue.gh_number)} ${issue.title}`
+        : ref(gh ?? 0);
+  const kindLabel = releaseMode ? "release" : planning ? "planejamento" : kind === "epic" ? "épico" : "issue";
 
   let blocked: string | null = null;
   if (!where) blocked = "Projeto não encontrado em nenhum ambiente conectado.";
@@ -457,7 +500,15 @@ function ItemStartModal({
       : roots
         ? `${ref(gh ?? 0)} não está na árvore do projeto.`
         : null;
-  const loading = !blocked && !planning && !issue;
+  // Release: o motivo da prévia (desligada, sem o secret, sessão viva).
+  if (!blocked && releaseMode) {
+    if (releaseError) blocked = `Não foi possível ler o estado da release: ${releaseError}`;
+    else if (releaseStatus) {
+      const why = startBlocker(releaseStatus, live.length > 0);
+      if (why) blocked = `${why.charAt(0).toUpperCase()}${why.slice(1)}.`;
+    }
+  }
+  const loading = !blocked && ((!planning && !issue) || (releaseMode && !releaseStatus));
 
   // Ao abrir, o foco vai para o primeiro controle da modal.
   useEffect(() => {
@@ -504,10 +555,18 @@ function ItemStartModal({
             // Só depois da confirmação da pessoa (#124).
             ...(unapproved && overrideApproval ? { override_approval: true } : {}),
           })
-        : await api.call<Session>(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
+        : releaseMode
+          ? await api.call<Session>(clone.env, "session.start_release", { ...tgt, prompt, ...agent, ...size })
+          : await api.call<Session>(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
       // Web: o painel da sessão espera o id do Remote Control e abre o link.
       if (web && withRemote) rcRequested(s.id);
-      onStarted(s, clone.env, clone.name, planning ? "Sessão de planejamento" : `Sessão de ${ref(gh ?? 0)}`, openTerm);
+      onStarted(
+        s,
+        clone.env,
+        clone.name,
+        releaseMode ? "Sessão de release" : planning ? "Sessão de planejamento" : `Sessão de ${ref(gh ?? 0)}`,
+        openTerm,
+      );
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       if (issue && isApprovalRefusal(m)) {
@@ -564,7 +623,9 @@ function ItemStartModal({
 
           {target.kill && replaced && <RestartNote />}
 
-          {live.length > 0 && (
+          {releaseMode && releaseStatus && <ReleasePreview s={releaseStatus} />}
+
+          {live.length > 0 && !releaseMode && (
             <div className="sm-note" role="status">
               <span className="sp-dot" data-tone="attention" aria-hidden="true" />
               <span className="sm-note-text">
@@ -780,14 +841,22 @@ function ItemStartModal({
               <span className="sm-label">{planning ? "Onde roda" : `Branch e worktree em ${clone?.name}`}</span>
               <div className="sm-where">
                 <span className="sm-where-top">
-                  <span className="mono">{planning ? `${branch} (clone principal)` : branch}</span>
+                  <span className="mono">
+                    {releaseMode ? "clone principal, só leitura" : planning ? `${branch} (clone principal)` : branch}
+                  </span>
                   <span className="sm-chip" data-tone={planning || wi?.branch ? "neutral" : "done"}>
                     {planning ? "clone principal, sem branch nova" : wi?.branch ? "já existentes" : "criados ao iniciar"}
                   </span>
                 </span>
                 <span className="mono muted sm-path">{planning ? project.repo_path : worktree}</span>
-                {planning && (
+                {planning && !releaseMode && (
                   <span className="muted small">Commits em branches protegidas são bloqueados.</span>
+                )}
+                {releaseMode && (
+                  <span className="muted small">
+                    Merges e aprovações só pelo <span className="mono">ctower release</span>, com merge commit preso ao SHA e o
+                    token exclusivo da release.
+                  </span>
                 )}
               </div>
             </div>
@@ -798,7 +867,7 @@ function ItemStartModal({
               <span className="sm-prompt-head">
                 <label htmlFor="sm-prompt">
                   Prompt inicial · template{" "}
-                  {planning ? "da sessão do projeto" : kind === "epic" ? "de épico" : "de issue"}
+                  {releaseMode ? "de release" : planning ? "da sessão do projeto" : kind === "epic" ? "de épico" : "de issue"}
                   {tracker === "jira" ? " do Jira" : ""}
                 </label>
                 <span className="sm-chip" data-tone="neutral" aria-label="Origem do template">
@@ -1192,5 +1261,52 @@ export function StartSessionHost({ children }: { children: ReactNode }) {
         </div>
       )}
     </StartCtx.Provider>
+  );
+}
+
+/** Prévia do "Criar release" (#204): o resumo do `hub.release.status`. */
+function ReleasePreview({ s }: { s: HubReleaseStatus }) {
+  const st = s.status;
+  return (
+    <div className="sm-field" aria-label="Estado da release">
+      <span className="sm-label">Estado da release</span>
+      {st ? (
+        <div className="sm-where">
+          <span className="sm-where-top">
+            <span>{statusSummary(st)}</span>
+            <span className="sm-chip" data-tone={st.next === "nothing" ? "neutral" : "done"}>
+              próxima etapa: {stepText(st.next)}
+            </span>
+          </span>
+          {[
+            ["Promoção", st.promotion_pr],
+            ["Release", st.release_pr],
+            ["Back-merge", st.back_merge_pr],
+          ].map(([label, pr]) =>
+            pr && typeof pr === "object" ? (
+              <span key={String(label)} className="muted small">
+                {String(label)}: <span className="mono">#{pr.number}</span> {pr.title}
+              </span>
+            ) : null,
+          )}
+          {st.pending_runs.length > 0 && (
+            <span className="muted small">{st.pending_runs.length} run(s) esperando aprovação</span>
+          )}
+          {st.latest_release && (
+            <span className="muted small">
+              Última release: <span className="mono">{st.latest_release.tag}</span>
+              {st.latest_release.draft ? " (rascunho)" : ""}
+            </span>
+          )}
+        </div>
+      ) : (
+        <p className="muted small" role="note">
+          {s.error ?? "Estado da release indisponível."}
+        </p>
+      )}
+      <span className="muted small">
+        Token: secret <span className="mono">{s.token_secret}</span> {s.secret_present ? "cadastrado" : "ausente"}.
+      </span>
+    </div>
   );
 }

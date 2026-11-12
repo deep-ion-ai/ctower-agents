@@ -48,7 +48,7 @@ pub struct AgentOptions {
 }
 
 impl AgentOptions {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         match &self.model {
             Some(m) if !CLAUDE_MODELS.contains(&m.as_str()) => {
                 return Err(SessionsError::Invalid(format!(
@@ -529,6 +529,9 @@ impl Sessions {
         } = spec;
         let cfg = self.config().clone();
         let gestor = project.kind == ProjectKind::Gestor;
+        // Sessão de release (#204): perfil próprio do guarda-corpo e o token
+        // exclusivo da release.
+        let release = !gestor && crate::release::is_release_item(wi);
         // Antes de criar a sessão no ledger: sem token, nada a desfazer.
         let session_token = crate::secrets::new_session_token()?;
         // Pastas de docs do projeto e do épico (o próprio ou o pai da
@@ -537,7 +540,7 @@ impl Sessions {
         let docs = if gestor {
             crate::docs::SessionDocs::default()
         } else {
-            let item = (wi.gh_number != PROJECT_WORK_ITEM).then_some(wi);
+            let item = (wi.gh_number > PROJECT_WORK_ITEM).then_some(wi);
             self.ensure_docs(project, item, title)
         };
         let session = self.ledger().create_session(&NewSession {
@@ -627,8 +630,9 @@ impl Sessions {
         // Secrets e variáveis do hub (só no ambiente do processo, nunca no
         // `launch_cmd` nem no ledger), resolvidos antes dos args: a
         // instrução ao agente cita os nomes (#165).
-        let secrets = self.session_secrets(project, &session.id);
+        let secrets = self.session_secrets(project, &session.id, release);
         let docs_line = [
+            release.then(|| crate::release::RELEASE_LIMITS.to_string()),
             docs.instruction(),
             crate::secrets::agent_instruction(&secrets.names()),
             autonomy,
@@ -682,6 +686,13 @@ impl Sessions {
         if gestor {
             // Perfil `gestor` do guarda-corpo no `ctower hook` (§10.2).
             env.push(("CTOWER_SESSION_KIND".to_string(), "gestor".to_string()));
+        }
+        if release {
+            // Perfil `release` do guarda-corpo e do `ctower release` (#204).
+            env.push((
+                "CTOWER_SESSION_KIND".to_string(),
+                ct_core::RELEASE_SESSION_KIND.to_string(),
+            ));
         }
         if let Some(branch) = autonomy_branch {
             // Sessão autônoma (#184): o guarda-corpo só deixa `gh pr merge`
@@ -931,7 +942,8 @@ fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, 
     if gestor {
         return env;
     }
-    let item = wi.gh_number != PROJECT_WORK_ITEM;
+    // Sessão do projeto (#0) e de release (#-1) não têm issue.
+    let item = wi.gh_number > PROJECT_WORK_ITEM;
     match &project.tracker {
         ct_core::TrackerConfig::Github => {
             if item && wi.kind == WorkItemKind::Issue {
@@ -1039,6 +1051,7 @@ mod tests {
                     autonomy: Default::default(),
                     autonomy_runner: false,
                     approval: Default::default(),
+                    release: Default::default(),
                     owner: p.gh_owner.clone(),
                     repo: p.gh_repo.clone(),
                     name: p.name.clone(),

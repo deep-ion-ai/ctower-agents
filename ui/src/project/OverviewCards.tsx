@@ -11,7 +11,7 @@ import { GestorLauncher } from "../hub/HubGestor";
 import { kindText, SEVERITY_TEXT, SEVERITY_TONE, useHubHealth } from "../hub/HubHealth";
 import { hubTab } from "../hub/sections";
 import { plural } from "../shell/summary";
-import { itemShort } from "../util/item";
+import { itemShort, noIssue } from "../util/item";
 import { projectSignals } from "./overview";
 import { runProjectSync, useSyncRun, type ProjectSyncInfo } from "./sync-now";
 import { SYNC_DESKTOP_NOTE, SyncStatus } from "./SyncNow";
@@ -21,7 +21,7 @@ import { ProposalItem, ProposalNote, useHubProposals, useProposalBatch } from ".
 import { CARD_WIDTH_TEXT, CARD_WIDTHS, useCardWidth, type CardWidth } from "./ui-store";
 import { pendingInOrder } from "../hub/proposalOrder";
 import type { Review } from "../protocol/gen";
-import { changeLabel, changeRef, forgeLabel, PROJECT_ITEM } from "../util/item";
+import { changeLabel, changeRef, forgeLabel } from "../util/item";
 import type { Clone } from "./clones";
 import { entryName, markPr, markReviewed, openPr, projectEntries, useReviewEntries, type ReviewEntry } from "../review/entries";
 import { noteReviewed, reviewKey, useReviews, wasReviewed } from "../review/ui-store";
@@ -510,7 +510,7 @@ export function ProjectReviewsCard({ clones }: { clones: readonly Clone[] }) {
     const pr = openPr(e.review);
     return [
       plural(e.count, "decisão pendente", "decisões pendentes"),
-      e.ghNumber === PROJECT_ITEM
+      noIssue(e.ghNumber)
         ? "sessões sem issue associada"
         : pr
           ? `${changeRef(e.project, pr.number)} aberto`

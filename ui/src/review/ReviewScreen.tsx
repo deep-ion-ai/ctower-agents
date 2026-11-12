@@ -1,6 +1,6 @@
 import "./review.css";
 import { GESTOR_LABEL } from "../control-room/attention";
-import { changeLabel, changeLabels, changeRef, forgeLabel, isGitlabProject, itemRef, itemShort, PROJECT_ITEM } from "../util/item";
+import { changeLabel, changeLabels, changeRef, forgeLabel, isGitlabProject, itemRef, itemShort, noIssue } from "../util/item";
 import { useCallback, useEffect, useId, useState } from "react";
 import type { Decision, PrComment, Review } from "../protocol/gen";
 import type { HubHistory } from "../protocol/hub-gen";
@@ -82,7 +82,7 @@ export function ReviewScreen({ env, workItemId }: { env?: string; workItemId?: n
                   e,
                   e.gestor
                     ? "decisões autônomas do gestor"
-                    : e.ghNumber === PROJECT_ITEM
+                    : noIssue(e.ghNumber)
                       ? "sessões sem issue associada"
                       : `sem ${changeLabel(e.project)} aberto`,
                 ),
@@ -134,7 +134,7 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
   const dwi = dproject?.work_items.find((w) => w.id === workItemId);
   const gestor = dashboards[env]?.gestor_work_item_id === workItemId;
   // Orientadas e revisadas só existem no histórico do hub (`review.get` traz as pendentes).
-  const withHistory = hub.up && !gestor && !!project && !!dwi && dwi.gh_number !== PROJECT_ITEM;
+  const withHistory = hub.up && !gestor && !!project && !!dwi && !noIssue(dwi.gh_number);
 
   const load = useCallback(async () => {
     try {
@@ -240,7 +240,7 @@ function ReviewDetail({ env, workItemId }: { env: string; workItemId: number }) 
     <section className="review-detail" aria-label={name}>
       <div className="review-head">
         <h1>
-          {!gestor && dwi && dwi.gh_number !== PROJECT_ITEM ? (
+          {!gestor && dwi && !noIssue(dwi.gh_number) ? (
             <>
               <span className="mono review-num">{itemRef(dwi.gh_number, project)}</span> {dwi.title ?? ""}
             </>

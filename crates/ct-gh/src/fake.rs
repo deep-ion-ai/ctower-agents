@@ -31,7 +31,7 @@ struct State {
     requests: Vec<(String, Option<String>)>,
     /// (método, caminho) de cada requisição.
     calls: Vec<(String, String)>,
-    /// (caminho, corpo JSON) de cada `POST`.
+    /// (caminho, corpo JSON) de cada `POST`, `PUT` e `PATCH`.
     posted: Vec<(String, Value)>,
     /// `GET` que responde `302` para outro caminho deste servidor.
     redirects: HashMap<String, String>,
@@ -46,9 +46,10 @@ struct State {
 /// remove (`204`); o de `.../git/refs/heads/<b>` remove também a leitura
 /// `.../git/ref/heads/<b>`, como no GitHub. `DELETE` do que não existe dá o
 /// `422` "Reference does not exist". `POST` numa rota publicada responde
-/// `201` com o corpo dela e guarda o enviado ([`FakeGitHub::posted`]).
-/// `POST /graphql` responde `200` com a resposta publicada por
-/// [`FakeGitHub::set_graphql`] para as variáveis enviadas.
+/// `201` com o corpo dela e guarda o enviado ([`FakeGitHub::posted`]);
+/// `PUT` e `PATCH`, o mesmo com `200`. `POST /graphql` responde `200` com a
+/// resposta publicada por [`FakeGitHub::set_graphql`] para as variáveis
+/// enviadas.
 #[derive(Clone)]
 pub struct FakeGitHub {
     addr: SocketAddr,
@@ -217,7 +218,7 @@ impl FakeGitHub {
         self.state.lock().unwrap().calls.clone()
     }
 
-    /// Corpos dos `POST` recebidos: (caminho, JSON).
+    /// Corpos dos `POST`, `PUT` e `PATCH` recebidos: (caminho, JSON).
     pub fn posted(&self) -> Vec<(String, Value)> {
         self.state.lock().unwrap().posted.clone()
     }
@@ -320,11 +321,12 @@ fn handle(stream: TcpStream, st: &Mutex<State>) -> std::io::Result<()> {
                 }),
             };
             (200, vec![], body.to_string())
-        } else if method == "POST" {
+        } else if matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
             let sent = serde_json::from_slice(&sent).unwrap_or(Value::Null);
             s.posted.push((path.clone(), sent));
+            let code = if method == "POST" { 201 } else { 200 };
             match s.routes.get(&path) {
-                Some(r) => (201, vec![], r.body.to_string()),
+                Some(r) => (code, vec![], r.body.to_string()),
                 None => (404, vec![], json!({ "message": "Not Found" }).to_string()),
             }
         } else if let Some(r) = s.routes.get(&path) {

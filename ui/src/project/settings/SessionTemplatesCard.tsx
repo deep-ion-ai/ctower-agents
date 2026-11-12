@@ -79,7 +79,7 @@ export function SessionTemplatesCard({
         override fica no hub e vale em todos os ambientes do projeto.
       </p>
       <dl className="hub-tpl-list">
-        {SESSION_TEMPLATE_KINDS.map((k) => {
+        {SESSION_TEMPLATE_KINDS.filter((k) => !(jira && k === "release")).map((k) => {
           const own = hasOverride(cur, k);
           const open = editing?.kind === k;
           const label = SESSION_TEMPLATE_LABEL[k];

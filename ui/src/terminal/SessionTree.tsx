@@ -7,7 +7,7 @@ import { SidePanel } from "../shell/SidePanel";
 import type { EnvView } from "../api/types";
 import type { Dashboard, DashboardWorkItem, GestorScope, Project, Session, Shell } from "../protocol/gen";
 import { ptyOf, type Pane, type ShellTab, type Tab } from "../state/nav";
-import { itemShort, itemTitle, PROJECT_ITEM } from "../util/item";
+import { itemShort, itemTitle, noIssue } from "../util/item";
 import type { TermState } from "./adapter";
 import { rcOn } from "./remote";
 import { shellItem, shellLabel } from "./shells";
@@ -223,7 +223,7 @@ export function groupSessions(
     }
   }
   // A sessão do projeto (#0) fica no topo do grupo, antes das issues (§6).
-  for (const g of groups.values()) g.sessions.sort((a, b) => Number(b.ghNumber === PROJECT_ITEM) - Number(a.ghNumber === PROJECT_ITEM));
+  for (const g of groups.values()) g.sessions.sort((a, b) => Number(noIssue(b.ghNumber)) - Number(noIssue(a.ghNumber)));
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 

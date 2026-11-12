@@ -385,3 +385,15 @@ Pré-requisito: um ambiente 2.15 ou maior com uma sessão de issue rodando, com 
 5. Peça ao agente para gerar um arquivo com mais de 3000 linhas. **Esperado:** aparece "Diff grande" com o total de linhas; **Mostrar mesmo assim** abre o patch (ou, acima de 1 MiB, "grande demais para mostrar").
 6. Na tela **Projeto**, abra o item: **Ver diff** no painel do work item (um por ambiente, se houver mais de um). Na **Revisão**, um item com PR aberto mostra **Ver diff** ao lado de "Abrir PR". Com o ambiente desconectado ou anterior à 2.15, o botão fica desabilitado com o motivo na dica.
 7. Na PWA (celular), abra a sessão pela Sala de controle e toque **Ver diff**. **Esperado:** a mesma tela, com a lista de arquivos acima do diff.
+
+## 26. Sessão de release (#204)
+
+Pré-requisito: hub 1.24 e um ambiente 2.23 com um projeto GitHub de teste (por exemplo `acme/acme-web`, com o fluxo do release-please) atribuído. Não use um repositório de produção.
+
+1. Em **Configurações do projeto › Release**, clique **Editar release**, ligue a sessão de release e salve. **Esperado:** "ligada", o fluxo `develop → main` e o secret `CT_RELEASE_GH_TOKEN`: ausente. Troque o destino para `develop`: o formulário avisa que origem e destino precisam ser diferentes e não salva.
+2. Na tela do projeto, clique **Criar release**. **Esperado:** a modal "Sessão de release" com o estado (diferença de conteúdo, PRs abertos, última release) e o início bloqueado com "Cadastre o secret CT_RELEASE_GH_TOKEN...".
+3. Cadastre o token exclusivo em **Secrets e variáveis** do projeto e abra **Criar release** de novo. **Esperado:** o secret "cadastrado" (sem valor), o prompt do template de release e **Iniciar sessão** habilitado.
+4. Inicie. **Esperado:** a sessão roda no clone principal; na sessão, `echo $CTOWER_SESSION_KIND` mostra `release`, e `gh pr merge 1` e `git push origin main` são bloqueados pelo guarda-corpo. `ctower release status` imprime o estado em JSON.
+5. Abra **Criar release** com a sessão viva. **Esperado:** o início bloqueado com "já há uma sessão de release viva neste projeto".
+6. Inicie uma sessão de issue do mesmo projeto e rode `ctower secret get CT_RELEASE_GH_TOKEN`. **Esperado:** "não existe para o projeto da sessão" (saída 2); `ctower release status` responde que só roda na sessão de release.
+7. Num projeto Jira + GitLab, abra as Configurações. **Esperado:** sem a seção Release e sem o botão.

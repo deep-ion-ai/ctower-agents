@@ -62,6 +62,7 @@ export const TEMPLATE_LABEL: Record<TemplateKey, string> = {
   jira_issue: "Issue do Jira (e sub-tarefa)",
   jira_epic: "Épico do Jira",
   jira_project: "Sessão do projeto Jira (sem issue)",
+  release: "Sessão de release (GitHub)",
 };
 
 export const TEMPLATE_KEYS = Object.keys(TEMPLATE_LABEL) as TemplateKey[];

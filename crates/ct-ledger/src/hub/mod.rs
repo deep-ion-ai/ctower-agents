@@ -36,6 +36,7 @@ mod model;
 mod priority;
 mod proposals;
 mod push;
+mod release;
 mod rules;
 mod tracker;
 mod views;
@@ -852,6 +853,11 @@ CREATE TABLE autopilot_close (
   updated_at    INTEGER NOT NULL
 );
 "#,
+    // 42: configuração de release do projeto (#204): JSON de
+    // `ct_core::ReleaseConfig`. `{}` = desligada, com os padrões.
+    r#"
+ALTER TABLE project ADD COLUMN release_config TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1070,6 +1076,9 @@ pub struct HubProject {
     /// rótulo padrão, sem exigir.
     #[serde(default)]
     pub approval: ct_core::ApprovalConfig,
+    /// Configuração de release (#204). Ausente num hub anterior: desligada.
+    #[serde(default)]
+    pub release: ct_core::ReleaseConfig,
 }
 
 fn attribution_default() -> bool {
@@ -1217,7 +1226,7 @@ const PROJECT_COLS: &str =
      sync_env_id, docs_config, session_templates, autonomy_config, \
      (SELECT l.autonomy FROM project_location l WHERE l.project_id = project.id \
         AND l.env_id = json_extract(project.autonomy_config, '$.env_id')), \
-     wip_limits, approval_config";
+     wip_limits, approval_config, release_config";
 const WORK_ITEM_COLS: &str = "id, project_id, gh_number, kind, status, branch, created_at, \
                               closed_at, priority, rank, model, effort";
 const SESSION_COLS: &str = "id, env_id, work_item_id, tool, tool_session_id, cwd, state, \
@@ -1251,6 +1260,7 @@ fn row_to_project(r: &Row) -> rusqlite::Result<HubProject> {
             .and_then(|s| serde_json::from_str(&s).ok()),
         wip_limits: json_col(r, 19)?,
         approval: json_col(r, 20)?,
+        release: json_col(r, 21)?,
     })
 }
 
@@ -5279,7 +5289,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 41);
+        assert_eq!(v, 42);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

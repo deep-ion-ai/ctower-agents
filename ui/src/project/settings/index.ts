@@ -16,3 +16,4 @@ export { DocsCard } from "./DocsCard";
 export { SessionTemplatesCard } from "./SessionTemplatesCard";
 export { WipCard } from "./WipCard";
 export { ApprovalCard } from "./ApprovalCard";
+export { ReleaseCard } from "./ReleaseCard";

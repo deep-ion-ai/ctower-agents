@@ -91,7 +91,7 @@ test("conflito com a base: o aviso aparece com os arquivos", async () => {
 });
 
 test("template autônomo (#191): padrão como placeholder e o objeto inteiro de session_templates vai ao hub", async () => {
-  const templates = { issue: "Issue {{key}}", epic: "", project: "", autonomous: "" };
+  const templates = { issue: "Issue {{key}}", epic: "", project: "", autonomous: "", release: "" };
   const { api, user } = setup(hubProject({ session_templates: templates }));
   const card = await screen.findByRole("region", { name: "Modo autônomo" });
   expect(within(card).getByText("template padrão")).toBeInTheDocument();

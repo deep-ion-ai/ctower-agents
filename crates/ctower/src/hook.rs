@@ -89,7 +89,10 @@ const FILE_TOOLS: &[(&str, &str)] = &[
 ];
 
 fn pre_tool_use(session: &str, payload: &Value) -> i32 {
-    let gestor = env_nonempty("CTOWER_SESSION_KIND").as_deref() == Some("gestor");
+    let kind = env_nonempty("CTOWER_SESSION_KIND");
+    let gestor = kind.as_deref() == Some("gestor");
+    // Sessão de release (#204): merges e aprovações só pelo `ctower release`.
+    let release = kind.as_deref() == Some(ct_core::RELEASE_SESSION_KIND);
     let tool = payload.get("tool_name").and_then(Value::as_str);
     if gestor {
         if let Some((_, field)) = FILE_TOOLS.iter().find(|(t, _)| Some(*t) == tool) {
@@ -137,10 +140,13 @@ fn pre_tool_use(session: &str, payload: &Value) -> i32 {
 
     let branch = check_command(cmd, &ctx);
     // O complemento de branch só vale para o bloqueio de branch protegida.
-    let hint = (!gestor && matches!(branch, Verdict::Block(_))).then_some(BRANCH_HINT);
+    let hint = (!gestor && !release && matches!(branch, Verdict::Block(_))).then_some(BRANCH_HINT);
     let mut v = branch;
     if gestor {
         v = v.max(check_gestor(cmd));
+    }
+    if release {
+        v = v.max(ct_core::guard::release::check_release(cmd));
     }
     if env_nonempty("CTOWER_TRACKER").as_deref() == Some("jira") {
         v = v.max(check_jira(cmd));

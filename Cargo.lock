@@ -774,6 +774,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "ct-core",
+ "ct-gh",
  "ct-ledger",
  "ct-secrets",
  "ct-sessions",

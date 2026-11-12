@@ -17,6 +17,7 @@ mod launch;
 pub mod paths;
 mod prune;
 mod recovery;
+pub mod release;
 pub mod remote;
 mod secrets;
 pub mod shell;
@@ -77,6 +78,9 @@ pub enum SessionsError {
     /// `ct_core::APPROVAL_REFUSAL_PREFIX`.
     #[error("{0}")]
     ApprovalRequired(String),
+    /// Já há uma sessão de release viva no projeto (#204).
+    #[error("{0}")]
+    ReleaseBusy(String),
 }
 
 pub type Result<T> = std::result::Result<T, SessionsError>;
@@ -136,6 +140,9 @@ struct Inner {
     session_tokens: Mutex<HashMap<String, String>>,
     /// Shells livres vivos (#428), só em memória.
     shells: Mutex<HashMap<String, shell::LiveShell>>,
+    /// Serializa a conferência "uma sessão de release viva por projeto" com
+    /// a criação da sessão (#204).
+    release_start: Mutex<()>,
     notify: Notifier,
 }
 
@@ -156,6 +163,7 @@ impl Sessions {
                 masks: Mutex::new(HashMap::new()),
                 session_tokens: Mutex::new(HashMap::new()),
                 shells: Mutex::new(HashMap::new()),
+                release_start: Mutex::new(()),
                 notify,
             }),
         }

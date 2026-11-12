@@ -11,6 +11,7 @@ import type { HubProposal, HubRanking, ProposalDecided } from "../protocol/hub-g
 import { resetProjectUi } from "./ui-store";
 import { hubItem as webItem, webApi } from "../test/web";
 import { DESKTOP_ONLY_NOTE } from "../web/mode";
+import { DEFAULT_RELEASE_CONFIG } from "../hub/release";
 
 const NOW = Date.now();
 
@@ -103,11 +104,12 @@ const HUB_PROJECT: HubProject = {
   attribution: true,
   sync_env_id: null,
   docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-  session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+  session_templates: { issue: "", epic: "", project: "", autonomous: "", release: "" },
   autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
   autonomy_report: null,
   wip_limits: { max_sessions: null, max_prs: null },
   approval: { label: "aprovada", required: false },
+  release: DEFAULT_RELEASE_CONFIG,
 };
 
 function hubItem(n: number, p: Partial<HubWorkItem> = {}): HubWorkItem {
@@ -853,6 +855,7 @@ test("Configurações do projeto (#17): a seção pelo endereço e cada seção 
     "Regras do agente",
     "Templates de sessão",
     "Aprovação",
+    "Release",
     "Secrets e variáveis",
     "Docs",
     "Limpeza",
@@ -948,7 +951,7 @@ test("Templates de sessão (#166): Personalizar parte do global, salva o objeto 
     .onHub("hub.projects.update", null)
     .onHub("hub.projects.list", [
       {
-        project: { ...HUB_PROJECT, session_templates: { issue: "", epic: "Épico do projeto {{key}}", project: "", autonomous: "" } },
+        project: { ...HUB_PROJECT, session_templates: { issue: "", epic: "Épico do projeto {{key}}", project: "", autonomous: "", release: "" } },
         assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
         locations: [],
         sync: sync({ project_id: 7, last_ok_at: NOW }),
@@ -978,14 +981,14 @@ test("Templates de sessão (#166): Personalizar parte do global, salva o objeto 
   expect(api.hubCallsTo("hub.projects.update")[0].params).toEqual({
     owner: "deep-ion-ai",
     repo: "ctower-agents",
-    session_templates: { issue: "Só a issue {{key}}", epic: "Épico do projeto {{key}}", project: "", autonomous: "" },
+    session_templates: { issue: "Só a issue {{key}}", epic: "Épico do projeto {{key}}", project: "", autonomous: "", release: "" },
   });
 
   // Voltar ao global: a chave vazia, o resto igual.
   await user.click(within(card).getByRole("button", { name: "Voltar ao global Épico" }));
   await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(2));
   expect(api.hubCallsTo("hub.projects.update")[1].params).toMatchObject({
-    session_templates: { issue: "", epic: "", project: "", autonomous: "" },
+    session_templates: { issue: "", epic: "", project: "", autonomous: "", release: "" },
   });
 });
 
@@ -1820,4 +1823,123 @@ test("Visão geral do projeto autônomo (#185): wip/autonoma com as issues à fr
     "https://github.example/acme/acme-web/pull/5",
   );
   expect(api.callsTo("hub.autopilot.wip")[0].params).toEqual({ owner: "deep-ion-ai", repo: "ctower-agents" });
+});
+
+// ---- Sessão de release (#204) ----
+
+const RELEASE_ON = { ...DEFAULT_RELEASE_CONFIG, enabled: true };
+
+function releaseStatus(p: { secret?: boolean; enabled?: boolean } = {}) {
+  return {
+    enabled: p.enabled ?? true,
+    token_secret: "CT_RELEASE_GH_TOKEN",
+    secret_present: p.secret ?? true,
+    error: null,
+    status: {
+      owner: "deep-ion-ai",
+      repo: "ctower-agents",
+      source: "develop",
+      target: "main",
+      source_sha: "d2",
+      target_sha: "m1",
+      content_diff: true,
+      target_ahead_by: 0,
+      source_ahead_by: 3,
+      promotion_pr: null,
+      release_pr: null,
+      back_merge_pr: null,
+      pending_runs: [],
+      latest_release: { tag: "v1.2.3", name: "v1.2.3", url: "https://github.example/releases/v1.2.3", draft: false },
+      next: "promote",
+    },
+  };
+}
+
+function setupRelease(release = RELEASE_ON) {
+  return setupTabs()
+    .onHub("hub.projects.list", [
+      {
+        project: { ...HUB_PROJECT, release },
+        assignments: [hubAssignment({ project_id: 7, env_id: "daemon-wsl", env_name: "wsl" })],
+        locations: [],
+        sync: sync({ project_id: 7, last_ok_at: NOW }),
+        tracker_status: null,
+      },
+    ])
+    .onHub("hub.projects.update", null)
+    .on("session.start_release", session({ id: "rel00000-0000-0000-0000-000000000001", work_item_id: 99 }));
+}
+
+test("Criar release (#204): prévia do hub e session.start_release com o template de release", async () => {
+  const api = setupRelease().onHub("hub.release.status", releaseStatus());
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Criar release" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByRole("heading", { name: /Sessão de release · / })).toBeInTheDocument();
+  expect(await within(dialog).findByText("3 commit(s) de develop a lançar em main")).toBeInTheDocument();
+  expect(within(dialog).getByText(/secret/)).toHaveTextContent("CT_RELEASE_GH_TOKEN cadastrado");
+  expect(api.hubCallsTo("hub.release.status")[0].params).toEqual({ owner: "deep-ion-ai", repo: "ctower-agents" });
+  const prompt = within(dialog).getByLabelText(/Prompt inicial · template de release/) as HTMLTextAreaElement;
+  expect(prompt.value).toContain("de develop para main");
+  expect(prompt.value).toContain("ctower release status");
+  await user.click(startButton());
+  await waitFor(() => expect(api.callsTo("session.start_release")).toHaveLength(1));
+  const call = api.callsTo("session.start_release")[0];
+  expect(call.env).toBe("wsl");
+  expect(call.params).toMatchObject({ owner: "deep-ion-ai", repo: "ctower-agents" });
+  expect((call.params as { prompt: string }).prompt).toContain("ctower release merge-back");
+  expect(api.callsTo("session.start_project")).toHaveLength(0);
+});
+
+test("Criar release (#204): sem o secret do token, o início fica bloqueado com o motivo", async () => {
+  const api = setupRelease().onHub("hub.release.status", releaseStatus({ secret: false }));
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Criar release" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(/Cadastre o secret CT_RELEASE_GH_TOKEN/);
+  expect(startButton()).toBeDisabled();
+});
+
+test("Criar release (#204): sem a release ligada, nem o botão", async () => {
+  const api = setupRelease(DEFAULT_RELEASE_CONFIG);
+  render(<App api={api} initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents" }} />);
+  await screen.findByText("visão do hub");
+  await screen.findByRole("button", { name: /Configurações do projeto/ });
+  expect(screen.queryByRole("button", { name: "Criar release" })).not.toBeInTheDocument();
+});
+
+test("Configurações › Release (#204): liga a release e mostra se o secret existe, sem valor", async () => {
+  const api = setupRelease(DEFAULT_RELEASE_CONFIG).onHub("hub.secrets.list", {
+    status: { entries: 1, store_rev: 1, recovery_configured: false },
+    items: [{ scope: { project: "deep-ion-ai/ctower-agents" }, name: "CT_RELEASE_GH_TOKEN", kind: "secret", rev: 1, updated_at: NOW }],
+    delivery: [],
+    rotate_pending: null,
+  });
+  render(
+    <App
+      api={api}
+      initial={{ name: "project", owner: "deep-ion-ai", repo: "ctower-agents", view: "settings", section: "release" }}
+    />,
+  );
+  const user = userEvent.setup();
+  const card = await screen.findByRole("group", { name: "Release" });
+  expect(card).toHaveTextContent("desligada");
+  expect(await within(card).findByText(/: cadastrado/)).toBeInTheDocument();
+  await user.click(within(card).getByRole("button", { name: "Editar release" }));
+  await user.click(within(card).getByLabelText(/Ligar a sessão de release/));
+  const target = within(card).getByLabelText("Branch de destino");
+  await user.clear(target);
+  await user.type(target, "develop");
+  expect(within(card).getByRole("alert")).toHaveTextContent("origem e destino precisam ser branches diferentes");
+  await user.clear(target);
+  await user.type(target, "main");
+  await user.click(within(card).getByRole("button", { name: "Salvar release" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.projects.update")[0].params).toMatchObject({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    release: { ...DEFAULT_RELEASE_CONFIG, enabled: true },
+  });
 });

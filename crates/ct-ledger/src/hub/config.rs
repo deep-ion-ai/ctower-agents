@@ -217,6 +217,9 @@ pub struct HubProjectPatch {
     /// Rótulo de aprovação (#124): o objeto inteiro substitui o anterior;
     /// rótulo vazio = desligado.
     pub approval: Option<ct_core::ApprovalConfig>,
+    /// Configuração de release (#204): o objeto inteiro substitui o
+    /// anterior. Só projetos GitHub + GitHub.
+    pub release: Option<ct_core::ReleaseConfig>,
 }
 
 impl HubProjectPatch {
@@ -234,6 +237,7 @@ impl HubProjectPatch {
             && self.autonomy.is_none()
             && self.wip_limits.is_none()
             && self.approval.is_none()
+            && self.release.is_none()
     }
 }
 
@@ -527,6 +531,10 @@ impl Hub {
                 cur.autonomy.clone()
             }
         };
+        let release = match &patch.release {
+            Some(r) => super::release::checked_release(&cur, r)?,
+            None => cur.release.clone(),
+        };
         let sync_env = match patch.sync_env.as_deref() {
             Some(e) => Some((self.resolve_env(e)?, e.trim().to_string())),
             None => None,
@@ -543,7 +551,7 @@ impl Hub {
                     protected_branches = coalesce(?4, protected_branches), rev = ?5,
                     tracker_config = ?6, forge_config = ?7, branch_pattern = ?8,
                     attribution = ?9, docs_config = ?10, session_templates = ?11,
-                    autonomy_config = ?12, approval_config = ?13
+                    autonomy_config = ?12, approval_config = ?13, release_config = ?14
              WHERE key = ?1 AND deleted_at IS NULL",
             params![
                 key,
@@ -558,7 +566,8 @@ impl Hub {
                 provider.docs.config_json(),
                 provider.session_templates.config_json(),
                 autonomy.config_json(),
-                provider.approval.config_json()
+                provider.approval.config_json(),
+                release.config_json()
             ],
         )?;
         if changed == 0 {

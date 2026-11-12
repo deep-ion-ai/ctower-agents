@@ -788,6 +788,7 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         // Log do hub (#65): as últimas linhas, mascaradas.
         "hub.logs.tail" => ct_http::logs::rpc_tail(ct_http::logs::global(), &p).await,
         "hub.workitem.body" => workitem_body(st, p).await,
+        "hub.release.status" => crate::release::status(st, p).await,
         "hub.tracker.add_issue" => tracker_add_issue(st, p).await,
         m if m.starts_with("hub.update.") => update_call(st, method, &p).await,
         "hub.projects.add" | "hub.projects.update" => {
@@ -1598,6 +1599,24 @@ fn approval_param(p: &Value) -> Result<Option<ct_core::ApprovalConfig>, (i64, St
     }
 }
 
+/// `release` (#204): o bloco de release do projeto, campos ausentes =
+/// padrão; o objeto inteiro substitui o anterior. A combinação (só GitHub +
+/// GitHub) o hub confere na gravação.
+fn release_param(p: &Value) -> Result<Option<ct_core::ReleaseConfig>, (i64, String)> {
+    match p.get("release") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => {
+            let r: ct_core::ReleaseConfig = serde_json::from_value(v.clone())
+                .map_err(|e| invalid(format!("release inválido: {e}")))?;
+            r.validate().map_err(invalid)?;
+            Ok(Some(r))
+        }
+        Some(_) => Err(invalid(
+            "release deve ser um objeto { enabled, source, target, ... }",
+        )),
+    }
+}
+
 fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(None),
@@ -1704,12 +1723,13 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         autonomy: autonomy_param(p)?,
         wip_limits: wip_param(p)?,
         approval: approval_param(p)?,
+        release: release_param(p)?,
     };
     if patch.is_empty() {
         return Err(invalid(
             "nada a mudar: informe name, base_branch, protected_branches, tracker, forge, \
-             branch_pattern, attribution, sync_env, docs, session_templates, autonomy, wip_limits \
-             ou approval",
+             branch_pattern, attribution, sync_env, docs, session_templates, autonomy, wip_limits, \
+             approval ou release",
         ));
     }
     let cur = st
@@ -1741,11 +1761,35 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
+    // As branches da release ligada (#204) precisam existir no GitHub. O
+    // projeto Jira + GitLab o hub recusa na gravação.
+    if let Some(r) = patch
+        .release
+        .as_ref()
+        .filter(|r| r.enabled && cur.forge.gitlab().is_none() && cur.tracker.jira().is_none())
+    {
+        let r = r.normalized();
+        for b in [&r.source, &r.target] {
+            github()?
+                .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+                .map_err(|m| (-32000, m))?;
+        }
+    }
     let updated = st
         .hub
         .lock()
         .update_project(owner, repo, &patch)
         .map_err(e)?;
+    if patch.release.is_some() {
+        let r = &updated.release;
+        tracing::info!(
+            "release de {owner}/{repo}: {} ({} → {}, secret {})",
+            if r.enabled { "ligada" } else { "desligada" },
+            r.source,
+            r.target,
+            r.token_secret
+        );
+    }
     if patch.approval.is_some() {
         let a = &updated.approval;
         tracing::info!(
@@ -2149,6 +2193,7 @@ mod export {
         SecretChanged::export_all_to(&dir).unwrap();
         WebSessionsRevoked::export_all_to(&dir).unwrap();
         HubWorkItemBody::export_all_to(&dir).unwrap();
+        crate::release::HubReleaseStatus::export_all_to(&dir).unwrap();
         crate::push::PushVapidKey::export_all_to(&dir).unwrap();
         crate::channel::EnvPush::export_all_to(&dir).unwrap();
         crate::channel::EnvOnline::export_all_to(&dir).unwrap();
@@ -3083,7 +3128,7 @@ pub(crate) mod tests {
         assert_eq!(
             t,
             &json!({ "issue": "Issue {{key}}", "epic": "", "project": "",
-                     "autonomous": "Faça {{ref}}" }),
+                     "autonomous": "Faça {{ref}}", "release": "" }),
             "{v}"
         );
         let novo = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();
@@ -4888,6 +4933,82 @@ pub(crate) mod tests {
         assert_eq!(
             web.pushes.last().unwrap(),
             &json!({ "event": "env.online", "data": { "env_id": "env-x", "online": false } })
+        );
+    }
+
+    /// Prévia do "Criar release" (#204): a configuração, o secret (sem o
+    /// valor) e o estado no GitHub lidos com o token do hub.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn release_status_mostra_secret_e_diferenca() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut st, gh) = hub_com_github(tmp.path());
+        let dirs = crate::config::Dirs {
+            config: tmp.path().join("config"),
+            data: tmp.path().join("data"),
+        };
+        dirs.ensure().unwrap();
+        st.secrets = Some(std::sync::Arc::new(
+            crate::secrets::HubSecrets::open(&dirs, st.hub.clone()).unwrap(),
+        ));
+        let r = "/repos/deep-ion-ai/demo";
+        for (b, sha, tree) in [("develop", "d2", "tree-b"), ("main", "m1", "tree-a")] {
+            gh.set(
+                &format!("{r}/branches/{b}"),
+                json!({ "name": b, "commit": { "sha": sha, "commit": { "tree": { "sha": tree } } } }),
+            );
+        }
+        gh.set(
+            &format!("{r}/compare/develop...main"),
+            json!({ "ahead_by": 0, "behind_by": 2 }),
+        );
+        for (h, b) in [
+            ("develop", "main"),
+            ("release-please--branches--main", "main"),
+            ("main", "develop"),
+        ] {
+            gh.set(
+                &ct_gh::sync::open_pulls_path("deep-ion-ai", "demo", h, b),
+                json!([]),
+            );
+        }
+        gh.set(&format!("{r}/releases?per_page=20"), json!([]));
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let p = json!({ "owner": "deep-ion-ai", "repo": "demo" });
+        let v = ui
+            .call(
+                "hub.projects.update",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "release": { "enabled": true } }),
+            )
+            .await;
+        assert_eq!(v["result"]["release"]["enabled"], true, "{v}");
+        let v = ui.call("hub.release.status", p.clone()).await;
+        let res = &v["result"];
+        assert_eq!(res["enabled"], true, "{v}");
+        assert_eq!(res["secret_present"], false);
+        assert_eq!(res["token_secret"], "CT_RELEASE_GH_TOKEN");
+        assert_eq!(res["status"]["content_diff"], true);
+        assert_eq!(res["status"]["next"], "promote");
+
+        let v = ui
+            .call(
+                "hub.secrets.set",
+                json!({ "scope": { "project": "deep-ion-ai/demo" }, "name": "CT_RELEASE_GH_TOKEN",
+                        "kind": "secret", "value": "tok-exclusivo-da-release" }),
+            )
+            .await;
+        assert!(v["result"].is_object(), "{v}");
+        let v = ui.call("hub.release.status", p.clone()).await;
+        assert_eq!(v["result"]["secret_present"], true, "{v}");
+        assert!(!v.to_string().contains("tok-exclusivo"), "{v}");
+
+        // GitHub fora: o resto da prévia vem, com o erro.
+        gh.fail_next(&format!("{r}/branches/develop"), 500, &[]);
+        let v = ui.call("hub.release.status", p).await;
+        assert!(v["result"]["status"].is_null(), "{v}");
+        assert!(
+            v["result"]["error"].as_str().unwrap().contains("GitHub"),
+            "{v}"
         );
     }
 

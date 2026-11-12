@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ct-core.workspace = true
+ct-gh.workspace = true
 ct-ledger.workspace = true
 ct-secrets.workspace = true
 ct-sessions.workspace = true
@@ -17,6 +18,7 @@ ureq.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+ct-gh = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true

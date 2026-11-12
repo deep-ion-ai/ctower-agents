@@ -1,5 +1,5 @@
 //! Templates do prompt inicial por projeto (#166): um override opcional por
-//! tipo de sessão (issue, épico, sessão do projeto), no cadastro do projeto
+//! tipo de sessão (issue, épico, sessão do projeto, release), no cadastro do projeto
 //! no hub e entregue aos ambientes pelo `config_rev`. Vazio = o template
 //! global do rastreador do projeto (o `ui.json` do app). Quem resolve e
 //! renderiza é a UI (`ui/src/project/templates.ts`).
@@ -30,6 +30,8 @@ pub struct SessionTemplates {
     /// Sessão autônoma (#191); vazio = [`DEFAULT_AUTONOMOUS_TEMPLATE`]. O
     /// ambiente renderiza, não a UI.
     pub autonomous: String,
+    /// Sessão de release (#204), sem issue; vazio = o template global.
+    pub release: String,
 }
 
 impl SessionTemplates {
@@ -53,6 +55,7 @@ impl SessionTemplates {
             epic: clean(&self.epic),
             project: clean(&self.project),
             autonomous: clean(&self.autonomous),
+            release: clean(&self.release),
         }
     }
 
@@ -62,6 +65,7 @@ impl SessionTemplates {
             && self.epic.is_empty()
             && self.project.is_empty()
             && self.autonomous.is_empty()
+            && self.release.is_empty()
     }
 
     /// Template da sessão autônoma: o do projeto ou, vazio ou só com
@@ -81,6 +85,7 @@ impl SessionTemplates {
             ("epic", &self.epic),
             ("project", &self.project),
             ("autonomous", &self.autonomous),
+            ("release", &self.release),
         ] {
             if t.len() > MAX_SESSION_TEMPLATE_BYTES {
                 return Err(format!(
@@ -216,6 +221,7 @@ mod tests {
             epic: "  Épico {{key}}\n".into(),
             project: String::new(),
             autonomous: " \t".into(),
+            release: String::new(),
         }
         .normalized();
         assert_eq!(t.issue, "");

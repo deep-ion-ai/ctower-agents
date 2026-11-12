@@ -26,6 +26,7 @@ pub mod docs_backup;
 pub mod github;
 pub mod migrate;
 pub mod push;
+pub mod release;
 pub mod remote;
 pub mod secrets;
 mod sync;
@@ -96,7 +97,11 @@ use tokio::sync::broadcast;
 /// eventos `feedback_sent`, `merge_requested`, `blocked` e `continue_failed`
 /// do agendador (e o escopo `env:`), e `reason` em `DigestIssue` (o motivo da
 /// issue bloqueada).
-pub const PROTOCOL_VERSION: &str = "1.23";
+/// 1.24 (#204): sessão de release — `release` em `HubProject` e em
+/// `hub.projects.update` (só GitHub + GitHub), `release` em
+/// `SessionTemplates` e `hub.release.status` (prévia do botão "Criar
+/// release", com o token do hub, só leitura).
+pub const PROTOCOL_VERSION: &str = "1.24";
 
 #[derive(Clone)]
 pub struct HubState {
