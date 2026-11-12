@@ -333,10 +333,9 @@ mod tests {
         );
         assert!(!out.contains("CTOWER_ISSUE="), "{out}");
         // No clone principal, sem worktree.
-        assert!(
-            out.contains(&format!("PWD={}", env.repo.display())),
-            "{out}"
-        );
+        // Caminho real: no macOS, o temporário fica sob /var → /private/var.
+        let real = std::fs::canonicalize(&env.repo).unwrap();
+        assert!(out.contains(&format!("PWD={}", real.display())), "{out}");
         assert!(out.contains("Sessão de release do Control Tower"), "{out}");
         let wi = env.sessions.ledger().get_work_item(s.work_item_id).unwrap();
         assert_eq!(wi.gh_number, RELEASE_WORK_ITEM);
