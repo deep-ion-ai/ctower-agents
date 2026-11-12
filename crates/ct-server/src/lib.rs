@@ -77,8 +77,12 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// e `autonomous` em `SessionTemplates`. 2.20 (#183): `session.continue`
 /// (também pelo canal do hub), que escreve um texto fixo na sessão viva
 /// parada pelo limite real do plano, para o agendador do piloto automático
-/// retomá-la depois do reset.
-pub const PROTOCOL_VERSION: &str = "2.20";
+/// retomá-la depois do reset. 2.21 (#204): sessão de release —
+/// `release` em `Project` e em `SessionTemplates`, `session.start_release`
+/// (também pelo canal do hub), o erro `RELEASE_BUSY` (-32053) e as rotas
+/// `/session/release/context` e `/session/release/event` do `ctower
+/// release`.
+pub const PROTOCOL_VERSION: &str = "2.21";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -141,6 +145,14 @@ pub fn router(state: AppState) -> Router {
             post(env_secrets::rotate_env_key_http),
         )
         .route("/session/secret", post(env_secrets::session_secret_http))
+        .route(
+            "/session/release/context",
+            post(env_secrets::release_context_http),
+        )
+        .route(
+            "/session/release/event",
+            post(env_secrets::release_event_http),
+        )
         .with_state(state)
 }
 

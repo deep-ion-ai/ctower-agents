@@ -107,6 +107,8 @@ pub const CHANNEL_METHODS: &[&str] = &[
     "session.start",
     "session.start_project",
     "session.start_gestor",
+    // Sessão de release (#204): só a UI inicia.
+    "session.start_release",
     "session.resume",
     // Retomada da sessão parada pelo limite do plano (#183): só um texto
     // fixo no PTY, para o agendador do piloto automático.
@@ -178,6 +180,10 @@ pub const CHANNEL_TIMEOUT: i64 = -32031;
 /// assim" (`override_approval: true`), que o gestor e as automações nunca
 /// mandam.
 pub const APPROVAL_REQUIRED: i64 = -32052;
+
+/// `session.start_release` recusado pelo ambiente (#204): já há uma sessão
+/// de release viva no projeto.
+pub const RELEASE_BUSY: i64 = -32053;
 
 /// O canal aceita `method`?
 pub fn channel_method_allowed(method: &str) -> bool {
