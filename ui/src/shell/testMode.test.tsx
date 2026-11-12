@@ -40,7 +40,8 @@ test("hub de teste: barra marcada, selo e título da janela", async () => {
   const badge = await screen.findByText("Ambiente de teste");
   expect(badge).toHaveAccessibleName("Modo de teste: hub ct-test-hub.");
   expect(banner()).toHaveAttribute("data-test", "true");
-  expect(document.title).toBe("[TESTE] Control Tower");
+  // O título muda num efeito depois do selo: no CI mais lento, a leitura direta corria antes.
+  await waitFor(() => expect(document.title).toBe("[TESTE] Control Tower"));
 });
 
 test("ambiente de teste num app sem hub de teste: o selo cita o ambiente", async () => {
