@@ -93,6 +93,8 @@ docker compose exec autonomo ct-autonomo verificar acme/repo-fora-do-escopo
 
 O `verificar` mostra o login do Claude (só `loggedIn` e `authMethod`), de onde vem a conta do plano, o usuário do `gh`, a ligação ao hub, o statusline e o `ctower status`. Com um `owner/repo` fora do escopo do token, ele confere que o `gh` **não** alcança esse repositório. Se alcançar, o token não está restrito, e o comando sai com erro.
 
+O repositório fora do escopo precisa ser **privado** e do mesmo dono, deixado fora do token. Um repositório público é legível por qualquer token, e um token com **All repositories** não deixa nada fora do escopo: nos dois casos, a conferência não prova nada.
+
 Para abrir um shell com os mesmos logins das sessões: `docker compose exec autonomo ct-autonomo bash`.
 
 Depois de ligado, atribua no hub os projetos autônomos a `linux-autonomo` (docs/hub.md, "Atribuições").
@@ -102,12 +104,44 @@ Depois de ligado, atribua no hub os projetos autônomos a `linux-autonomo` (docs
 O Docker sobe o container de novo depois de um reboot, por causa do `restart: unless-stopped`, desde que o serviço do Docker esteja habilitado no boot. Para ter o ambiente sob o systemd (`systemctl start|stop|status ct-autonomo`):
 
 ```sh
-sed "s|@DIR@|$PWD|g" ct-autonomo.service | sudo tee /etc/systemd/system/ct-autonomo.service
+sed -e "s|@DIR@|$PWD|g" -e "s|@PROJECT@|ct-autonomo|g" ct-autonomo.service \
+  | sudo tee /etc/systemd/system/ct-autonomo.service
 sudo systemctl daemon-reload
 sudo systemctl enable ct-autonomo
 ```
 
-A unidade roda `docker compose up -d --no-recreate --no-build` e não recebe tokens: ela reaproveita o container já criado, com os secrets dele. Criar o container (primeira subida, versão nova ou token novo) é sempre no shell, como no passo 3.
+O `@PROJECT@` é o projeto do compose: `ct-autonomo`, o `name:` do compose.yml, ou o `-p` de um container por dono (abaixo).
+
+A unidade não recebe tokens. Ela acha o container já criado com `docker compose ps -aq autonomo` e o sobe com `docker start`: o Docker guarda os secrets com o container. Se não há container, ela falha com a mensagem para criá-lo. Criar o container (primeira subida, versão nova ou token novo) é sempre no shell, como no passo 3.
+
+No Compose recente, `docker compose up` e `docker compose start` **sem os logins no shell** recusam rodar, mesmo com o container já criado ("environment variable \"CLAUDE_CODE_OAUTH_TOKEN\" required by secret ... is not set"). Para subir de novo um container parado, use `sudo systemctl start ct-autonomo` ou `docker start $(docker compose ps -aq autonomo)`, não o `docker compose start`. O `docker compose stop`, o `ps` e o `logs` funcionam sem os logins.
+
+### Mais de um dono no GitHub
+
+Um token fine-grained cobre um dono só (um usuário ou uma organização). As operações do próprio `ctowerd` no GitHub (clonar, criar a `wip/autonoma`, abrir o PR em rascunho, o alinhamento) usam o `GH_TOKEN` único do container. Um secret `GH_TOKEN` do projeto no hub só vale dentro do processo da sessão, não no `ctowerd`. Por isso, projetos de donos diferentes pedem **um container por dono**:
+
+```sh
+cp .env acme.env && $EDITOR acme.env     # CT_ENV_NAME=linux-autonomo-acme, CT_AUTONOMO_PORT=17881
+read -rs CLAUDE_CODE_OAUTH_TOKEN && export CLAUDE_CODE_OAUTH_TOKEN
+read -rs GH_TOKEN && export GH_TOKEN     # o fine-grained do dono acme
+docker compose -p ct-autonomo-acme --env-file acme.env up -d --build
+unset CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN
+ssh hub.example.com cthubd add-env linux-autonomo-acme \
+  | docker compose -p ct-autonomo-acme exec -T autonomo ctower hub set-token
+```
+
+O `agent-token` segue igual, como no passo 3.
+
+- Cada container tem `CT_ENV_NAME` e `CT_AUTONOMO_PORT` próprios. O volume vem do projeto (`ct-autonomo-acme_home`), então o HOME é separado.
+- Todo comando desse container leva o `-p ct-autonomo-acme` (e o `--env-file acme.env` no `up`).
+- No hub, cada ambiente tem o próprio nome (`cthubd add-env` e `agent-token` com ele), e os projetos de cada dono são atribuídos ao ambiente desse dono.
+- Para a unidade systemd, copie-a com outro nome e o projeto no `@PROJECT@`:
+
+  ```sh
+  sed -e "s|@DIR@|$PWD|g" -e "s|@PROJECT@|ct-autonomo-acme|g" ct-autonomo.service \
+    | sudo tee /etc/systemd/system/ct-autonomo-acme.service
+  sudo systemctl daemon-reload && sudo systemctl enable ct-autonomo-acme
+  ```
 
 ## 4. Atualizar a versão
 
@@ -136,6 +170,8 @@ cd ctower-agents/docker/autonomo
 docker compose down -v --rmi all
 sudo systemctl disable --now ct-autonomo 2>/dev/null; sudo rm -f /etc/systemd/system/ct-autonomo.service
 ```
+
+Num container por dono, apague cada um com o `-p` dele (`docker compose -p ct-autonomo-acme down -v`) e a unidade dele. A imagem é a mesma para todos: o `--rmi all` só no último.
 
 O `-v` apaga o volume do HOME: ledger, worktrees, clones e os tokens do hub. O `--rmi all` apaga a imagem. Depois, revogue o que ficou fora do host:
 

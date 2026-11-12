@@ -4,17 +4,24 @@
 # depois de um reboot (com o Docker habilitado no boot). Esta unidade serve
 # para quem quer o ambiente sob o systemd: `systemctl start|stop|status`.
 #
-# Instalação (troque @DIR@ pela pasta docker/autonomo do clone):
-#   sed "s|@DIR@|$PWD|g" ct-autonomo.service | sudo tee /etc/systemd/system/ct-autonomo.service
+# Instalação (troque @DIR@ pela pasta docker/autonomo do clone e @PROJECT@
+# pelo projeto do compose: ct-autonomo, ou o `-p` de um container por dono,
+# com a unidade copiada com outro nome, como ct-autonomo-acme.service):
+#   sed -e "s|@DIR@|$PWD|g" -e "s|@PROJECT@|ct-autonomo|g" ct-autonomo.service \
+#     | sudo tee /etc/systemd/system/ct-autonomo.service
 #   sudo systemctl daemon-reload && sudo systemctl enable ct-autonomo
 #
-# A unidade não recebe tokens: o `--no-recreate` reaproveita o container já
-# criado (com os secrets dele). Criar o container (primeira subida, versão
-# nova, token novo) é com `docker compose up -d` no shell, com os tokens
-# (docs/ambiente-autonomo.md).
+# A unidade não recebe tokens. No Compose recente, `docker compose up` e
+# `docker compose start` sem os logins no ambiente recusam rodar ("environment
+# variable ... required by secret ... is not set"), mesmo com o container já
+# criado. Por isso, ela acha o container com `docker compose ps -aq` e o sobe
+# com `docker start`: o Docker guarda os secrets com o container criado.
+# Criar o container (primeira subida, versão nova, token novo) é com
+# `docker compose up -d` no shell, com os logins (docs/ambiente-autonomo.md).
+# O `$$` é o `$` literal para o sh.
 
 [Unit]
-Description=Control Tower: ambiente autônomo (Docker)
+Description=Control Tower: ambiente autônomo (Docker, @PROJECT@)
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -23,7 +30,8 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=@DIR@
-ExecStart=/usr/bin/docker compose up -d --no-recreate --no-build
+Environment=COMPOSE_PROJECT_NAME=@PROJECT@
+ExecStart=/bin/sh -c 'id="$$(/usr/bin/docker compose ps -aq autonomo)" || exit 1; if [ -z "$$id" ]; then echo "nenhum container do ambiente autônomo no projeto $$COMPOSE_PROJECT_NAME: crie-o com docker compose up -d no shell, com os logins (docs/ambiente-autonomo.md)" >&2; exit 1; fi; exec /usr/bin/docker start $$id'
 ExecStop=/usr/bin/docker compose stop
 TimeoutStartSec=120
 

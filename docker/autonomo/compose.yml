@@ -50,9 +50,10 @@ services:
       - home:/home/ct
 
 # Lidos das variáveis do shell quando o container é criado e copiados para
-# /run/secrets dentro dele. Sem eles, o compose recusa criar o container.
-# Com o container já criado, `up -d` sem eles não o recria (o valor não entra
-# na comparação): trocar um token pede `up -d --force-recreate`.
+# /run/secrets dentro dele. Sem eles, o compose recusa criar o container e,
+# no Compose recente, também o `up` e o `start` de um container já criado:
+# para subir um container parado, `docker start` ou a unidade systemd. O valor
+# não entra na comparação: trocar um token pede `up -d --force-recreate`.
 secrets:
   claude_code_oauth_token:
     environment: CLAUDE_CODE_OAUTH_TOKEN

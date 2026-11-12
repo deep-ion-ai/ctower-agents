@@ -74,6 +74,18 @@ RUN tmp="$(mktemp -d)" \
  && claude --version
 
 COPY --from=release /out/ctowerd /out/ctower /usr/local/bin/
+# A base é bookworm (glibc 2.36). Um binário compilado numa distro mais nova
+# (Ubuntu 24.04, por exemplo) pede uma glibc que não existe aqui, e o loader
+# pode só avisar ("weak version GLIBC_2.39 not found") sem mudar o código de
+# saída: por isso a saída também é conferida.
+RUN for b in ctowerd ctower; do \
+      if ! out="$("$b" --version 2>&1)" || grep -q 'GLIBC' <<<"$out"; then \
+        echo "$b não roda nesta imagem (glibc 2.36, bookworm): $out" >&2; \
+        echo "o ctower-env da release precisa ser compilado numa distro com glibc <= 2.36 (docs/ambiente-autonomo.md)" >&2; \
+        exit 1; \
+      fi; \
+      echo "$out"; \
+    done
 COPY --from=release /out/VERSION /usr/local/share/ctower-autonomo/VERSION
 COPY entrypoint.sh /usr/local/bin/ct-autonomo
 
