@@ -6,6 +6,7 @@ mod checks;
 mod decisions;
 mod error;
 mod events;
+mod feedback_text;
 mod github;
 mod hub;
 mod hub_config;
@@ -29,6 +30,10 @@ pub use checks::{
 pub use decisions::{Decision, NewDecision};
 pub use error::{LedgerError, Result};
 pub use events::{Event, NewEvent};
+pub use feedback_text::{
+    check_log_text, neutralize, pr_feedback_text, CheckLogTail, FeedbackTextOptions, DATA_CLOSE,
+    DATA_NOTICE, DATA_OPEN, EXTERNAL_NOTICE, MAX_BODY_BYTES,
+};
 pub use github::{
     gh_epic_merged_uid, gh_issue_closed_uid, gh_issue_gone_uid, gh_pr_uid, GithubApplied,
     GithubSnapshot, GoneIssue, IssueMeta, IssueRow, PrRow, SyncState, GH_ISSUE_GONE_CAUSE,

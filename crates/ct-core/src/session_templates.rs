@@ -111,7 +111,9 @@ revisadas no {{change}}.
 Siga as regras do projeto e do épico do system prompt; releia com `rules_get`.
 Ao terminar, com os testes passando, abra o {{change}} de {{branch}} para {{integration_branch}} \
 (nunca para outra branch), com a linha `{{closes}}` no corpo, exatamente assim, e resuma o que \
-foi feito e as decisões tomadas. Não mescle o {{change}}.";
+foi feito e as decisões tomadas. Não mescle o {{change}}.
+Antes de dizer que o {{change}} está pronto, consulte `pr_feedback`: corrija os checks que \
+falharam (o log vem com `pr_check_log`) e as threads de review não resolvidas, e faça push de novo.";
 
 /// Variáveis do template da sessão autônoma.
 #[derive(Debug, Clone, Copy)]

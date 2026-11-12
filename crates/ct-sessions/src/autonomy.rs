@@ -163,7 +163,9 @@ pub fn agent_instruction(project: &Project, branch: &str, base: &str) -> String 
     format!(
         "Modo autônomo (Control Tower): esta issue roda no modo autônomo do projeto. A branch \
 desta sessão saiu de `{branch}`, a branch de integração: abra o {label} contra ela (`{create}`), \
-nunca contra `{base}`. Quem leva `{branch}` para `{base}` é a pessoa, pelo {label} rascunho."
+nunca contra `{base}`. Quem leva `{branch}` para `{base}` é a pessoa, pelo {label} rascunho. \
+Antes de dizer que o {label} está pronto, consulte `pr_feedback` (checks e threads de review do \
+espelho) e corrija o que falhou."
     )
 }
 
@@ -822,6 +824,10 @@ mod tests {
             "{i}"
         );
         assert!(i.contains("nunca contra `develop`"), "{i}");
+        assert!(
+            i.contains("Antes de dizer que o PR está pronto, consulte `pr_feedback`"),
+            "{i}"
+        );
         let gl = Project {
             forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
                 host: "gitlab.example.com".into(),

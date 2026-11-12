@@ -17,6 +17,7 @@ pub mod hub_config;
 pub mod hub_sync;
 mod mcp;
 mod mcp_gestor;
+mod mcp_pr;
 pub mod permissions;
 pub mod plan;
 pub mod update;

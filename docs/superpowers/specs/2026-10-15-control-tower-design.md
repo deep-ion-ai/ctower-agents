@@ -269,8 +269,10 @@ Servidor MCP em `/mcp` (transporte HTTP streamable). A sessão é identificada p
 | `ledger_list_decisions` | `scope?` (`work_item` padrão \| `epic` \| `project`) | lista decisões |
 | `ledger_set_status` | `status` (`bloqueado`\|`pausado`\|`em_execucao`), `reason` | muda status do work item + evento |
 | `ledger_get_context` | — | retorna work item, branch, branch protegidas, issue pai (épico) |
+| `pr_feedback` | — | checks e review do PR do work item, do espelho (#133); sem PR, `has_pr: false` |
+| `pr_check_log` | `check` (nome ou `job_id`) \| `job_id`, `max_bytes?` (padrão 24 KiB, até 32 KiB) | trecho final do log de um check do espelho, lido na hora no Actions (#133) |
 
-Instruções do servidor MCP orientam o agente: usar `orientada` quando a decisão veio do humano na conversa, `autonoma` caso contrário.
+Instruções do servidor MCP orientam o agente: usar `orientada` quando a decisão veio do humano na conversa, `autonoma` caso contrário. A lista completa e atual das ferramentas está em docs/ambiente.md ("Ferramentas MCP do agente").
 
 ## 9. Protocolo UI ⇄ daemon
 
