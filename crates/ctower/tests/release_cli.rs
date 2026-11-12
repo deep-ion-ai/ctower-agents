@@ -181,10 +181,12 @@ fn sem_diferenca_status_e_promote_relatam_nada_a_lancar() {
     assert_eq!(st["content_diff"], false);
     assert_eq!(st["next"], "nothing");
 
-    std::fs::write(std::env::temp_dir().join("ct-release-corpo.md"), "Corpo").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let corpo = dir.path().join("corpo.md");
+    std::fs::write(&corpo, "Corpo").unwrap();
     ctower(&d)
         .args(["release", "promote", "--body-file"])
-        .arg(std::env::temp_dir().join("ct-release-corpo.md"))
+        .arg(&corpo)
         .assert()
         .code(3)
         .stderr(contains("nada a lançar"));

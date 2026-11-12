@@ -422,4 +422,30 @@ mod tests {
         ));
         env.sessions.kill(&s.id).unwrap();
     }
+
+    #[test]
+    fn projeto_jira_gitlab_nao_tem_sessao_de_release() {
+        let env = TestEnv::new(FakeClaude::sleep(30));
+        env.assign_config(1, |p| {
+            p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
+                url: "https://jira.example.com".into(),
+                project_key: "ACME".into(),
+                ..Default::default()
+            });
+            p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                host: "gitlab.example.com".into(),
+                path: "acme/acme-web".into(),
+                clone_url: "https://gitlab.example.com/acme/acme-web.git".into(),
+                credential_cmd: String::new(),
+            });
+            // Mesmo que chegasse ligada (o hub recusa o campo nesses projetos).
+            p.release = ReleaseConfig {
+                enabled: true,
+                ..Default::default()
+            };
+        });
+        cache(&env);
+        let err = start(&env).unwrap_err().to_string();
+        assert!(err.contains("GitHub + GitHub"), "{err}");
+    }
 }

@@ -610,3 +610,185 @@ fn nenhuma_etapa_usa_squash_rebase_nem_bypass() {
         assert!(!path.contains("/git/refs"), "{path}");
     }
 }
+
+/// Critério da #204: com diferença de conteúdo, o fluxo completo roda sem
+/// intervenção. O teste faz o papel do GitHub e dos workflows entre as
+/// etapas (o release-please abre o PR de release com os lockfiles, os runs
+/// ficam em `action_required`, a publicação tira a release do rascunho e o
+/// workflow abre o back-merge).
+#[test]
+fn fluxo_completo_da_release() {
+    let gh = setup();
+    let rp = "release-please--branches--main";
+    // develop com conteúdo novo.
+    gh.branch("develop", "d2", "tree-b");
+    gh.compare(0, 3);
+    gh.fake.set(
+        &format!("{R}/pulls"),
+        pr_json(
+            10,
+            "develop",
+            "main",
+            "d2d2d2d2",
+            "release: develop -> main",
+        ),
+    );
+    let st = gh.release().status().unwrap();
+    assert_eq!(st.next, ReleaseStep::Promote);
+
+    // 1. promote
+    let o = gh.release().promote(None, "## O que entra\n- feat: x");
+    assert_eq!(
+        (o.result, o.pr),
+        (StepResult::Ok, Some(10)),
+        "{}",
+        o.message
+    );
+    let promo = pr_json(
+        10,
+        "develop",
+        "main",
+        "d2d2d2d2",
+        "release: develop -> main",
+    );
+    gh.prs("develop", "main", vec![promo.clone()]);
+    gh.pull(10, promo);
+    gh.fake.set(
+        &format!("{R}/pulls/10/merge"),
+        json!({ "merged": true, "sha": "m2" }),
+    );
+
+    // 2. merge-promotion (sem checks obrigatórios na main)
+    let o = gh.release().merge_promotion(Some("d2d2d2d"));
+    assert_eq!(o.result, StepResult::Ok, "{}", o.message);
+    // O GitHub: main avança, o PR fecha e o workflow `release` roda.
+    gh.prs("develop", "main", vec![]);
+    gh.branch("main", "m2", "tree-b");
+    gh.compare(1, 0);
+    gh.runs(
+        "m2",
+        vec![run(50, "release", "m2", "completed", Some("success"), 1)],
+    );
+    let release_pr = pr_json(11, rp, "main", "r2r2r2r2", "chore(main): release 1.2.3");
+    gh.prs(rp, "main", vec![release_pr.clone()]);
+    gh.pull(11, release_pr);
+
+    // 3. wait-release-pr
+    let o = gh.release().wait_release_pr();
+    assert_eq!(
+        (o.result, o.pr),
+        (StepResult::Ok, Some(11)),
+        "{}",
+        o.message
+    );
+    assert_eq!(o.details["version"], "1.2.3");
+
+    // 4. approve-runs: os runs do PR de release esperam aprovação.
+    gh.runs(
+        "r2r2r2r2",
+        vec![run(60, "ci", "r2r2r2r2", "action_required", None, 1)],
+    );
+    gh.fake
+        .set(&format!("{R}/actions/runs/60/approve"), json!({}));
+    let fake = gh.fake.clone();
+    let t = std::thread::spawn(move || {
+        for _ in 0..400 {
+            std::thread::sleep(Duration::from_millis(3));
+            if fake
+                .posted()
+                .iter()
+                .any(|(p, _)| p.ends_with("/runs/60/approve"))
+            {
+                fake.set(
+                    &format!("{R}/actions/runs?head_sha=r2r2r2r2&per_page=100"),
+                    json!({ "workflow_runs": [run(60, "ci", "r2r2r2r2", "completed", Some("success"), 1)] }),
+                );
+                return;
+            }
+        }
+    });
+    let o = gh.release().approve_runs(11);
+    t.join().unwrap();
+    assert_eq!(o.result, StepResult::Ok, "{}", o.message);
+
+    // 5. merge-release
+    gh.fake.set(
+        &format!("{R}/pulls/11/merge"),
+        json!({ "merged": true, "sha": "m3" }),
+    );
+    let o = gh.release().merge_release(Some("r2r2r2r2"));
+    assert_eq!(o.result, StepResult::Ok, "{}", o.message);
+    // O GitHub: tag, release publicada e o back-merge aberto pelo workflow.
+    gh.prs(rp, "main", vec![]);
+    let mut merged = pr_json(11, rp, "main", "r2r2r2r2", "chore(main): release 1.2.3");
+    merged["merged_at"] = json!("2026-11-12T10:00:00Z");
+    merged["merge_commit_sha"] = json!("m3");
+    gh.closed(rp, "main", vec![merged.clone()]);
+    gh.pull(11, merged);
+    gh.runs(
+        "m3",
+        vec![run(70, "release", "m3", "completed", Some("success"), 1)],
+    );
+    gh.fake.set(
+        &format!("{R}/releases?per_page=20"),
+        json!([{ "tag_name": "v1.2.3", "name": "v1.2.3", "html_url": "https://github.com/acme/acme-web/releases/tag/v1.2.3", "draft": false }]),
+    );
+
+    // 6. wait-publish
+    let o = gh.release().wait_publish();
+    assert!(
+        matches!(o.result, StepResult::Ok | StepResult::Noop),
+        "{}",
+        o.message
+    );
+    assert!(o.message.contains("v1.2.3"));
+
+    // 7. merge-back
+    gh.compare(2, 0);
+    let back = pr_json(
+        12,
+        "main",
+        "develop",
+        "m3m3m3m3",
+        "chore: back-merge v1.2.3",
+    );
+    gh.prs("main", "develop", vec![back.clone()]);
+    gh.pull(12, back);
+    gh.runs(
+        "m3m3m3m3",
+        vec![run(80, "ci", "m3m3m3m3", "completed", Some("success"), 1)],
+    );
+    gh.fake.set(
+        &format!("{R}/pulls/12/merge"),
+        json!({ "merged": true, "sha": "d3" }),
+    );
+    let o = gh.release().merge_back(None);
+    assert_eq!(o.result, StepResult::Ok, "{}", o.message);
+
+    // Três merges, todos com merge commit e presos ao SHA conferido.
+    let merges = gh.puts();
+    assert_eq!(
+        merges,
+        vec![
+            (
+                format!("{R}/pulls/10/merge"),
+                json!({ "merge_method": "merge", "sha": "d2d2d2d2" })
+            ),
+            (
+                format!("{R}/pulls/11/merge"),
+                json!({ "merge_method": "merge", "sha": "r2r2r2r2" })
+            ),
+            (
+                format!("{R}/pulls/12/merge"),
+                json!({ "merge_method": "merge", "sha": "m3m3m3m3" })
+            ),
+        ]
+    );
+    // Depois do back-merge: develop contém a main e não há o que lançar.
+    gh.prs("main", "develop", vec![]);
+    gh.compare(0, 0);
+    gh.branch("develop", "d3", "tree-b");
+    let st = gh.release().status().unwrap();
+    assert!(!st.content_diff);
+    assert_eq!(st.next, ReleaseStep::Nothing);
+}

@@ -3087,7 +3087,7 @@ pub(crate) mod tests {
         assert_eq!(
             t,
             &json!({ "issue": "Issue {{key}}", "epic": "", "project": "",
-                     "autonomous": "Faça {{ref}}" }),
+                     "autonomous": "Faça {{ref}}", "release": "" }),
             "{v}"
         );
         let novo = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();
