@@ -77,8 +77,9 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// e `autonomous` em `SessionTemplates`. 2.20 (#183): `session.continue`
 /// (também pelo canal do hub), que escreve um texto fixo na sessão viva
 /// parada pelo limite real do plano, para o agendador do piloto automático
-/// retomá-la depois do reset.
-pub const PROTOCOL_VERSION: &str = "2.20";
+/// retomá-la depois do reset. 2.21 (#129): `pr_checks` (resumo dos checks
+/// do head do PR aberto) no `WorkItemSummary` da árvore do projeto.
+pub const PROTOCOL_VERSION: &str = "2.21";
 
 #[derive(Clone)]
 pub struct AppState {

@@ -16,7 +16,8 @@
 //! branch). Quando o PR da branch para a base é mesclado, elas vão a
 //! `concluido` e saem da conta. O PR `wip/autonoma → base` em si não fica
 //! no `pr_cache` (não é de work item): o link vem do relato do ambiente do
-//! modo (`HubProject.autonomy_report.pr_url`).
+//! modo (`HubProject.autonomy_report.pr_url`). Os checks dele, sim, ficam no
+//! espelho (`pr_checks`, #129), lidos pelo sync do hub: o `ci` é o resumo.
 
 use super::{Hub, HubProject};
 use crate::Result;
@@ -52,8 +53,9 @@ pub struct AutonomyWip {
     pub ahead: Vec<DigestIssue>,
     /// PR rascunho `branch → base`, do relato do ambiente do modo.
     pub pr_url: Option<String>,
-    /// Estado do CI do PR no espelho; `None` = o espelho não tem os checks
-    /// (ainda não guarda os checks dos PRs, #129).
+    /// Resumo dos checks do PR `branch → base` no espelho do hub (#129),
+    /// como "3 checks, 1 falhou"; `None` = sem PR aberto ou checks ainda não
+    /// lidos.
     pub ci: Option<String>,
     /// A branch está em conflito com a base (relato do ambiente).
     pub conflict: bool,
@@ -83,6 +85,8 @@ pub struct DigestProject {
     /// Issues à frente da base (mescladas na branch, ainda não na base).
     pub ahead: u32,
     pub pr_url: Option<String>,
+    /// Resumo dos checks do PR `branch → base` (#129), como em
+    /// [`AutonomyWip::ci`].
     pub ci: Option<String>,
     pub conflict: bool,
     /// Mensagem do relato `error` da branch de integração; `None` sem erro.
@@ -216,6 +220,13 @@ impl Hub {
         )
     }
 
+    /// Resumo dos checks do PR `branch → base` no espelho (#129).
+    fn wip_ci(&self, project_id: i64, branch: &str, base: &str) -> Result<Option<String>> {
+        Ok(self
+            .pr_checks_by_head(project_id, branch, base)?
+            .map(|c| c.summary().text))
+    }
+
     /// Projetos com o modo autônomo ligado, na ordem do hub; com `only`,
     /// só aquele (`owner`, `repo`).
     fn autonomous_projects(&self, only: Option<(&str, &str)>) -> Result<Vec<HubProject>> {
@@ -236,7 +247,7 @@ impl Hub {
             out.push(AutonomyWip {
                 ahead: self.ahead_of_base(p.id, &branch)?,
                 pr_url: report.and_then(|r| r.pr_url.clone()),
-                ci: None,
+                ci: self.wip_ci(p.id, &branch, &base)?,
                 conflict: report.is_some_and(|r| r.state == AutonomyState::Conflict),
                 error: report_error(report),
                 owner: p.gh_owner,
@@ -290,7 +301,7 @@ impl Hub {
                 decisions_new: new,
                 ahead,
                 pr_url: report.and_then(|r| r.pr_url.clone()),
-                ci: None,
+                ci: self.wip_ci(p.id, &branch, &base)?,
                 conflict: report.is_some_and(|r| r.state == AutonomyState::Conflict),
                 error: report_error(report),
                 owner: p.gh_owner,
@@ -523,6 +534,89 @@ mod tests {
         assert!(!w.conflict);
         assert_eq!(w.error, None);
         assert_eq!(hub.autonomy_wip(Some(("acme", "outro"))).unwrap(), vec![]);
+    }
+
+    /// #129: o `ci` da wip e do resumo é o resumo dos checks do PR
+    /// `wip/autonoma → develop` no espelho do hub; os checks do PR de uma
+    /// issue ficam pelo work item. PR fora da rodada sai do espelho.
+    #[test]
+    fn ci_da_wip_vem_dos_checks_do_espelho() {
+        use crate::{CheckSource, ChecksRead, ChecksState, PrCheck, PrChecksFetch};
+        let hub = hub();
+        let p = hub.list_projects().unwrap()[0].id;
+        let check = |name: &str, conclusion: Option<&str>, job: Option<i64>| PrCheck {
+            name: name.into(),
+            source: CheckSource::CheckRun,
+            conclusion: conclusion.map(String::from),
+            url: Some(format!("https://github.example/acme/acme-web/runs/{name}")),
+            job_id: job,
+        };
+        let fetch = |n: i64, head: &str, base: &str, checks: Vec<PrCheck>| PrChecksFetch {
+            pr_number: n,
+            head: head.into(),
+            base: base.into(),
+            head_sha: format!("sha-{n}"),
+            runs: Some(ChecksRead {
+                checks,
+                etag: Some("\"e1\"".into()),
+            }),
+            statuses: Some(ChecksRead::default()),
+        };
+        let apply = |c: crate::PrChecksSnapshot| {
+            hub.apply_github(
+                &GithubSnapshot {
+                    project_id: p,
+                    pr_checks: Some(c),
+                    ..Default::default()
+                },
+                "hub-id",
+            )
+            .unwrap()
+        };
+        apply(crate::PrChecksSnapshot {
+            open: vec![5, 62],
+            updates: vec![
+                fetch(
+                    5,
+                    "wip/autonoma",
+                    "develop",
+                    vec![
+                        check("build", Some("success"), Some(1)),
+                        check("e2e", Some("failure"), Some(2)),
+                    ],
+                ),
+                fetch(
+                    62,
+                    "feat/62",
+                    "wip/autonoma",
+                    vec![check("build", None, Some(3))],
+                ),
+            ],
+        });
+        let w = &hub.autonomy_wip(None).unwrap()[0];
+        assert_eq!(w.ci.as_deref(), Some("2 checks, 1 falhou"));
+        let d = hub.digest_projects(0, 1_000).unwrap();
+        assert_eq!(d[0].ci.as_deref(), Some("2 checks, 1 falhou"));
+        let c = hub
+            .pr_checks_by_head(p, "wip/autonoma", "develop")
+            .unwrap()
+            .unwrap();
+        assert_eq!((c.pr_number, c.state), (5, ChecksState::Failure));
+        assert_eq!(c.failed().next().unwrap().job_id, Some(2));
+        // O PR 62 é da issue 125: lido pelo work item.
+        let wi = hub.ensure_work_item("acme", "acme-web", 125).unwrap();
+        let by_wi = hub.pr_checks_for_work_item(wi).unwrap();
+        assert_eq!(by_wi.len(), 1);
+        assert_eq!(
+            (by_wi[0].pr_number, by_wi[0].state),
+            (62, ChecksState::Pending)
+        );
+        assert_eq!(hub.pr_checks(p, 62).unwrap().unwrap(), by_wi[0]);
+
+        // Rodada sem os PRs abertos: os checks saem.
+        apply(crate::PrChecksSnapshot::default());
+        assert_eq!(hub.autonomy_wip(None).unwrap()[0].ci, None);
+        assert!(hub.list_pr_checks(p).unwrap().is_empty());
     }
 
     #[test]

@@ -298,6 +298,8 @@ impl Ledger {
         for sql in [
             "DELETE FROM event WHERE work_item_id = ?1",
             "DELETE FROM decision WHERE work_item_id = ?1",
+            "DELETE FROM pr_checks WHERE (project_id, pr_number) IN
+               (SELECT project_id, number FROM pr_cache WHERE work_item_id = ?1)",
             "DELETE FROM pr_cache WHERE work_item_id = ?1",
             "DELETE FROM session WHERE work_item_id = ?1",
             "DELETE FROM work_item WHERE id = ?1",
@@ -317,6 +319,7 @@ impl Ledger {
         self.keep_gh_uids("SELECT uid FROM event WHERE project_id = ?1", id)?;
         for sql in [
             "DELETE FROM event WHERE project_id = ?1",
+            "DELETE FROM pr_checks WHERE project_id = ?1",
             "DELETE FROM pr_cache WHERE project_id = ?1",
             "DELETE FROM issue_cache WHERE project_id = ?1",
             "DELETE FROM sync_state WHERE project_id = ?1",
@@ -480,6 +483,7 @@ mod tests {
             synced_at: now_ms(),
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         })
         .unwrap();
         (wi.id, s.id)
@@ -732,6 +736,7 @@ mod tests {
             synced_at: now_ms(),
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         })
         .unwrap();
         l.conn
@@ -945,6 +950,7 @@ mod tests {
             synced_at: now_ms(),
             gone: Vec::new(),
             me: None,
+            pr_checks: None,
         })
         .unwrap();
     }

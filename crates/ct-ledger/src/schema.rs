@@ -369,6 +369,25 @@ ALTER TABLE project ADD COLUMN autonomy_report TEXT;
     r#"
 ALTER TABLE project ADD COLUMN approval_config TEXT NOT NULL DEFAULT '{}';
 "#,
+    // 23: checks do head dos PRs abertos (#129, épico #136): por PR, o SHA
+    // lido, a situação geral (`pending`, `success`, `failure`), os checks
+    // (JSON de `Vec<PrCheck>`) e o ETag de cada leitura do SHA. Vazio até o
+    // primeiro sync; o sync tira o PR que fecha.
+    r#"
+CREATE TABLE pr_checks (
+  project_id  INTEGER NOT NULL,
+  pr_number   INTEGER NOT NULL,
+  head        TEXT NOT NULL,
+  base        TEXT NOT NULL,
+  head_sha    TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  checks      TEXT NOT NULL DEFAULT '[]',
+  synced_at   INTEGER NOT NULL,
+  runs_etag   TEXT,
+  status_etag TEXT,
+  PRIMARY KEY (project_id, pr_number)
+);
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo

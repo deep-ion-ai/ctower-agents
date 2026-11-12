@@ -19,8 +19,9 @@ ahead: Array<DigestIssue>,
  */
 pr_url: string | null, 
 /**
- * Estado do CI do PR no espelho; `None` = o espelho não tem os checks
- * (ainda não guarda os checks dos PRs, #129).
+ * Resumo dos checks do PR `branch → base` no espelho do hub (#129),
+ * como "3 checks, 1 falhou"; `None` = sem PR aberto ou checks ainda não
+ * lidos.
  */
 ci: string | null, 
 /**

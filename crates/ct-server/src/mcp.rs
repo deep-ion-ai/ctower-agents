@@ -1024,6 +1024,7 @@ mod tests {
                     synced_at: 1,
                     gone: Vec::new(),
                     me: None,
+                    pr_checks: None,
                 },
                 "hub-id",
             )
@@ -1303,6 +1304,7 @@ mod tests {
                 synced_at: 1,
                 gone: Vec::new(),
                 me: None,
+                pr_checks: None,
             })
             .unwrap();
         let s = srv.env.sessions.start(srv.env.request(1, "A")).unwrap();

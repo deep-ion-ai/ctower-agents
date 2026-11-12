@@ -2,6 +2,7 @@
 //! sessões, decisões e eventos (spec §5).
 
 mod backup;
+mod checks;
 mod decisions;
 mod error;
 mod events;
@@ -20,6 +21,10 @@ mod tree;
 mod work_items;
 
 pub use backup::{db_user_version, snapshot_db};
+pub use checks::{
+    checks_state, CheckSource, ChecksRead, ChecksState, PrCheck, PrChecks, PrChecksFetch,
+    PrChecksSnapshot, PrChecksSummary,
+};
 pub use decisions::{Decision, NewDecision};
 pub use error::{LedgerError, Result};
 pub use events::{Event, NewEvent};
