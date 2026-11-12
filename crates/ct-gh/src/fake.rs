@@ -37,6 +37,8 @@ struct State {
     redirects: HashMap<String, String>,
     /// Texto servido sem exigir token (o endereço temporário do log).
     raw: HashMap<String, String>,
+    /// Respostas do `POST /graphql`: (variáveis esperadas, resposta).
+    graphql: Vec<(Value, Value)>,
 }
 
 /// Servidor GitHub falso. As rotas são casadas pelo caminho completo com a
@@ -45,6 +47,8 @@ struct State {
 /// `.../git/ref/heads/<b>`, como no GitHub. `DELETE` do que não existe dá o
 /// `422` "Reference does not exist". `POST` numa rota publicada responde
 /// `201` com o corpo dela e guarda o enviado ([`FakeGitHub::posted`]).
+/// `POST /graphql` responde `200` com a resposta publicada por
+/// [`FakeGitHub::set_graphql`] para as variáveis enviadas.
 #[derive(Clone)]
 pub struct FakeGitHub {
     addr: SocketAddr,
@@ -170,6 +174,28 @@ impl FakeGitHub {
             .push_back((status, vec![], Some(body)));
     }
 
+    /// Publica a resposta GraphQL (`{"data": ...}` inteiro) das consultas
+    /// cujas `variables` têm todos os campos de `variables` (a última
+    /// publicada vence). Sem resposta publicada, o `POST /graphql` responde
+    /// `200` com o erro `NOT_FOUND`, como o GitHub.
+    pub fn set_graphql(&self, variables: Value, response: Value) {
+        let mut st = self.state.lock().unwrap();
+        st.graphql.retain(|(v, _)| v != &variables);
+        st.graphql.push((variables, response));
+    }
+
+    /// Consultas GraphQL recebidas: as `variables` de cada uma.
+    pub fn graphql_calls(&self) -> Vec<Value> {
+        self.state
+            .lock()
+            .unwrap()
+            .posted
+            .iter()
+            .filter(|(p, _)| p == "/graphql")
+            .map(|(_, b)| b.get("variables").cloned().unwrap_or(Value::Null))
+            .collect()
+    }
+
     /// Atraso antes de cada resposta.
     pub fn set_delay(&self, d: Duration) {
         self.state.lock().unwrap().delay = d;
@@ -278,6 +304,22 @@ fn handle(stream: TcpStream, st: &Mutex<State>) -> std::io::Result<()> {
                     json!({ "message": "Reference does not exist" }).to_string(),
                 )
             }
+        } else if method == "POST" && path == "/graphql" {
+            let sent: Value = serde_json::from_slice(&sent).unwrap_or(Value::Null);
+            let vars = sent.get("variables").cloned().unwrap_or(Value::Null);
+            s.posted.push((path.clone(), sent));
+            let found = s.graphql.iter().rev().find(|(want, _)| {
+                want.as_object()
+                    .is_some_and(|w| w.iter().all(|(k, v)| vars.get(k) == Some(v)))
+            });
+            let body = match found {
+                Some((_, r)) => r.clone(),
+                None => json!({
+                    "data": null,
+                    "errors": [{ "type": "NOT_FOUND", "message": "Could not resolve to a node" }],
+                }),
+            };
+            (200, vec![], body.to_string())
         } else if method == "POST" {
             let sent = serde_json::from_slice(&sent).unwrap_or(Value::Null);
             s.posted.push((path.clone(), sent));

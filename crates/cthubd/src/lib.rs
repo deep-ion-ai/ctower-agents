@@ -88,7 +88,10 @@ use tokio::sync::broadcast;
 /// situação, contagens e texto) no `WorkItemSummary` do `hub.tree.get`, e o
 /// `ci` de `AutonomyWip` e `DigestProject` preenchido com o resumo dos checks
 /// do PR da branch de integração.
-pub const PROTOCOL_VERSION: &str = "1.21";
+/// 1.22 (#130): `hub.workitem.pr_feedback` (threads de review não
+/// resolvidas e pedidos de mudança dos PRs do item, do espelho, com a marca
+/// de autor externo).
+pub const PROTOCOL_VERSION: &str = "1.22";
 
 #[derive(Clone)]
 pub struct HubState {

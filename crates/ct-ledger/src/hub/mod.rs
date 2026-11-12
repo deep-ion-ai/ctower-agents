@@ -798,6 +798,35 @@ CREATE TABLE pr_checks (
   PRIMARY KEY (project_id, pr_number)
 );
 "#,
+    // 40: feedback de review dos PRs abertos dos work items (#130, épico
+    // #136): threads não resolvidas e reviews que pedem mudanças
+    // (`pr_review_item`), como a migração 24 do `ledger.db`.
+    // `reviews_updated_at` é o `updated_at` do PR na última leitura (nulo =
+    // nunca lido): o sync só relê o PR que mudou. O gatilho leva os itens
+    // junto quando o PR sai do `pr_cache`.
+    r#"
+CREATE TABLE pr_review_item (
+  project_id         INTEGER NOT NULL,
+  pr_number          INTEGER NOT NULL,
+  kind               TEXT NOT NULL CHECK (kind IN ('thread', 'changes_requested')),
+  node_id            TEXT NOT NULL,
+  path               TEXT,
+  line               INTEGER,
+  outdated           INTEGER NOT NULL DEFAULT 0,
+  author             TEXT NOT NULL,
+  author_association TEXT NOT NULL,
+  body               TEXT NOT NULL,
+  url                TEXT NOT NULL,
+  replies            INTEGER NOT NULL DEFAULT 0,
+  created_at         INTEGER NOT NULL,
+  PRIMARY KEY (project_id, pr_number, kind, node_id)
+);
+ALTER TABLE pr_cache ADD COLUMN reviews_updated_at INTEGER;
+CREATE TRIGGER pr_review_item_cleanup AFTER DELETE ON pr_cache
+BEGIN
+  DELETE FROM pr_review_item WHERE project_id = OLD.project_id AND pr_number = OLD.number;
+END;
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -5225,7 +5254,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 39);
+        assert_eq!(v, 40);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

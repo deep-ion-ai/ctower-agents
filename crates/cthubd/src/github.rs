@@ -169,7 +169,7 @@ impl HubGithub {
             );
             return Ok(skipped);
         }
-        Ok(match fetched {
+        let result = match fetched {
             Ok(snap) => {
                 let applied = h.apply_github(&snap, &self.hub_id)?;
                 for g in &applied.removed {
@@ -194,7 +194,34 @@ impl HubGithub {
                     ..ProjectSync::default()
                 }
             }
-        })
+        };
+        drop(h);
+        if result.ok {
+            self.sync_reviews(project_id, rev, &input)?;
+        }
+        Ok(result)
+    }
+
+    /// Feedback de review dos PRs abertos dos work items (#130), depois do
+    /// espelho aplicado: só os PRs que mudaram (`updated_at`) desde a última
+    /// leitura, sem o lock do `hub.db` durante a rede, e aplicado só se o
+    /// projeto não mudou de `rev`. A falha no GitHub não derruba o sync:
+    /// fica no log, e o que faltou é lido no próximo ciclo.
+    fn sync_reviews(&self, project_id: i64, rev: i64, input: &SyncInput) -> ct_ledger::Result<()> {
+        let targets = self.hub.lock().pr_review_targets(project_id)?;
+        if targets.is_empty() {
+            return Ok(());
+        }
+        let (o, r) = (&input.project.gh_owner, &input.project.gh_repo);
+        let (got, err) = ct_gh::reviews::fetch_reviews(&self.client, o, r, &targets);
+        if let Some(e) = err {
+            tracing::warn!("github: projeto {project_id}: reviews dos PRs não lidas: {e}");
+        }
+        let h = self.hub.lock();
+        if h.live_project_rev(project_id)? == Some(rev) {
+            h.apply_pr_reviews(project_id, &got)?;
+        }
+        Ok(())
     }
 }
 
@@ -346,6 +373,116 @@ mod tests {
         let ev = rx.try_recv().unwrap();
         assert_eq!(ev["event"], "hub_sync_status");
         assert_eq!(ev["data"]["ok"], true);
+    }
+
+    /// Thread de review no formato do GraphQL, montada à mão.
+    fn thread(id: &str, resolved: bool, path: &str, line: i64, login: &str, assoc: &str) -> Value {
+        json!({
+            "id": id, "isResolved": resolved, "isOutdated": false,
+            "path": path, "line": line, "originalLine": line,
+            "comments": { "totalCount": 1, "nodes": [{
+                "author": { "login": login }, "authorAssociation": assoc,
+                "body": format!("ajuste em {path}"),
+                "url": format!("https://github.com/acme/acme-web/pull/40#discussion_{id}"),
+                "createdAt": "2026-10-15T10:00:00Z",
+            }]},
+        })
+    }
+
+    /// #130: o sync do hub lê as threads não resolvidas do PR aberto do work
+    /// item e só relê quando o `updated_at` do PR muda.
+    #[test]
+    fn threads_de_review_do_pr_aberto_no_espelho_do_hub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let bin = fake_gh(tmp.path(), "tok");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("acme", "acme-web");
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        gh.set(&pulls_path(o, r, "feat/5-x"), json!([pr(40, "feat/5-x")]));
+        gh.set_graphql(
+            json!({ "owner": o, "repo": r, "number": 40 }),
+            json!({ "data": { "repository": { "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null },
+                    "nodes": [
+                        thread("T1", true, "src/a.rs", 3, "fulano", "MEMBER"),
+                        thread("T2", false, "src/b.rs", 12, "beltrano", "NONE"),
+                    ],
+                },
+                "latestOpinionatedReviews": { "nodes": [] },
+            }}}}),
+        );
+        let outro = Ledger::open_in_memory().unwrap();
+        let p = outro
+            .add_project(&NewProject {
+                name: "acme-web".into(),
+                gh_owner: o.into(),
+                gh_repo: r.into(),
+                repo_path: "/longe".into(),
+                base_branch: "develop".into(),
+                protected_branches: vec![],
+            })
+            .unwrap();
+        let wi = outro
+            .ensure_work_item(p.id, 5, WorkItemKind::Issue)
+            .unwrap();
+        outro
+            .set_work_item_branch(wi.id, "feat/5-x", "/longe/wt")
+            .unwrap();
+        let hub = hub_com(o, r);
+        hub.lock()
+            .ingest(
+                outro.env_id(),
+                "outro",
+                &outro.outbox_pending(1000).unwrap(),
+            )
+            .unwrap();
+        let (events, _) = broadcast::channel(16);
+        let sync = HubGithub::new(hub.clone(), client, "hub-id", events);
+        assert!(sync.sync_all().unwrap()[0].ok);
+        let feedback = |hub: &SharedHub| {
+            let h = hub.lock();
+            let w = h.find_work_item(o, r, 5).unwrap().unwrap();
+            h.pr_feedback_for_work_item(w.id).unwrap()
+        };
+        let f = feedback(&hub);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].pr.number, 40);
+        assert_eq!(f[0].threads.len(), 1, "a resolvida fica de fora");
+        let t = &f[0].threads[0];
+        assert_eq!((t.path.as_str(), t.line), ("src/b.rs", Some(12)));
+        assert!(t.external);
+        assert_eq!(gh.graphql_calls().len(), 1);
+
+        // PR sem mudança: nenhuma consulta GraphQL nova.
+        assert!(sync.sync_all().unwrap()[0].ok);
+        assert_eq!(gh.graphql_calls().len(), 1);
+
+        // O PR mudou (`updated_at`): relê, e a thread resolvida sai.
+        let mut novo = pr(40, "feat/5-x");
+        novo["updated_at"] = json!("2026-10-15T12:00:00Z");
+        gh.set(&pulls_path(o, r, "feat/5-x"), json!([novo]));
+        gh.set_graphql(
+            json!({ "owner": o, "repo": r, "number": 40 }),
+            json!({ "data": { "repository": { "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null },
+                    "nodes": [thread("T2", true, "src/b.rs", 12, "beltrano", "NONE")],
+                },
+                "latestOpinionatedReviews": { "nodes": [] },
+            }}}}),
+        );
+        assert!(sync.sync_all().unwrap()[0].ok);
+        assert_eq!(gh.graphql_calls().len(), 2);
+        assert!(feedback(&hub)[0].threads.is_empty());
     }
 
     /// #149: o login do token do hub vai ao `sync_state.me` do projeto, e

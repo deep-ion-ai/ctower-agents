@@ -4,6 +4,7 @@
 //! Métodos: `hub.info`, `hub.status`, `hub.projects.list|add|update|delete|impact`,
 //! `hub.assignments.list|add|remove`, `hub.quarantine.list|discard`, `hub.tree.get`, `hub.workitem.history`,
 //! `hub.workitem.set_status|set_priority|move`, `hub.workitem.body`,
+//! `hub.workitem.pr_feedback` (reviews dos PRs do item no espelho, #130),
 //! `hub.tracker.add_issue` (issue do Jira pelo ID, #148), `hub.projects.move`,
 //! `hub.ranking.get`, `hub.health.get`, `hub.proposals.list|decide`,
 //! `hub.dashboard.get`, `hub.envs.list`,
@@ -1104,6 +1105,17 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 .map_err(e)?
                 .map(|v| json!(v))
                 .ok_or_else(|| (-32000, format!("{owner}/{repo}#{number} não está no hub")))
+        }
+        // Feedback de review dos PRs do item no espelho (#130): threads não
+        // resolvidas e pedidos de mudança, com a marca de autor externo.
+        "hub.workitem.pr_feedback" => {
+            let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
+            let number = i64_param(p, "number")?;
+            let wi = h
+                .find_work_item(owner, repo, number)
+                .map_err(e)?
+                .ok_or_else(|| (-32000, format!("{owner}/{repo}#{number} não está no hub")))?;
+            Ok(json!({ "prs": h.pr_feedback_for_work_item(wi.id).map_err(e)? }))
         }
         "hub.workitem.set_status" => {
             let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
@@ -2414,6 +2426,35 @@ pub(crate) mod tests {
         assert_eq!(v["result"].as_array().unwrap().len(), 1);
         let v = ui.call("hub.inventado", json!({})).await;
         assert_eq!(v["error"]["code"], -32601);
+    }
+
+    /// #130: o feedback de review dos PRs do item, do espelho do hub.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn feedback_de_review_do_item() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui
+            .call(
+                "hub.workitem.pr_feedback",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 5 }),
+            )
+            .await;
+        assert!(v["result"]["prs"].is_array(), "{v}");
+        let v = ui
+            .call(
+                "hub.workitem.pr_feedback",
+                json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 999 }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32000);
+        let v = ui
+            .call(
+                "hub.workitem.pr_feedback",
+                json!({ "owner": "deep-ion-ai" }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602);
     }
 
     #[tokio::test(flavor = "multi_thread")]
