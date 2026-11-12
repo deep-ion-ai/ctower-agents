@@ -41,6 +41,7 @@ test("aviso só com o modo ligado e a branch em conflito", () => {
     message: null,
     conflicts: ["app.txt"],
     pr_url: null,
+    pr_pending: false,
     at: 1,
   };
   expect(autonomyWarning(project({ enabled: true, env_id: "env-auto" }, conflito))).toBe("wip/autonoma em conflito com a base");
@@ -56,6 +57,7 @@ test("erro da branch: só com o modo ligado e o relato error", () => {
     message: "push recusado (403)",
     conflicts: [],
     pr_url: null,
+    pr_pending: false,
     at: 1,
   };
   expect(autonomyError(project({ enabled: true, env_id: "e" }, erro))).toBe("push recusado (403)");
@@ -105,4 +107,6 @@ test("template autônomo (#191): campo do hub, patch do objeto inteiro e limite"
   expect(autonomyTemplatesPatch({ ...f, template: " \n" }, own)).toEqual(templates);
   expect(autonomyFormError({ ...f, template: "x".repeat(MAX_AUTONOMOUS_TEMPLATE_BYTES + 1) }, p)).toMatch(/64 KiB/);
   expect(DEFAULT_AUTONOMOUS_TEMPLATE).toContain("{{integration_branch}}");
+  // O corpo do PR com `Closes #n`, exigido pelo guarda-corpo do `gh pr create`.
+  expect(DEFAULT_AUTONOMOUS_TEMPLATE).toContain("com a linha `{{closes}}` no corpo");
 });

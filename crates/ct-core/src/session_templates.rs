@@ -8,7 +8,7 @@
 //! o template `autonomous` do projeto ou [`DEFAULT_AUTONOMOUS_TEMPLATE`], e
 //! renderiza com [`AutonomousVars`] (o hub inicia a sessão sem a UI).
 
-use crate::tracker::{change_label, item_ref, ForgeKind, TrackerRef};
+use crate::tracker::{change_label, item_ref, item_short, ForgeKind, TrackerConfig, TrackerRef};
 use crate::WorkItemKind;
 use serde::{Deserialize, Serialize};
 
@@ -95,7 +95,10 @@ impl SessionTemplates {
 }
 
 /// Template padrão da sessão autônoma (#191). Vale para GitHub e Jira:
-/// `{{ref}}` é `owner/repo#12` ou `ACME-123`, e `{{change}}` é `PR` ou `MR`.
+/// `{{ref}}` é `owner/repo#12` ou `ACME-123`, `{{change}}` é `PR` ou `MR`, e
+/// `{{closes}}` é a linha que o corpo do PR precisa ter: `Closes #12` no
+/// GitHub (o guarda-corpo recusa o `gh pr create` sem ela, #375) ou a chave
+/// `ACME-123` no Jira.
 pub const DEFAULT_AUTONOMOUS_TEMPLATE: &str = "\
 Sessão autônoma do Control Tower: trabalhe na {{kind}} {{ref}} ({{title}}) do repositório \
 {{owner}}/{{repo}} do começo ao fim, sem perguntar nada: ninguém acompanha esta sessão.
@@ -107,8 +110,8 @@ Registre toda decisão relevante com `ledger_record_decision` e origin `autonoma
 revisadas no {{change}}.
 Siga as regras do projeto e do épico do system prompt; releia com `rules_get`.
 Ao terminar, com os testes passando, abra o {{change}} de {{branch}} para {{integration_branch}} \
-(nunca para outra branch), cite {{ref}} no corpo e resuma o que foi feito e as decisões \
-tomadas. Não mescle o {{change}}.";
+(nunca para outra branch), com a linha `{{closes}}` no corpo, exatamente assim, e resuma o que \
+foi feito e as decisões tomadas. Não mescle o {{change}}.";
 
 /// Variáveis do template da sessão autônoma.
 #[derive(Debug, Clone, Copy)]
@@ -144,6 +147,7 @@ impl AutonomousVars<'_> {
             "integration_branch" => self.integration_branch.into(),
             "protected" => self.protected.join(", "),
             "change" => change_label(self.forge).into(),
+            "closes" => closes_line(&self.tracker, self.number),
             _ => return None,
         })
     }
@@ -151,6 +155,16 @@ impl AutonomousVars<'_> {
     /// O template com as variáveis trocadas.
     pub fn render(&self, template: &str) -> String {
         render_template(template, |name| self.value(name))
+    }
+}
+
+/// A linha do corpo do PR que liga a issue: `Closes #12` no GitHub (só as
+/// palavras-chave em inglês fecham a issue, e o guarda-corpo exige essa
+/// forma) e a chave `ACME-123` no Jira.
+fn closes_line(t: &TrackerRef, n: i64) -> String {
+    match t.tracker {
+        TrackerConfig::Github => format!("Closes {}", item_short(t, n)),
+        TrackerConfig::Jira(_) => item_short(t, n),
     }
 }
 
@@ -272,6 +286,9 @@ mod tests {
         );
         assert!(p.contains("origin `autonoma`"), "{p}");
         assert!(p.contains("main, develop"), "{p}");
+        // O corpo pedido passa no guarda-corpo do `gh pr create` (#375).
+        assert!(p.contains("com a linha `Closes #12` no corpo"), "{p}");
+        assert!(crate::guard::closes::closes(&p, 12), "{p}");
         assert!(!p.contains("{{"), "variável sem trocar: {p}");
     }
 
@@ -296,7 +313,8 @@ mod tests {
             p.contains("abra o MR de feat/12-tela-de-login para wip/autonoma"),
             "{p}"
         );
-        assert!(p.contains("cite ACME-123 no corpo"), "{p}");
+        assert!(p.contains("com a linha `ACME-123` no corpo"), "{p}");
+        assert!(!p.contains("Closes"), "{p}");
         assert!(!p.contains(" PR "), "{p}");
     }
 

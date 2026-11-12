@@ -453,12 +453,32 @@ fn status_error(code: u16, r: ureq::Response) -> GhError {
     let text = r.into_string().unwrap_or_default();
     let message = serde_json::from_str::<Value>(&text)
         .ok()
-        .and_then(|v| v.get("message").and_then(Value::as_str).map(String::from))
+        .and_then(|v| api_message(&v))
         .unwrap_or_else(|| truncate(&text, 200));
     GhError::Http {
         status: code,
         message,
     }
+}
+
+/// `message` do corpo de erro da API, com o detalhe de `errors[].message`
+/// quando houver: o `422` diz só "Validation Failed" no `message`, e o motivo
+/// (ex.: "No commits between develop and wip/autonoma") vem em `errors`.
+fn api_message(v: &Value) -> Option<String> {
+    let message = v.get("message").and_then(Value::as_str)?;
+    let details: Vec<&str> = v
+        .get("errors")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.get("message").and_then(Value::as_str))
+        .filter(|m| !m.is_empty())
+        .collect();
+    Some(if details.is_empty() {
+        message.to_string()
+    } else {
+        format!("{message}: {}", details.join("; "))
+    })
 }
 
 /// URL com `rel="next"` de um cabeçalho `Link`.
@@ -771,6 +791,22 @@ mod tests {
             GhError::Http {
                 status: 404,
                 message: "Not Found".into()
+            }
+        );
+        // 422 de validação: o motivo em `errors[].message` entra na mensagem.
+        gh.fail_next_with(
+            "/x",
+            422,
+            json!({ "message": "Validation Failed", "errors": [
+                { "resource": "PullRequest", "code": "custom",
+                  "message": "No commits between develop and wip/autonoma" }
+            ] }),
+        );
+        assert_eq!(
+            c.get_all("/x", None).unwrap_err(),
+            GhError::Http {
+                status: 422,
+                message: "Validation Failed: No commits between develop and wip/autonoma".into()
             }
         );
     }

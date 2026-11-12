@@ -7,7 +7,8 @@ import type { AutonomyState } from "./AutonomyState";
  */
 export type AutonomyReport = { state: AutonomyState, branch: string, base: string, 
 /**
- * Aviso para a tela (conflito) ou o erro.
+ * Aviso para a tela (conflito), o erro ou, com `ok`, a situação do PR
+ * rascunho (pendente ou não aberto).
  */
 message: string | null, 
 /**
@@ -18,6 +19,13 @@ conflicts: Array<string>,
  * PR rascunho `branch → base`, quando conhecido.
  */
 pr_url: string | null, 
+/**
+ * O PR rascunho ainda não pode abrir: a branch não tem commits além da
+ * base (o GitHub recusa o PR vazio). Não é erro: o ambiente tenta de
+ * novo a cada alinhamento, e o PR abre depois do primeiro merge na
+ * branch. Ausente (relato anterior) = `false`.
+ */
+pr_pending: boolean, 
 /**
  * Quando o relato foi feito (ms).
  */

@@ -262,6 +262,7 @@ mod tests {
                     message: Some(ct_core::autonomy::conflict_warning("wip/autonoma")),
                     conflicts: vec!["app.txt".into()],
                     pr_url: None,
+                    pr_pending: false,
                     at: 1,
                 }),
             }),

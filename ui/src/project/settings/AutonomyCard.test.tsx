@@ -80,6 +80,7 @@ test("conflito com a base: o aviso aparece com os arquivos", async () => {
         message: "wip/autonoma em conflito com a base",
         conflicts: ["src/app.ts"],
         pr_url: null,
+        pr_pending: false,
         at: 1,
       },
     }),

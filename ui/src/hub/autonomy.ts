@@ -22,7 +22,7 @@ export const DEFAULT_AUTONOMOUS_TEMPLATE = [
   "Antes de começar, consulte decisões anteriores com `ledger_list_decisions`.",
   "Diante de uma dúvida, escolha a opção mais conservadora que resolva a issue e siga em frente. Registre toda decisão relevante com `ledger_record_decision` e origin `autonoma`: elas são revisadas no {{change}}.",
   "Siga as regras do projeto e do épico do system prompt; releia com `rules_get`.",
-  "Ao terminar, com os testes passando, abra o {{change}} de {{branch}} para {{integration_branch}} (nunca para outra branch), cite {{ref}} no corpo e resuma o que foi feito e as decisões tomadas. Não mescle o {{change}}.",
+  "Ao terminar, com os testes passando, abra o {{change}} de {{branch}} para {{integration_branch}} (nunca para outra branch), com a linha `{{closes}}` no corpo, exatamente assim, e resuma o que foi feito e as decisões tomadas. Não mescle o {{change}}.",
 ].join("\n");
 
 /** Tamanho máximo do template, em bytes (o de `SessionTemplates`). */

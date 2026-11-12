@@ -369,11 +369,14 @@ pub async fn tick(hub: &SharedHub, port: &dyn EnvPort, now: i64) -> Result<usize
                 let slug = format!("{}/{}#{}", i.owner, i.repo, i.number);
                 // Sem `prompt` (o ambiente monta o autônomo, #191) e nunca
                 // com `override_approval` (#124); o modelo e o esforço da
-                // issue entram no `call_env` (#182).
+                // issue entram no `call_env` (#182). O `title` sai do espelho
+                // do hub: logo depois da atribuição, o do ambiente ainda não
+                // tem a issue, e sem ele o `session.start` é recusado.
                 let params = json!({
                     "owner": i.owner,
                     "repo": i.repo,
                     "gh_number": i.number,
+                    "title": i.title,
                     "autonomous": true,
                 });
                 let base = AutopilotEvent {
@@ -835,7 +838,7 @@ mod tests {
         assert_eq!(
             params,
             &json!({ "owner": "acme", "repo": "acme-web", "gh_number": 123,
-                     "autonomous": true })
+                     "title": "ACME-123", "autonomous": true })
         );
         assert!(params.get("prompt").is_none() && params.get("override_approval").is_none());
         let ev = hub.lock().list_autopilot_events(10, None).unwrap();
@@ -917,6 +920,7 @@ mod tests {
                     message: Some("push de wip/autonoma recusado (403)".into()),
                     conflicts: vec![],
                     pr_url: None,
+                    pr_pending: false,
                     at: 1,
                 }),
             }),

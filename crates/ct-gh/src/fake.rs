@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Falha programada: status e cabeçalhos.
-type Failure = (u16, Vec<(String, String)>);
+/// Falha programada: status, cabeçalhos e corpo (`None` = o padrão,
+/// `{"message": "falha programada"}`).
+type Failure = (u16, Vec<(String, String)>, Option<Value>);
 
 struct Route {
     body: Value,
@@ -130,7 +131,19 @@ impl FakeGitHub {
             .fails
             .entry(path.to_string())
             .or_default()
-            .push_back((status, h));
+            .push_back((status, h, None));
+    }
+
+    /// A próxima requisição a `path` recebe `status` com este corpo JSON
+    /// (ex.: o `422` de validação do GitHub, com `errors`).
+    pub fn fail_next_with(&self, path: &str, status: u16, body: Value) {
+        self.state
+            .lock()
+            .unwrap()
+            .fails
+            .entry(path.to_string())
+            .or_default()
+            .push_back((status, vec![], Some(body)));
     }
 
     /// Atraso antes de cada resposta.
@@ -202,12 +215,9 @@ fn handle(stream: TcpStream, st: &Mutex<State>) -> std::io::Result<()> {
     let (status, extra, body) = {
         let mut s = st.lock().unwrap();
         let auth_ok = headers.get("authorization") == Some(&format!("Bearer {}", s.token));
-        if let Some((code, h)) = s.fails.get_mut(&path).and_then(VecDeque::pop_front) {
-            (
-                code,
-                h,
-                json!({ "message": "falha programada" }).to_string(),
-            )
+        if let Some((code, h, body)) = s.fails.get_mut(&path).and_then(VecDeque::pop_front) {
+            let body = body.unwrap_or_else(|| json!({ "message": "falha programada" }));
+            (code, h, body.to_string())
         } else if !auth_ok {
             (
                 401,
