@@ -8,7 +8,8 @@
 //!
 //! - **status do work item** = `to` do evento `status_changed` ou
 //!   `status_set_manual` (mudança manual pela UI do hub) mais recente por HLC, com desempate por `env_id`; evento atrasado fica no histórico
-//!   mas não sobrescreve um status mais novo;
+//!   mas não sobrescreve um status mais novo; um `needs_human` só vale se o
+//!   status anterior o aceita ([`ct_core::next_status`]);
 //! - **atributos de work item** seguem a fotografia mais recente (HLC);
 //! - **sessão**: vale a cópia com `last_event_at` maior (só o dono a altera);
 //! - **revisão de decisão**: vale a primeira.
@@ -1685,17 +1686,44 @@ impl Hub {
     }
 
     /// Status = `to` do `status_changed`/`status_set_manual` mais recente por (HLC, env_id).
+    ///
+    /// Exceção: um `status_changed` de causa `needs_human` só vale se o
+    /// status que o hub já tinha o aceita ([`next_status`]); o `from` do
+    /// evento é o status local do ambiente, que pode não ter visto o PR
+    /// ainda. Assim o aviso de espera da sessão ociosa depois do PR não
+    /// volta uma issue `em_revisao` (ou `concluido`) para `aguardando_voce`.
     fn recompute_status(&self, work_item_id: i64) -> Result<()> {
-        let last: Option<(String, i64)> = self
-            .conn
-            .query_row(
-                "SELECT json_extract(payload, '$.to'), ts FROM event
-                 WHERE work_item_id = ?1 AND type IN ('status_changed', 'status_set_manual')
-                 ORDER BY hlc DESC, env_id DESC LIMIT 1",
-                [work_item_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT json_extract(payload, '$.to'), json_extract(payload, '$.cause'), ts FROM event
+             WHERE work_item_id = ?1 AND type IN ('status_changed', 'status_set_manual')
+             ORDER BY hlc DESC, env_id DESC",
+        )?;
+        let mut rows = stmt.query([work_item_id])?;
+        // Pedidos de atenção mais novos que o último status de outra causa.
+        let mut needs_human: Option<(String, i64)> = None;
+        let mut base: Option<(String, i64)> = None;
+        while let Some(r) = rows.next()? {
+            let (to, cause, ts): (String, Option<String>, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
+            if cause.as_deref() == Some(WorkItemTrigger::NeedsHuman.as_str()) {
+                needs_human.get_or_insert((to, ts));
+                continue;
+            }
+            base = Some((to, ts));
+            break;
+        }
+        drop(rows);
+        drop(stmt);
+        let last = match (base, needs_human) {
+            (Some((to, ts)), Some(nh)) => {
+                let current: WorkItemStatus = to.parse()?;
+                if next_status(current, WorkItemTrigger::NeedsHuman).is_some() {
+                    Some(nh)
+                } else {
+                    Some((to, ts))
+                }
+            }
+            (base, nh) => base.or(nh),
+        };
         let Some((to, ts)) = last else {
             return Ok(());
         };
@@ -3256,6 +3284,119 @@ mod tests {
         hub.ingest("env-a", "a", &[velho]).unwrap();
         let w = hub.find_work_item("o", "r", 1).unwrap().unwrap();
         assert_eq!(w.status, Bloqueado);
+    }
+
+    #[test]
+    fn needs_human_do_ambiente_nao_volta_a_issue_em_revisao() {
+        use ct_core::WorkItemStatus::*;
+        let hub = hub_com("o", "r");
+        let mk = |hlc, env: &str, from: &str, to: &str, cause: &str| OutboxEntry {
+            seq: 1,
+            created_at: 0,
+            change: SyncChange::Event(EventChange {
+                uid: format!("u{hlc}"),
+                env_id: env.into(),
+                hlc,
+                ts: 1_000,
+                owner: "o".into(),
+                repo: "r".into(),
+                gh_number: Some(1),
+                session_id: None,
+                kind: "status_changed".into(),
+                payload: serde_json::json!({ "from": from, "to": to, "cause": cause }),
+            }),
+        };
+        let status = || hub.find_work_item("o", "r", 1).unwrap().unwrap().status;
+        hub.ingest(
+            "env-a",
+            "a",
+            &[mk(
+                hlc::from_ms(1_000),
+                "env-a",
+                "backlog",
+                "em_execucao",
+                "session_active",
+            )],
+        )
+        .unwrap();
+        // O hub viu o PR aberto (R3-1, #178).
+        hub.ingest(
+            "env-hub",
+            "hub",
+            &[mk(
+                hlc::from_ms(2_000),
+                "env-hub",
+                "em_execucao",
+                "em_revisao",
+                "pr_opened",
+            )],
+        )
+        .unwrap();
+        // O aviso de espera da sessão ociosa chega depois, com o `from` do
+        // ambiente, que ainda não viu o PR: não volta a issue.
+        let aviso = mk(
+            hlc::from_ms(3_000),
+            "env-a",
+            "em_execucao",
+            "aguardando_voce",
+            "needs_human",
+        );
+        hub.ingest("env-a", "a", &[aviso]).unwrap();
+        assert_eq!(status(), EmRevisao);
+        // A pessoa retoma a sessão: a atividade reabre a execução, e o
+        // pedido seguinte vale de novo.
+        hub.ingest(
+            "env-a",
+            "a",
+            &[mk(
+                hlc::from_ms(4_000),
+                "env-a",
+                "aguardando_voce",
+                "em_execucao",
+                "session_active",
+            )],
+        )
+        .unwrap();
+        assert_eq!(status(), EmExecucao);
+        hub.ingest(
+            "env-a",
+            "a",
+            &[mk(
+                hlc::from_ms(5_000),
+                "env-a",
+                "em_execucao",
+                "aguardando_voce",
+                "needs_human",
+            )],
+        )
+        .unwrap();
+        assert_eq!(status(), AguardandoVoce);
+        // Concluída também não volta.
+        hub.ingest(
+            "env-hub",
+            "hub",
+            &[mk(
+                hlc::from_ms(6_000),
+                "env-hub",
+                "aguardando_voce",
+                "concluido",
+                "pr_merged",
+            )],
+        )
+        .unwrap();
+        hub.ingest(
+            "env-a",
+            "a",
+            &[mk(
+                hlc::from_ms(7_000),
+                "env-a",
+                "em_execucao",
+                "aguardando_voce",
+                "needs_human",
+            )],
+        )
+        .unwrap();
+        assert_eq!(status(), Concluido);
     }
 
     #[test]

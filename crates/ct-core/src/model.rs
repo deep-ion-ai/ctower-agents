@@ -207,6 +207,12 @@ impl WorkItemTrigger {
 /// por atividade de sessão (volta a `em_execucao`) ou pelo merge do épico
 /// (`EpicMerged`): outro PR, aberto ou mesclado, e um pedido de atenção não o
 /// tiram dali. `EpicMerged` só move quem aguarda o épico.
+///
+/// Um pedido de atenção (`NeedsHuman`) não volta um item `em_revisao` para
+/// `aguardando_voce`: com o PR aberto, a vez já é de quem revisa, e o aviso
+/// de espera que o Claude Code manda quando a sessão fica ociosa depois do
+/// PR não é uma pergunta pendente. Se a pessoa retoma a sessão (atividade),
+/// o item volta a `em_execucao` e o próximo pedido vale de novo.
 pub fn next_status(current: WorkItemStatus, trigger: WorkItemTrigger) -> Option<WorkItemStatus> {
     use WorkItemStatus as S;
     use WorkItemTrigger as T;
@@ -223,6 +229,7 @@ pub fn next_status(current: WorkItemStatus, trigger: WorkItemTrigger) -> Option<
     let aceito = match current {
         S::Concluido => trigger == T::SessionActive,
         S::AguardandoEpico => matches!(trigger, T::SessionActive | T::EpicMerged),
+        S::EmRevisao => !matches!(trigger, T::NeedsHuman | T::EpicMerged),
         _ => trigger != T::EpicMerged,
     };
     (aceito && target != current).then_some(target)
@@ -430,6 +437,33 @@ mod tests {
         ] {
             assert_eq!(next_status(s, WorkItemTrigger::EpicMerged), None, "{s}");
         }
+    }
+
+    #[test]
+    fn em_revisao_e_concluido_nao_voltam_para_aguardando_voce() {
+        use WorkItemStatus::*;
+        // O aviso de espera da sessão ociosa depois do PR (R3-1, #178).
+        assert_eq!(next_status(EmRevisao, WorkItemTrigger::NeedsHuman), None);
+        assert_eq!(next_status(Concluido, WorkItemTrigger::NeedsHuman), None);
+        // A atividade da sessão continua reabrindo a execução; dali, o
+        // pedido seguinte vale de novo.
+        assert_eq!(
+            next_status(EmRevisao, WorkItemTrigger::SessionActive),
+            Some(EmExecucao)
+        );
+        assert_eq!(
+            next_status(EmExecucao, WorkItemTrigger::NeedsHuman),
+            Some(AguardandoVoce)
+        );
+        // Os gatilhos de PR seguem valendo em revisão.
+        assert_eq!(
+            next_status(EmRevisao, WorkItemTrigger::SubIssuePrMerged),
+            Some(AguardandoEpico)
+        );
+        assert_eq!(
+            next_status(EmRevisao, WorkItemTrigger::AutonomyMerged),
+            Some(Concluido)
+        );
     }
 
     #[test]

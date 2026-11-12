@@ -161,6 +161,8 @@ backlog → em_execucao → aguardando_voce → em_revisao → concluido
 
 Mudanças manuais prevalecem até o próximo gatilho automático de natureza diferente.
 
+O hook `Notification` não volta um item `em_revisao` ou `concluido` para `aguardando_voce`: com o PR aberto, a vez já é de quem revisa, e o aviso de espera que o Claude Code manda quando a sessão fica ociosa depois do PR não é uma pergunta pendente. O evento `needs_human` continua registrado (e avisa a pessoa). Se ela retoma a sessão (`UserPromptSubmit`), o item volta a `em_execucao` e o pedido seguinte vale de novo. O hub aplica a mesma regra contra o status que ele já tem, não contra o `from` do evento, que é o status local do ambiente e pode não ter visto o PR ainda.
+
 ### Sessão
 
 ```
