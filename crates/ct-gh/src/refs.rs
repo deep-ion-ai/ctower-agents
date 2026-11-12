@@ -6,7 +6,7 @@ use crate::{GhClient, GhError};
 use serde_json::Value;
 
 /// Percent-encoding de um caminho de branch, preservando as `/`.
-fn encode_branch(branch: &str) -> String {
+pub(crate) fn encode_branch(branch: &str) -> String {
     branch
         .bytes()
         .map(|b| match b {

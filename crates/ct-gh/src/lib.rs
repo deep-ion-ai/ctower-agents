@@ -5,6 +5,7 @@
 //! Síncrono; quem chama roda fora do runtime assíncrono.
 
 pub mod refs;
+pub mod release;
 pub mod sync;
 pub mod time;
 
@@ -35,6 +36,9 @@ pub struct GhConfig {
     pub token_timeout: Duration,
     /// Token configurado (`~/.config/ctower/github.token`); tem prioridade sobre o `gh`.
     pub token_file: Option<PathBuf>,
+    /// Token fixo (o exclusivo da sessão de release, #204): tem prioridade
+    /// sobre o arquivo e nunca cai para o `gh auth token`.
+    pub token: Option<String>,
 }
 
 impl GhConfig {
@@ -45,7 +49,14 @@ impl GhConfig {
             timeout: Duration::from_secs(30),
             token_timeout: DEFAULT_TOKEN_TIMEOUT,
             token_file: None,
+            token: None,
         }
+    }
+
+    /// Usa sempre este token ([`GhConfig::token`]).
+    pub fn with_token(mut self, token: String) -> Self {
+        self.token = Some(token);
+        self
     }
 
     pub fn with_token_file(mut self, path: PathBuf) -> Self {
@@ -189,13 +200,35 @@ impl GhClient {
     /// POST de `body` (`path` relativo à API); devolve a resposta. Um `401`
     /// descarta o token e tenta uma vez mais.
     pub fn post_json(&self, path: &str, body: &Value) -> Result<Value, GhError> {
+        self.send_json("POST", path, body)
+    }
+
+    /// PUT de `body` (`path` relativo à API); devolve a resposta (o merge de
+    /// PR, #204). Um `401` descarta o token e tenta uma vez mais.
+    pub fn put_json(&self, path: &str, body: &Value) -> Result<Value, GhError> {
+        self.send_json("PUT", path, body)
+    }
+
+    /// PATCH de `body` (`path` relativo à API); devolve a resposta.
+    pub fn patch_json(&self, path: &str, body: &Value) -> Result<Value, GhError> {
+        self.send_json("PATCH", path, body)
+    }
+
+    /// Requisição com corpo JSON. Resposta vazia (`204`, ou o `201` sem
+    /// corpo do `.../approve` de um run) vira `null`.
+    fn send_json(&self, method: &str, path: &str, body: &Value) -> Result<Value, GhError> {
         let url = format!("{}{}", self.cfg.api_url, path);
         let mut renewed = false;
         loop {
-            return match self.request("POST", &url)?.send_json(body) {
-                Ok(r) => r
-                    .into_json::<Value>()
-                    .map_err(|e| GhError::Parse(e.to_string())),
+            return match self.request(method, &url)?.send_json(body) {
+                Ok(r) => {
+                    let text = r.into_string().map_err(|e| GhError::Parse(e.to_string()))?;
+                    if text.trim().is_empty() {
+                        Ok(Value::Null)
+                    } else {
+                        serde_json::from_str(&text).map_err(|e| GhError::Parse(e.to_string()))
+                    }
+                }
                 Err(ureq::Error::Status(401, _)) if !renewed => {
                     *self.token.lock().unwrap() = None;
                     renewed = true;
@@ -276,6 +309,9 @@ impl GhClient {
     fn token(&self) -> Result<String, GhError> {
         let mut t = self.token.lock().unwrap();
         if let Some(tok) = t.as_ref() {
+            return Ok(tok.clone());
+        }
+        if let Some(tok) = &self.cfg.token {
             return Ok(tok.clone());
         }
         let tok = match self.file_token() {

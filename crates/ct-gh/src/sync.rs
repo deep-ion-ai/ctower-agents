@@ -230,7 +230,7 @@ pub fn sub_issue_of_head(head: &str, epic: i64, parents: &HashMap<i64, i64>) -> 
 }
 
 /// Percent-encoding de um valor de query (tudo fora de `A-Za-z0-9-._~`).
-fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
