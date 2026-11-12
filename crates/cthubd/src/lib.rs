@@ -26,6 +26,7 @@ pub mod docs_backup;
 pub mod github;
 pub mod migrate;
 pub mod push;
+pub mod release;
 pub mod remote;
 pub mod secrets;
 mod sync;
@@ -84,7 +85,11 @@ use tokio::sync::broadcast;
 /// `hub.autopilot.digest|wip`, `wip` em `AutopilotStatus`,
 /// `digest_at_min` em `BudgetPolicy` e o evento `morning_digest` da Web
 /// Push.
-pub const PROTOCOL_VERSION: &str = "1.20";
+/// 1.21 (#204): sessão de release — `release` em `HubProject` e em
+/// `hub.projects.update` (só GitHub + GitHub), `release` em
+/// `SessionTemplates` e `hub.release.status` (prévia do botão "Criar
+/// release", com o token do hub, só leitura).
+pub const PROTOCOL_VERSION: &str = "1.21";
 
 #[derive(Clone)]
 pub struct HubState {
