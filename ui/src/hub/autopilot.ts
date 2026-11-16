@@ -11,6 +11,8 @@ import type {
   DigestProject,
   DigestUsage,
   ProjectPlan,
+  QueueDep,
+  QueueItem,
   TimeBand,
 } from "../protocol/hub-gen";
 
@@ -196,9 +198,66 @@ export const SKIP_TEXT: Record<string, string> = {
   no_priority: "sem prioridade",
   no_model: "sem modelo",
   live_session: "sessão em andamento",
+  blocked_by: "bloqueada",
+  dependency_cycle: "ciclo de dependências",
+  analysis_pending: "esperando a reanálise",
 };
 
 export const skipText = (s: string) => SKIP_TEXT[s] ?? s;
+
+/** Protocolo do hub com a análise de dependências do piloto (#215). */
+export const AUTOPILOT_DEPS_PROTOCOL = "1.24";
+
+/**
+ * Situação do item na fila: "inicia agora", "elegível" ou o motivo de ter
+ * ficado de fora, com os bloqueantes (#215): "fora: bloqueada por #120, #121".
+ */
+export function queueSituation(q: Pick<QueueItem, "skip" | "number"> & { blocked_by?: number[] }, next: number | null): string {
+  if (!q.skip) return q.number === next ? "inicia agora" : "elegível";
+  if (q.skip === "blocked_by" && q.blocked_by?.length) {
+    return `fora: bloqueada por ${q.blocked_by.map((n) => `#${n}`).join(", ")}`;
+  }
+  return `fora: ${skipText(q.skip)}`;
+}
+
+/** Situação do bloqueante (#215). */
+export const BLOCKER_STATE_TEXT: Record<string, string> = {
+  ready: "pronta",
+  pending: "pendente",
+  unknown: "fora do espelho",
+};
+
+/** "#120 (pendente, manual)" para a aresta da fila. */
+export function depText(d: QueueDep): string {
+  const parts = [d.removed ? "removida" : (BLOCKER_STATE_TEXT[d.state] ?? d.state)];
+  if (d.source === "manual") parts.push("manual");
+  return `#${d.blocker} (${parts.join(", ")})`;
+}
+
+/**
+ * A análise de dependências do projeto (#215), para o cartão da fila;
+ * `null` sem rodada (fora da janela) e com o ambiente em dia.
+ */
+export function analysisText(p: Pick<ProjectPlan, "analysis" | "analysis_unsupported">, offsetMin?: number): string | null {
+  if (p.analysis_unsupported) {
+    return "O ambiente autônomo não roda a análise de dependências (versão anterior): só as dependências já gravadas valem. Atualize o ambiente.";
+  }
+  const a = p.analysis;
+  if (!a) return null;
+  const at = (ms: number) => localTime(ms, offsetMin ?? -new Date(ms).getTimezoneOffset());
+  switch (a.state) {
+    case "planning":
+      return `Análise de dependências: planejando a janela (aberta ${at(a.opened_at)}); nenhuma implementação começa antes.`;
+    case "reanalysing":
+      return `Análise de dependências: reanalisando ${a.pending.map((n) => `#${n}`).join(", ")}.`;
+    case "failed":
+      return "Análise de dependências: a sessão falhou; outra inicia em alguns minutos.";
+    default:
+      return a.planned_at != null
+        ? `Análise de dependências: planejada às ${at(a.planned_at)}; esperando mudanças na fila.`
+        : "Análise de dependências: esperando mudanças na fila.";
+  }
+}
 
 /** Encerramento da sessão autônoma ociosa; `undefined` = hub anterior. */
 export function idleText(min: number | undefined, closing = false): string {
@@ -240,6 +299,7 @@ export function digestCounts(p: DigestProject): string {
     p.blocked.length > 0 && n(p.blocked.length, "bloqueada", "bloqueadas"),
     p.decisions_pending > 0 && n(p.decisions_pending, "decisão para revisar", "decisões para revisar"),
     p.ahead > 0 && `${p.ahead} à frente da base`,
+    (p.waiting_blocker ?? 0) > 0 && `${p.waiting_blocker} esperando bloqueante`,
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : "nada novo";
 }

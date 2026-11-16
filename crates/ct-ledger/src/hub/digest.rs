@@ -98,6 +98,10 @@ pub struct DigestProject {
     /// Mensagem do relato `error` da branch de integração; `None` sem erro.
     #[serde(default)]
     pub error: Option<String>,
+    /// Issues da fila (abertas, no backlog) que esperam um bloqueante ainda
+    /// não pronto (#215); `0` num hub anterior.
+    #[serde(default)]
+    pub waiting_blocker: u32,
 }
 
 /// Uso da semanal de uma conta com política no período do resumo.
@@ -172,6 +176,13 @@ pub fn digest_push_body(d: &MorningDigest) -> String {
             if p.ahead > 0 {
                 c.push(n(p.ahead as usize, "à frente da base", "à frente da base"));
             }
+            if p.waiting_blocker > 0 {
+                c.push(n(
+                    p.waiting_blocker as usize,
+                    "esperando bloqueante",
+                    "esperando bloqueante",
+                ));
+            }
             (!c.is_empty()).then(|| format!("{}: {}", p.name, c.join(", ")))
         })
         .collect();
@@ -229,6 +240,31 @@ impl Hub {
              ORDER BY w.gh_number",
             params![project_id, branch, WorkItemStatus::EmRevisao.as_str()],
         )
+    }
+
+    /// Issues abertas no backlog com uma dependência ativa cujo bloqueante
+    /// não está pronto (#215): sem PR mesclado na branch de integração,
+    /// não concluído e não fechado.
+    fn waiting_blocker(&self, project_id: i64, branch: &str) -> Result<u32> {
+        Ok(self.conn.query_row(
+            "SELECT count(DISTINCT d.number) FROM autopilot_dependency d
+             JOIN issue_cache ic ON ic.project_id = d.project_id AND ic.gh_number = d.number
+                                AND ic.state = 'open'
+             LEFT JOIN work_item w ON w.project_id = d.project_id AND w.gh_number = d.number
+             WHERE d.project_id = ?1 AND d.removed = 0
+               AND coalesce(w.status, 'backlog') = 'backlog'
+               AND NOT EXISTS (SELECT 1 FROM issue_cache b
+                               WHERE b.project_id = d.project_id AND b.gh_number = d.blocker
+                                 AND b.state = 'closed')
+               AND NOT EXISTS (SELECT 1 FROM work_item b
+                               WHERE b.project_id = d.project_id AND b.gh_number = d.blocker
+                                 AND b.status = 'concluido')
+               AND NOT EXISTS (SELECT 1 FROM pr_cache c JOIN work_item b ON b.id = c.work_item_id
+                               WHERE c.project_id = d.project_id AND b.gh_number = d.blocker
+                                 AND c.base = ?2 AND c.state = 'merged')",
+            params![project_id, branch],
+            |r| r.get(0),
+        )?)
     }
 
     /// Resumo dos checks do PR `branch → base` no espelho (#129).
@@ -309,8 +345,10 @@ impl Hub {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
             let ahead = self.ahead_of_base(p.id, &branch)?.len() as u32;
+            let waiting_blocker = self.waiting_blocker(p.id, &branch)?;
             let report = p.autonomy_report.as_ref();
             out.push(DigestProject {
+                waiting_blocker,
                 merged,
                 blocked,
                 decisions_pending: pending,
@@ -526,6 +564,48 @@ mod tests {
                 .unwrap();
         }
         hub
+    }
+
+    /// #215: conta as issues da fila (abertas, no backlog) com bloqueante
+    /// ainda não pronto; mesclado na wip conta como pronto, e a aresta
+    /// removida à mão não conta.
+    #[test]
+    fn issues_esperando_bloqueante() {
+        let hub = hub();
+        let p = hub.list_projects().unwrap()[0].id;
+        for n in [127, 128] {
+            hub.conn
+                .execute(
+                    "INSERT INTO issue_cache (project_id, gh_number, title, state, labels, url,
+                                              updated_at, synced_at)
+                     VALUES (?1, ?2, ?3, 'open', '[]', '', 1, 1)",
+                    params![p, n, format!("ACME-{n}")],
+                )
+                .unwrap();
+        }
+        assert_eq!(hub.digest_projects(0, 1000).unwrap()[0].waiting_blocker, 0);
+        let edit = |n, b, e| {
+            hub.set_dependency_manual(p, n, b, e, "", 1).unwrap();
+        };
+        edit(127, 123, crate::ManualEdit::Add); // 123 mesclada na wip: pronta
+        edit(127, 126, crate::ManualEdit::Remove); // removida à mão
+        edit(128, 125, crate::ManualEdit::Add); // 125 só com PR aberto
+        edit(128, 999, crate::ManualEdit::Add); // fora do espelho
+        let d = hub.digest_projects(0, 1000).unwrap();
+        assert_eq!(d[0].waiting_blocker, 1);
+        let digest = MorningDigest {
+            id: 0,
+            local_day: 0,
+            at: 1000,
+            since: 0,
+            projects: d,
+            usage: vec![],
+        };
+        assert!(
+            digest_push_body(&digest).contains("1 esperando bloqueante"),
+            "{}",
+            digest_push_body(&digest)
+        );
     }
 
     #[test]

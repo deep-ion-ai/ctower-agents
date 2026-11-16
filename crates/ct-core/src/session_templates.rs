@@ -7,6 +7,11 @@
 //! A exceção é a sessão autônoma (#191): o ambiente monta o prompt dela, com
 //! o template `autonomous` do projeto ou [`DEFAULT_AUTONOMOUS_TEMPLATE`], e
 //! renderiza com [`AutonomousVars`] (o hub inicia a sessão sem a UI).
+//!
+//! A sessão de análise de dependências do piloto automático (#215) também
+//! foge da UI: o hub renderiza o template `analysis` do projeto (ou
+//! [`DEFAULT_ANALYSIS_TEMPLATE`]) com [`AnalysisVars`] e manda o prompt
+//! pronto no `session.start_project`.
 
 use crate::tracker::{change_label, item_ref, item_short, ForgeKind, TrackerConfig, TrackerRef};
 use crate::WorkItemKind;
@@ -30,6 +35,9 @@ pub struct SessionTemplates {
     /// Sessão autônoma (#191); vazio = [`DEFAULT_AUTONOMOUS_TEMPLATE`]. O
     /// ambiente renderiza, não a UI.
     pub autonomous: String,
+    /// Sessão de análise de dependências do piloto automático (#215); vazio
+    /// = [`DEFAULT_ANALYSIS_TEMPLATE`]. O hub renderiza, não a UI.
+    pub analysis: String,
 }
 
 impl SessionTemplates {
@@ -53,6 +61,7 @@ impl SessionTemplates {
             epic: clean(&self.epic),
             project: clean(&self.project),
             autonomous: clean(&self.autonomous),
+            analysis: clean(&self.analysis),
         }
     }
 
@@ -62,6 +71,7 @@ impl SessionTemplates {
             && self.epic.is_empty()
             && self.project.is_empty()
             && self.autonomous.is_empty()
+            && self.analysis.is_empty()
     }
 
     /// Template da sessão autônoma: o do projeto ou, vazio ou só com
@@ -74,6 +84,16 @@ impl SessionTemplates {
         }
     }
 
+    /// Template da sessão de análise (#215): o do projeto ou, vazio ou só
+    /// com espaços, o padrão.
+    pub fn analysis_template(&self) -> &str {
+        if self.analysis.trim().is_empty() {
+            DEFAULT_ANALYSIS_TEMPLATE
+        } else {
+            &self.analysis
+        }
+    }
+
     /// Cada template cabe em [`MAX_SESSION_TEMPLATE_BYTES`].
     pub fn validate(&self) -> Result<(), String> {
         for (label, t) in [
@@ -81,6 +101,7 @@ impl SessionTemplates {
             ("epic", &self.epic),
             ("project", &self.project),
             ("autonomous", &self.autonomous),
+            ("analysis", &self.analysis),
         ] {
             if t.len() > MAX_SESSION_TEMPLATE_BYTES {
                 return Err(format!(
@@ -160,6 +181,70 @@ impl AutonomousVars<'_> {
     }
 }
 
+/// Template padrão da sessão de análise de dependências do piloto
+/// automático (#215). `{{issues}}` é a lista das issues da fila a analisar
+/// (uma por linha) e `{{in_progress}}` a das que já estão em andamento ou em
+/// revisão; `{{ref}}` não existe aqui (a sessão é do projeto).
+pub const DEFAULT_ANALYSIS_TEMPLATE: &str = "\
+Sessão de análise de dependências do piloto automático do Control Tower, no repositório \
+{{owner}}/{{repo}}. Ninguém acompanha esta sessão: não pergunte nada.
+Sua tarefa é montar a ordem de execução e as dependências entre as issues da fila do modo \
+autônomo. Você não implementa nada, não cria branch, não faz commit nem push e não altera issues \
+no rastreador (nada de comentar, rotular ou fechar).
+Issues da fila (abertas, aprovadas e com prioridade):
+{{issues}}
+Issues já em andamento ou em revisão (podem bloquear as da fila):
+{{in_progress}}
+Dependências já gravadas (as manuais foram corrigidas pela pessoa e prevalecem):
+{{dependencies}}
+Leia cada issue no rastreador ({{tracker_hint}}): título, corpo, épico, menções como \
+“Depende de #N” e as áreas do código citadas. Leia o código na branch de integração \
+{{integration_branch}} sem trocar de branch: `git fetch origin {{integration_branch}}` e depois \
+`git show origin/{{integration_branch}}:<caminho>` ou `git log origin/{{integration_branch}}`.
+Uma issue depende de outra quando precisa do código, da migração ou da decisão dela já \
+mesclados para começar sem retrabalho ou conflito. Na dúvida, não crie a dependência.
+Grave o resultado com a ferramenta `autopilot_set_dependencies`: para cada issue da fila, a lista \
+de issues que a bloqueiam (vazia se nenhuma), com uma justificativa curta para cada uma, e a \
+ordem de execução sugerida. Depois disso, fique parado: o hub manda aqui as issues novas ou \
+alteradas, e você reanalisa só o necessário e grava de novo.";
+
+/// Variáveis do template da sessão de análise (#215).
+#[derive(Debug, Clone, Copy)]
+pub struct AnalysisVars<'a> {
+    pub owner: &'a str,
+    pub repo: &'a str,
+    /// Branch de integração do modo autônomo (`wip/autonoma`).
+    pub integration_branch: &'a str,
+    /// Linhas das issues a analisar (`- #12 Título`).
+    pub issues: &'a str,
+    /// Linhas das issues em andamento ou em revisão.
+    pub in_progress: &'a str,
+    /// Linhas das arestas já gravadas (`- #12 bloqueada por #11 (análise)`).
+    pub dependencies: &'a str,
+    /// Como ler as issues: `gh issue view <n>` no GitHub, a chave no Jira.
+    pub tracker_hint: &'a str,
+}
+
+impl AnalysisVars<'_> {
+    fn value(&self, name: &str) -> Option<String> {
+        Some(match name {
+            "owner" => self.owner.into(),
+            "repo" => self.repo.into(),
+            "integration_branch" => self.integration_branch.into(),
+            "issues" => self.issues.into(),
+            "in_progress" => self.in_progress.into(),
+            "dependencies" => self.dependencies.into(),
+            "tracker_hint" => self.tracker_hint.into(),
+            _ => return None,
+        })
+    }
+
+    /// O template com as variáveis trocadas.
+    pub fn render(&self, template: &str) -> String {
+        render_template(template, |name| self.value(name))
+    }
+}
+
 /// A linha do corpo do PR que liga a issue: `Closes #12` no GitHub (só as
 /// palavras-chave em inglês fecham a issue, e o guarda-corpo exige essa
 /// forma) e a chave `ACME-123` no Jira.
@@ -216,6 +301,7 @@ mod tests {
             epic: "  Épico {{key}}\n".into(),
             project: String::new(),
             autonomous: " \t".into(),
+            analysis: "  ".into(),
         }
         .normalized();
         assert_eq!(t.issue, "");
@@ -339,6 +425,22 @@ mod tests {
     }
 
     #[test]
+    fn padrao_de_analise_espelhado_na_ui() {
+        let ts =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/src/hub/autonomy.ts");
+        let Ok(ts) = std::fs::read_to_string(&ts) else {
+            return; // fora do repositório (crate empacotado)
+        };
+        for line in DEFAULT_ANALYSIS_TEMPLATE.lines() {
+            assert!(!line.contains(['"', '\\']), "{line}");
+            assert!(
+                ts.contains(&format!("\"{line}\"")),
+                "linha fora do espelho da UI: {line}"
+            );
+        }
+    }
+
+    #[test]
     fn sobrescrita_do_projeto_e_so_espacos_vale_o_padrao() {
         let mut t = SessionTemplates {
             autonomous: "Faça {{ref}} em {{branch}}".into(),
@@ -379,5 +481,34 @@ mod tests {
         assert_eq!(v.render("{{{{ref}}}}"), "{{acme/acme-web#12}}");
         assert_eq!(v.render("{{{ref}}}"), "{acme/acme-web#12}");
         assert_eq!(v.render("sem variáveis"), "sem variáveis");
+    }
+
+    #[test]
+    fn template_de_analise_do_projeto_ou_o_padrao() {
+        let v = AnalysisVars {
+            owner: "acme",
+            repo: "acme-web",
+            integration_branch: "wip/autonoma",
+            issues: "- #12 Tela de login",
+            in_progress: "(nenhuma)",
+            dependencies: "- #12 bloqueada por #11 (manual)",
+            tracker_hint: "gh issue view <número>",
+        };
+        let mut t = SessionTemplates::default();
+        assert_eq!(t.analysis_template(), DEFAULT_ANALYSIS_TEMPLATE);
+        let out = v.render(t.analysis_template());
+        assert!(out.contains("acme/acme-web"), "{out}");
+        assert!(out.contains("- #12 Tela de login"), "{out}");
+        assert!(out.contains("- #12 bloqueada por #11 (manual)"), "{out}");
+        assert!(out.contains("git show origin/wip/autonoma:"), "{out}");
+        assert!(out.contains("autopilot_set_dependencies"), "{out}");
+        assert!(!out.contains("{{"), "{out}");
+        t.analysis = "Analise {{issues}} em {{repo}} {{ref}}".into();
+        assert_eq!(
+            v.render(t.analysis_template()),
+            "Analise - #12 Tela de login em acme-web {{ref}}"
+        );
+        t.analysis = " \n".into();
+        assert_eq!(t.analysis_template(), DEFAULT_ANALYSIS_TEMPLATE);
     }
 }

@@ -43,6 +43,10 @@ pub use hub::IssueAgent;
 pub use hub::{
     digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
 };
+pub use hub::{
+    issue_fingerprint, AnalysisRound, BlockerInput, BlockerState, DependencyEdge, DependencyInput,
+    DependencySet, DependencySetResult, ManualEdit, DEP_SOURCE_ANALYSIS, DEP_SOURCE_MANUAL,
+};
 pub use hub::{list_snapshots, rotate_snapshots, IssuedEnvToken, AGENT_TOKEN_PREFIX};
 pub use hub::{
     AgentAssignment, AgentDecision, AgentDecisionFilter, AgentDecisions, AgentEnv, AgentEvent,

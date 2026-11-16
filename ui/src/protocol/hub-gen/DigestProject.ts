@@ -30,4 +30,9 @@ ci: string | null, conflict: boolean,
 /**
  * Mensagem do relato `error` da branch de integração; `None` sem erro.
  */
-error: string | null, };
+error: string | null, 
+/**
+ * Issues da fila (abertas, no backlog) que esperam um bloqueante ainda
+ * não pronto (#215); `0` num hub anterior.
+ */
+waiting_blocker: number, };

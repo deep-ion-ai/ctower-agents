@@ -21,4 +21,9 @@ project: string,
  * Sessão autônoma (#191); vazio = [`DEFAULT_AUTONOMOUS_TEMPLATE`]. O
  * ambiente renderiza, não a UI.
  */
-autonomous: string, };
+autonomous: string, 
+/**
+ * Sessão de análise de dependências do piloto automático (#215); vazio
+ * = [`DEFAULT_ANALYSIS_TEMPLATE`]. O hub renderiza, não a UI.
+ */
+analysis: string, };

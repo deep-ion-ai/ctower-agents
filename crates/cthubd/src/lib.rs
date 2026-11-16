@@ -96,7 +96,14 @@ use tokio::sync::broadcast;
 /// eventos `feedback_sent`, `merge_requested`, `blocked` e `continue_failed`
 /// do agendador (e o escopo `env:`), e `reason` em `DigestIssue` (o motivo da
 /// issue bloqueada).
-pub const PROTOCOL_VERSION: &str = "1.23";
+/// 1.24 (#215): análise de dependências do piloto automático — na fila de
+/// `ProjectPlan`, os skips `blocked_by`, `dependency_cycle` e
+/// `analysis_pending`, `blocked_by`, `dependencies` e `order` em
+/// `QueueItem`, `analysis` e `analysis_unsupported` em `ProjectPlan`, o
+/// bloqueio `analysis`, `hub.autopilot.deps.set` (também na web), os eventos
+/// `analysis_*`, `dependency_*` e `dependency_edited`, `waiting_blocker` em
+/// `DigestProject` e `analysis` em `SessionTemplates`.
+pub const PROTOCOL_VERSION: &str = "1.24";
 
 #[derive(Clone)]
 pub struct HubState {
@@ -229,6 +236,10 @@ pub fn router(state: HubState) -> Router {
         .route(
             "/agent/v1/proposals",
             get(agent::list_proposals).post(agent::create_proposal),
+        )
+        .route(
+            "/agent/v1/autopilot/dependencies",
+            axum::routing::post(agent::set_dependencies),
         );
     // Desligada, `/`, `/assets/*` e `/web/*` caem no 404 padrão.
     let r = if web {

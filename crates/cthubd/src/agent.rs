@@ -3,6 +3,9 @@
 //! repassa pelas ferramentas `portfolio_*`. Nenhuma rota daqui aplica
 //! mudança: a única escrita é `POST /agent/v1/proposals`, que cria proposta
 //! pendente (#218). Aprovar só pela UI do hub (`hub.proposals.decide`).
+//! A exceção é `POST /agent/v1/autopilot/dependencies` (#215): a sessão de
+//! análise da rodada (e só ela) grava as dependências entre as issues da
+//! fila do piloto automático, que valem na hora (a pessoa corrige na UI).
 //!
 //! O ambiente manda `X-Ctower-Env-Id`; um `env_id` diferente do preso ao
 //! token de sync do mesmo ambiente dá `403`, como no sync.
@@ -361,6 +364,128 @@ pub(crate) async fn create_proposal(
     .await;
     if resp.status() == StatusCode::CREATED {
         notify.proposals_changed();
+    }
+    resp
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct DependenciesBody {
+    owner: String,
+    repo: String,
+    #[serde(flatten)]
+    set: ct_ledger::DependencySet,
+}
+
+/// `POST /agent/v1/autopilot/dependencies` (#215): o resultado da sessão de
+/// análise do piloto automático. Só a sessão da rodada aberta do projeto,
+/// no ambiente do modo autônomo, grava.
+pub(crate) async fn set_dependencies(
+    State(st): State<HubState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let session = headers
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let notify = st.clone();
+    let resp = with_env(st, headers, move |h, env_id| {
+        let b: DependenciesBody = serde_json::from_slice(&body)
+            .map_err(|e| bad(format!("dependências inválidas: {e}")))?;
+        let p = h
+            .find_project(&b.owner, &b.repo)
+            .map_err(internal)?
+            .ok_or_else(|| not_found(format!("projeto {}/{} não cadastrado", b.owner, b.repo)))?;
+        let forbidden = |m: String| (StatusCode::FORBIDDEN, m);
+        if !p.autonomy.is_on() || p.autonomy.env_id.as_deref() != Some(env_id) {
+            return Err(forbidden(format!(
+                "{}/{}: só o ambiente do modo autônomo grava as dependências do piloto",
+                b.owner, b.repo
+            )));
+        }
+        let round = h.autopilot_analysis(p.id).map_err(internal)?;
+        let Some(round) = round else {
+            return Err((
+                StatusCode::CONFLICT,
+                "nenhuma rodada de análise aberta: a janela da política está fechada".into(),
+            ));
+        };
+        if session.is_none() || round.session_id != session {
+            return Err(forbidden(
+                "só a sessão de análise da rodada grava as dependências do piloto".into(),
+            ));
+        }
+        let now = ct_core::now_ms();
+        let r = h
+            .set_dependencies_from_analysis(p.id, &b.set, now)
+            .map_err(|e| match e {
+                LedgerError::Invalid(m) => bad(m),
+                LedgerError::Conflict(m) => (StatusCode::CONFLICT, m),
+                e => internal(e),
+            })?;
+        // Bloqueantes fora do espelho do projeto: a aresta vale (bloqueia)
+        // e o agente fica sabendo.
+        let cited: std::collections::BTreeSet<i64> = b
+            .set
+            .items
+            .iter()
+            .flat_map(|i| i.blocked_by.iter().map(|x| x.number))
+            .collect();
+        let unknown: Vec<i64> = h
+            .autopilot_blocker_states(p.id, p.autonomy.branch(), &cited)
+            .map_err(internal)?
+            .into_iter()
+            .filter(|(_, s)| *s == ct_ledger::BlockerState::Unknown)
+            .map(|(n, _)| n)
+            .collect();
+        let slug = format!("{}/{}", p.gh_owner, p.gh_repo);
+        let what = if r.planned {
+            "planejamento da janela concluído"
+        } else {
+            "reanálise gravada"
+        };
+        h.record_autopilot_event(&ct_ledger::AutopilotEvent {
+            at: now,
+            kind: crate::autopilot::plan::EV_ANALYSIS_DONE.into(),
+            scope: format!("project:{slug}"),
+            reason: Some(
+                if r.planned {
+                    crate::autopilot::plan::ANALYSIS_PLANNING
+                } else {
+                    crate::autopilot::plan::ANALYSIS_REANALYSIS
+                }
+                .into(),
+            ),
+            message: format!(
+                "{slug}: {what} ({} {}, {} {} de dependência)",
+                r.items,
+                if r.items == 1 { "issue" } else { "issues" },
+                r.edges,
+                if r.edges == 1 { "aresta" } else { "arestas" }
+            ),
+            env_id: Some(env_id.to_string()),
+            owner: Some(p.gh_owner.clone()),
+            repo: Some(p.gh_repo.clone()),
+            session_id: session.clone(),
+            ..Default::default()
+        })
+        .map_err(internal)?;
+        Ok(Json(serde_json::json!({
+            "items": r.items,
+            "edges": r.edges,
+            "kept_manual": r.kept_manual,
+            "analysed": r.analysed,
+            "planned": r.planned,
+            "unknown_blockers": unknown,
+        }))
+        .into_response())
+    })
+    .await;
+    if resp.status().is_success() {
+        notify.autopilot_changed();
+        notify.autopilot.kick();
     }
     resp
 }
@@ -839,5 +964,76 @@ mod tests {
         assert_eq!(s, StatusCode::BAD_REQUEST);
         let (s, _) = get(&f.st, "/agent/v1/decisions?origin=x", a, env).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    /// #215: só a sessão da rodada de análise aberta, no ambiente do modo
+    /// autônomo, grava as dependências; o resultado vale na hora.
+    #[tokio::test]
+    async fn dependencias_so_da_sessao_de_analise_da_rodada() {
+        let f = fx();
+        let path = "/agent/v1/autopilot/dependencies";
+        let body = json!({ "owner": "deep-ion-ai", "repo": "demo",
+                           "items": [{ "number": 11, "blocked_by": [
+                               { "number": 20, "reason": "usa a tabela nova" },
+                               { "number": 99, "reason": "outro projeto" }] }],
+                           "order": [20, 11] });
+        // Modo autônomo desligado no projeto.
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+        let pid = {
+            let h = f.st.hub.lock();
+            h.set_env_autonomous(&f.env_id, true).unwrap();
+            h.add_assignment("deep-ion-ai", "demo", &f.env_id, None)
+                .unwrap();
+            h.update_project(
+                "deep-ion-ai",
+                "demo",
+                &ct_ledger::HubProjectPatch {
+                    autonomy: Some(ct_core::AutonomyConfig {
+                        enabled: true,
+                        env_id: Some(f.env_id.clone()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            h.find_project("deep-ion-ai", "demo").unwrap().unwrap().id
+        };
+        // Sem rodada aberta (janela fechada).
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{v}");
+        // Rodada de outra sessão.
+        let mut round = ct_ledger::AnalysisRound {
+            project_id: pid,
+            session_id: Some("s-outra".into()),
+            env_id: f.env_id.clone(),
+            opened_at: 1,
+            pending: [(11, "fp".to_string())].into(),
+            ..Default::default()
+        };
+        f.st.hub.lock().save_autopilot_analysis(&round).unwrap();
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+        // A sessão da rodada (o `post` manda `s-gestor`).
+        round.session_id = Some("s-gestor".into());
+        f.st.hub.lock().save_autopilot_analysis(&round).unwrap();
+        let bad = json!({ "owner": "deep-ion-ai", "repo": "demo", "items": [{ "number": 0 }] });
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["edges"], 2);
+        assert_eq!(v["planned"], true);
+        assert_eq!(v["analysed"], 1);
+        assert_eq!(v["unknown_blockers"], json!([99]));
+        let h = f.st.hub.lock();
+        let deps = h.autopilot_dependencies(pid).unwrap();
+        assert_eq!(deps.len(), 2);
+        assert_eq!(deps[0].reason, "usa a tabela nova");
+        assert_eq!(h.autopilot_order(pid).unwrap()[&11], 2);
+        let ev = h.list_autopilot_events(5, None).unwrap();
+        assert_eq!(ev[0].kind, "analysis_done");
+        assert_eq!(ev[0].session_id.as_deref(), Some("s-gestor"));
     }
 }

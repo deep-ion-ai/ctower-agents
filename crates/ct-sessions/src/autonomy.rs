@@ -35,6 +35,11 @@ pub const AUTONOMY_SESSION: &str = "autonomy_session";
 /// Alerta (e evento no projeto) do alinhamento em conflito.
 pub const AUTONOMY_CONFLICT: &str = "autonomy_conflict";
 
+/// Evento no work item do projeto (#0) da sessão de análise de
+/// dependências do piloto automático (#215), com o id da sessão: só ela
+/// recebe texto no `session.continue` e vê `autopilot_set_dependencies`.
+pub const AUTOPILOT_ANALYSIS: &str = "autopilot_analysis";
+
 /// Um alinhamento por vez neste ambiente: dois inícios autônomos
 /// simultâneos não disputam o mesmo push.
 static ALIGN: Mutex<()> = Mutex::new(());
@@ -347,6 +352,43 @@ impl Sessions {
         self.check_approval(&project, &req)?;
         let report = self.autonomy_align(req.project_id, pr)?;
         self.start_with_base(req, Some((&report.branch, &report.base)))
+    }
+
+    /// Sessão de análise de dependências do piloto automático (#215): uma
+    /// sessão do projeto (#0, no clone principal, sem branch) com o prompt
+    /// que o hub renderizou, marcada com o evento [`AUTOPILOT_ANALYSIS`].
+    /// Só no ambiente do modo autônomo do projeto, com o modo ligado.
+    pub fn start_analysis(
+        &self,
+        project_id: i64,
+        prompt: &str,
+        size: Option<crate::launch::PtySize>,
+        agent: &crate::launch::AgentOptions,
+    ) -> Result<Session> {
+        self.autonomy_mode(project_id)?;
+        if prompt.trim().is_empty() {
+            return Err(SessionsError::Invalid(
+                "a sessão de análise precisa do prompt".into(),
+            ));
+        }
+        let s = self.start_project(project_id, prompt, size, agent)?;
+        self.ledger().append_event(NewEvent {
+            project_id,
+            work_item_id: Some(s.work_item_id),
+            session_id: Some(&s.id),
+            kind: AUTOPILOT_ANALYSIS,
+            payload: json!({ "session_id": s.id }),
+        })?;
+        Ok(s)
+    }
+
+    /// A sessão é a de análise de dependências do piloto (#215).
+    pub fn is_analysis_session(&self, s: &Session) -> Result<bool> {
+        Ok(self
+            .ledger()
+            .list_events_of_kind(s.work_item_id, AUTOPILOT_ANALYSIS)?
+            .iter()
+            .any(|e| e.session_id.as_deref() == Some(s.id.as_str())))
     }
 
     /// Relato `ok`, com o PR rascunho garantido. A branch sem commits além
@@ -686,6 +728,40 @@ mod tests {
         assert_eq!(r.state, AutonomyState::Ok);
         assert!(pr.0.lock().unwrap().is_empty());
         assert!(r.message.unwrap().contains("abra o MR rascunho"));
+    }
+
+    /// #215: a sessão de análise do piloto é uma sessão do projeto (#0),
+    /// só no ambiente do modo autônomo, com o prompt e marcada (só ela).
+    #[test]
+    fn sessao_de_analise_so_no_ambiente_do_modo_e_marcada() {
+        let agent = crate::AgentOptions::default();
+        for (on, runner) in [(false, false), (true, false)] {
+            let (env, _remote) = env_com_remoto(on, runner);
+            assert!(env
+                .sessions
+                .start_analysis(env.project_id, "Analise a fila", None, &agent)
+                .is_err());
+        }
+        let (env, _remote) = env_com_remoto(true, true);
+        assert!(env
+            .sessions
+            .start_analysis(env.project_id, "  ", None, &agent)
+            .is_err());
+        let s = env
+            .sessions
+            .start_analysis(env.project_id, "Analise a fila", None, &agent)
+            .unwrap();
+        let wi = env.sessions.ledger().get_work_item(s.work_item_id).unwrap();
+        assert_eq!(wi.gh_number, crate::launch::PROJECT_WORK_ITEM);
+        assert!(env.sessions.is_analysis_session(&s).unwrap());
+        let out = env.wait_fake_output(&s.id);
+        assert!(out.contains("Analise a fila"), "{out}");
+        // Outra sessão do projeto, no mesmo work item, não é a de análise.
+        let p = env
+            .sessions
+            .start_project(env.project_id, "planejar", None, &agent)
+            .unwrap();
+        assert!(!env.sessions.is_analysis_session(&p).unwrap());
     }
 
     #[test]

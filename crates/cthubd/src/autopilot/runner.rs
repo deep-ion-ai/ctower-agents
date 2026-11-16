@@ -10,11 +10,19 @@
 //! que enviou (`autopilot_close`) e, ao bloquear, encerra a sessão e põe a
 //! issue em `bloqueado` pelo mesmo caminho da mudança manual de status
 //! (`status_set_manual` com o `hub_id`).
+//!
+//! Na análise de dependências (#215), o ciclo pergunta o protocolo aos
+//! ambientes dos projetos autônomos, inicia a sessão de análise pelo
+//! `session.start_project` (`analysis: true`, com o prompt renderizado
+//! aqui), acorda-a pelo `session.continue` e a encerra no fim da janela,
+//! guardando a rodada (`autopilot_analysis`).
 
-use super::plan::{self, Action, Outcome, ProjectPlan, ResumeVia, SendKind, Snapshot};
+use super::plan::{
+    self, Action, AnalysisStart, Outcome, ProjectPlan, ResumeVia, SendKind, Snapshot,
+};
 use crate::HubState;
 use ct_core::{AutonomyState, PrState, SessionState, WorkItemStatus};
-use ct_http::rpc::{invalid, RpcResult};
+use ct_http::rpc::{invalid, str_param, RpcResult};
 use ct_ledger::{
     AutonomyWip, AutopilotEvent, AutopilotSession, AutopilotSettings, Hub, ParkedSession,
     RankingFilter, SharedHub, RANKING_MAX,
@@ -51,7 +59,13 @@ const RESUME_PROMPT: &str =
 pub struct Scheduler {
     kick: Notify,
     last_tick_at: AtomicI64,
+    /// Protocolo de cada ambiente lido no último ciclo (`env.info`), para o
+    /// `status` do painel saber se o ambiente roda a análise (#215).
+    protocols: std::sync::Mutex<Protocols>,
 }
+
+/// Protocolo `(major, minor)` de cada ambiente, por id.
+pub type Protocols = std::collections::BTreeMap<String, (u32, u32)>;
 
 impl Scheduler {
     /// Pede um ciclo já (leitura nova do plano, pausa retomada).
@@ -62,6 +76,14 @@ impl Scheduler {
     /// Último ciclo (ms); `None` = ainda não rodou.
     pub fn last_tick_at(&self) -> Option<i64> {
         Some(self.last_tick_at.load(Ordering::Relaxed)).filter(|t| *t > 0)
+    }
+
+    /// Os protocolos lidos no último ciclo.
+    pub fn protocols(&self) -> Protocols {
+        self.protocols
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -102,11 +124,16 @@ pub fn spawn(st: HubState) {
         tokio::time::sleep(FIRST_TICK).await;
         loop {
             let now = ct_core::now_ms();
-            match tick(&st.hub, &port, &st.hub_id, now).await {
+            let mut protocols = st.autopilot.protocols();
+            match tick_with(&st.hub, &port, &st.hub_id, now, &mut protocols).await {
                 Ok(n) if n > 0 => st.autopilot_changed(),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("piloto automático: ciclo falhou: {e}"),
             }
+            *st.autopilot
+                .protocols
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = protocols;
             // Resumo da manhã (#185): no horário da política, uma vez por
             // dia útil; vira o card da Visão geral e a Web Push.
             let hub = st.hub.clone();
@@ -164,6 +191,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
                 account: accounts.get(&e.env_id).cloned(),
                 name: e.name,
                 continue_text: None,
+                analysis: None,
             },
         );
     }
@@ -280,11 +308,19 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
             project: Some((p.gh_owner.clone(), p.gh_repo.clone())),
             priority: None,
         };
+        let meta = hub.autopilot_issue_meta(p.id)?;
         let mut items = Vec::new();
         for r in hub.ranking(&filter, RANKING_MAX)?.items {
             let model = hub
                 .issue_agent(&p.gh_owner, &p.gh_repo, r.number)?
                 .and_then(|a| a.model);
+            let (updated_at, labels) = meta.get(&r.number).cloned().unwrap_or_default();
+            let fingerprint = ct_ledger::issue_fingerprint(
+                r.title.as_deref().unwrap_or_default(),
+                updated_at,
+                r.priority.map(|p| p.as_str()),
+                &labels,
+            );
             items.push(plan::ItemSnap {
                 number: r.number,
                 title: r.title,
@@ -293,18 +329,72 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
                 priority: r.priority,
                 model,
                 approved: hub.is_approved(&p.gh_owner, &p.gh_repo, r.number)?,
+                fingerprint,
             });
         }
+        // Dependências (#215): as arestas e a situação de cada bloqueante
+        // citado nas ativas.
+        let integration = p.autonomy.branch().to_string();
+        let deps = hub.autopilot_dependencies(p.id)?;
+        let cited: std::collections::BTreeSet<i64> = deps
+            .iter()
+            .filter(|d| !d.removed)
+            .map(|d| d.blocker)
+            .collect();
+        let tracker_hint = match &p.tracker {
+            ct_core::TrackerConfig::Github => {
+                format!("`gh issue view <número> -R {}/{}`", p.gh_owner, p.gh_repo)
+            }
+            ct_core::TrackerConfig::Jira(_) => "`jira issue view <chave>`".to_string(),
+        };
         s.projects.push(plan::ProjectSnap {
             wip: hub.project_wip(p.id)?,
             approval_label: p.approval.active_label().map(String::from),
+            blockers: hub.autopilot_blocker_states(p.id, &integration, &cited)?,
+            order: hub.autopilot_order(p.id)?,
+            analysed: hub.autopilot_analysed(p.id)?,
+            project_id: p.id,
+            templates: p.session_templates.clone(),
             owner: p.gh_owner,
             repo: p.gh_repo,
             env_id,
             conflict,
             autonomy_error,
             items,
+            integration,
+            deps,
+            tracker_hint,
         });
+    }
+    // Rodadas de análise abertas (#215) e o estado das sessões delas.
+    let rounds = hub.autopilot_analyses()?;
+    let names: std::collections::BTreeMap<i64, (String, String)> = if rounds.is_empty() {
+        Default::default()
+    } else {
+        hub.list_projects()?
+            .into_iter()
+            .map(|p| (p.id, (p.gh_owner, p.gh_repo)))
+            .collect()
+    };
+    for r in rounds {
+        if let Some(sid) = &r.session_id {
+            if let Some(st) = hub.autopilot_session_state(sid)? {
+                s.analysis_states.insert(sid.clone(), st);
+            }
+        }
+        // Projeto apagado: sem nome, e o `decide` fecha a rodada.
+        let (owner, repo) = names
+            .get(&r.project_id)
+            .cloned()
+            .unwrap_or_else(|| ("projeto".into(), r.project_id.to_string()));
+        s.analyses.insert(
+            r.project_id,
+            plan::AnalysisSnap {
+                owner,
+                repo,
+                round: r,
+            },
+        );
     }
     Ok(s)
 }
@@ -350,9 +440,15 @@ fn start_error_reason(code: i64) -> &'static str {
     }
 }
 
-/// O ambiente aceita texto no `session.continue`? Pelo `env.info`
-/// (`protocol`); `None` = não respondeu agora.
-async fn continue_text_supported(port: &dyn EnvPort, env_id: &str) -> Option<bool> {
+/// O que o ambiente aceita, pelo protocolo; `None` = não se sabe.
+fn set_protocol(e: &mut plan::EnvSnap, protocol: Option<(u32, u32)>) {
+    e.continue_text = protocol.map(|p| p >= plan::CONTINUE_TEXT_PROTOCOL);
+    e.analysis = protocol.map(|p| p >= plan::ANALYSIS_PROTOCOL);
+}
+
+/// O protocolo do ambiente, pelo `env.info`; `None` = não respondeu agora.
+/// Sem o campo (ou ilegível) conta como `0.0`: anterior a tudo.
+async fn env_protocol(port: &dyn EnvPort, env_id: &str) -> Option<(u32, u32)> {
     let v = port
         .call(env_id.to_string(), "env.info", json!({}))
         .await
@@ -361,7 +457,7 @@ async fn continue_text_supported(port: &dyn EnvPort, env_id: &str) -> Option<boo
         v.get("protocol")
             .and_then(Value::as_str)
             .and_then(plan::parse_protocol)
-            .is_some_and(|p| p >= plan::CONTINUE_TEXT_PROTOCOL),
+            .unwrap_or((0, 0)),
     )
 }
 
@@ -374,22 +470,39 @@ pub async fn tick(
     hub_id: &str,
     now: i64,
 ) -> Result<usize, String> {
+    tick_with(hub, port, hub_id, now, &mut Protocols::new()).await
+}
+
+/// [`tick`] guardando em `protocols` a versão de cada ambiente que
+/// respondeu ao `env.info` (o `status` do painel a reaproveita).
+pub async fn tick_with(
+    hub: &SharedHub,
+    port: &dyn EnvPort,
+    hub_id: &str,
+    now: i64,
+    protocols: &mut Protocols,
+) -> Result<usize, String> {
     let mut snap = {
         let h = hub.lock();
         snapshot(&h, port, now).map_err(ledger_err)?
     };
-    // Só pergunta a versão aos ambientes com algo a fechar.
+    // Só pergunta a versão aos ambientes com algo a fechar e aos dos
+    // projetos autônomos (a análise de dependências, #215).
     let envs: std::collections::BTreeSet<String> = snap
         .sessions
         .iter()
         .filter(|x| snap.closing.contains_key(&x.session_id))
         .map(|x| x.env_id.clone())
+        .chain(snap.projects.iter().map(|p| p.env_id.clone()))
         .filter(|id| snap.envs.get(id).is_some_and(|e| e.online))
         .collect();
     for id in envs {
-        let ok = continue_text_supported(port, &id).await;
+        let protocol = env_protocol(port, &id).await;
+        if let Some(p) = protocol {
+            protocols.insert(id.clone(), p);
+        }
         if let Some(e) = snap.envs.get_mut(&id) {
-            e.continue_text = ok;
+            set_protocol(e, protocol);
         }
     }
     let outcome = plan::decide(&snap);
@@ -405,6 +518,14 @@ pub async fn tick(
             ..event("refused", r.scope.clone(), r.message.clone(), now)
         })
         .collect();
+    events.extend(outcome.notices.iter().map(|(kind, r)| AutopilotEvent {
+        reason: Some(r.reason.clone()),
+        account_key: r.account.clone(),
+        env_id: r.env_id.clone(),
+        owner: r.owner.clone(),
+        repo: r.repo.clone(),
+        ..event(kind, r.scope.clone(), r.message.clone(), now)
+    }));
     for a in outcome.actions {
         match a {
             Action::Park(p) => {
@@ -602,6 +723,130 @@ pub async fn tick(
                     ..event("blocked", format!("item:{slug}"), message, now)
                 });
             }
+            Action::StartAnalysis(a) => {
+                events.extend(start_analysis(hub, port, a, now).await?);
+            }
+            Action::ContinueAnalysis {
+                round,
+                owner,
+                repo,
+                text,
+                message,
+            } => {
+                let Some(sid) = round.session_id.clone() else {
+                    continue;
+                };
+                let ev = analysis_event(&owner, &repo, &round.env_id, Some(&sid), now);
+                match port
+                    .call(
+                        round.env_id.clone(),
+                        "session.continue",
+                        json!({ "session_id": sid, "text": text }),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        hub.lock()
+                            .save_autopilot_analysis(&round)
+                            .map_err(ledger_err)?;
+                        events.push(AutopilotEvent {
+                            kind: plan::EV_ANALYSIS_STARTED.into(),
+                            reason: Some(plan::ANALYSIS_REANALYSIS.into()),
+                            message,
+                            ..ev
+                        });
+                    }
+                    Err((c, _))
+                        if c == ct_http::sync::CHANNEL_ENV_OFFLINE
+                            || c == ct_http::sync::CHANNEL_TIMEOUT => {}
+                    // A sessão não aceitou: falha, e outra inicia depois.
+                    Err((_, m)) => {
+                        let failed = ct_ledger::AnalysisRound {
+                            session_id: None,
+                            pending: Default::default(),
+                            failed_at: Some(now),
+                            ..round
+                        };
+                        hub.lock()
+                            .save_autopilot_analysis(&failed)
+                            .map_err(ledger_err)?;
+                        events.push(AutopilotEvent {
+                            kind: plan::EV_ANALYSIS_FAILED.into(),
+                            reason: Some("continue_failed".into()),
+                            message: format!(
+                                "{owner}/{repo}: o pedido de reanálise falhou (session.continue): {m}"
+                            ),
+                            ..ev
+                        });
+                    }
+                }
+            }
+            Action::CloseAnalysis {
+                round,
+                owner,
+                repo,
+                message,
+            } => {
+                if let Some(sid) = &round.session_id {
+                    // Ambiente offline ou sessão já encerrada: a rodada fecha
+                    // mesmo assim.
+                    let _ = port
+                        .call(
+                            round.env_id.clone(),
+                            "session.kill",
+                            json!({ "session_id": sid }),
+                        )
+                        .await;
+                }
+                hub.lock()
+                    .close_autopilot_analysis(round.project_id)
+                    .map_err(ledger_err)?;
+                events.push(AutopilotEvent {
+                    kind: plan::EV_ANALYSIS_ENDED.into(),
+                    reason: Some("fim_da_janela".into()),
+                    message,
+                    ..analysis_event(
+                        &owner,
+                        &repo,
+                        &round.env_id,
+                        round.session_id.as_deref(),
+                        now,
+                    )
+                });
+            }
+            Action::FailAnalysis {
+                round,
+                kill,
+                owner,
+                repo,
+                message,
+            } => {
+                if let Some(sid) = &kill {
+                    let _ = port
+                        .call(
+                            round.env_id.clone(),
+                            "session.kill",
+                            json!({ "session_id": sid }),
+                        )
+                        .await;
+                }
+                hub.lock()
+                    .save_autopilot_analysis(&round)
+                    .map_err(ledger_err)?;
+                events.push(AutopilotEvent {
+                    kind: plan::EV_ANALYSIS_FAILED.into(),
+                    reason: Some(
+                        if kill.is_some() {
+                            "parada"
+                        } else {
+                            "sessao_encerrada"
+                        }
+                        .into(),
+                    ),
+                    message,
+                    ..analysis_event(&owner, &repo, &round.env_id, kill.as_deref(), now)
+                });
+            }
             Action::Start(i) => {
                 let slug = format!("{}/{}#{}", i.owner, i.repo, i.number);
                 // Sem `prompt` (o ambiente monta o autônomo, #191) e nunca
@@ -676,6 +921,106 @@ pub async fn tick(
     Ok(recorded)
 }
 
+/// Base dos eventos da análise de um projeto (#215).
+fn analysis_event(
+    owner: &str,
+    repo: &str,
+    env_id: &str,
+    session_id: Option<&str>,
+    at: i64,
+) -> AutopilotEvent {
+    AutopilotEvent {
+        at,
+        scope: format!("project:{owner}/{repo}"),
+        env_id: Some(env_id.to_string()),
+        owner: Some(owner.to_string()),
+        repo: Some(repo.to_string()),
+        session_id: session_id.map(String::from),
+        ..Default::default()
+    }
+}
+
+/// Inicia a sessão de análise (#215) pelo `session.start_project` com
+/// `analysis: true` e grava a rodada com a sessão; a recusa grava a rodada
+/// sem sessão e com a falha (outra tentativa depois do prazo).
+async fn start_analysis(
+    hub: &SharedHub,
+    port: &dyn EnvPort,
+    a: AnalysisStart,
+    now: i64,
+) -> Result<Vec<AutopilotEvent>, String> {
+    let params = json!({
+        "owner": a.owner,
+        "repo": a.repo,
+        "prompt": a.prompt,
+        "analysis": true,
+    });
+    let slug = format!("{}/{}", a.owner, a.repo);
+    let base = AutopilotEvent {
+        account_key: Some(a.account.clone()),
+        ..analysis_event(&a.owner, &a.repo, &a.env_id, None, now)
+    };
+    match port
+        .call(a.env_id.clone(), "session.start_project", params)
+        .await
+    {
+        Ok(v) => {
+            let sid = v.get("id").and_then(Value::as_str).map(String::from);
+            let round = ct_ledger::AnalysisRound {
+                session_id: sid.clone(),
+                failed_at: None,
+                ..a.round
+            };
+            hub.lock()
+                .save_autopilot_analysis(&round)
+                .map_err(ledger_err)?;
+            let what = if a.reason == plan::ANALYSIS_PLANNING {
+                "planejamento da janela"
+            } else {
+                "a anterior falhou"
+            };
+            Ok(vec![AutopilotEvent {
+                kind: plan::EV_ANALYSIS_STARTED.into(),
+                reason: Some(a.reason.into()),
+                session_id: sid,
+                message: format!(
+                    "{slug}: sessão de análise de dependências iniciada ({what}, {} {})",
+                    round.pending.len(),
+                    if round.pending.len() == 1 {
+                        "issue"
+                    } else {
+                        "issues"
+                    }
+                ),
+                ..base
+            }])
+        }
+        // Canal caiu: tenta no próximo ciclo, sem contar como falha.
+        Err((c, _))
+            if c == ct_http::sync::CHANNEL_ENV_OFFLINE || c == ct_http::sync::CHANNEL_TIMEOUT =>
+        {
+            Ok(Vec::new())
+        }
+        Err((code, m)) => {
+            let round = ct_ledger::AnalysisRound {
+                session_id: None,
+                pending: Default::default(),
+                failed_at: Some(now),
+                ..a.round
+            };
+            hub.lock()
+                .save_autopilot_analysis(&round)
+                .map_err(ledger_err)?;
+            Ok(vec![AutopilotEvent {
+                kind: plan::EV_ANALYSIS_FAILED.into(),
+                reason: Some(start_error_reason(code).into()),
+                message: format!("{slug}: a sessão de análise não iniciou: {m}"),
+                ..base
+            }])
+        }
+    }
+}
+
 trait Merge {
     fn merge(self, base: &AutopilotEvent) -> AutopilotEvent;
 }
@@ -742,8 +1087,15 @@ pub fn status(
     last_tick_at: Option<i64>,
     now: i64,
     web: bool,
+    protocols: &Protocols,
 ) -> ct_ledger::Result<AutopilotStatus> {
-    let s = snapshot(hub, port, now)?;
+    let mut s = snapshot(hub, port, now)?;
+    // A versão lida no último ciclo (o status não chama o ambiente).
+    for (id, e) in s.envs.iter_mut() {
+        if e.online {
+            set_protocol(e, protocols.get(id).copied());
+        }
+    }
     let Outcome { mut projects, .. } = plan::decide(&s);
     let autonomous: std::collections::BTreeSet<&str> = s
         .envs
@@ -813,9 +1165,9 @@ pub fn status(
     })
 }
 
-/// `hub.autopilot.status|events|pause|resume|set` (#183) e
-/// `hub.autopilot.digest|wip` (#185). `web` = vindo do
-/// `/web/ws` (sem as chaves de conta).
+/// `hub.autopilot.status|events|pause|resume|set` (#183),
+/// `hub.autopilot.digest|wip` (#185) e `hub.autopilot.deps.set` (#215).
+/// `web` = vindo do `/web/ws` (sem as chaves de conta).
 pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> RpcResult {
     let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
     let now = ct_core::now_ms();
@@ -826,8 +1178,15 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
             match method2.as_str() {
                 "hub.autopilot.status" => {
                     let port = HubPort(st2.clone());
-                    let v =
-                        status(&hub, &port, st2.autopilot.last_tick_at(), now, web).map_err(e)?;
+                    let v = status(
+                        &hub,
+                        &port,
+                        st2.autopilot.last_tick_at(),
+                        now,
+                        web,
+                        &st2.autopilot.protocols(),
+                    )
+                    .map_err(e)?;
                     Ok((json!(v), false))
                 }
                 "hub.autopilot.events" => {
@@ -877,6 +1236,61 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     let repo = p.get("repo").and_then(Value::as_str);
                     let only = owner.zip(repo);
                     Ok((json!(hub.autonomy_wip(only).map_err(e)?), false))
+                }
+                // Correção manual de uma aresta de dependência (#215): vale
+                // na hora e prevalece sobre a análise seguinte.
+                "hub.autopilot.deps.set" => {
+                    let owner = str_param(&p, "owner")?;
+                    let repo = str_param(&p, "repo")?;
+                    let int = |k: &str| {
+                        p.get(k)
+                            .and_then(Value::as_i64)
+                            .filter(|n| *n > 0)
+                            .ok_or_else(|| invalid(format!("{k} deve ser um número de issue")))
+                    };
+                    let number = int("number")?;
+                    let blocker = int("blocker")?;
+                    let edit = match str_param(&p, "action")? {
+                        "add" => ct_ledger::ManualEdit::Add,
+                        "remove" => ct_ledger::ManualEdit::Remove,
+                        "reset" => ct_ledger::ManualEdit::Reset,
+                        a => {
+                            return Err(invalid(format!(
+                                "action inválida: {a} (use add, remove ou reset)"
+                            )))
+                        }
+                    };
+                    let reason = p.get("reason").and_then(Value::as_str).unwrap_or_default();
+                    let proj = hub
+                        .find_project(owner, repo)
+                        .map_err(e)?
+                        .ok_or_else(|| invalid(format!("projeto {owner}/{repo} não cadastrado")))?;
+                    hub.set_dependency_manual(proj.id, number, blocker, edit, reason, now)
+                        .map_err(|err| match err {
+                            ct_ledger::LedgerError::Invalid(m) => invalid(m),
+                            err => e(err),
+                        })?;
+                    let what = match edit {
+                        ct_ledger::ManualEdit::Add => "adicionada",
+                        ct_ledger::ManualEdit::Remove => "removida",
+                        ct_ledger::ManualEdit::Reset => "devolvida à análise",
+                    };
+                    let (o, r) = (&proj.gh_owner, &proj.gh_repo);
+                    hub.record_autopilot_event(&AutopilotEvent {
+                        reason: Some(str_param(&p, "action")?.to_string()),
+                        owner: Some(o.clone()),
+                        repo: Some(r.clone()),
+                        gh_number: Some(number),
+                        ..event(
+                            "dependency_edited",
+                            format!("item:{o}/{r}#{number}"),
+                            format!("{o}/{r}#{number}: dependência de #{blocker} {what} à mão"),
+                            now,
+                        )
+                    })
+                    .map_err(e)?;
+                    let deps = hub.autopilot_dependencies(proj.id).map_err(e)?;
+                    Ok((json!({ "dependencies": deps }), true))
                 }
                 "hub.autopilot.set" => {
                     let num = |k: &str| -> Result<Option<u32>, (i64, String)> {
@@ -969,6 +1383,8 @@ mod tests {
     struct FakePort {
         offline: bool,
         calls: Mutex<Vec<(String, String, Value)>>,
+        /// Ambientes a que o ciclo perguntou a versão (`env.info`).
+        infos: Mutex<Vec<String>>,
         /// Resposta de `session.start`; `None` = `{ "id": "s-<n>" }`.
         start_error: Option<(i64, String)>,
         /// Erro de `session.kill`; `None` = encerra.
@@ -989,13 +1405,20 @@ mod tests {
             params: Value,
         ) -> Pin<Box<dyn Future<Output = RpcResult> + Send + '_>> {
             let n = params.get("gh_number").and_then(Value::as_i64).unwrap_or(0);
-            self.calls
-                .lock()
-                .unwrap()
-                .push((env_id, method.into(), params));
+            // A versão (`env.info`) vai à parte: o ciclo pergunta a todo
+            // ambiente de projeto autônomo (#215).
+            if method == "env.info" {
+                self.infos.lock().unwrap().push(env_id.clone());
+            } else {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((env_id, method.into(), params.clone()));
+            }
             let r = match (&self.start_error, method) {
                 (Some(e), "session.start") => Err(e.clone()),
                 (_, "session.start") => Ok(json!({ "id": format!("s-{n}") })),
+                (_, "session.start_project") => Ok(json!({ "id": "s-0" })),
                 (_, "session.kill") if self.kill_error.is_some() => {
                     Err(self.kill_error.clone().unwrap())
                 }
@@ -1125,7 +1548,8 @@ mod tests {
         let hub = hub();
         let port = FakePort::default();
         let n = tick(&hub, &port, "hub-id", SAB).await.unwrap();
-        assert_eq!(n, 1);
+        // O início e o aviso de ambiente sem a análise (#215).
+        assert_eq!(n, 2);
         let calls = port.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
         let (env, method, params) = &calls[0];
@@ -1139,7 +1563,7 @@ mod tests {
                      "title": "ACME-123", "autonomous": true })
         );
         assert!(params.get("prompt").is_none() && params.get("override_approval").is_none());
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev[0].kind, "started");
         assert_eq!(ev[0].session_id.as_deref(), Some("s-123"));
         assert_eq!(ev[0].gh_number, Some(123));
@@ -1174,7 +1598,7 @@ mod tests {
         let port = FakePort::default();
         tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert_eq!(port.calls.lock().unwrap().len(), 1);
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev[0].kind, "started");
         assert_eq!(ev[0].reason.as_deref(), Some(PROBE_REASON));
         assert!(ev[0].message.contains("sonda"));
@@ -1183,7 +1607,7 @@ mod tests {
         port.calls.lock().unwrap().clear();
         tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
         assert!(port.calls.lock().unwrap().is_empty());
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev[0].kind, "refused");
         assert_eq!(ev[0].reason.as_deref(), Some("budget:no_reading"));
     }
@@ -1231,7 +1655,7 @@ mod tests {
             tick(&hub, &port, "hub-id", SAB + i * 60_000).await.unwrap();
         }
         assert!(port.calls.lock().unwrap().is_empty());
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev.len(), 1, "{ev:?}");
         assert_eq!(ev[0].kind, "refused");
         assert_eq!(ev[0].reason.as_deref(), Some("autonomy_error"));
@@ -1265,7 +1689,7 @@ mod tests {
             tick(&hub, &port, "hub-id", SAB + i * 60_000).await.unwrap();
         }
         assert!(port.calls.lock().unwrap().is_empty());
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev.len(), 1, "{ev:?}");
         assert_eq!(ev[0].kind, "refused");
         assert_eq!(ev[0].reason.as_deref(), Some("budget:five_hour_over_cap"));
@@ -1284,7 +1708,7 @@ mod tests {
         };
         tick(&hub, &port, "hub-id", SAB).await.unwrap();
         tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev.len(), 1, "{ev:?}");
         assert_eq!(ev[0].kind, "start_failed");
         assert_eq!(ev[0].reason.as_deref(), Some("approval_required"));
@@ -1337,7 +1761,7 @@ mod tests {
     async fn status_mostra_fila_e_esconde_a_conta_na_web() {
         let hub = hub();
         let port = FakePort::default();
-        let s = status(&hub.lock(), &port, None, SAB, false).unwrap();
+        let s = status(&hub.lock(), &port, None, SAB, false, &antigo()).unwrap();
         assert_eq!(s.projects.len(), 1);
         let p = &s.projects[0];
         assert_eq!(p.next, Some(123));
@@ -1348,7 +1772,7 @@ mod tests {
         // Status não tem efeito.
         assert!(port.calls.lock().unwrap().is_empty());
 
-        let w = status(&hub.lock(), &port, None, SAB, true).unwrap();
+        let w = status(&hub.lock(), &port, None, SAB, true, &antigo()).unwrap();
         assert_eq!(w.accounts[0].account, "conta-1");
         assert_eq!(w.projects[0].account.as_deref(), Some("conta-1"));
     }
@@ -1362,14 +1786,22 @@ mod tests {
         };
         tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert!(port.calls.lock().unwrap().is_empty());
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev[0].reason.as_deref(), Some("env_offline"));
     }
 
     #[tokio::test]
     async fn resumo_e_wip_pelo_ws_sem_a_conta_na_web() {
         let hub = hub();
-        let s = status(&hub.lock(), &FakePort::default(), None, SAB, false).unwrap();
+        let s = status(
+            &hub.lock(),
+            &FakePort::default(),
+            None,
+            SAB,
+            false,
+            &antigo(),
+        )
+        .unwrap();
         assert_eq!(s.wip.len(), 1);
         assert_eq!(s.wip[0].branch, "wip/autonoma");
         // Segunda 09:00 em GMT-3, a semana seguinte ao `SAB`.
@@ -1453,7 +1885,7 @@ mod tests {
         let port = FakePort::default();
         tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev[0].kind, "ended");
         assert_eq!(ev[0].reason.as_deref(), Some(plan::END_DONE));
         assert_eq!(ev[0].session_id.as_deref(), Some("s1"));
@@ -1514,7 +1946,7 @@ mod tests {
             .is_err());
         tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         assert_eq!(ev[0].kind, "ended");
         assert_eq!(ev[0].reason.as_deref(), Some(plan::END_IDLE));
         assert!(ev[0].message.contains("15 min"), "{}", ev[0].message);
@@ -1582,7 +2014,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(kills(&port).len(), 2);
-        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        let ev = sched_events(&hub);
         let failed: Vec<_> = ev.iter().filter(|e| e.kind == "end_failed").collect();
         assert_eq!(failed.len(), 1, "{ev:?}");
         assert_eq!(failed[0].reason.as_deref(), Some(plan::END_DONE));
@@ -1593,6 +2025,23 @@ mod tests {
     use ct_ledger::{
         CheckSource, ChecksRead, PrCheck, PrChecksFetch, PrChecksSnapshot, PrReviews, PrRow,
     };
+
+    /// `env-auto` no protocolo 2.22 (sem a análise, #215), como lido no
+    /// último ciclo.
+    fn antigo() -> Protocols {
+        Protocols::from([("env-auto".to_string(), (2, 22))])
+    }
+
+    /// Eventos do agendador sem o aviso de ambiente sem a análise (#215),
+    /// que os testes anteriores a ela não esperam.
+    fn sched_events(hub: &SharedHub) -> Vec<AutopilotEvent> {
+        hub.lock()
+            .list_autopilot_events(10, None)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind != plan::EV_ANALYSIS_UNSUPPORTED)
+            .collect()
+    }
 
     fn calls_of(port: &FakePort, method: &str) -> Vec<Value> {
         port.calls
@@ -1931,9 +2380,91 @@ mod tests {
         let port = FakePort::default();
         tick(&hub, &port, "hub-id", SAB).await.unwrap();
         assert!(calls_of(&port, "session.continue").is_empty());
-        assert!(calls_of(&port, "env.info").is_empty());
         // O comportamento anterior: encerra como `pr_aberto`.
         assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
+    }
+
+    /// #215, de ponta a ponta no hub: com o ambiente 2.23, a janela aberta
+    /// inicia a sessão de análise (não a implementação); a gravação das
+    /// dependências conclui o planejamento e a 123 inicia; no fim da janela
+    /// a análise é encerrada e a rodada fecha.
+    #[tokio::test]
+    async fn analise_inicia_grava_libera_a_fila_e_fecha_no_fim_da_janela() {
+        let hub = hub();
+        let port = FakePort {
+            protocol: Some("2.23"),
+            ..Default::default()
+        };
+        tick(&hub, &port, "hub-id", SAB).await.unwrap();
+        let starts = calls_of(&port, "session.start_project");
+        assert_eq!(starts.len(), 1, "{:?}", port.calls.lock().unwrap());
+        assert!(calls_of(&port, "session.start").is_empty());
+        assert_eq!(starts[0]["analysis"], true);
+        assert_eq!(starts[0]["owner"], "acme");
+        let prompt = starts[0]["prompt"].as_str().unwrap();
+        assert!(prompt.contains("- #123 ACME-123 (P1)"), "{prompt}");
+        assert!(
+            prompt.contains("gh issue view <número> -R acme/acme-web"),
+            "{prompt}"
+        );
+        let pid = hub
+            .lock()
+            .find_project("acme", "acme-web")
+            .unwrap()
+            .unwrap()
+            .id;
+        let round = hub.lock().autopilot_analysis(pid).unwrap().unwrap();
+        assert_eq!(round.session_id.as_deref(), Some("s-0"));
+        assert_eq!(round.planned_at, None);
+        assert_eq!(round.pending.keys().copied().collect::<Vec<_>>(), vec![123]);
+        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        assert_eq!(ev[0].kind, plan::EV_ANALYSIS_STARTED);
+        assert_eq!(ev[0].reason.as_deref(), Some(plan::ANALYSIS_PLANNING));
+
+        // Planejamento em andamento: nada inicia.
+        port.calls.lock().unwrap().clear();
+        tick(&hub, &port, "hub-id", SAB + 60_000).await.unwrap();
+        assert!(port.calls.lock().unwrap().is_empty());
+
+        // A sessão grava (o que a rota de agente faz): a 123 inicia.
+        let set = ct_ledger::DependencySet {
+            items: vec![ct_ledger::DependencyInput {
+                number: 123,
+                blocked_by: vec![],
+            }],
+            order: vec![123],
+        };
+        let r = hub
+            .lock()
+            .set_dependencies_from_analysis(pid, &set, SAB + 90_000)
+            .unwrap();
+        assert!(r.planned);
+        tick(&hub, &port, "hub-id", SAB + 120_000).await.unwrap();
+        assert_eq!(calls_of(&port, "session.start").len(), 1);
+        let s = status(
+            &hub.lock(),
+            &port,
+            None,
+            SAB + 120_000,
+            false,
+            &Protocols::from([("env-auto".to_string(), (2, 23))]),
+        )
+        .unwrap();
+        assert_eq!(s.projects[0].analysis.as_ref().unwrap().state, "ready");
+        assert_eq!(s.projects[0].queue[0].order, Some(1));
+
+        // Segunda, 08:01: a faixa comercial fecha a janela.
+        port.calls.lock().unwrap().clear();
+        let segunda = SAB + 2 * 24 * H - 4 * H + 60_000;
+        reading(&hub.lock(), 10.0, segunda);
+        tick(&hub, &port, "hub-id", segunda).await.unwrap();
+        assert_eq!(kills(&port), vec![json!({ "session_id": "s-0" })]);
+        assert!(hub.lock().autopilot_analysis(pid).unwrap().is_none());
+        let ev = hub.lock().list_autopilot_events(10, None).unwrap();
+        assert!(
+            ev.iter().any(|e| e.kind == plan::EV_ANALYSIS_ENDED),
+            "{ev:?}"
+        );
     }
 
     #[tokio::test]

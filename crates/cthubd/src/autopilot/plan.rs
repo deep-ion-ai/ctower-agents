@@ -65,13 +65,35 @@
 //!   em `aguardando_voce` há `waiting_timeout_min` é encerrada e a issue
 //!   fica `bloqueado` (`aguardando_voce`). A estacionada nunca, nem a da
 //!   conta com a janela esgotada (essa estaciona).
+//! - **Análise de dependências (#215):** com a janela da rodada aberta
+//!   ([`super::deps::window_open`]: a faixa da política permite iniciar) e o
+//!   orçamento permitindo um início, o projeto com issues na fila ganha uma
+//!   sessão de análise ([`Action::StartAnalysis`], sessão do projeto, #0)
+//!   antes de qualquer implementação: enquanto o planejamento não termina, o
+//!   projeto fica bloqueado (`analysis`). Ela não ocupa a vaga do ambiente
+//!   e conta como o início da conta no ciclo. Depois, issue nova ou alterada
+//!   (impressão digital diferente da analisada) fica fora (`analysis_pending`)
+//!   e o hub acorda a sessão ociosa com a lista ([`Action::ContinueAnalysis`],
+//!   nunca com a conta na janela esgotada). Fim da janela, modo desligado ou
+//!   ambiente sem a análise: a sessão é encerrada e a rodada fecha
+//!   ([`Action::CloseAnalysis`]). A sessão que some, não inicia ou fica
+//!   parada com a reanálise pendente falha ([`Action::FailAnalysis`]) e é
+//!   reiniciada depois de [`ANALYSIS_RETRY_MS`]. Ambiente anterior a
+//!   [`ANALYSIS_PROTOCOL`]: sem análise nem gate, só as arestas gravadas.
+//! - **Dependências (#215):** issue com bloqueante que não está pronto (PR
+//!   mesclado na branch de integração, ou concluído ou fechado) fica fora
+//!   com `blocked_by` e os números; bloqueante fora do espelho mantém o
+//!   bloqueio e vira aviso (`dependency_unknown`); as issues de um ciclo
+//!   ficam fora com `dependency_cycle` (e o evento).
 
+use super::deps;
 use ct_core::plan::budget::{BlockReason, BudgetDecision};
 use ct_core::plan::{PlanView, WindowView};
-use ct_core::{Priority, SessionState, WipUsage, WorkItemKind, WorkItemStatus};
+use ct_core::{Priority, SessionState, SessionTemplates, WipUsage, WorkItemKind, WorkItemStatus};
 use ct_ledger::{
-    pr_feedback_text, AutopilotSession, AutopilotSettings, ChecksState, CloseState,
-    FeedbackTextOptions, IdleSession, ParkedSession, PrChecks, PrFeedback, PrRow, WaitingSession,
+    pr_feedback_text, AnalysisRound, AutopilotSession, AutopilotSettings, BlockerState,
+    ChecksState, CloseState, DependencyEdge, FeedbackTextOptions, IdleSession, ParkedSession,
+    PrChecks, PrFeedback, PrRow, WaitingSession,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -111,6 +133,30 @@ pub const ENV_OUTDATED: &str = "env_outdated";
 
 /// Versão do protocolo do ambiente com o `text` no `session.continue`.
 pub const CONTINUE_TEXT_PROTOCOL: (u32, u32) = (2, 22);
+
+/// Versão do protocolo do ambiente com a sessão de análise (#215):
+/// `analysis` no `session.start_project`, o texto no `session.continue` dela
+/// e a ferramenta `autopilot_set_dependencies`.
+pub const ANALYSIS_PROTOCOL: (u32, u32) = (2, 23);
+/// Depois de uma falha da sessão de análise, espera isto para iniciar outra.
+pub const ANALYSIS_RETRY_MS: i64 = 15 * 60_000;
+/// Sessão de análise ociosa com a reanálise pendente há isto: falhou.
+pub const ANALYSIS_STALL_MS: i64 = 30 * 60_000;
+/// Sessão de análise iniciada que o hub ainda não conhece conta como viva
+/// por este tempo (o ambiente sincroniza).
+pub const ANALYSIS_START_GRACE_MS: i64 = 10 * 60_000;
+
+/// Eventos da análise (#215).
+pub const EV_ANALYSIS_STARTED: &str = "analysis_started";
+pub const EV_ANALYSIS_DONE: &str = "analysis_done";
+pub const EV_ANALYSIS_FAILED: &str = "analysis_failed";
+pub const EV_ANALYSIS_ENDED: &str = "analysis_ended";
+pub const EV_DEPENDENCY_CYCLE: &str = "dependency_cycle";
+pub const EV_DEPENDENCY_UNKNOWN: &str = "dependency_unknown";
+pub const EV_ANALYSIS_UNSUPPORTED: &str = "analysis_unsupported";
+/// `reason` do `analysis_started`: o planejamento da janela ou a reanálise.
+pub const ANALYSIS_PLANNING: &str = "planejamento";
+pub const ANALYSIS_REANALYSIS: &str = "reanalise";
 
 /// Head sem nenhum check conta como verde depois disto desde que o hub o
 /// viu lido (repositório sem CI). Dá tempo ao Actions de registrar os
@@ -188,6 +234,19 @@ pub struct Snapshot {
     /// Sessões autônomas ociosas com o PR aberto da issue contra a branch
     /// de integração do projeto, por id (#184).
     pub closing: BTreeMap<String, Closing>,
+    /// Rodadas de análise abertas (#215), por projeto.
+    pub analyses: BTreeMap<i64, AnalysisSnap>,
+    /// Estado das sessões de análise das rodadas que o hub conhece, por id.
+    pub analysis_states: BTreeMap<String, SessionState>,
+}
+
+/// A rodada de análise aberta de um projeto, com o projeto (o modo pode já
+/// ter sido desligado).
+#[derive(Debug, Clone, Default)]
+pub struct AnalysisSnap {
+    pub owner: String,
+    pub repo: String,
+    pub round: AnalysisRound,
 }
 
 /// O PR aberto de uma issue autônoma contra a branch de integração (#184),
@@ -216,6 +275,10 @@ pub struct EnvSnap {
     /// [`CONTINUE_TEXT_PROTOCOL`] ou mais novo, #184); `None` = não se sabe
     /// (sem `env.info` neste ciclo): o fechamento espera.
     pub continue_text: Option<bool>,
+    /// O ambiente roda a sessão de análise (protocolo
+    /// [`ANALYSIS_PROTOCOL`] ou mais novo, #215); `None` = não se sabe: o
+    /// projeto espera.
+    pub analysis: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -249,6 +312,22 @@ pub struct ProjectSnap {
     pub approval_label: Option<String>,
     /// Na ordem do projeto (prioridade, ordem na classe, número).
     pub items: Vec<ItemSnap>,
+    /// Id do projeto no hub (#215).
+    pub project_id: i64,
+    /// Branch de integração do modo autônomo.
+    pub integration: String,
+    /// Arestas de dependência do projeto, com as lápides manuais.
+    pub deps: Vec<DependencyEdge>,
+    /// Situação de cada bloqueante citado nas arestas ativas.
+    pub blockers: BTreeMap<i64, BlockerState>,
+    /// Ordem de execução sugerida pela análise (número → posição).
+    pub order: BTreeMap<i64, i64>,
+    /// Impressão digital de cada issue na última análise.
+    pub analysed: BTreeMap<i64, String>,
+    /// Templates do projeto (o `analysis` vai no prompt da análise).
+    pub templates: SessionTemplates,
+    /// Como a sessão de análise lê as issues (o comando do rastreador).
+    pub tracker_hint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -261,6 +340,9 @@ pub struct ItemSnap {
     pub priority: Option<Priority>,
     pub model: Option<String>,
     pub approved: bool,
+    /// Impressão digital (`ct_ledger::issue_fingerprint`): muda com o
+    /// título, o corpo, os rótulos ou a prioridade (#215).
+    pub fingerprint: String,
 }
 
 /// Janela esgotada da visão do plano (a de reset mais tarde, se as duas).
@@ -335,6 +417,49 @@ pub enum Action {
         status_reason: String,
         message: String,
     },
+    /// Inicia a sessão de análise do projeto (#215).
+    StartAnalysis(AnalysisStart),
+    /// Acorda a sessão de análise ociosa com as issues novas ou alteradas
+    /// (`session.continue` com `text`) e grava `round` (o que foi enviado).
+    ContinueAnalysis {
+        round: AnalysisRound,
+        owner: String,
+        repo: String,
+        text: String,
+        message: String,
+    },
+    /// Fim da janela, modo desligado ou ambiente sem a análise: encerra a
+    /// sessão (se houver) e apaga a rodada.
+    CloseAnalysis {
+        round: AnalysisRound,
+        owner: String,
+        repo: String,
+        message: String,
+    },
+    /// A sessão de análise sumiu ou parou: grava `round` (sem sessão, com a
+    /// falha) e, com `kill`, encerra a sessão parada.
+    FailAnalysis {
+        round: AnalysisRound,
+        kill: Option<String>,
+        owner: String,
+        repo: String,
+        message: String,
+    },
+}
+
+/// O início da sessão de análise de um projeto (#215).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalysisStart {
+    pub account: String,
+    pub env_id: String,
+    pub owner: String,
+    pub repo: String,
+    /// A rodada a gravar quando o ambiente aceitar (o runner põe a sessão).
+    pub round: AnalysisRound,
+    pub prompt: String,
+    /// [`ANALYSIS_PLANNING`] ou [`ANALYSIS_REANALYSIS`] (a sessão anterior
+    /// da janela falhou depois do planejamento).
+    pub reason: &'static str,
 }
 
 /// O que o texto do [`Action::Send`] pede.
@@ -383,8 +508,46 @@ pub struct QueueItem {
     pub priority: Option<Priority>,
     pub model: Option<String>,
     /// `None` = elegível. Senão: `epic`, `status`, `not_in_mirror`,
-    /// `not_approved`, `no_priority`, `no_model` ou `live_session`.
+    /// `not_approved`, `no_priority`, `no_model`, `live_session` e, com as
+    /// dependências (#215), `dependency_cycle`, `blocked_by` (bloqueante
+    /// ainda não pronto) ou `analysis_pending` (nova ou alterada, esperando
+    /// a reanálise).
     pub skip: Option<String>,
+    /// Bloqueantes que ainda não estão prontos (`skip` = `blocked_by`).
+    pub blocked_by: Vec<i64>,
+    /// Arestas ativas da issue (prontas ou não) e as removidas à mão.
+    pub dependencies: Vec<QueueDep>,
+    /// Posição na ordem sugerida pela análise.
+    pub order: Option<i64>,
+}
+
+/// Uma aresta da issue na fila (#215).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct QueueDep {
+    pub blocker: i64,
+    pub reason: String,
+    /// `analysis` ou `manual`.
+    pub source: String,
+    /// Removida à mão (não bloqueia; a análise não a recria).
+    pub removed: bool,
+    pub state: BlockerState,
+}
+
+/// A rodada de análise do projeto, para o painel (#215).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AnalysisView {
+    /// `planning` (planejamento inicial), `ready` (ociosa, esperando
+    /// mudanças), `reanalysing` (com issues enviadas) ou `failed` (sem
+    /// sessão, esperando para reiniciar).
+    pub state: String,
+    pub session_id: Option<String>,
+    pub opened_at: i64,
+    pub planned_at: Option<i64>,
+    /// Issues enviadas e ainda sem resposta.
+    pub pending: Vec<i64>,
+    pub failed_at: Option<i64>,
 }
 
 /// Situação de um projeto autônomo no ciclo.
@@ -400,9 +563,10 @@ pub struct ProjectPlan {
     pub account: Option<String>,
     /// Por que nada inicia agora; `None` = pode iniciar (ou iniciou).
     /// `paused`, `env_offline`, `unknown_account`, `no_policy`, `parked`,
-    /// `budget:<motivos>`, `conflict`, `autonomy_error`, `env_busy`,
-    /// `wip_limit`, `account_turn` (a conta já iniciou neste ciclo) ou
-    /// `no_eligible`.
+    /// `budget:<motivos>`, `conflict`, `autonomy_error`, `analysis` (o
+    /// planejamento de dependências da janela não terminou, #215),
+    /// `env_busy`, `wip_limit`, `account_turn` (a conta já iniciou neste
+    /// ciclo) ou `no_eligible`.
     pub blocked: Option<String>,
     /// Texto do motivo, para a pessoa.
     pub blocked_message: Option<String>,
@@ -412,6 +576,11 @@ pub struct ProjectPlan {
     /// orçamento em `no_reading`).
     pub probe: bool,
     pub queue: Vec<QueueItem>,
+    /// Rodada de análise aberta (#215); `None` = nenhuma (fora da janela).
+    pub analysis: Option<AnalysisView>,
+    /// O ambiente não roda a análise (versão anterior): só as arestas
+    /// gravadas valem.
+    pub analysis_unsupported: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -419,6 +588,10 @@ pub struct Outcome {
     pub actions: Vec<Action>,
     pub refusals: Vec<Refusal>,
     pub projects: Vec<ProjectPlan>,
+    /// Avisos da análise e das dependências (#215), com o `kind` do evento
+    /// (`dependency_cycle`, `dependency_unknown`, `analysis_unsupported`);
+    /// gravados como as recusas, só quando mudam no escopo.
+    pub notices: Vec<(&'static str, Refusal)>,
 }
 
 /// Código estável dos motivos do orçamento: `budget:band_closed+after_cutoff`.
@@ -876,7 +1049,97 @@ pub fn decide(s: &Snapshot) -> Outcome {
         }));
     }
 
-    // 4. Inícios.
+    // 4. Rodadas de análise (#215): fim da janela, modo desligado ou
+    // ambiente sem a análise fecham a rodada; a sessão que sumiu, não
+    // iniciou ou parou com a reanálise pendente falha.
+    let decision_of = |env_id: &str| {
+        account_of(env_id).and_then(|k| s.accounts.get(&k).and_then(|a| a.decision.clone()))
+    };
+    let mut rounds: BTreeMap<i64, AnalysisRound> = BTreeMap::new();
+    for (pid, a) in &s.analyses {
+        let r = &a.round;
+        let slug = format!("{}/{}", a.owner, a.repo);
+        let proj = s.projects.iter().find(|p| p.project_id == *pid);
+        let why_close = match proj {
+            None => Some("o modo autônomo do projeto foi desligado".to_string()),
+            Some(p) if env(&p.env_id).and_then(|e| e.analysis) == Some(false) => {
+                Some("o ambiente autônomo não roda a análise".to_string())
+            }
+            Some(p) if p.env_id != r.env_id => {
+                Some("o ambiente do modo autônomo mudou".to_string())
+            }
+            Some(p) => match decision_of(&p.env_id) {
+                Some(d) if deps::window_open(&d) => None,
+                _ => Some("a janela da política fechou".to_string()),
+            },
+        };
+        if let Some(why) = why_close {
+            let m = if r.session_id.is_some() {
+                format!("{slug}: {why}; a sessão de análise foi encerrada (as implementações em andamento continuam)")
+            } else {
+                format!("{slug}: {why}; a rodada de análise terminou")
+            };
+            out.actions.push(Action::CloseAnalysis {
+                round: r.clone(),
+                owner: a.owner.clone(),
+                repo: a.repo.clone(),
+                message: m,
+            });
+            continue;
+        }
+        let mut r = r.clone();
+        if let Some(sid) = r.session_id.clone() {
+            let st = s.analysis_states.get(&sid).copied();
+            let started = r.started_at.unwrap_or(r.opened_at);
+            let gone = match st {
+                Some(st) => !st.is_live(),
+                None => now - started >= ANALYSIS_START_GRACE_MS,
+            };
+            let exhausted = proj
+                .and_then(|p| account_of(&p.env_id))
+                .is_some_and(|k| exhausted_now(&k));
+            let stalled = st == Some(SessionState::Idle)
+                && !r.pending.is_empty()
+                && !exhausted
+                && r.sent_at.is_some_and(|t| now - t >= ANALYSIS_STALL_MS);
+            if gone || stalled {
+                let why = if stalled {
+                    format!(
+                        "a sessão de análise ficou parada por mais de {} min sem gravar a \
+                         reanálise; foi encerrada",
+                        ANALYSIS_STALL_MS / 60_000
+                    )
+                } else if st.is_none() {
+                    "a sessão de análise não apareceu no ambiente".to_string()
+                } else {
+                    "a sessão de análise terminou".to_string()
+                };
+                let pending = if r.planned_at.is_none() {
+                    " antes de terminar o planejamento"
+                } else if !r.pending.is_empty() {
+                    " sem gravar a reanálise"
+                } else {
+                    ""
+                };
+                r.session_id = None;
+                r.pending.clear();
+                r.failed_at = Some(now);
+                out.actions.push(Action::FailAnalysis {
+                    round: r.clone(),
+                    kill: stalled.then_some(sid),
+                    owner: a.owner.clone(),
+                    repo: a.repo.clone(),
+                    message: format!(
+                        "{slug}: {why}{pending}; outra inicia em {} min",
+                        ANALYSIS_RETRY_MS / 60_000
+                    ),
+                });
+            }
+        }
+        rounds.insert(*pid, r);
+    }
+
+    // 5. Inícios.
     let live_on_env = |env_id: &str| {
         s.sessions
             .iter()
@@ -905,22 +1168,179 @@ pub fn decide(s: &Snapshot) -> Outcome {
         let slug = format!("{}/{}", p.owner, p.repo);
         let e = env(&p.env_id);
         let account = account_of(&p.env_id);
-        let queue: Vec<QueueItem> = p
+        // Dependências (#215): arestas ativas por issue; as que esperam um
+        // bloqueante não pronto formam o grafo dos ciclos.
+        let gate = e.and_then(|e| e.analysis);
+        let state_of = |b: i64| p.blockers.get(&b).copied().unwrap_or(BlockerState::Unknown);
+        let mut waiting: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+        for d in p.deps.iter().filter(|d| !d.removed) {
+            if state_of(d.blocker) != BlockerState::Ready {
+                waiting.entry(d.number).or_default().insert(d.blocker);
+            }
+        }
+        let cycle = deps::cycle_members(&waiting);
+        let base: Vec<Option<&'static str>> = p
             .items
             .iter()
-            .map(|i| QueueItem {
-                number: i.number,
-                title: i.title.clone(),
-                priority: i.priority,
-                model: i.model.clone(),
-                skip: skip_of(
+            .map(|i| {
+                skip_of(
                     i,
                     p.approval_label.as_deref(),
                     live_item(&p.owner, &p.repo, i.number),
                 )
-                .map(String::from),
             })
             .collect();
+        let candidates: Vec<&ItemSnap> = p
+            .items
+            .iter()
+            .zip(&base)
+            .filter(|(_, b)| b.is_none())
+            .map(|(i, _)| i)
+            .collect();
+        // Sem a análise no ambiente, nenhuma issue espera por ela.
+        let unanalysed: Vec<&ItemSnap> = if gate == Some(false) {
+            Vec::new()
+        } else {
+            candidates
+                .iter()
+                .copied()
+                .filter(|i| p.analysed.get(&i.number) != Some(&i.fingerprint))
+                .collect()
+        };
+        let mut unknown: Vec<String> = Vec::new();
+        let queue: Vec<QueueItem> = p
+            .items
+            .iter()
+            .zip(&base)
+            .map(|(i, b)| {
+                let dependencies: Vec<QueueDep> = p
+                    .deps
+                    .iter()
+                    .filter(|d| d.number == i.number)
+                    .map(|d| QueueDep {
+                        blocker: d.blocker,
+                        reason: d.reason.clone(),
+                        source: d.source.clone(),
+                        removed: d.removed,
+                        state: state_of(d.blocker),
+                    })
+                    .collect();
+                let blocked_by: Vec<i64> = waiting
+                    .get(&i.number)
+                    .map(|bs| bs.iter().copied().collect())
+                    .unwrap_or_default();
+                if b.is_none() {
+                    unknown.extend(
+                        dependencies
+                            .iter()
+                            .filter(|d| !d.removed && d.state == BlockerState::Unknown)
+                            .map(|d| format!("#{} ← #{}", i.number, d.blocker)),
+                    );
+                }
+                let skip = b.or_else(|| {
+                    if cycle.contains(&i.number) {
+                        Some("dependency_cycle")
+                    } else if !blocked_by.is_empty() {
+                        Some("blocked_by")
+                    } else if unanalysed.iter().any(|u| u.number == i.number) {
+                        Some("analysis_pending")
+                    } else {
+                        None
+                    }
+                });
+                QueueItem {
+                    number: i.number,
+                    title: i.title.clone(),
+                    priority: i.priority,
+                    model: i.model.clone(),
+                    skip: skip.map(String::from),
+                    blocked_by,
+                    dependencies,
+                    order: p.order.get(&i.number).copied(),
+                }
+            })
+            .collect();
+        let notice = |kind: &'static str, scope: String, reason: &str, message: String| {
+            (
+                kind,
+                Refusal {
+                    scope,
+                    reason: reason.into(),
+                    message,
+                    account: account.clone(),
+                    env_id: Some(p.env_id.clone()),
+                    owner: Some(p.owner.clone()),
+                    repo: Some(p.repo.clone()),
+                },
+            )
+        };
+        let in_cycle: Vec<String> = p
+            .items
+            .iter()
+            .zip(&base)
+            .filter(|(i, b)| b.is_none() && cycle.contains(&i.number))
+            .map(|(i, _)| format!("#{}", i.number))
+            .collect();
+        if !in_cycle.is_empty() {
+            out.notices.push(notice(
+                EV_DEPENDENCY_CYCLE,
+                format!("cycle:{slug}"),
+                EV_DEPENDENCY_CYCLE,
+                format!(
+                    "{slug}: ciclo de dependências entre {}; essas issues ficam fora da fila até \
+                     alguém corrigir uma aresta",
+                    cycle
+                        .iter()
+                        .map(|n| format!("#{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+        if !unknown.is_empty() {
+            out.notices.push(notice(
+                EV_DEPENDENCY_UNKNOWN,
+                format!("deps:{slug}"),
+                EV_DEPENDENCY_UNKNOWN,
+                format!(
+                    "{slug}: bloqueante fora do espelho do projeto ({}); a issue segue bloqueada \
+                     até alguém remover a aresta",
+                    unknown.join(", ")
+                ),
+            ));
+        }
+        if gate == Some(false) && !candidates.is_empty() {
+            let name = e.map(|e| e.name.clone()).unwrap_or_default();
+            out.notices.push(notice(
+                EV_ANALYSIS_UNSUPPORTED,
+                format!("analysis:{}", p.env_id),
+                EV_ANALYSIS_UNSUPPORTED,
+                format!(
+                    "o ambiente autônomo {name} é anterior ao protocolo {}.{}: sem a análise de \
+                     dependências; só as arestas já gravadas valem (atualize o ambiente)",
+                    ANALYSIS_PROTOCOL.0, ANALYSIS_PROTOCOL.1
+                ),
+            ));
+        }
+        let round = rounds.get(&p.project_id).cloned();
+        let analysis_view = round.as_ref().map(|r| AnalysisView {
+            state: if r.session_id.is_none() {
+                "failed"
+            } else if r.planned_at.is_none() {
+                "planning"
+            } else if !r.pending.is_empty() {
+                "reanalysing"
+            } else {
+                "ready"
+            }
+            .into(),
+            session_id: r.session_id.clone(),
+            opened_at: r.opened_at,
+            planned_at: r.planned_at,
+            pending: r.pending.keys().copied().collect(),
+            failed_at: r.failed_at,
+        });
+        let mut analysis_action: Option<Action> = None;
         let mut plan = ProjectPlan {
             owner: p.owner.clone(),
             repo: p.repo.clone(),
@@ -933,6 +1353,8 @@ pub fn decide(s: &Snapshot) -> Outcome {
             next: None,
             probe: false,
             queue,
+            analysis: analysis_view,
+            analysis_unsupported: gate == Some(false),
         };
         let project_refusal = |reason: &str, message: String| Refusal {
             scope: format!("project:{slug}"),
@@ -1038,6 +1460,146 @@ pub fn decide(s: &Snapshot) -> Outcome {
                     Some(project_refusal("autonomy_error", m)),
                 ));
             }
+            // Análise de dependências (#215): não ocupa a vaga do ambiente,
+            // mas vem antes de qualquer implementação no projeto.
+            if !candidates.is_empty() {
+                match gate {
+                    None => {
+                        return Some((
+                            "analysis".into(),
+                            format!(
+                                "{slug}: aguardando o ambiente autônomo informar a versão (análise \
+                                 de dependências)"
+                            ),
+                            None,
+                        ));
+                    }
+                    Some(false) => {}
+                    Some(true) => {
+                        let planned = round.as_ref().is_some_and(|r| r.planned_at.is_some());
+                        match round
+                            .as_ref()
+                            .and_then(|r| r.session_id.clone().map(|sid| (r, sid)))
+                        {
+                            None => {
+                                let retry_at = round
+                                    .as_ref()
+                                    .and_then(|r| r.failed_at)
+                                    .map(|f| f + ANALYSIS_RETRY_MS);
+                                if retry_at.is_some_and(|t| now < t) {
+                                    if !planned {
+                                        return Some((
+                                            "analysis".into(),
+                                            format!(
+                                                "{slug}: a sessão de análise falhou; outra inicia \
+                                                 depois de {} min",
+                                                ANALYSIS_RETRY_MS / 60_000
+                                            ),
+                                            None,
+                                        ));
+                                    }
+                                } else if started_accounts.contains(key) {
+                                    return Some((
+                                        "account_turn".into(),
+                                        "a conta já iniciou uma sessão neste ciclo".into(),
+                                        None,
+                                    ));
+                                } else {
+                                    let pending = candidates
+                                        .iter()
+                                        .map(|i| (i.number, i.fingerprint.clone()))
+                                        .collect();
+                                    let r = match round.clone() {
+                                        Some(r) => AnalysisRound {
+                                            pending,
+                                            started_at: Some(now),
+                                            sent_at: Some(now),
+                                            env_id: p.env_id.clone(),
+                                            ..r
+                                        },
+                                        None => AnalysisRound {
+                                            project_id: p.project_id,
+                                            session_id: None,
+                                            env_id: p.env_id.clone(),
+                                            opened_at: now,
+                                            started_at: Some(now),
+                                            planned_at: None,
+                                            pending,
+                                            sent_at: Some(now),
+                                            failed_at: None,
+                                        },
+                                    };
+                                    started_accounts.insert(key.clone());
+                                    analysis_action = Some(Action::StartAnalysis(AnalysisStart {
+                                        account: key.clone(),
+                                        env_id: p.env_id.clone(),
+                                        owner: p.owner.clone(),
+                                        repo: p.repo.clone(),
+                                        prompt: deps::analysis_prompt(p, &candidates),
+                                        reason: if planned {
+                                            ANALYSIS_REANALYSIS
+                                        } else {
+                                            ANALYSIS_PLANNING
+                                        },
+                                        round: r,
+                                    }));
+                                    return Some((
+                                        "analysis".into(),
+                                        format!(
+                                            "{slug}: a sessão de análise de dependências iniciou; \
+                                             as implementações esperam o planejamento"
+                                        ),
+                                        None,
+                                    ));
+                                }
+                            }
+                            Some((r, sid)) => {
+                                let idle = s.analysis_states.get(&sid) == Some(&SessionState::Idle);
+                                if planned && r.pending.is_empty() && !unanalysed.is_empty() && idle
+                                {
+                                    let send: Vec<&ItemSnap> = unanalysed
+                                        .iter()
+                                        .copied()
+                                        .take(deps::REANALYSIS_MAX_ITEMS)
+                                        .collect();
+                                    let nums = send
+                                        .iter()
+                                        .map(|i| format!("#{}", i.number))
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    analysis_action = Some(Action::ContinueAnalysis {
+                                        round: AnalysisRound {
+                                            pending: send
+                                                .iter()
+                                                .map(|i| (i.number, i.fingerprint.clone()))
+                                                .collect(),
+                                            sent_at: Some(now),
+                                            ..r.clone()
+                                        },
+                                        owner: p.owner.clone(),
+                                        repo: p.repo.clone(),
+                                        text: deps::reanalysis_text(&send),
+                                        message: format!(
+                                            "{slug}: issues novas ou alteradas na fila ({nums}); \
+                                             a sessão de análise foi acordada para reanalisar"
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                        if !planned {
+                            return Some((
+                                "analysis".into(),
+                                format!(
+                                    "{slug}: o planejamento de dependências da janela está em \
+                                     andamento; nenhuma implementação começa antes dele"
+                                ),
+                                None,
+                            ));
+                        }
+                    }
+                }
+            }
             let busy = live_on_env(&p.env_id) + started_envs.get(&p.env_id).copied().unwrap_or(0);
             if busy >= s.settings.max_sessions_per_env {
                 return Some((
@@ -1066,6 +1628,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
             }
             None
         })();
+        out.actions.extend(analysis_action);
         match blocked {
             Some((code, message, refusal)) => {
                 plan.blocked = Some(code);
@@ -1100,7 +1663,7 @@ pub fn decide(s: &Snapshot) -> Outcome {
                     None => {
                         let m = format!(
                             "{slug}: nenhuma issue elegível (aprovada, com prioridade, com \
-                             modelo e sem sessão viva)"
+                             modelo, sem sessão viva e sem bloqueante pendente)"
                         );
                         plan.blocked = Some("no_eligible".into());
                         plan.blocked_message = Some(m.clone());
@@ -1159,6 +1722,7 @@ mod tests {
             priority: p,
             model: model.map(String::from),
             approved,
+            fingerprint: format!("fp-{n}"),
         }
     }
 
@@ -1172,6 +1736,8 @@ mod tests {
             wip: WipUsage::default(),
             approval_label: Some("aprovada".into()),
             items,
+            integration: "wip/autonoma".into(),
+            ..Default::default()
         }
     }
 
@@ -1188,6 +1754,8 @@ mod tests {
                 autonomous: true,
                 account: Some("conta-a".into()),
                 continue_text: Some(true),
+                // Os testes anteriores à #215 rodam sem a análise.
+                analysis: Some(false),
             },
         );
         s.accounts
@@ -1346,6 +1914,7 @@ mod tests {
                 autonomous: true,
                 account: Some("conta-b".into()),
                 continue_text: Some(true),
+                analysis: Some(false),
             },
         );
         s.accounts
@@ -1598,6 +2167,7 @@ mod tests {
                 autonomous: true,
                 account: Some("conta-a".into()),
                 continue_text: Some(true),
+                analysis: Some(false),
             },
         );
         s.sessions
@@ -2240,5 +2810,479 @@ mod tests {
             "{t}"
         );
         assert!(!t.contains(ct_ledger::DATA_OPEN));
+    }
+
+    // --- Análise de dependências (#215) ---------------------------------
+
+    /// Terça 18:01 em GMT-3: a "Noite de dia útil" acabou de abrir.
+    const TER_18: i64 = TER_CORTE + 13 * H + 60_000;
+    const MIN: i64 = 60_000;
+
+    fn dep(n: i64, b: i64, source: &str, removed: bool) -> DependencyEdge {
+        DependencyEdge {
+            number: n,
+            blocker: b,
+            reason: format!("precisa da #{b}"),
+            source: source.into(),
+            removed,
+            updated_at: 1,
+        }
+    }
+
+    /// `snap` com a análise ligada no ambiente: o projeto `acme-web` (id 1)
+    /// com a 123 elegível (P1, opus) e a 124 sem modelo.
+    fn snap_analise(now: i64) -> Snapshot {
+        let mut s = snap(now);
+        s.envs.get_mut("env-auto").unwrap().analysis = Some(true);
+        s.projects[0].project_id = 1;
+        s
+    }
+
+    /// A 123 (e as demais elegíveis) já analisadas na versão atual.
+    fn analisadas(s: &mut Snapshot) {
+        let p = &mut s.projects[0];
+        for i in &p.items {
+            p.analysed.insert(i.number, i.fingerprint.clone());
+        }
+    }
+
+    fn rodada(
+        s: &mut Snapshot,
+        session: Option<(&str, SessionState)>,
+        planned_at: Option<i64>,
+        at: i64,
+    ) {
+        if let Some((id, st)) = session {
+            s.analysis_states.insert(id.into(), st);
+        }
+        s.analyses.insert(
+            1,
+            AnalysisSnap {
+                owner: "acme".into(),
+                repo: "acme-web".into(),
+                round: AnalysisRound {
+                    project_id: 1,
+                    session_id: session.map(|(id, _)| id.to_string()),
+                    env_id: "env-auto".into(),
+                    opened_at: at,
+                    started_at: Some(at),
+                    planned_at,
+                    sent_at: Some(at),
+                    ..Default::default()
+                },
+            },
+        );
+    }
+
+    fn analysis_starts(o: &Outcome) -> Vec<&AnalysisStart> {
+        o.actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::StartAnalysis(x) => Some(x),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn closes(o: &Outcome) -> usize {
+        o.actions
+            .iter()
+            .filter(|a| matches!(a, Action::CloseAnalysis { .. }))
+            .count()
+    }
+
+    fn skip_of_item(o: &Outcome, n: i64) -> Option<String> {
+        o.projects[0]
+            .queue
+            .iter()
+            .find(|q| q.number == n)
+            .unwrap()
+            .skip
+            .clone()
+    }
+
+    #[test]
+    fn janela_abre_analisa_antes_de_implementar_e_fecha_no_fim() {
+        // Terça 17:00: horário comercial, janela fechada: nada de análise.
+        let antes = TER_18 - H;
+        let o = decide(&snap_analise(antes));
+        assert!(analysis_starts(&o).is_empty());
+        assert!(starts(&o).is_empty());
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("budget:band_closed"));
+
+        // 18:01: a janela abre e a análise inicia antes de qualquer
+        // implementação.
+        let o = decide(&snap_analise(TER_18));
+        let a = analysis_starts(&o);
+        assert_eq!(a.len(), 1, "{:?}", o.actions);
+        assert!(starts(&o).is_empty());
+        assert_eq!(a[0].reason, ANALYSIS_PLANNING);
+        assert_eq!(a[0].env_id, "env-auto");
+        assert_eq!(
+            a[0].round.pending,
+            BTreeMap::from([(123, "fp-123".to_string())])
+        );
+        assert_eq!(a[0].round.opened_at, TER_18);
+        assert!(
+            a[0].prompt.contains("- #123 ACME-123 (P1)"),
+            "{}",
+            a[0].prompt
+        );
+        assert!(!a[0].prompt.contains("#124"), "{}", a[0].prompt);
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("analysis"));
+
+        // Planejamento em andamento: nenhuma implementação, nenhuma outra
+        // análise.
+        let mut s = snap_analise(TER_18 + 5 * MIN);
+        rodada(
+            &mut s,
+            Some(("s-analise", SessionState::Running)),
+            None,
+            TER_18,
+        );
+        let o = decide(&s);
+        assert!(analysis_starts(&o).is_empty());
+        assert!(starts(&o).is_empty());
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("analysis"));
+        assert_eq!(o.projects[0].analysis.as_ref().unwrap().state, "planning");
+
+        // Planejamento gravado: a 123 inicia. A sessão de análise (#0) não
+        // ocupa a vaga do ambiente (uma sessão por ambiente).
+        let mut s = snap_analise(TER_18 + 30 * MIN);
+        rodada(
+            &mut s,
+            Some(("s-analise", SessionState::Idle)),
+            Some(TER_18 + 20 * MIN),
+            TER_18,
+        );
+        analisadas(&mut s);
+        assert_eq!(s.settings.max_sessions_per_env, 1);
+        let o = decide(&s);
+        assert_eq!(starts(&o), vec![("acme-web".into(), 123, "opus".into())]);
+        assert_eq!(o.projects[0].analysis.as_ref().unwrap().state, "ready");
+
+        // Quarta 08:01: a janela fecha; a análise é encerrada e a
+        // implementação em andamento continua.
+        let fim = TER_CORTE + 27 * H + MIN;
+        let mut s = snap_analise(fim);
+        rodada(
+            &mut s,
+            Some(("s-analise", SessionState::Idle)),
+            Some(TER_18 + 20 * MIN),
+            TER_18,
+        );
+        analisadas(&mut s);
+        s.sessions
+            .push(session("s-123", "env-auto", 123, SessionState::Running));
+        let o = decide(&s);
+        assert_eq!(closes(&o), 1, "{:?}", o.actions);
+        assert!(!o
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::End { .. } | Action::Block { .. })));
+        assert!(analysis_starts(&o).is_empty());
+        assert!(o.projects[0].analysis.is_none());
+
+        // Fora da janela, sem rodada: nada.
+        let o = decide(&snap_analise(fim + H));
+        assert!(analysis_starts(&o).is_empty());
+        assert_eq!(closes(&o), 0);
+    }
+
+    #[test]
+    fn issue_nova_ou_alterada_acorda_a_analise_e_espera_a_reanalise() {
+        let mut s = snap_analise(SAB);
+        rodada(
+            &mut s,
+            Some(("s-analise", SessionState::Idle)),
+            Some(SAB - H),
+            SAB - 2 * H,
+        );
+        analisadas(&mut s);
+        s.projects[0]
+            .items
+            .insert(0, item(125, Some(Priority::P0), Some("sonnet"), true));
+        let o = decide(&s);
+        // A 125 (nova, P0) espera; a 123, já analisada, segue.
+        assert_eq!(skip_of_item(&o, 125).as_deref(), Some("analysis_pending"));
+        assert_eq!(starts(&o), vec![("acme-web".into(), 123, "opus".into())]);
+        let sent: Vec<_> = o
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::ContinueAnalysis { round, text, .. } => Some((round, text)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent.len(), 1, "{:?}", o.actions);
+        assert_eq!(
+            sent[0].0.pending,
+            BTreeMap::from([(125, "fp-125".to_string())])
+        );
+        assert!(sent[0].1.contains("#125"));
+        assert!(!sent[0].1.contains("#123"));
+
+        // Já enviada: não envia de novo enquanto a reanálise não volta.
+        {
+            let r = &mut s.analyses.get_mut(&1).unwrap().round;
+            r.pending = BTreeMap::from([(125, "fp-125".to_string())]);
+            r.sent_at = Some(SAB - MIN);
+        }
+        let o = decide(&s);
+        assert!(!o
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::ContinueAnalysis { .. })));
+        assert_eq!(skip_of_item(&o, 125).as_deref(), Some("analysis_pending"));
+        assert_eq!(
+            o.projects[0].analysis.as_ref().unwrap().state,
+            "reanalysing"
+        );
+
+        // A sessão rodando (ainda respondendo) não é acordada.
+        s.analyses.get_mut(&1).unwrap().round.pending.clear();
+        s.analysis_states
+            .insert("s-analise".into(), SessionState::Running);
+        let o = decide(&s);
+        assert!(!o
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::ContinueAnalysis { .. })));
+
+        // Reanalisada: a 125 entra na fila (P0 primeiro).
+        s.projects[0].analysed.insert(125, "fp-125".into());
+        let o = decide(&s);
+        assert_eq!(starts(&o), vec![("acme-web".into(), 125, "sonnet".into())]);
+
+        // A 123 mudou (corpo, rótulo ou prioridade): impressão nova, espera.
+        s.projects[0].items[1].fingerprint = "fp-123-v2".into();
+        s.projects[0].items.remove(0);
+        s.analysis_states
+            .insert("s-analise".into(), SessionState::Idle);
+        let o = decide(&s);
+        assert_eq!(skip_of_item(&o, 123).as_deref(), Some("analysis_pending"));
+        assert!(starts(&o).is_empty());
+        assert!(o
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::ContinueAnalysis { .. })));
+    }
+
+    #[test]
+    fn bloqueante_nao_pronto_tira_da_fila_ate_mesclar() {
+        let mut s = snap(SAB);
+        s.projects[0].deps = vec![dep(123, 120, "analysis", false)];
+        s.projects[0].blockers.insert(120, BlockerState::Pending);
+        let o = decide(&s);
+        assert!(starts(&o).is_empty());
+        let q = &o.projects[0].queue[0];
+        assert_eq!(q.skip.as_deref(), Some("blocked_by"));
+        assert_eq!(q.blocked_by, vec![120]);
+        assert_eq!(q.dependencies[0].state, BlockerState::Pending);
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("no_eligible"));
+
+        // Mesclado na wip (ou concluído): entra na fila.
+        s.projects[0].blockers.insert(120, BlockerState::Ready);
+        let o = decide(&s);
+        assert_eq!(starts(&o), vec![("acme-web".into(), 123, "opus".into())]);
+        assert!(o.projects[0].queue[0].blocked_by.is_empty());
+
+        // Removida à mão: não bloqueia, mesmo com o bloqueante pendente.
+        s.projects[0].deps = vec![dep(123, 120, "manual", true)];
+        s.projects[0].blockers.insert(120, BlockerState::Pending);
+        let o = decide(&s);
+        assert_eq!(starts(&o).len(), 1);
+        assert!(o.projects[0].queue[0].dependencies[0].removed);
+
+        // Ambiente sem a análise: o aviso sai, e as arestas valem do mesmo
+        // jeito.
+        assert!(o.projects[0].analysis_unsupported);
+        assert!(o
+            .notices
+            .iter()
+            .any(|(k, r)| *k == EV_ANALYSIS_UNSUPPORTED && r.scope == "analysis:env-auto"));
+    }
+
+    #[test]
+    fn bloqueante_desconhecido_mantem_o_bloqueio_e_avisa() {
+        let mut s = snap(SAB);
+        s.projects[0].deps = vec![dep(123, 999, "analysis", false)];
+        let o = decide(&s);
+        assert!(starts(&o).is_empty());
+        let q = &o.projects[0].queue[0];
+        assert_eq!(q.skip.as_deref(), Some("blocked_by"));
+        assert_eq!(q.blocked_by, vec![999]);
+        assert_eq!(q.dependencies[0].state, BlockerState::Unknown);
+        let (_, n) = o
+            .notices
+            .iter()
+            .find(|(k, _)| *k == EV_DEPENDENCY_UNKNOWN)
+            .unwrap();
+        assert_eq!(n.scope, "deps:acme/acme-web");
+        assert!(n.message.contains("#123 ← #999"), "{}", n.message);
+    }
+
+    #[test]
+    fn ciclo_tira_as_issues_da_fila_e_gera_o_evento() {
+        let mut s = snap(SAB);
+        s.projects[0].items = vec![
+            item(123, Some(Priority::P1), Some("opus"), true),
+            item(125, Some(Priority::P1), Some("opus"), true),
+            item(126, Some(Priority::P2), Some("opus"), true),
+            item(127, Some(Priority::P3), Some("opus"), true),
+        ];
+        s.projects[0].deps = vec![
+            dep(123, 125, "analysis", false),
+            dep(125, 123, "manual", false),
+            dep(126, 125, "analysis", false),
+        ];
+        for n in [123, 125] {
+            s.projects[0].blockers.insert(n, BlockerState::Pending);
+        }
+        let o = decide(&s);
+        assert_eq!(skip_of_item(&o, 123).as_deref(), Some("dependency_cycle"));
+        assert_eq!(skip_of_item(&o, 125).as_deref(), Some("dependency_cycle"));
+        // Depende do ciclo sem fazer parte: só bloqueada.
+        assert_eq!(skip_of_item(&o, 126).as_deref(), Some("blocked_by"));
+        // A fila segue para a próxima elegível.
+        assert_eq!(starts(&o), vec![("acme-web".into(), 127, "opus".into())]);
+        let (_, n) = o
+            .notices
+            .iter()
+            .find(|(k, _)| *k == EV_DEPENDENCY_CYCLE)
+            .unwrap();
+        assert_eq!(n.scope, "cycle:acme/acme-web");
+        assert!(n.message.contains("#123, #125"), "{}", n.message);
+        // A pessoa remove uma aresta: o ciclo some.
+        s.projects[0].deps[1].removed = true;
+        let o = decide(&s);
+        assert!(!o.notices.iter().any(|(k, _)| *k == EV_DEPENDENCY_CYCLE));
+        assert_eq!(starts(&o), vec![("acme-web".into(), 125, "opus".into())]);
+    }
+
+    #[test]
+    fn sessao_de_analise_que_some_ou_para_falha_e_reinicia_depois() {
+        // Sumiu antes de terminar o planejamento.
+        let mut s = snap_analise(SAB);
+        rodada(
+            &mut s,
+            Some(("s-analise", SessionState::Exited)),
+            None,
+            SAB - H,
+        );
+        let o = decide(&s);
+        let fail: Vec<_> = o
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::FailAnalysis { round, kill, .. } => Some((round, kill)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fail.len(), 1);
+        assert_eq!(fail[0].0.session_id, None);
+        assert_eq!(fail[0].0.failed_at, Some(SAB));
+        assert_eq!(fail[0].1, &None);
+        // No mesmo ciclo não reinicia: espera o prazo.
+        assert!(analysis_starts(&o).is_empty());
+        assert!(starts(&o).is_empty());
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("analysis"));
+
+        // Rodada sem sessão, dentro do prazo: espera; depois, reinicia.
+        let mut s = snap_analise(SAB + 5 * MIN);
+        rodada(&mut s, None, None, SAB - H);
+        s.analyses.get_mut(&1).unwrap().round.failed_at = Some(SAB);
+        let o = decide(&s);
+        assert!(analysis_starts(&o).is_empty());
+        assert_eq!(o.projects[0].analysis.as_ref().unwrap().state, "failed");
+        s.now = SAB + ANALYSIS_RETRY_MS;
+        s.accounts
+            .insert("conta-a".into(), account(10.0, 10.0, s.now));
+        let o = decide(&s);
+        let a = analysis_starts(&o);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].round.opened_at, SAB - H);
+        assert_eq!(a[0].reason, ANALYSIS_PLANNING);
+
+        // Parada ociosa com a reanálise pendente: encerrada.
+        let mut s = snap_analise(SAB);
+        rodada(
+            &mut s,
+            Some(("s-analise", SessionState::Idle)),
+            Some(SAB - 2 * H),
+            SAB - 3 * H,
+        );
+        {
+            let r = &mut s.analyses.get_mut(&1).unwrap().round;
+            r.pending = BTreeMap::from([(123, "fp-123".to_string())]);
+            r.sent_at = Some(SAB - ANALYSIS_STALL_MS);
+        }
+        let o = decide(&s);
+        assert!(o.actions.iter().any(|a| matches!(
+            a,
+            Action::FailAnalysis { kill: Some(k), .. } if k == "s-analise"
+        )));
+        // Planejada: a falha não trava as já analisadas... e a 123, que
+        // estava na reanálise, espera a próxima sessão.
+        assert_eq!(skip_of_item(&o, 123).as_deref(), Some("analysis_pending"));
+
+        // Iniciada há pouco, ainda desconhecida do hub: conta como viva.
+        let mut s = snap_analise(SAB);
+        rodada(&mut s, None, None, SAB - MIN);
+        s.analyses.get_mut(&1).unwrap().round.session_id = Some("s-nova".into());
+        let o = decide(&s);
+        assert!(!o
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::FailAnalysis { .. })));
+    }
+
+    #[test]
+    fn versao_do_ambiente_desconhecida_espera_e_modo_desligado_fecha_a_rodada() {
+        let mut s = snap_analise(SAB);
+        s.envs.get_mut("env-auto").unwrap().analysis = None;
+        let o = decide(&s);
+        assert!(starts(&o).is_empty());
+        assert!(analysis_starts(&o).is_empty());
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("analysis"));
+
+        // Rodada de um projeto que saiu do modo autônomo: fecha.
+        let mut s = snap_analise(SAB);
+        rodada(
+            &mut s,
+            Some(("s-analise", SessionState::Idle)),
+            Some(SAB),
+            SAB,
+        );
+        s.projects.clear();
+        let o = decide(&s);
+        assert_eq!(closes(&o), 1);
+
+        // Sem issue na fila: nenhuma análise (nada a planejar).
+        let mut s = snap_analise(SAB);
+        s.projects[0].items = vec![item(124, Some(Priority::P0), None, true)];
+        let o = decide(&s);
+        assert!(analysis_starts(&o).is_empty());
+        assert_eq!(o.projects[0].blocked.as_deref(), Some("no_eligible"));
+    }
+
+    #[test]
+    fn analise_conta_como_o_inicio_da_conta_no_ciclo() {
+        let mut s = snap_analise(SAB);
+        s.settings.max_sessions_per_env = 5;
+        let mut p2 = project(
+            "acme-api",
+            "env-auto",
+            vec![item(7, Some(Priority::P0), Some("opus"), true)],
+        );
+        p2.project_id = 2;
+        p2.analysed.insert(7, "fp-7".into());
+        s.projects.push(p2);
+        let o = decide(&s);
+        // O primeiro projeto inicia a análise; o segundo (já analisado, mas
+        // sem rodada nesta janela) espera a vez da conta.
+        assert_eq!(analysis_starts(&o).len(), 1);
+        assert!(starts(&o).is_empty());
+        assert_eq!(o.projects[1].blocked.as_deref(), Some("account_turn"));
     }
 }
