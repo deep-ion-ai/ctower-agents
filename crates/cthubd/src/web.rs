@@ -42,6 +42,8 @@ pub const WEB_METHODS: &[&str] = &[
     "hub.workitem.history",
     // "Ver issue" (#434): só leitura, de passagem, sem gravar.
     "hub.workitem.body",
+    // Prévia do "Criar release" (#204): só leitura, com o token do hub.
+    "hub.release.status",
     // "Adicionar issue pelo ID" (#148): escreve só no espelho do Jira (a
     // issue que o Jira já mostra, que sai na poda sem work item), pelo
     // ambiente de sync.

@@ -6,6 +6,7 @@ import type { DocsConfig } from "./DocsConfig";
 import type { ForgeConfig } from "./ForgeConfig";
 import type { LocationState } from "./LocationState";
 import type { ProjectKind } from "./ProjectKind";
+import type { ReleaseConfig } from "./ReleaseConfig";
 import type { SessionTemplates } from "./SessionTemplates";
 import type { TrackerConfig } from "./TrackerConfig";
 
@@ -90,4 +91,9 @@ autonomy_report: AutonomyReport | null,
  * Rótulo de aprovação do projeto, como veio do hub (#124); o padrão
  * (sem exigir) no projeto local legado e num hub anterior.
  */
-approval: ApprovalConfig, };
+approval: ApprovalConfig, 
+/**
+ * Configuração de release, como veio do hub (#204); desligada no
+ * projeto local legado e num hub anterior.
+ */
+release: ReleaseConfig, };

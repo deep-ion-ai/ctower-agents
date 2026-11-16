@@ -137,7 +137,7 @@ pub const CONTINUE_TEXT_PROTOCOL: (u32, u32) = (2, 22);
 /// Versão do protocolo do ambiente com a sessão de análise (#215):
 /// `analysis` no `session.start_project`, o texto no `session.continue` dela
 /// e a ferramenta `autopilot_set_dependencies`.
-pub const ANALYSIS_PROTOCOL: (u32, u32) = (2, 23);
+pub const ANALYSIS_PROTOCOL: (u32, u32) = (2, 24);
 /// Depois de uma falha da sessão de análise, espera isto para iniciar outra.
 pub const ANALYSIS_RETRY_MS: i64 = 15 * 60_000;
 /// Sessão de análise ociosa com a reanálise pendente há isto: falhou.

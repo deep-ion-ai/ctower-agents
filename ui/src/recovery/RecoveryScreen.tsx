@@ -1,7 +1,7 @@
 import "./recovery.css";
 import { GESTOR_LABEL, issueRef } from "../control-room/attention";
 import { DISCARD_LABEL, useDiscard, type DiscardTarget } from "./discard";
-import { itemRef, PROJECT_ITEM } from "../util/item";
+import { itemRef, RELEASE_ITEM, noIssue } from "../util/item";
 import { useCallback, useEffect, useState } from "react";
 import { contextNote } from "../project/templates";
 import type {
@@ -187,7 +187,8 @@ export function RecoveryScreen({ env, session }: { env?: string; session?: strin
   const nameOf = (r: Row | Archived) => {
     if (gestorOf(r)) return GESTOR_LABEL;
     const wi = r.item.work_item;
-    if (wi.gh_number === PROJECT_ITEM) return `Planejamento · ${r.item.project_name}`;
+    if (wi.gh_number === RELEASE_ITEM) return `Release · ${r.item.project_name}`;
+    if (noIssue(wi.gh_number)) return `Planejamento · ${r.item.project_name}`;
     // Chave do Jira no projeto Jira (#352): o projeto vem do dashboard.
     const project = dashboards[r.env]?.projects.find((p) => p.project.id === wi.project_id)?.project;
     return `${itemRef(wi.gh_number, project)} ${titleOf(r)}`.trim();

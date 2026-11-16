@@ -95,7 +95,7 @@ test("ambientes: atribuídos e marcados como autônomos", () => {
 });
 
 test("template autônomo (#191): campo do hub, patch do objeto inteiro e limite", () => {
-  const templates = { issue: "Issue {{key}}", epic: "", project: "", autonomous: "", analysis: "" };
+  const templates = { issue: "Issue {{key}}", epic: "", project: "", autonomous: "", release: "", analysis: "" };
   const p = { ...project({}), session_templates: templates } as HubProject;
   // Hub sem o campo: não edita.
   expect(autonomousTemplateOf(project({}))).toBeNull();

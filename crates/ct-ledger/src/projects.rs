@@ -86,6 +86,9 @@ pub struct Project {
     /// Rótulo de aprovação do projeto, como veio do hub (#124); o padrão
     /// (sem exigir) no projeto local legado e num hub anterior.
     pub approval: ct_core::ApprovalConfig,
+    /// Configuração de release, como veio do hub (#204); desligada no
+    /// projeto local legado e num hub anterior.
+    pub release: ct_core::ReleaseConfig,
 }
 
 impl Default for Project {
@@ -116,6 +119,7 @@ impl Default for Project {
             autonomy_runner: false,
             autonomy_report: None,
             approval: ct_core::ApprovalConfig::default(),
+            release: ct_core::ReleaseConfig::default(),
         }
     }
 }
@@ -149,10 +153,10 @@ pub(crate) const COLS: &str =
      config_rev, unassigned_at, location_state, location_error, applied_rev, kind, \
      tracker_kind, tracker_config, forge_kind, forge_config, branch_pattern, attribution, \
      sync_role, docs_config, session_templates, autonomy_config, autonomy_runner, \
-     autonomy_report, approval_config";
+     autonomy_report, approval_config, release_config";
 
 /// Quantas colunas `COLS` tem (a seguinte é a primeira extra de uma consulta).
-pub(crate) const COLS_LEN: usize = 27;
+pub(crate) const COLS_LEN: usize = 28;
 
 pub(crate) fn location_state_col(r: &Row, idx: usize) -> rusqlite::Result<Option<LocationState>> {
     let s: Option<String> = r.get(idx)?;
@@ -192,6 +196,7 @@ pub(crate) fn row_to_project(r: &Row) -> rusqlite::Result<Project> {
             .get::<_, Option<String>>(25)?
             .and_then(|s| serde_json::from_str(&s).ok()),
         approval: json_col(r, 26)?,
+        release: json_col(r, 27)?,
     })
 }
 

@@ -4,6 +4,7 @@
 mod clean;
 mod hook;
 mod hub;
+mod release;
 mod secrets;
 mod status;
 mod statusline;
@@ -86,6 +87,13 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SecretCmd,
     },
+    /// Na sessão de release: as etapas determinísticas da release (merge
+    /// commit preso ao SHA, aprovação de runs). Saída: 0 ok, 3 recusada, 1
+    /// falha.
+    Release {
+        #[command(subcommand)]
+        cmd: release::ReleaseCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -147,7 +155,11 @@ fn main() {
             }
             // `secret get` não é hook: quem o chama dentro de `$(...)` precisa
             // ver a falha (#165).
-            if std::env::args().nth(1).as_deref() == Some("secret") {
+            // `release` também não: o agente precisa ver o erro (#204).
+            if matches!(
+                std::env::args().nth(1).as_deref(),
+                Some("secret" | "release")
+            ) {
                 e.exit();
             }
             let _ = e.print();
@@ -197,6 +209,7 @@ fn main() {
         Cmd::Secret { cmd } => match cmd {
             SecretCmd::Get { name } => secrets::get(&name),
         },
+        Cmd::Release { cmd } => release::run(cmd),
     };
     std::process::exit(code);
 }

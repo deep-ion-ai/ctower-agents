@@ -3,7 +3,7 @@
 // projeto (#0). Só tipos de fora: o reducer de nav importa daqui.
 import type { Dashboard, Project } from "../protocol/gen";
 import type { Pane } from "../state/nav";
-import { PROJECT_ITEM } from "../util/item";
+import { RELEASE_ITEM, noIssue } from "../util/item";
 
 /** Projeto de uma aba: `key` é a mesma do grupo na árvore (`env|p<id>`). */
 export interface TabProject {
@@ -39,6 +39,7 @@ export function paneProject(d: Dashboard | undefined, p: Pane): TabProject | nul
  * `itemTitle`.
  */
 export function projectSessionTitle(ghNumber: number, project: Pick<Project, "name"> | undefined): string | null {
-  if (ghNumber !== PROJECT_ITEM) return null;
-  return project ? `Sessão do projeto · ${project.name}` : "Sessão do projeto";
+  if (!noIssue(ghNumber)) return null;
+  const label = ghNumber === RELEASE_ITEM ? "Sessão de release" : "Sessão do projeto";
+  return project ? `${label} · ${project.name}` : label;
 }

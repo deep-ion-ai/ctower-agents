@@ -14,7 +14,7 @@ import type { OpenTab, Screen } from "../../state/nav";
 import { itemTab } from "../../project/tabs";
 import { ADD_ISSUE_COMMAND } from "../../project/add-issue";
 import { projectAt, projectsPlace, type ProjectPage, type ProjectSettingsSection } from "../../project/sections";
-import { itemTitle, PROJECT_ITEM, trackersText, type ProviderProject } from "../../util/item";
+import { itemTitle, trackersText, type ProviderProject, noIssue } from "../../util/item";
 import { liveGestorLabel } from "../../hub/HubGestor";
 import { PLACES, type Place } from "../places";
 import { logsTab, maintenanceTab } from "../../maintenance/sections";
@@ -141,7 +141,7 @@ function catalog(src: PaletteSources): { projects: ProjectRef[]; issues: IssueRe
     } else projects.set(k, p);
     const ref = projects.get(k)!;
     for (const w of items) {
-      if (w.gh_number === PROJECT_ITEM) continue;
+      if (noIssue(w.gh_number)) continue;
       const ik = `${k}#${w.gh_number}`;
       if (issues.has(ik)) continue;
       issues.set(ik, {
@@ -207,7 +207,7 @@ function sessions(src: PaletteSources): PaletteItem[] {
         label,
         detail: [project?.name, e.name, interrupted ? "interrompida" : state].filter(Boolean).join(" · "),
         keywords: "sessão",
-        num: wi && wi.gh_number !== PROJECT_ITEM ? wi.gh_number : undefined,
+        num: wi && !noIssue(wi.gh_number) ? wi.gh_number : undefined,
         // A interrompida se resolve na Recuperação (retomar ou arquivar).
         action: interrupted
           ? { type: "screen", screen: { name: "recovery", env: e.id, session: s.id } }
@@ -224,7 +224,7 @@ function sessions(src: PaletteSources): PaletteItem[] {
         label: `${DISCARD_LABEL}: ${target.name}`,
         detail: [project?.name, e.name, "interrompida · encerrar sem retomar"].filter(Boolean).join(" · "),
         keywords: "descartar encerrar arquivar sessão interrompida",
-        num: wi && wi.gh_number !== PROJECT_ITEM ? wi.gh_number : undefined,
+        num: wi && !noIssue(wi.gh_number) ? wi.gh_number : undefined,
         browse: false,
         action: { type: "discard", target },
       };
@@ -381,6 +381,10 @@ function projectCommands(src: PaletteSources, projects: ProjectRef[]): PaletteIt
       at("templates", "Templates de sessão", "templates prompt inicial sessão override", "settings", "templates"),
       at("docs", "Docs", "docs pasta documentação", "settings", "docs"),
     );
+    // Release (#204): só GitHub + GitHub.
+    if (p.provider.tracker?.kind !== "jira") {
+      out.push(at("release", "Release", "release criar release-please promoção back-merge token", "settings", "release"));
+    }
     // Só no projeto Jira (#150); também na web (o hub repassa ao ambiente de sync).
     if (p.provider.tracker?.kind === "jira") {
       out.push(

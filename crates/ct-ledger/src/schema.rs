@@ -416,6 +416,11 @@ BEGIN
   DELETE FROM pr_review_item WHERE project_id = OLD.project_id AND pr_number = OLD.number;
 END;
 "#,
+    // 25: configuração de release do projeto, como vem do hub (#204): JSON
+    // de `ReleaseConfig`. `{}` = desligada.
+    r#"
+ALTER TABLE project ADD COLUMN release_config TEXT NOT NULL DEFAULT '{}';
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo

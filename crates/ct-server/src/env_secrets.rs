@@ -24,6 +24,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use ct_secrets::{EnvCache, EnvSecrets, SecretsError};
+use ct_sessions::release::ReleaseApiError;
 use ct_sessions::{Dirs, SecretGetError};
 use serde::{Deserialize, Serialize};
 
@@ -151,6 +152,72 @@ pub(crate) async fn session_secret_http(
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
     (code, msg).into_response()
+}
+
+/// Status HTTP de uma recusa das rotas da release.
+fn release_error(e: ReleaseApiError) -> Response {
+    let code = match e {
+        ReleaseApiError::Unauthorized => StatusCode::UNAUTHORIZED,
+        ReleaseApiError::Forbidden(_) => StatusCode::FORBIDDEN,
+        ReleaseApiError::Invalid(_) => StatusCode::BAD_REQUEST,
+        ReleaseApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (code, e.to_string()).into_response()
+}
+
+/// `POST /session/release/context` com `Authorization: Bearer <token da
+/// sessão>` (#204): o repositório, a configuração de release do projeto e a
+/// raiz da API do GitHub, em JSON. Só a sessão de release: `403` nas outras,
+/// `401` token ausente ou inválido.
+pub(crate) async fn release_context_http(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(token) = ct_http::bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "token de sessão ausente").into_response();
+    };
+    let sessions = st.sessions.clone();
+    let r = tokio::task::spawn_blocking(move || sessions.release_context(&token)).await;
+    match r {
+        Ok(Ok(ctx)) => {
+            let api_url = st
+                .github
+                .as_ref()
+                .map(|g| g.client().config().api_url.clone())
+                .unwrap_or_else(|| DEFAULT_GITHUB_API.to_string());
+            let mut v = serde_json::to_value(&ctx).expect("ReleaseContext serializa");
+            v["api_url"] = serde_json::Value::String(api_url);
+            axum::Json(v).into_response()
+        }
+        Ok(Err(e)) => release_error(e),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Raiz da API do GitHub sem a integração configurada no ambiente.
+const DEFAULT_GITHUB_API: &str = "https://api.github.com";
+
+/// `POST /session/release/event` com o token da sessão (#204): grava o
+/// desfecho de uma etapa (`{step, result, ...}`) como evento `release_step`
+/// no ledger. Responde `{ "id": N }`.
+pub(crate) async fn release_event_http(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(token) = ct_http::bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "token de sessão ausente").into_response();
+    };
+    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return (StatusCode::BAD_REQUEST, "corpo esperado: JSON da etapa").into_response();
+    };
+    let sessions = st.sessions.clone();
+    let r = tokio::task::spawn_blocking(move || sessions.release_event(&token, &payload)).await;
+    match r {
+        Ok(Ok(id)) => axum::Json(serde_json::json!({ "id": id })).into_response(),
+        Ok(Err(e)) => release_error(e),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -581,6 +648,88 @@ mod tests {
         assert_eq!(s, StatusCode::BAD_REQUEST);
         srv.env.sessions.kill(&projeto.id).unwrap();
         srv.env.sessions.kill(&gestor.id).unwrap();
+    }
+
+    /// `POST` direto no router com o token da sessão: (status, corpo).
+    async fn post_release(
+        srv: &Srv,
+        path: &str,
+        token: Option<&str>,
+        body: &str,
+    ) -> (StatusCode, String) {
+        use axum::body::Body;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let mut req = axum::http::Request::post(path).header("content-type", "application/json");
+        if let Some(t) = token {
+            req = req.header("authorization", format!("Bearer {t}"));
+        }
+        let resp = crate::router(srv.state.clone())
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    /// Rotas do `ctower release` (#204): só a sessão de release fala com
+    /// elas; a de issue do mesmo projeto recebe `403` e não lê o token
+    /// exclusivo pelo `/session/secret`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rotas_da_release_so_para_a_sessao_de_release() {
+        let srv = Srv::new(FakeClaude::sleep(30));
+        srv.env.assign_config(1, |p| {
+            p.release = ct_core::ReleaseConfig {
+                enabled: true,
+                ..Default::default()
+            };
+        });
+        srv.env
+            .write_secrets_cache(&[(Some(DEMO), "CT_RELEASE_GH_TOKEN", "tok-release-12345678")]);
+        let rel = srv
+            .env
+            .sessions
+            .start_release(
+                srv.env.project_id,
+                "Release",
+                None,
+                &ct_sessions::AgentOptions::default(),
+            )
+            .unwrap();
+        let issue = srv
+            .env
+            .sessions
+            .start(srv.env.request(42, "Issue"))
+            .unwrap();
+        let (tr, ti) = (token_of(&srv, &rel.id), token_of(&srv, &issue.id));
+
+        let (s, b) = post_release(&srv, "/session/release/context", Some(&tr), "").await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        let v: serde_json::Value = serde_json::from_str(&b).unwrap();
+        assert_eq!(v["repo"], "demo");
+        assert_eq!(v["release"]["token_secret"], "CT_RELEASE_GH_TOKEN");
+        assert_eq!(v["api_url"], "https://api.github.com");
+        assert!(!b.contains("tok-release"), "{b}");
+
+        let ev = r#"{"step":"promote","result":"refused","message":"nada a lançar"}"#;
+        let (s, b) = post_release(&srv, "/session/release/event", Some(&tr), ev).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        let (s, _) = post_release(&srv, "/session/release/event", Some(&tr), "{}").await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+
+        for path in ["/session/release/context", "/session/release/event"] {
+            let (s, _) = post_release(&srv, path, Some(&ti), ev).await;
+            assert_eq!(s, StatusCode::FORBIDDEN, "{path}");
+            let (s, _) = post_release(&srv, path, None, ev).await;
+            assert_eq!(s, StatusCode::UNAUTHORIZED, "{path}");
+        }
+        let (s, b) = get_secret(&srv, Some(&ti), None, &name("CT_RELEASE_GH_TOKEN")).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{b}");
+        let (s, b) = get_secret(&srv, Some(&tr), None, &name("CT_RELEASE_GH_TOKEN")).await;
+        assert_eq!((s, b.as_str()), (StatusCode::OK, "tok-release-12345678"));
+        srv.env.sessions.kill(&rel.id).unwrap();
+        srv.env.sessions.kill(&issue.id).unwrap();
     }
 
     /// `/ws` do hub com o token de UI: uma chamada e a resposta.

@@ -17,7 +17,7 @@ import { DecisionCard, EVENTS_PAGE, EventItem, pendingDecision, PR_TEXT, STATE_T
 import { Icon } from "../shell/icons";
 import { useNav, type Tab } from "../state/nav";
 import { useTower } from "../state/tower";
-import { changeLabel, changeRef, forgeLabel, itemShort, itemTitle, PROJECT_ITEM } from "../util/item";
+import { changeLabel, changeRef, forgeLabel, itemShort, itemTitle, noIssue } from "../util/item";
 import { ago, duration } from "../util/time";
 import { prUrl } from "./actions";
 import type { TabInfo } from "./SessionTree";
@@ -105,7 +105,7 @@ export function ContextPanel({ tab, info, onClose }: { tab: Tab; info: TabInfo; 
   const env = tab.env;
   const d = dashboards[env];
   const wiId = s?.work_item_id ?? wi?.id ?? null;
-  const zero = wi?.gh_number === PROJECT_ITEM;
+  const zero = noIssue(wi?.gh_number);
   const diffOff = diffBlocked(wi, infos[env], status[env]?.connected !== false, envs.find((e) => e.id === env)?.name ?? env);
   // Sessões anteriores pelo hub (o ambiente não lista as sessões encerradas).
   const hubRef = !gestor && wi && project ? { owner: project.gh_owner, repo: project.gh_repo, number: wi.gh_number } : null;

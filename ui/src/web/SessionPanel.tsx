@@ -21,7 +21,7 @@ import { ago, duration } from "../util/time";
 import { RESUME_PROMPT } from "../recovery/RecoveryScreen";
 import { SharedFiles } from "../files/SharedFiles";
 import { diffTab } from "../diff/diff";
-import { itemShort, PROJECT_ITEM } from "../util/item";
+import { itemShort, noIssue } from "../util/item";
 import { OFFLINE_ACTIONS, rcDone, rcRequested, useEnvOnline, useEnvSession, useRcRequest } from "./envActions";
 
 const ENDED: Partial<Record<Session["state"], string>> = {
@@ -280,7 +280,7 @@ export function SessionPanel({ tab }: { tab: Tab }) {
               </button>
             ))}
           {/* Diff do código da worktree (#168), calculado pelo ambiente. */}
-          {!gestor && wi?.worktree_path && wi.gh_number !== PROJECT_ITEM && (
+          {!gestor && wi?.worktree_path && !noIssue(wi.gh_number) && (
             <button type="button" className="btn" onClick={() => nav.openTab(diffTab(tab.env, wi.id, itemShort(project, wi.gh_number)))}>
               Ver diff
             </button>

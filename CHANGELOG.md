@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.9.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.8.0...v1.9.0) (2026-11-12)
+
+
+### Features
+
+* **core,hub:** política de orçamento do plano por conta ([80daf3c](https://github.com/deep-ion-ai/ctower-agents/commit/80daf3c97a326199524984a2052bb0671def63cd)), closes [#180](https://github.com/deep-ion-ai/ctower-agents/issues/180)
+* **core,sessions:** prompt inicial da sessão autônoma montado no ambiente ([2a3af16](https://github.com/deep-ion-ai/ctower-agents/commit/2a3af1631733c92a09e0d94271aae4971a56caf3)), closes [#191](https://github.com/deep-ion-ai/ctower-agents/issues/191)
+* **ct-core,ct-gh:** etapas determinísticas da release e perfil release do guarda-corpo ([1a695d8](https://github.com/deep-ion-ai/ctower-agents/commit/1a695d862dc4198662b9d85a6032ee6c0f255ca6)), closes [#204](https://github.com/deep-ion-ai/ctower-agents/issues/204)
+* **ct-gh:** checks do head do PR no espelho ([a147cd0](https://github.com/deep-ion-ai/ctower-agents/commit/a147cd0b4dd8318498d12c53dd05bb33fbdc8145)), closes [#129](https://github.com/deep-ion-ai/ctower-agents/issues/129)
+* **ct-gh:** threads de review não resolvidas no espelho ([4893a12](https://github.com/deep-ion-ai/ctower-agents/commit/4893a12911ffdc35ce9106e6e69b7242b4ddf662)), closes [#130](https://github.com/deep-ion-ai/ctower-agents/issues/130)
+* **ct-server:** session.start_release e rotas do ctower release ([5583251](https://github.com/deep-ion-ai/ctower-agents/commit/55832516b9d4b134c6a8f315a9571d4e44555f4d)), closes [#204](https://github.com/deep-ion-ai/ctower-agents/issues/204)
+* **ctower:** ctower release e perfil release no hook ([001e009](https://github.com/deep-ion-ai/ctower-agents/commit/001e009a3f8d93b4ea81a4d3fd87b81757874653)), closes [#204](https://github.com/deep-ion-ai/ctower-agents/issues/204)
+* hub e ambiente de teste em Docker, com marca de teste na UI ([bc71a5d](https://github.com/deep-ion-ai/ctower-agents/commit/bc71a5df0f2876be4aa34a048c833bba6b472b97))
+* hub e ambiente de teste em Docker, com marca de teste na UI ([2f56fca](https://github.com/deep-ion-ai/ctower-agents/commit/2f56fca0ba6ef8cd5f71f8e03bf0a73866c70bd4)), closes [#176](https://github.com/deep-ion-ai/ctower-agents/issues/176)
+* **hub,ledger:** configuração de release no cadastro do projeto ([9db2c7f](https://github.com/deep-ion-ai/ctower-agents/commit/9db2c7f67f5b5a073552573d7720ec03a2318f2c)), closes [#204](https://github.com/deep-ion-ai/ctower-agents/issues/204)
+* **hub,sessions:** agendador do piloto automático ([de9a379](https://github.com/deep-ion-ai/ctower-agents/commit/de9a379aca2a88ea5bff3d212e4939ccd6048a11)), closes [#183](https://github.com/deep-ion-ai/ctower-agents/issues/183)
+* **hub,sessions:** modo autônomo no projeto e branch wip/autonoma ([647def5](https://github.com/deep-ion-ai/ctower-agents/commit/647def5e29c81f03e6fee42a6df30a43eb1c2ec2)), closes [#181](https://github.com/deep-ion-ai/ctower-agents/issues/181)
+* **hub,sessions:** rótulo de aprovação por projeto, exigido para iniciar sessão ([4cef668](https://github.com/deep-ion-ai/ctower-agents/commit/4cef6682a0a66370c2bf73769fa10d79e1e84896)), closes [#124](https://github.com/deep-ion-ai/ctower-agents/issues/124)
+* **hub,ui:** limite de trabalho em andamento por projeto ([dd1213c](https://github.com/deep-ion-ai/ctower-agents/commit/dd1213cf6122e76f390bc3d967e612474ca30689)), closes [#126](https://github.com/deep-ion-ai/ctower-agents/issues/126)
+* **hub,ui:** modelo e esforço por issue, sugeridos pelo gestor ([191f7a4](https://github.com/deep-ion-ai/ctower-agents/commit/191f7a404621b85888c5a55c6eed33f45a19b057)), closes [#182](https://github.com/deep-ion-ai/ctower-agents/issues/182)
+* **hub,ui:** painel do piloto automático e resumo da manhã ([7dfe21e](https://github.com/deep-ion-ai/ctower-agents/commit/7dfe21e26b25b8a5acc440238ab1a37044260adb)), closes [#185](https://github.com/deep-ion-ai/ctower-agents/issues/185)
+* **hub:** hub.release.status para a prévia do Criar release ([1f52236](https://github.com/deep-ion-ai/ctower-agents/commit/1f52236ad12becf8ebeaf3d6077d4edfe643fed3)), closes [#204](https://github.com/deep-ion-ai/ctower-agents/issues/204)
+* **ledger:** ferramentas MCP pr_feedback e pr_check_log ([7c4ce90](https://github.com/deep-ion-ai/ctower-agents/commit/7c4ce9006e8f120ad18c7ecf8a81cfe3f383c780)), closes [#133](https://github.com/deep-ion-ai/ctower-agents/issues/133)
+* **packaging:** ambiente autônomo em container no Linux ([3439381](https://github.com/deep-ion-ai/ctower-agents/commit/3439381d7e1a14cb814b111b9c27d232c3ca7c9e)), closes [#179](https://github.com/deep-ion-ai/ctower-agents/issues/179)
+* piloto automático por projeto, com orçamento do plano e branch wip/autonoma (épico [#178](https://github.com/deep-ion-ai/ctower-agents/issues/178)) ([ed0e102](https://github.com/deep-ion-ai/ctower-agents/commit/ed0e10205a481f27fc4fd55acf128926c08c08f1))
+* **sessions,hub:** fechamento autônomo da issue na wip/autonoma ([41e8a4e](https://github.com/deep-ion-ai/ctower-agents/commit/41e8a4e9639a66629bb03bfe8b9295c846c861e8)), closes [#184](https://github.com/deep-ion-ai/ctower-agents/issues/184)
+* **sessions,hub:** sessão de release com merges determinísticos (GitHub, release-please) ([09039f0](https://github.com/deep-ion-ai/ctower-agents/commit/09039f0e21eecda6848a25dc8169c2d6f205ca78))
+* **sessions:** sessão de release com o token exclusivo e rotas do ctower release ([42dd48a](https://github.com/deep-ion-ai/ctower-agents/commit/42dd48a664e8e795249651f3ae657cb7fa6c5793)), closes [#204](https://github.com/deep-ion-ai/ctower-agents/issues/204)
+* **ui:** Criar release, seção Release e template de release ([a95edfe](https://github.com/deep-ion-ai/ctower-agents/commit/a95edfe1c142f18364c485225e7b6281508818f7)), closes [#204](https://github.com/deep-ion-ai/ctower-agents/issues/204)
+* **ui:** sessão de release como item sem issue nos rótulos e no Reiniciar ([8e0c97e](https://github.com/deep-ion-ai/ctower-agents/commit/8e0c97e4f3eebd5be9f42d103f6b5313a326abb7)), closes [#204](https://github.com/deep-ion-ai/ctower-agents/issues/204)
+* visualizador de diff de código da sessão ([be96408](https://github.com/deep-ion-ai/ctower-agents/commit/be96408c9301d873ad211d24060179d2b84264fe))
+* visualizador de diff de código da sessão ([ac50d7e](https://github.com/deep-ion-ai/ctower-agents/commit/ac50d7ee3e3cf2acaec821551445aa849d7b5972)), closes [#168](https://github.com/deep-ion-ai/ctower-agents/issues/168)
+
+
+### Bug Fixes
+
+* ambiente autônomo cala a oferta do auto mode do Claude Code ([c47308f](https://github.com/deep-ion-ai/ctower-agents/commit/c47308feae48906386d6c6e05d2b938c225571a8))
+* ambiente autônomo no host x86 (systemd, glibc, mais de um dono) ([d592195](https://github.com/deep-ion-ai/ctower-agents/commit/d592195139ac152e66d20684e7ab412f452ab017)), closes [#179](https://github.com/deep-ion-ai/ctower-agents/issues/179) [#178](https://github.com/deep-ion-ai/ctower-agents/issues/178)
+* **autonomo:** PR rascunho pendente sem commits e Closes #n no template ([233c897](https://github.com/deep-ion-ai/ctower-agents/commit/233c89710c8c083087cde5edeee2dd2b52dbf669))
+* **hub,ui:** integra modelo e esforço com o modo autônomo ([89ab5b8](https://github.com/deep-ion-ai/ctower-agents/commit/89ab5b86138f56664f94cd3cfe5c6e6d904e1250)), closes [#182](https://github.com/deep-ion-ai/ctower-agents/issues/182)
+* **hub,ui:** sonda sem leitura do plano e erro da wip bloqueando o piloto ([66eba4d](https://github.com/deep-ion-ai/ctower-agents/commit/66eba4d2c25a75eb26f4872dbc29e554f1826d4d))
+* **hub:** piloto encerra a sessão autônoma ociosa e a unidade systemd acompanha o container ([19725f3](https://github.com/deep-ion-ai/ctower-agents/commit/19725f332e7d3ada4a24d855abcdff60f0beecba))
+* **status:** pedido de atenção não volta issue em revisão para aguardando você ([ea25016](https://github.com/deep-ion-ai/ctower-agents/commit/ea25016826ee8214cc17851271fb8fcb632b8aee))
+* **status:** pedido de atenção não volta issue em revisão para aguardando você ([14965b2](https://github.com/deep-ion-ai/ctower-agents/commit/14965b200e83e6a437617697c937253adecf45fd))
+
 ## [1.8.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.7.1...v1.8.0) (2026-11-10)
 
 

@@ -2384,7 +2384,7 @@ mod tests {
         assert_eq!(kills(&port), vec![json!({ "session_id": "s1" })]);
     }
 
-    /// #215, de ponta a ponta no hub: com o ambiente 2.23, a janela aberta
+    /// #215, de ponta a ponta no hub: com o ambiente 2.24, a janela aberta
     /// inicia a sessão de análise (não a implementação); a gravação das
     /// dependências conclui o planejamento e a 123 inicia; no fim da janela
     /// a análise é encerrada e a rodada fecha.
@@ -2392,7 +2392,7 @@ mod tests {
     async fn analise_inicia_grava_libera_a_fila_e_fecha_no_fim_da_janela() {
         let hub = hub();
         let port = FakePort {
-            protocol: Some("2.23"),
+            protocol: Some("2.24"),
             ..Default::default()
         };
         tick(&hub, &port, "hub-id", SAB).await.unwrap();
@@ -2447,7 +2447,7 @@ mod tests {
             None,
             SAB + 120_000,
             false,
-            &Protocols::from([("env-auto".to_string(), (2, 23))]),
+            &Protocols::from([("env-auto".to_string(), (2, 24))]),
         )
         .unwrap();
         assert_eq!(s.projects[0].analysis.as_ref().unwrap().state, "ready");

@@ -8,16 +8,7 @@ import type { ReadyPrompt } from "../api/types";
 import type { StartTarget } from "../shell/start";
 import type { Tab } from "../state/nav";
 import type { Review } from "../protocol/gen";
-import {
-  changeLabel,
-  changeNewUrl,
-  forgeLabel,
-  itemUrl,
-  PROJECT_ITEM,
-  repoUrl,
-  trackerLabel,
-  type ProviderProject,
-} from "../util/item";
+import { changeLabel, changeNewUrl, forgeLabel, itemUrl, repoUrl, trackerLabel, type ProviderProject, RELEASE_ITEM, noIssue } from "../util/item";
 import type { TabInfo } from "./SessionTree";
 
 /** Tipo da sessão para as ações: issue, épico, sessão do projeto (`#0`) ou gestor. */
@@ -53,14 +44,14 @@ export interface SessionAction {
 export function sessionKind(info: TabInfo): SessionKind | null {
   if (info.gestor) return "gestor";
   if (!info.wi) return null;
-  if (info.wi.gh_number === PROJECT_ITEM) return "project";
+  if (noIssue(info.wi.gh_number)) return "project";
   return info.wi.kind === "epic" ? "epic" : "issue";
 }
 
 /** Pasta do "Abrir no VS Code": o worktree do item ou, no `#0`, o clone principal. */
 export function vscodePath(info: TabInfo): string | null {
   if (info.gestor || !info.wi) return null;
-  return info.wi.worktree_path ?? (info.wi.gh_number === PROJECT_ITEM ? (info.project?.repo_path ?? null) : null);
+  return info.wi.worktree_path ?? (noIssue(info.wi.gh_number) ? (info.project?.repo_path ?? null) : null);
 }
 
 /**
@@ -195,7 +186,8 @@ export function restartTarget(tab: Tab, info: TabInfo, live: boolean): StartTarg
   return {
     ...base,
     projectId: project.id,
-    ...(wi.gh_number === PROJECT_ITEM ? {} : { ghNumber: wi.gh_number }),
+    // Release (#204): `session.start_release` de novo, sem número.
+    ...(wi.gh_number === RELEASE_ITEM ? { release: true } : noIssue(wi.gh_number) ? {} : { ghNumber: wi.gh_number }),
   };
 }
 

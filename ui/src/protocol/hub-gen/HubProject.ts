@@ -4,6 +4,7 @@ import type { AutonomyConfig } from "./AutonomyConfig";
 import type { AutonomyReport } from "./AutonomyReport";
 import type { DocsConfig } from "./DocsConfig";
 import type { ForgeConfig } from "./ForgeConfig";
+import type { ReleaseConfig } from "./ReleaseConfig";
 import type { SessionTemplates } from "./SessionTemplates";
 import type { TrackerConfig } from "./TrackerConfig";
 import type { WipLimits } from "./WipLimits";
@@ -69,4 +70,8 @@ wip_limits: WipLimits,
  * Rótulo de aprovação do projeto (#124). Ausente num hub anterior: o
  * rótulo padrão, sem exigir.
  */
-approval: ApprovalConfig, };
+approval: ApprovalConfig, 
+/**
+ * Configuração de release (#204). Ausente num hub anterior: desligada.
+ */
+release: ReleaseConfig, };

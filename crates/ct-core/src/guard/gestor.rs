@@ -116,7 +116,7 @@ fn check_segment(words: &[String], depth: u8) -> Verdict {
 
 /// Primeiro argumento posicional, pulando as opções globais do git que
 /// recebem valor (`-C <dir>`, `-c <k=v>`).
-fn git_subcommand<'a>(args: &[&'a str]) -> Option<&'a str> {
+pub(super) fn git_subcommand<'a>(args: &[&'a str]) -> Option<&'a str> {
     let mut it = args.iter().copied();
     while let Some(a) = it.next() {
         match a {
@@ -141,7 +141,7 @@ fn check_git(args: &[&str]) -> Verdict {
 
 /// Argumentos posicionais do `gh`, sem as opções (e os valores das que
 /// recebem um).
-fn positional<'a>(args: &[&'a str]) -> Vec<&'a str> {
+pub(super) fn positional<'a>(args: &[&'a str]) -> Vec<&'a str> {
     let mut pos = Vec::new();
     let mut it = args.iter().copied();
     while let Some(a) = it.next() {
@@ -210,8 +210,26 @@ fn check_gh(args: &[&str]) -> Verdict {
 }
 
 /// `gh api`: só leitura, exceto a API de sub-issues, que pede confirmação.
-/// Campos (`-f`, `-F`, `--input`) sem `-X` tornam a chamada um POST.
 fn check_api(args: &[&str]) -> Verdict {
+    let (method, path) = api_call(args);
+    if method == "GET" {
+        return Verdict::Allow;
+    }
+    if path.contains("sub_issues") {
+        Verdict::Ask(format!(
+            "o gestor quer `gh api -X {method} {path}` (sub-issues): confirme se você aprovou \
+             na conversa"
+        ))
+    } else {
+        Verdict::Block(format!(
+            "o gestor só lê pela `gh api` (`{method} {path}` recusado)"
+        ))
+    }
+}
+
+/// Método e caminho de um `gh api` (`args` a partir de `api` ou antes dele).
+/// Campos (`-f`, `-F`, `--input`) sem `-X` tornam a chamada um POST.
+pub(super) fn api_call<'a>(args: &[&'a str]) -> (String, &'a str) {
     let mut method: Option<String> = None;
     let mut writes = false;
     let mut path: Option<&str> = None;
@@ -244,20 +262,7 @@ fn check_api(args: &[&str]) -> Verdict {
         }
     }
     let method = method.unwrap_or_else(|| if writes { "POST" } else { "GET" }.into());
-    if method == "GET" {
-        return Verdict::Allow;
-    }
-    let path = path.unwrap_or("");
-    if path.contains("sub_issues") {
-        Verdict::Ask(format!(
-            "o gestor quer `gh api -X {method} {path}` (sub-issues): confirme se você aprovou \
-             na conversa"
-        ))
-    } else {
-        Verdict::Block(format!(
-            "o gestor só lê pela `gh api` (`{method} {path}` recusado)"
-        ))
-    }
+    (method, path.unwrap_or(""))
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ import { shellItem, shellTitle } from "../terminal/shells";
 import { hasProjectKey, type EditorTab, type Screen, type TabMeta } from "../state/nav";
 import { paneProject, projectSessionTitle } from "../terminal/tabmeta";
 import { dashboardSessions } from "../terminal/SessionTree";
-import { itemShort, itemTitle, PROJECT_ITEM } from "../util/item";
+import { itemShort, itemTitle, noIssue, noIssueLabel } from "../util/item";
 import type { IconName } from "./icons";
 
 /** Nome de cada tela (barra de atividades, abas, cabeçalho do painel lateral). */
@@ -52,7 +52,7 @@ function screenTitle(s: Screen, dashboards: Record<string, Dashboard>): string {
       if (s.env !== undefined && s.workItemId !== undefined && dashboards[s.env]?.gestor_work_item_id === s.workItemId)
         return `Revisão · ${GESTOR_LABEL}`;
       if (!wi) return SCREEN_LABEL.review;
-      return `Revisão · ${wi.gh_number === PROJECT_ITEM ? "planejamento" : itemShort(dp?.project, wi.gh_number)}`;
+      return `Revisão · ${noIssue(wi.gh_number) ? noIssueLabel(wi.gh_number) : itemShort(dp?.project, wi.gh_number)}`;
     }
     case "recovery": {
       const d = s.env !== undefined ? dashboards[s.env] : undefined;
@@ -61,7 +61,7 @@ function screenTitle(s: Screen, dashboards: Record<string, Dashboard>): string {
       const { wi, project, gestor } = lookup(d, sess);
       if (gestor) return `Recuperação · ${GESTOR_LABEL}`;
       return wi
-        ? `Recuperação · ${wi.gh_number === PROJECT_ITEM ? "planejamento" : itemShort(project, wi.gh_number)}`
+        ? `Recuperação · ${noIssue(wi.gh_number) ? noIssueLabel(wi.gh_number) : itemShort(project, wi.gh_number)}`
         : SCREEN_LABEL.recovery;
     }
     case "hub":

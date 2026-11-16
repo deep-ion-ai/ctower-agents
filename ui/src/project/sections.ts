@@ -17,7 +17,8 @@ export type ProjectPage = "overview" | "items" | "sessions" | "settings";
  * sync = `SyncEnvCard` (Jira) ou o sync do hub (GitHub); Ambientes =
  * `AssignmentsCard`; Regras = `AgentRules`; Secrets = `ProjectSecretsCard`;
  * Docs = `DocsForm`; Templates de sessão = `SessionTemplatesCard` (#166); Modo
- * autônomo = `AutonomyCard` (#181); Aprovação = `ApprovalCard` (#124); Limpeza = `CleanupCard` (o atalho para Manutenção ›
+ * autônomo = `AutonomyCard` (#181); Aprovação = `ApprovalCard` (#124); Release =
+ * `ReleaseCard` (#204, só GitHub + GitHub); Limpeza = `CleanupCard` (o atalho para Manutenção ›
  * Limpeza filtrada pelo projeto, #22); Zona de perigo = `DangerZone`.
  */
 export type ProjectSettingsSection =
@@ -28,6 +29,7 @@ export type ProjectSettingsSection =
   | "rules"
   | "templates"
   | "approval"
+  | "release"
   | "secrets"
   | "docs"
   | "cleanup"
@@ -52,6 +54,7 @@ export const PROJECT_SECTIONS: ProjectSettingsSection[] = [
   "rules",
   "templates",
   "approval",
+  "release",
   "secrets",
   "docs",
   "cleanup",
@@ -66,6 +69,7 @@ export const PROJECT_SECTION_LABEL: Record<ProjectSettingsSection, string> = {
   rules: "Regras do agente",
   templates: "Templates de sessão",
   approval: "Aprovação",
+  release: "Release",
   secrets: "Secrets e variáveis",
   docs: "Docs",
   cleanup: "Limpeza",

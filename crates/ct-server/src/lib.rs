@@ -83,12 +83,16 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// (#184): `text` opcional no `session.continue` (o pedido de correção ou de
 /// merge do piloto automático do hub, só numa sessão autônoma, até 16 KB) e
 /// a variável `CTOWER_AUTONOMY_BRANCH` da sessão autônoma (o `ctower hook`
-/// só deixa `gh pr merge` em PR com base na branch de integração). 2.23
-/// (#215): `analysis` no `session.start_project` (a sessão de análise de
-/// dependências do piloto automático, só no ambiente do modo autônomo), o
+/// só deixa `gh pr merge` em PR com base na branch de integração).
+/// 2.23 (#204): sessão de release — `release` em `Project` e em
+/// `SessionTemplates`, `session.start_release` (também pelo canal do hub),
+/// o erro `RELEASE_BUSY` (-32053) e as rotas `/session/release/context` e
+/// `/session/release/event` do `ctower release`.
+/// 2.24 (#215): `analysis` no `session.start_project` (a sessão de análise
+/// de dependências do piloto automático, só no ambiente do modo autônomo), o
 /// texto do `session.continue` também nela e a ferramenta MCP
 /// `autopilot_set_dependencies`.
-pub const PROTOCOL_VERSION: &str = "2.23";
+pub const PROTOCOL_VERSION: &str = "2.24";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -151,6 +155,14 @@ pub fn router(state: AppState) -> Router {
             post(env_secrets::rotate_env_key_http),
         )
         .route("/session/secret", post(env_secrets::session_secret_http))
+        .route(
+            "/session/release/context",
+            post(env_secrets::release_context_http),
+        )
+        .route(
+            "/session/release/event",
+            post(env_secrets::release_event_http),
+        )
         .with_state(state)
 }
 

@@ -2,7 +2,7 @@ import "../hub/hub.css";
 import { DISCARD_LABEL, useDiscard } from "../recovery/discard";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
-import { itemTitle, PROJECT_ITEM, type ProviderProject } from "../util/item";
+import { itemTitle, type ProviderProject, noIssue } from "../util/item";
 import { ago } from "../util/time";
 import type { EnvSessions, ProjectSession, SessionKind } from "./sessions";
 
@@ -40,7 +40,7 @@ export function ProjectSessions({
     if (!env) return null;
     if (s.kind === "interrupted") {
       const item =
-        project && s.gh !== PROJECT_ITEM ? { owner: project.gh_owner, repo: project.gh_repo, number: s.gh } : null;
+        project && !noIssue(s.gh) ? { owner: project.gh_owner, repo: project.gh_repo, number: s.gh } : null;
       return (
         <span className="pj-ses-actions">
           <button

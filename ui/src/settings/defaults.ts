@@ -38,6 +38,19 @@ export const DEFAULT_GESTOR_TEMPLATE = [
   "Consulte suas decisões anteriores com ledger_list_decisions e registre as relevantes com ledger_record_decision.",
 ].join("\n");
 
+// Sessão de release (#204), só GitHub: {{owner}}, {{repo}}, {{source}},
+// {{target}}, {{release_pr_branch}} e {{protected}}. Os limites fixos
+// (merges só pelo `ctower release`) vão à parte, no system prompt da sessão.
+export const DEFAULT_RELEASE_TEMPLATE = [
+  "Sessão de release de {{owner}}/{{repo}}: conduza a release de {{source}} para {{target}} até o fim, sem esperar por mim, só pelas etapas do `ctower release`.",
+  "Comece por `ctower release status`. Sem diferença de conteúdo e sem PR do fluxo aberto, relate \"nada a lançar\" e termine. Com uma etapa já em andamento, continue dela (campo `next`).",
+  "Promoção: escreva o corpo do PR (o que entra na release, a partir de `git log --oneline origin/{{target}}..origin/{{source}}` e dos PRs mesclados) num arquivo e rode `ctower release promote --body-file <arquivo>`.",
+  "Depois, nesta ordem: `ctower release merge-promotion --sha <head conferido>`, `ctower release wait-release-pr`, `ctower release approve-runs <PR de release>`, `ctower release merge-release --sha <head conferido>`, `ctower release wait-publish` e `ctower release merge-back`.",
+  "Saída 3 é recusa e 1 é falha: leia a mensagem. Reexecute jobs que falharam com `gh run rerun <id> --failed` e rode a etapa de novo. Diante de conflito, check obrigatório vermelho ou prazo esgotado, pare e relate. Não corrija código nem CI.",
+  "Registre as decisões relevantes com `ledger_record_decision` (origin `autonoma`).",
+  "Ao terminar, resuma: a versão, os links da release e dos três PRs (promoção, release e back-merge), os runs aprovados e as decisões registradas.",
+].join("\n");
+
 // Projetos Jira + GitLab (spec do Jira e GitLab §9, #351), escolhidos pelo
 // rastreador do projeto. Além das variáveis de sempre: {{key}} (PROJ-5450),
 // {{title}}, {{base}}, {{jira_url}}, {{jira_project}}, {{jira}} e {{glab}}
@@ -123,6 +136,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
     jira_issue: DEFAULT_JIRA_ISSUE_TEMPLATE,
     jira_epic: DEFAULT_JIRA_EPIC_TEMPLATE,
     jira_project: DEFAULT_JIRA_PROJECT_TEMPLATE,
+    release: DEFAULT_RELEASE_TEMPLATE,
   },
   prompts: DEFAULT_PROMPTS,
   notify: { needs_human: true, session_error: true, env_down: true },

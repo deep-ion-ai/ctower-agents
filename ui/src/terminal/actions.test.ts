@@ -92,3 +92,22 @@ test("Reiniciar: o mesmo item, modelo e modo; #0 sem número; gestor com o escop
   expect(restartTarget(tab, GESTOR, false)).toMatchObject({ gestor: { kind: "health" }, replace: tab });
   expect(restartTarget(tab, { ...GESTOR, scope: undefined }, false)).toMatchObject({ gestor: { kind: "portfolio" } });
 });
+
+test("sessão de release (#204): como a do projeto, e o Reiniciar inicia outra de release", () => {
+  const rel: TabInfo = { ...ISSUE, wi: workItem({ gh_number: -1, branch: null, worktree_path: null }) };
+  expect(view(sessionActions({ info: rel, ended: false, vscode: true }))).toEqual([
+    "Abrir repositório no GitHub",
+    "Abrir no VS Code",
+    "Reiniciar",
+  ]);
+  const tab = { env: "wsl", session: "s" };
+  expect(restartTarget(tab, { ...rel, s: session({ model: null, mode: "native" }) }, false)).toEqual({
+    env: "wsl",
+    replace: tab,
+    kill: false,
+    model: null,
+    mode: "native",
+    projectId: 1,
+    release: true,
+  });
+});

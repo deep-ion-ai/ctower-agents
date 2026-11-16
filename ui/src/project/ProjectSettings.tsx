@@ -9,6 +9,7 @@ import { isJira } from "../hub/tracker";
 import {
   ApprovalCard,
   AssignmentsCard,
+  ReleaseCard,
   AutonomyCard,
   CleanupCard,
   DangerZone,
@@ -31,6 +32,7 @@ import {
   type ProjectSettingsSection,
 } from "./sections";
 import { DesktopOnly } from "../web/DesktopOnly";
+import { releaseSupported } from "../hub/release";
 
 /**
  * Aba Configurações do projeto pela visão do hub (#17): o índice das seções
@@ -70,7 +72,7 @@ export function ProjectSettings({
   const [editing, setEditing] = useState(false);
   const noteId = useId();
   // Secrets: só onde aparecem (a seção e a contagem da exclusão); a web não lê.
-  const secrets = useSecrets(!web && (section === "secrets" || section === "danger"));
+  const secrets = useSecrets(!web && (section === "secrets" || section === "danger" || section === "release"));
 
   const want = keyOf(owner, repo).toLowerCase();
   const p = hub.projects.find((x) => keyOf(x.project.gh_owner, x.project.gh_repo).toLowerCase() === want);
@@ -174,6 +176,25 @@ export function ProjectSettings({
     case "approval":
       body = <ApprovalCard project={p} settings={settings} readOnly={web} />;
       break;
+    case "release": {
+      // Só GitHub + GitHub (#204): o projeto Jira + GitLab não tem a seção.
+      const name = pr.release?.token_secret ?? "";
+      body = releaseSupported(pr) ? (
+        <ReleaseCard
+          project={p}
+          settings={settings}
+          readOnly={web}
+          secretPresent={
+            web || !secrets.list ? null : projectSecretsOf(secrets, pr.gh_owner, pr.gh_repo).own.some((i) => i.name === name)
+          }
+        />
+      ) : (
+        <p className="muted" role="note">
+          A sessão de release é só para projetos GitHub + GitHub.
+        </p>
+      );
+      break;
+    }
     case "secrets":
       body = <ProjectSecretsCard project={pr} secrets={secrets} />;
       break;
@@ -202,7 +223,7 @@ export function ProjectSettings({
     <div className="pj-settings">
       <nav className="pj-settings-nav" aria-label="Seções das configurações do projeto">
         <ul>
-          {PROJECT_SECTIONS.map((s) => (
+          {PROJECT_SECTIONS.filter((s) => s !== "release" || releaseSupported(pr)).map((s) => (
             <li key={s}>
               <button
                 type="button"

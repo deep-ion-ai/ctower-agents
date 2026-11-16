@@ -8,6 +8,7 @@ pub mod closes;
 pub mod gestor;
 pub mod glab;
 pub mod jira;
+pub mod release;
 pub mod tokenize;
 
 use tokenize::split_segments;

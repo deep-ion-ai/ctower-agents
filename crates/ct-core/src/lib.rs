@@ -11,6 +11,7 @@ pub mod files;
 pub mod guard;
 mod logs;
 pub mod plan;
+pub mod release;
 #[macro_use]
 mod model;
 mod repo_url;
@@ -27,6 +28,9 @@ pub use credentials::{
 pub use docs::DocsConfig;
 pub use logs::LogsConfig;
 pub use model::*;
+pub use release::{
+    ReleaseConfig, ReleaseStatus, ReleaseStep, RELEASE_SESSION_KIND, RELEASE_WORK_ITEM,
+};
 pub use repo_url::{github_repo_from_url, repo_from_url, RepoRef};
 pub use session_templates::SessionTemplates;
 pub use tracker::{

@@ -164,6 +164,7 @@ fn from_sessions(e: SessionsError) -> (i64, String) {
         SessionsError::RemoteControl(m) => (REMOTE_CONTROL_UNAVAILABLE, m),
         SessionsError::AutonomyConflict(m) => (ct_http::sync::AUTONOMY_CONFLICT, m),
         SessionsError::ApprovalRequired(m) => (ct_http::sync::APPROVAL_REQUIRED, m),
+        SessionsError::ReleaseBusy(m) => (ct_http::sync::RELEASE_BUSY, m),
         e => (-32000, e.to_string()),
     }
 }
@@ -737,6 +738,17 @@ impl Conn {
                     } else {
                         s.start_project(project_id, &prompt, size, &agent)
                     }
+                })
+                .await?;
+                Ok(json!(v))
+            }
+            "session.start_release" => {
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let prompt = str_param(p, "prompt")?.to_string();
+                let size = size_param(p)?;
+                let agent = agent_param(p)?;
+                let v = blocking(&sessions, move |s| {
+                    s.start_release(project_id, &prompt, size, &agent)
                 })
                 .await?;
                 Ok(json!(v))
@@ -2717,6 +2729,7 @@ mod tests {
                         autonomy: Default::default(),
                         autonomy_runner: false,
                         approval: Default::default(),
+                        release: Default::default(),
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
                         name: "demo".into(),

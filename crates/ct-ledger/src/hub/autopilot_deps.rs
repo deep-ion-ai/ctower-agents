@@ -1,5 +1,5 @@
 //! Dependências entre issues do piloto automático (#215, épico #178),
-//! guardadas no hub (migração 42), sem relação nativa no rastreador.
+//! guardadas no hub (migração 43), sem relação nativa no rastreador.
 //!
 //! - **Arestas** ([`DependencyEdge`]): `number` é bloqueada por `blocker`.
 //!   A sessão de análise grava as de origem `analysis`; a pessoa corrige na

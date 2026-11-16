@@ -206,7 +206,7 @@ export const SKIP_TEXT: Record<string, string> = {
 export const skipText = (s: string) => SKIP_TEXT[s] ?? s;
 
 /** Protocolo do hub com a análise de dependências do piloto (#215). */
-export const AUTOPILOT_DEPS_PROTOCOL = "1.24";
+export const AUTOPILOT_DEPS_PROTOCOL = "1.25";
 
 /**
  * Situação do item na fila: "inicia agora", "elegível" ou o motivo de ter

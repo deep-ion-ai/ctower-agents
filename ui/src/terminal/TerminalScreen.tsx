@@ -4,7 +4,7 @@
 // shell livre no worktree (#423) é uma aba do mesmo jeito, com cabeçalho
 // enxuto (`ShellBar`).
 import "./terminal.css";
-import { itemShort, itemTitle, PROJECT_ITEM } from "../util/item";
+import { itemShort, itemTitle, noIssue } from "../util/item";
 import { diffBlocked, diffTab } from "../diff/diff";
 import { useEffect, useRef, useState } from "react";
 import { useNow } from "../App";
@@ -889,7 +889,7 @@ function PaneBar({
             "Abrir shell no worktree",
             "prompt",
             onOpenShell,
-            !wi || (!wi.worktree_path && wi.gh_number !== PROJECT_ITEM),
+            !wi || (!wi.worktree_path && !noIssue(wi.gh_number)),
           )}
         <RcControl
           rc={rc}
@@ -1096,7 +1096,7 @@ function ShellBar({
         </span>
         <span className="pane-meta">
           {shell && <span className="mono">{shell.cwd}</span>}
-          {wi?.gh_number === PROJECT_ITEM && (
+          {noIssue(wi?.gh_number) && (
             <span className="pane-warn" title="O shell roda no clone principal do projeto, não num worktree isolado">
               clone principal
             </span>
