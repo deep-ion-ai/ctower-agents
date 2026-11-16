@@ -725,8 +725,19 @@ impl Conn {
                 let prompt = str_param(p, "prompt")?.to_string();
                 let size = size_param(p)?;
                 let agent = agent_param(p)?;
+                // Sessão de análise de dependências do piloto automático
+                // (#215): só no ambiente do modo autônomo, e marcada.
+                let analysis = match p.get("analysis") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err(invalid("analysis deve ser true ou false")),
+                };
                 let v = blocking(&sessions, move |s| {
-                    s.start_project(project_id, &prompt, size, &agent)
+                    if analysis {
+                        s.start_analysis(project_id, &prompt, size, &agent)
+                    } else {
+                        s.start_project(project_id, &prompt, size, &agent)
+                    }
                 })
                 .await?;
                 Ok(json!(v))

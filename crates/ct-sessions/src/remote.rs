@@ -419,9 +419,10 @@ impl Sessions {
             .ledger()
             .list_events_of_kind(s.work_item_id, crate::autonomy::AUTONOMY_SESSION)?
             .is_empty();
-        if !autonomous {
+        // A sessão de análise do piloto (#215) recebe o pedido de reanálise.
+        if !autonomous && !self.is_analysis_session(s)? {
             return Err(SessionsError::Invalid(format!(
-                "sessão {}: texto no session.continue só numa sessão autônoma",
+                "sessão {}: texto no session.continue só numa sessão autônoma ou de análise",
                 s.id
             )));
         }
@@ -886,6 +887,47 @@ mod tests {
             std::fs::read_to_string(&cmd).unwrap(),
             "CI verde: mescle o PR #9[201~ agora"
         );
+        env.sessions.kill(&s.id).ok();
+        env.wait_state(&s.id, SessionState::Exited);
+    }
+
+    /// #215: a sessão de análise do piloto (sessão do projeto marcada)
+    /// também recebe texto; outra sessão do projeto, não.
+    #[test]
+    fn continuar_com_texto_na_sessao_de_analise() {
+        let env = TestEnv::new(FakeClaude::script(
+            "read cmd; printf '%s' \"$cmd\" > \"$out.cmd\"; sleep 30",
+        ));
+        let agent = crate::AgentOptions::default();
+        let s = env
+            .sessions
+            .start_project(env.project_id, "analise", None, &agent)
+            .unwrap();
+        env.wait_fake_output(&s.id);
+        assert!(matches!(
+            env.sessions.continue_session(&s.id, Some("reanalise #12")),
+            Err(SessionsError::Invalid(_))
+        ));
+        env.sessions
+            .ledger()
+            .append_event(NewEvent {
+                project_id: env.project_id,
+                work_item_id: Some(s.work_item_id),
+                session_id: Some(&s.id),
+                kind: crate::autonomy::AUTOPILOT_ANALYSIS,
+                payload: json!({ "session_id": s.id }),
+            })
+            .unwrap();
+        env.sessions
+            .continue_session(&s.id, Some("reanalise #12"))
+            .unwrap();
+        let cmd = env.fake_output_path(&s.id).with_extension("txt.cmd");
+        let deadline = Instant::now() + T;
+        while std::fs::read_to_string(&cmd).map_or(true, |c| c.is_empty()) {
+            assert!(Instant::now() < deadline, "texto não chegou ao PTY");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(std::fs::read_to_string(&cmd).unwrap(), "reanalise #12");
         env.sessions.kill(&s.id).ok();
         env.wait_state(&s.id, SessionState::Exited);
     }

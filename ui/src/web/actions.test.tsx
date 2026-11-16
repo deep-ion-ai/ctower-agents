@@ -284,7 +284,7 @@ describe("Revisão: marcar decisões como revisadas", () => {
             attribution: true,
             sync_role: false,
             docs: { enabled: false, project_dirs: [], epic_dirs: [] },
-            session_templates: { issue: "", epic: "", project: "", autonomous: "", release: "" },
+            session_templates: { issue: "", epic: "", project: "", autonomous: "", release: "", analysis: "" },
             autonomy: { enabled: false, env_id: null, branch: "", base_branch: "", strategy: "merge" },
             autonomy_runner: false,
             autonomy_report: null,

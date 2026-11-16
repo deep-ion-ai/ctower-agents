@@ -26,6 +26,26 @@ export const DEFAULT_AUTONOMOUS_TEMPLATE = [
   "Antes de dizer que o {{change}} está pronto, consulte `pr_feedback`: corrija os checks que falharam (o log vem com `pr_check_log`) e as threads de review não resolvidas, e faça push de novo.",
 ].join("\n");
 
+/**
+ * Template padrão da sessão de análise de dependências do piloto (#215),
+ * espelho de `ct_core::session_templates::DEFAULT_ANALYSIS_TEMPLATE` (o teste
+ * `padrao_de_analise_espelhado_na_ui` confere linha a linha). Quem renderiza
+ * é o hub; aqui é só o placeholder do campo.
+ */
+export const DEFAULT_ANALYSIS_TEMPLATE = [
+  "Sessão de análise de dependências do piloto automático do Control Tower, no repositório {{owner}}/{{repo}}. Ninguém acompanha esta sessão: não pergunte nada.",
+  "Sua tarefa é montar a ordem de execução e as dependências entre as issues da fila do modo autônomo. Você não implementa nada, não cria branch, não faz commit nem push e não altera issues no rastreador (nada de comentar, rotular ou fechar).",
+  "Issues da fila (abertas, aprovadas e com prioridade):",
+  "{{issues}}",
+  "Issues já em andamento ou em revisão (podem bloquear as da fila):",
+  "{{in_progress}}",
+  "Dependências já gravadas (as manuais foram corrigidas pela pessoa e prevalecem):",
+  "{{dependencies}}",
+  "Leia cada issue no rastreador ({{tracker_hint}}): título, corpo, épico, menções como “Depende de #N” e as áreas do código citadas. Leia o código na branch de integração {{integration_branch}} sem trocar de branch: `git fetch origin {{integration_branch}}` e depois `git show origin/{{integration_branch}}:<caminho>` ou `git log origin/{{integration_branch}}`.",
+  "Uma issue depende de outra quando precisa do código, da migração ou da decisão dela já mesclados para começar sem retrabalho ou conflito. Na dúvida, não crie a dependência.",
+  "Grave o resultado com a ferramenta `autopilot_set_dependencies`: para cada issue da fila, a lista de issues que a bloqueiam (vazia se nenhuma), com uma justificativa curta para cada uma, e a ordem de execução sugerida. Depois disso, fique parado: o hub manda aqui as issues novas ou alteradas, e você reanalisa só o necessário e grava de novo.",
+].join("\n");
+
 /** Tamanho máximo do template, em bytes (o de `SessionTemplates`). */
 export const MAX_AUTONOMOUS_TEMPLATE_BYTES = 64 * 1024;
 
@@ -83,6 +103,8 @@ export interface AutonomyForm {
   strategy: AlignStrategy;
   /** Template autônomo do projeto (#191); `null` = hub sem o campo (não edita). */
   template: string | null;
+  /** Template da sessão de análise (#215); `null` = hub sem o campo (não edita). */
+  analysisTemplate: string | null;
 }
 
 /** O template autônomo do projeto; `null` = hub anterior à #191 (sem o campo). */
@@ -91,17 +113,29 @@ export function autonomousTemplateOf(p: HubProject): string | null {
   return typeof t?.autonomous === "string" ? t.autonomous : null;
 }
 
+/** O template da sessão de análise do projeto; `null` = hub anterior à #215. */
+export function analysisTemplateOf(p: HubProject): string | null {
+  const t = (p as Partial<HubProject>).session_templates as Partial<SessionTemplates> | undefined;
+  return typeof t?.analysis === "string" ? t.analysis : null;
+}
+
 /**
- * `session_templates` do `hub.projects.update` com o template autônomo do
- * formulário (o objeto inteiro: o hub substitui). Só espaços = o padrão
- * (vazio). `null` se nada mudou ou o hub não tem o campo.
+ * `session_templates` do `hub.projects.update` com os templates autônomo e
+ * de análise do formulário (o objeto inteiro: o hub substitui). Só espaços
+ * = o padrão (vazio). `null` se nada mudou ou o hub não tem os campos.
  */
 export function autonomyTemplatesPatch(f: AutonomyForm, p: HubProject): SessionTemplates | null {
+  const clean = (t: string) => (t.trim() ? t : "");
+  let out: SessionTemplates | null = null;
   const cur = autonomousTemplateOf(p);
-  if (cur === null || f.template === null) return null;
-  const next = f.template.trim() ? f.template : "";
-  if (next === cur) return null;
-  return { ...p.session_templates, autonomous: next };
+  if (cur !== null && f.template !== null && clean(f.template) !== cur) {
+    out = { ...p.session_templates, autonomous: clean(f.template) };
+  }
+  const curA = analysisTemplateOf(p);
+  if (curA !== null && f.analysisTemplate != null && clean(f.analysisTemplate) !== curA) {
+    out = { ...(out ?? p.session_templates), analysis: clean(f.analysisTemplate) };
+  }
+  return out;
 }
 
 export function autonomyForm(a: AutonomyConfig, p: HubProject): AutonomyForm {
@@ -112,6 +146,7 @@ export function autonomyForm(a: AutonomyConfig, p: HubProject): AutonomyForm {
     base: autonomyBase(a, p),
     strategy: a.strategy,
     template: autonomousTemplateOf(p),
+    analysisTemplate: analysisTemplateOf(p),
   };
 }
 
@@ -141,5 +176,8 @@ export function autonomyFormError(f: AutonomyForm, p: HubProject): string | null
   const bytes = new TextEncoder().encode(f.template ?? "").length;
   if (bytes > MAX_AUTONOMOUS_TEMPLATE_BYTES)
     return `O template da sessão autônoma tem no máximo ${MAX_AUTONOMOUS_TEMPLATE_BYTES / 1024} KiB (${bytes} bytes).`;
+  const aBytes = new TextEncoder().encode(f.analysisTemplate ?? "").length;
+  if (aBytes > MAX_AUTONOMOUS_TEMPLATE_BYTES)
+    return `O template da sessão de análise tem no máximo ${MAX_AUTONOMOUS_TEMPLATE_BYTES / 1024} KiB (${aBytes} bytes).`;
   return null;
 }

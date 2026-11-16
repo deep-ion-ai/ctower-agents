@@ -100,6 +100,9 @@ pub const WEB_METHODS: &[&str] = &[
     // chave da conta.
     "hub.autopilot.digest",
     "hub.autopilot.wip",
+    // Dependências entre issues (#215): a correção manual de uma aresta,
+    // como o pausar, só muda o que o agendador inicia.
+    "hub.autopilot.deps.set",
 ];
 
 /// Sensíveis da decisão do épico #205: nunca na web, mesmo com sessão válida.

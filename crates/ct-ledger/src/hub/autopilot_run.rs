@@ -94,11 +94,17 @@ pub struct AutopilotEvent {
     /// `unpaused` e, no fechamento autônomo (#184), `feedback_sent`
     /// (`reason` `ci_falhou` ou `review`, com o head), `merge_requested`,
     /// `blocked` (`reason` `ci_tentativas_esgotadas`, `aguardando_voce` ou
-    /// `sem_progresso`) e `continue_failed`.
+    /// `sem_progresso`) e `continue_failed`. Na análise de dependências
+    /// (#215): `analysis_started` (`reason` `planejamento` ou `reanalise`),
+    /// `analysis_done`, `analysis_failed`, `analysis_ended` e os avisos
+    /// `dependency_cycle`, `dependency_unknown` e `analysis_unsupported`
+    /// (gravados como as recusas, só quando mudam no escopo).
     pub kind: String,
     /// De quem é o evento: `hub`, `account:<chave>`, `project:<owner/repo>`,
-    /// `item:<owner/repo#n>` ou `env:<env_id>` (ambiente sem o
-    /// `session.continue` com texto, #184). A recusa (`refused`,
+    /// `item:<owner/repo#n>`, `env:<env_id>` (ambiente sem o
+    /// `session.continue` com texto, #184) ou, nos avisos da análise
+    /// (#215), `cycle:<owner/repo>`, `deps:<owner/repo>` e
+    /// `analysis:<env_id>`. A recusa (`refused`,
     /// `start_failed`, `end_failed`, `continue_failed`) só é gravada de novo
     /// quando o motivo (`reason`) ou a causa no texto (`message`, sem os
     /// números) muda no mesmo escopo.
@@ -410,7 +416,13 @@ impl Hub {
     pub fn record_autopilot_event(&self, e: &AutopilotEvent) -> Result<Option<AutopilotEvent>> {
         if matches!(
             e.kind.as_str(),
-            "refused" | "start_failed" | "end_failed" | "continue_failed"
+            "refused"
+                | "start_failed"
+                | "end_failed"
+                | "continue_failed"
+                | "dependency_cycle"
+                | "dependency_unknown"
+                | "analysis_unsupported"
         ) {
             if let Some(last) = self.last_autopilot_event(&e.scope)? {
                 if last.kind == e.kind

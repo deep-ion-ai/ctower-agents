@@ -88,7 +88,11 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// `SessionTemplates`, `session.start_release` (também pelo canal do hub),
 /// o erro `RELEASE_BUSY` (-32053) e as rotas `/session/release/context` e
 /// `/session/release/event` do `ctower release`.
-pub const PROTOCOL_VERSION: &str = "2.23";
+/// 2.24 (#215): `analysis` no `session.start_project` (a sessão de análise
+/// de dependências do piloto automático, só no ambiente do modo autônomo), o
+/// texto do `session.continue` também nela e a ferramenta MCP
+/// `autopilot_set_dependencies`.
+pub const PROTOCOL_VERSION: &str = "2.24";
 
 #[derive(Clone)]
 pub struct AppState {

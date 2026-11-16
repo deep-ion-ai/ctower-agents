@@ -14,7 +14,13 @@
 //!
 //! O resumo da manhã (#185) mora em [`digest`]: o mesmo laço o gera em todo
 //! dia útil, no horário da política.
+//!
+//! A análise de dependências entre as issues da fila (#215) entra no mesmo
+//! agendador: a regra em [`plan`], as partes puras (janela, ciclos, textos)
+//! em [`deps`]; a sessão de análise grava pela rota de agente
+//! `POST /agent/v1/autopilot/dependencies`.
 
+pub mod deps;
 pub mod digest;
 pub mod plan;
 pub mod runner;

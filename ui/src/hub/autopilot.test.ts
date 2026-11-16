@@ -1,6 +1,10 @@
 import type { BudgetDecision } from "../protocol/hub-gen";
 import {
+  analysisText,
   bandSummary,
+  depText,
+  digestCounts,
+  queueSituation,
   endInput,
   hhmmToMin,
   closingText,
@@ -114,4 +118,55 @@ test("fechamento autônomo: tentativas do CI e “Aguardando você” (#184)", (
   expect(closingText({ max_ci_attempts: 0, waiting_timeout_min: 0 })).toBe(
     "Com o PR na branch de integração, a primeira falha do CI bloqueia a issue e pede o merge com o CI verde; a sessão parada em “Aguardando você” não é bloqueada.",
   );
+});
+
+test("dependências na fila (#215): bloqueada por, arestas e a análise", () => {
+  expect(queueSituation({ number: 12, skip: null }, 12)).toBe("inicia agora");
+  expect(queueSituation({ number: 12, skip: null }, 13)).toBe("elegível");
+  expect(queueSituation({ number: 12, skip: "blocked_by", blocked_by: [10, 11] }, null)).toBe(
+    "fora: bloqueada por #10, #11",
+  );
+  expect(queueSituation({ number: 12, skip: "dependency_cycle", blocked_by: [13] }, null)).toBe(
+    "fora: ciclo de dependências",
+  );
+  expect(queueSituation({ number: 12, skip: "analysis_pending" }, null)).toBe("fora: esperando a reanálise");
+  const dep = { blocker: 10, reason: "migração", source: "analysis", removed: false, state: "pending" as const };
+  expect(depText(dep)).toBe("#10 (pendente)");
+  expect(depText({ ...dep, state: "unknown", source: "manual" })).toBe("#10 (fora do espelho, manual)");
+  expect(depText({ ...dep, removed: true, source: "manual" })).toBe("#10 (removida, manual)");
+
+  const view = { state: "planning", session_id: "s", opened_at: TUE_10, planned_at: null, pending: [12], failed_at: null };
+  expect(analysisText({ analysis: null, analysis_unsupported: false })).toBeNull();
+  expect(analysisText({ analysis: view, analysis_unsupported: false }, -180)).toBe(
+    "Análise de dependências: planejando a janela (aberta ter 10:00); nenhuma implementação começa antes.",
+  );
+  expect(analysisText({ analysis: { ...view, state: "reanalysing" }, analysis_unsupported: false })).toBe(
+    "Análise de dependências: reanalisando #12.",
+  );
+  expect(
+    analysisText({ analysis: { ...view, state: "ready", planned_at: TUE_10 }, analysis_unsupported: false }, -180),
+  ).toBe("Análise de dependências: planejada às ter 10:00; esperando mudanças na fila.");
+  expect(analysisText({ analysis: null, analysis_unsupported: true })).toMatch(/Atualize o ambiente/);
+});
+
+test("resumo: issues esperando bloqueante (#215)", () => {
+  const p = {
+    owner: "acme",
+    repo: "acme-web",
+    name: "acme-web",
+    branch: "wip/autonoma",
+    base: "develop",
+    merged: [],
+    blocked: [],
+    decisions_pending: 0,
+    decisions_new: 0,
+    ahead: 0,
+    pr_url: null,
+    ci: null,
+    conflict: false,
+    error: null,
+    waiting_blocker: 2,
+  };
+  expect(digestCounts(p)).toBe("2 esperando bloqueante");
+  expect(digestCounts({ ...p, waiting_blocker: 0 })).toBe("nada novo");
 });

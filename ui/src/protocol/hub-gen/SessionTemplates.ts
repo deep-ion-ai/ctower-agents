@@ -25,4 +25,9 @@ autonomous: string,
 /**
  * Sessão de release (#204), sem issue; vazio = o template global.
  */
-release: string, };
+release: string, 
+/**
+ * Sessão de análise de dependências do piloto automático (#215); vazio
+ * = [`DEFAULT_ANALYSIS_TEMPLATE`]. O hub renderiza, não a UI.
+ */
+analysis: string, };

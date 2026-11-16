@@ -16,6 +16,9 @@ pub enum LedgerError {
     /// Operação recusada pelo estado atual (ex.: excluir projeto com sessão viva).
     #[error("{0}")]
     Conflict(String),
+    /// Pedido com dado inválido (ex.: número de issue negativo).
+    #[error("{0}")]
+    Invalid(String),
 }
 
 impl From<ParseEnumError> for LedgerError {

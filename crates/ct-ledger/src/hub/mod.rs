@@ -26,6 +26,7 @@ mod approval;
 mod assignments;
 mod autonomy;
 mod autopilot;
+mod autopilot_deps;
 mod autopilot_run;
 mod config;
 mod digest;
@@ -50,6 +51,10 @@ pub use agent::{
 };
 pub use approval::ApprovalStatus;
 pub use assignments::{AssignmentAdded, AssignmentFilter, AssignmentState, HubAssignment};
+pub use autopilot_deps::{
+    issue_fingerprint, AnalysisRound, BlockerInput, BlockerState, DependencyEdge, DependencyInput,
+    DependencySet, DependencySetResult, ManualEdit, DEP_SOURCE_ANALYSIS, DEP_SOURCE_MANUAL,
+};
 pub use autopilot_run::{
     AutopilotEvent, AutopilotSession, AutopilotSettings, CloseState, IdleSession, ParkedSession,
     WaitingSession, AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN,
@@ -857,6 +862,48 @@ CREATE TABLE autopilot_close (
     // `ct_core::ReleaseConfig`. `{}` = desligada, com os padrões.
     r#"
 ALTER TABLE project ADD COLUMN release_config TEXT NOT NULL DEFAULT '{}';
+"#,
+    // 43: dependências entre issues do piloto automático (#215, épico
+    // #178): as arestas (`number` bloqueada por `blocker`) da análise ou da
+    // correção manual (`removed` = lápide manual), a ordem sugerida, a
+    // impressão digital de cada issue na última análise e a rodada de
+    // análise aberta de cada projeto (a sessão, as issues enviadas e o fim
+    // do planejamento).
+    r#"
+CREATE TABLE autopilot_dependency (
+  project_id INTEGER NOT NULL REFERENCES project(id),
+  number     INTEGER NOT NULL,
+  blocker    INTEGER NOT NULL,
+  reason     TEXT NOT NULL DEFAULT '',
+  source     TEXT NOT NULL,
+  removed    INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, number, blocker)
+);
+CREATE TABLE autopilot_order (
+  project_id INTEGER NOT NULL REFERENCES project(id),
+  number     INTEGER NOT NULL,
+  position   INTEGER NOT NULL,
+  PRIMARY KEY (project_id, number)
+);
+CREATE TABLE autopilot_analysed (
+  project_id  INTEGER NOT NULL REFERENCES project(id),
+  number      INTEGER NOT NULL,
+  fingerprint TEXT NOT NULL,
+  analysed_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, number)
+);
+CREATE TABLE autopilot_analysis (
+  project_id INTEGER PRIMARY KEY REFERENCES project(id),
+  session_id TEXT,
+  env_id     TEXT NOT NULL,
+  opened_at  INTEGER NOT NULL,
+  started_at INTEGER,
+  planned_at INTEGER,
+  pending    TEXT NOT NULL DEFAULT '{}',
+  sent_at    INTEGER,
+  failed_at  INTEGER
+);
 "#,
 ];
 
@@ -5289,7 +5336,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 42);
+        assert_eq!(v, 43);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
