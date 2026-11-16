@@ -47,6 +47,7 @@ import { cachedTree } from "./ui-store";
 import { rcRequested } from "../web/envActions";
 import { PlanConfirm, PlanEnvChoices, PlanStartNote, usePlanGate } from "../plan/PlanStart";
 import { wipOf, wipReason } from "./wip";
+import { descendants, flattenTree } from "./tree-view";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -289,7 +290,7 @@ function ItemStartModal({
   }, [gh]);
   const dialog = useRef<HTMLElement>(null);
 
-  const all = useMemo(() => (roots ?? []).flatMap((r) => [r, ...r.children]), [roots]);
+  const all = useMemo(() => flattenTree(roots ?? []), [roots]);
   const node = gh !== undefined ? all.find((x) => x.issue.gh_number === gh) : undefined;
   // Fora da árvore (ainda carregando, ou fora do espelho): o work item do ambiente basta.
   const known = gh !== undefined && !node ? clones.flatMap((c) => c.items).find((w) => w.gh_number === gh) : undefined;
@@ -472,7 +473,7 @@ function ItemStartModal({
   );
   const subsTodo =
     issue?.has_sub_issues && node
-      ? node.children.filter((c) => c.issue.state === "open" && (c.work_item?.status ?? "backlog") === "backlog")
+      ? descendants(node).filter((c) => c.issue.state === "open" && (c.work_item?.status ?? "backlog") === "backlog")
       : [];
   const repoText = project ? `${project.gh_owner}/${project.gh_repo}` : where?.view === "hub" ? `${where.owner}/${where.repo}` : "";
   const name = project?.name ?? (where?.view === "hub" ? where.repo : "projeto");

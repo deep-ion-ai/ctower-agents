@@ -7,6 +7,10 @@ import {
   byPriority,
   RECENT_MS,
   buildView,
+  descendants,
+  familyLive,
+  flattenTree,
+  pathTo,
   isExpanded,
   lastActivity,
   matchesQuery,
@@ -174,7 +178,7 @@ describe("expansão", () => {
 describe("kanban", () => {
   test("boardItems: épico + filhas + avulsas; com filtro o épico só entra se casa", () => {
     const roots = [n(1, { kids: [n(2, { status: "bloqueado" }), n(3)] }), n(4)];
-    const sem = boardItems(buildView(roots, f()), f());
+    const sem = boardItems(buildView(roots, f()));
     expect(sem.map((i) => [i.node.issue.gh_number, i.epicOf])).toEqual([
       [1, null],
       [2, 1],
@@ -182,9 +186,9 @@ describe("kanban", () => {
       [4, null],
     ]);
     const chips = f({ chips: new Set<WorkItemStatus>(["bloqueado"]) });
-    expect(boardItems(buildView(roots, chips), chips).map((i) => i.node.issue.gh_number)).toEqual([2]);
+    expect(boardItems(buildView(roots, chips)).map((i) => i.node.issue.gh_number)).toEqual([2]);
     const q = f({ query: "item 1" });
-    expect(boardItems(buildView(roots, q), q).map((i) => i.node.issue.gh_number)).toEqual([1, 2, 3]);
+    expect(boardItems(buildView(roots, q)).map((i) => i.node.issue.gh_number)).toEqual([1, 2, 3]);
   });
 
   test("boardColumns: 8 colunas, ou só as dos chips", () => {
@@ -212,7 +216,7 @@ describe("chip Concluído sozinho", () => {
   test("o Kanban recebe os concluídos na coluna Concluído", () => {
     const fechada = n(16, { state: "closed", status: null });
     const v = buildView([fechada], chip);
-    expect(boardItems(v, chip).map((i) => i.node.issue.gh_number)).toEqual([16]);
+    expect(boardItems(v).map((i) => i.node.issue.gh_number)).toEqual([16]);
   });
 
   test("outros chips não trazem concluídos", () => {
@@ -294,7 +298,7 @@ describe("Só minhas (#151)", () => {
   test("Quadro: o épico só entra como card se ele mesmo for meu", () => {
     const roots = [a(1, ["beltrano"], [a(2, [ME])]), a(5, [ME], [a(6, ["beltrano"])]), a(7, [ME])];
     const v = buildView(roots, mine, ME);
-    expect(boardItems(v, mine, ME).map((i) => [i.node.issue.gh_number, i.epicOf])).toEqual([
+    expect(boardItems(v).map((i) => [i.node.issue.gh_number, i.epicOf])).toEqual([
       [2, 1],
       [5, null],
       [7, null],
@@ -309,5 +313,114 @@ describe("Só minhas (#151)", () => {
     const g = mineFilters(antigo as unknown as TreeFilters, ME);
     expect(g.mine).toBe(false);
     expect(narrowing(g)).toBe(false);
+  });
+});
+
+describe("sub-épico (#217): épico › sub-épico › sub-issues", () => {
+  // acme-web: ACME-10 → sub-épico ACME-20 → ACME-21, ACME-22; mais ACME-11 direta.
+  const tres = () => [
+    n(10, {
+      title: "Épico de exemplo",
+      kids: [n(11, { title: "Filha direta" }), n(20, { title: "Sub-épico", kids: [n(21, { title: "Neta alfa" }), n(22, { title: "Neta beta", status: "bloqueado" })] })],
+    }),
+    n(30),
+  ];
+
+  test("utilitários: descendentes, todos os nós e o caminho até a neta", () => {
+    const roots = tres();
+    expect(nums(descendants(roots[0]))).toEqual([11, 20, 21, 22]);
+    expect(nums(flattenTree(roots))).toEqual([10, 11, 20, 21, 22, 30]);
+    expect(nums(pathTo(roots, 22) ?? [])).toEqual([10, 20, 22]);
+    expect(pathTo(roots, 99)).toBeNull();
+  });
+
+  test("árvore: o sub-épico aparece sob o épico com as próprias sub-issues", () => {
+    const v = buildView(tres(), f({ sort: "number" }));
+    expect(nums(v.epics[0].shown)).toEqual([11, 20]);
+    expect(nums(v.epics[0].subs.get(20)!.shown)).toEqual([21, 22]);
+    expect(nums(v.loose)).toEqual([30]);
+  });
+
+  test("busca pelo número ou título da neta mantém o sub-épico e o épico", () => {
+    for (const query of ["ACME-22", "#22", "neta beta"]) {
+      const v = buildView(tres(), f({ query }));
+      expect(nums(v.epics.map((e) => e.epic))).toEqual([10]);
+      expect(nums(v.epics[0].shown)).toEqual([20]);
+      expect(nums(v.epics[0].subs.get(20)!.shown)).toEqual([22]);
+      expect(v.loose).toHaveLength(0);
+    }
+  });
+
+  test("sub-épico que casa com a busca traz todos os descendentes", () => {
+    const v = buildView(tres(), f({ query: "sub-épico", sort: "number" }));
+    expect(nums(v.epics[0].shown)).toEqual([20]);
+    expect(nums(v.epics[0].subs.get(20)!.shown)).toEqual([21, 22]);
+    const e = buildView(tres(), f({ query: "épico de exemplo", sort: "number" }));
+    expect(nums(e.epics[0].shown)).toEqual([11, 20]);
+    expect(nums(e.epics[0].subs.get(20)!.shown)).toEqual([21, 22]);
+  });
+
+  test("chips, 'Só minhas' e sprint valem para as netas", () => {
+    const chips = f({ chips: new Set<WorkItemStatus>(["bloqueado"]) });
+    const v = buildView(tres(), chips);
+    expect(nums(v.epics[0].shown)).toEqual([20]);
+    expect(nums(v.epics[0].subs.get(20)!.shown)).toEqual([22]);
+    expect(boardItems(v).map((i) => [i.node.issue.gh_number, i.epicOf])).toEqual([[22, 20]]);
+
+    const mine = (num: number, who: string[], kids: ViewNode[] = []): ViewNode => {
+      const x = n(num, { kids });
+      x.issue.assignees = who;
+      return x;
+    };
+    const roots = [mine(10, [], [mine(11, []), mine(20, [], [mine(21, ["fulano"]), mine(22, [])])])];
+    const m = buildView(roots, f({ mine: true }), "fulano");
+    expect(nums(m.epics[0].shown)).toEqual([20]);
+    expect(nums(m.epics[0].subs.get(20)!.shown)).toEqual([21]);
+
+    const sprint = { id: 7, name: "Sprint 7", state: "active" } as never;
+    const roots2 = tres();
+    roots2[0].children[1].children[0].issue.sprints = [sprint];
+    const s = buildView(roots2, f({ sprint: "7" }));
+    expect(nums(s.epics[0].subs.get(20)!.shown)).toEqual([21]);
+  });
+
+  test("Kanban inclui as netas com o épico pai direto", () => {
+    const v = buildView(tres(), f({ sort: "number" }));
+    expect(boardItems(v).map((i) => [i.node.issue.gh_number, i.epicOf])).toEqual([
+      [10, null],
+      [11, 10],
+      [20, 10],
+      [21, 20],
+      [22, 20],
+      [30, null],
+    ]);
+  });
+
+  test("atividade e sessão viva consideram a neta; um épico fechado com neta aberta aparece", () => {
+    const neta = n(21, { last: NOW });
+    const roots = [n(10, { state: "closed", last: null, kids: [n(20, { state: "closed", last: null, kids: [neta] })] })];
+    expect(lastActivity(roots[0])).toBe(NOW);
+    expect(familyLive(roots[0], (x) => x === neta)).toBe(true);
+    expect(buildView(roots, f()).epics).toHaveLength(1);
+    expect(isExpanded(roots[0], f(), undefined, NOW + 30 * DAY, (x) => x === neta)).toBe(true);
+  });
+
+  test("ciclo no parent_number: cada nó é visitado uma vez", () => {
+    const a10 = n(10);
+    const a20 = n(20);
+    const a21 = n(21);
+    a10.children = [a20];
+    a20.children = [a21, a10];
+    a21.children = [a20];
+    expect(nums(descendants(a10))).toEqual([20, 21]);
+    expect(nums(flattenTree([a10]))).toEqual([10, 20, 21]);
+    expect(nums(pathTo([a10], 21) ?? [])).toEqual([10, 20, 21]);
+    expect(lastActivity(a10)).toBe(NOW);
+    const v = buildView([a10], f({ sort: "number" }));
+    expect(nums(v.epics[0].shown)).toEqual([20]);
+    expect(nums(v.epics[0].subs.get(20)!.shown)).toEqual([21]);
+    expect(boardItems(v).map((i) => i.node.issue.gh_number)).toEqual([10, 20, 21]);
+    const q = buildView([a10], f({ query: "item 21" }));
+    expect(nums(q.epics[0].subs.get(20)!.shown)).toEqual([21]);
   });
 });

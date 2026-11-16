@@ -788,3 +788,50 @@ describe("Só minhas (#151)", () => {
     expect(within(side()).getByText("ct-server: lacunas")).toBeInTheDocument();
   });
 });
+
+// #217: épico › sub-épico › sub-issues (dados fictícios).
+const DEEP: ProjectTree = {
+  ...TREE,
+  roots: [
+    node(issue(10, "Épico de exemplo", { has_sub_issues: true }), null, [
+      node(issue(11, "Filha direta", { parent_number: 10 })),
+      node(issue(20, "Sub-épico de exemplo", { parent_number: 10, has_sub_issues: true }), null, [
+        node(issue(21, "Neta alfa", { parent_number: 20 })),
+        node(issue(22, "Neta beta", { parent_number: 20 })),
+      ]),
+    ]),
+  ],
+};
+
+test("sub-épico (#217): netas na árvore sob o sub-épico, achadas pela busca", async () => {
+  const { user } = setup(DEEP);
+  await screen.findByText("Épico de exemplo");
+  await user.click(screen.getByRole("button", { name: "Expandir épico #10" }));
+  expect(within(side()).getByText("Sub-épico de exemplo")).toBeInTheDocument();
+  expect(rowBtn(/^Épico #20 Sub-épico de exemplo, .*0 de 2 concluídas/)).toBeInTheDocument();
+  expect(rowBtn(/^Épico #10 Épico de exemplo, .*0 de 2 concluídas/)).toBeInTheDocument();
+  expect(within(side()).queryByText("Neta beta")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Expandir épico #20" }));
+  expect(within(side()).getByText("Neta beta")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Recolher épico #10" }));
+  await user.type(screen.getByRole("searchbox", { name: "Buscar por número ou título" }), "#22");
+  expect(screen.getByRole("button", { name: "Recolher épico #10" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "Recolher épico #20" })).toHaveAttribute("aria-expanded", "true");
+  expect(within(side()).getByText("Neta beta")).toBeInTheDocument();
+  expect(within(side()).queryByText("Neta alfa")).not.toBeInTheDocument();
+  expect(within(side()).queryByText("Filha direta")).not.toBeInTheDocument();
+});
+
+test("sub-épico (#217): abrir a neta por link expande o caminho e a trilha mostra os dois épicos", async () => {
+  const api = new FakeDaemonApi()
+    .on("dashboard.get", dashboard({ live_sessions: [], sync: [sync({ last_ok_at: NOW })] }, []))
+    .on("tree.get", DEEP)
+    .on("env.info", { protocol: "2.0", version: "0.1.0", hostname: "ct", worktrees_root: "/home/user/worktrees" });
+  render(<App api={api} initial={{ ...LOCAL, item: { ghNumber: 22 } }} />);
+  const trilha = await screen.findByRole("list", { name: "Trilha" });
+  expect(within(trilha).getByRole("button", { name: "Épico #10" })).toBeInTheDocument();
+  expect(within(trilha).getByRole("button", { name: "Épico #20" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Recolher épico #10" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "Recolher épico #20" })).toHaveAttribute("aria-expanded", "true");
+  expect(rowBtn(/^#22 /)).toHaveAttribute("aria-current", "true");
+});
