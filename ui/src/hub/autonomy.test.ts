@@ -1,7 +1,9 @@
 import type { AutonomyConfig, HubAssignment, HubEnv, HubProject } from "../protocol/hub-gen";
 import {
+  DEFAULT_ANALYSIS_TEMPLATE,
   DEFAULT_AUTONOMOUS_TEMPLATE,
   MAX_AUTONOMOUS_TEMPLATE_BYTES,
+  analysisTemplateOf,
   autonomousTemplateOf,
   autonomyEnvChoices,
   autonomyForm,
@@ -69,7 +71,7 @@ test("erro da branch: só com o modo ligado e o relato error", () => {
 test("formulário: padrões vazios no patch e erros", () => {
   const p = project({});
   const f = autonomyForm(autonomyOf(p)!, p);
-  expect(f).toEqual({ enabled: false, envId: "", branch: "wip/autonoma", base: "develop", strategy: "merge", template: null });
+  expect(f).toEqual({ enabled: false, envId: "", branch: "wip/autonoma", base: "develop", strategy: "merge", template: null, analysisTemplate: null });
   expect(autonomyPatch(f, p)).toEqual(OFF);
   expect(autonomyPatch({ ...f, enabled: true, envId: "env-auto", branch: "wip/acme", base: "main" }, p)).toEqual({
     enabled: true,
@@ -93,7 +95,7 @@ test("ambientes: atribuídos e marcados como autônomos", () => {
 });
 
 test("template autônomo (#191): campo do hub, patch do objeto inteiro e limite", () => {
-  const templates = { issue: "Issue {{key}}", epic: "", project: "", autonomous: "", release: "" };
+  const templates = { issue: "Issue {{key}}", epic: "", project: "", autonomous: "", release: "", analysis: "" };
   const p = { ...project({}), session_templates: templates } as HubProject;
   // Hub sem o campo: não edita.
   expect(autonomousTemplateOf(project({}))).toBeNull();
@@ -109,4 +111,24 @@ test("template autônomo (#191): campo do hub, patch do objeto inteiro e limite"
   expect(DEFAULT_AUTONOMOUS_TEMPLATE).toContain("{{integration_branch}}");
   // O corpo do PR com `Closes #n`, exigido pelo guarda-corpo do `gh pr create`.
   expect(DEFAULT_AUTONOMOUS_TEMPLATE).toContain("com a linha `{{closes}}` no corpo");
+});
+
+test("template da análise de dependências (#215): campo do hub e patch junto do autônomo", () => {
+  const templates = { issue: "", epic: "", project: "", autonomous: "", analysis: "" };
+  const p = { ...project({}), session_templates: templates } as HubProject;
+  expect(analysisTemplateOf(project({}))).toBeNull();
+  const f = autonomyForm(autonomyOf(p)!, p);
+  expect(f.analysisTemplate).toBe("");
+  expect(autonomyTemplatesPatch({ ...f, analysisTemplate: " " }, p)).toBeNull();
+  expect(autonomyTemplatesPatch({ ...f, analysisTemplate: "Analise {{issues}}" }, p)).toEqual({
+    ...templates,
+    analysis: "Analise {{issues}}",
+  });
+  expect(
+    autonomyTemplatesPatch({ ...f, template: "Faça {{ref}}", analysisTemplate: "Analise {{issues}}" }, p),
+  ).toEqual({ ...templates, autonomous: "Faça {{ref}}", analysis: "Analise {{issues}}" });
+  expect(autonomyFormError({ ...f, analysisTemplate: "x".repeat(MAX_AUTONOMOUS_TEMPLATE_BYTES + 1) }, p)).toMatch(
+    /sessão de análise/,
+  );
+  expect(DEFAULT_ANALYSIS_TEMPLATE).toContain("autopilot_set_dependencies");
 });

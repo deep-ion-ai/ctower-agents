@@ -1113,6 +1113,7 @@ mod tests {
                 ci: None,
                 conflict: false,
                 error: None,
+                waiting_blocker: 0,
             }],
             usage: vec![crate::DigestUsage {
                 account: "conta-secreta".into(),

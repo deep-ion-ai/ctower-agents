@@ -5,25 +5,30 @@
 // conta, a fila de cada projeto com o motivo de cada item que ficou de fora,
 // a branch de integração, as sessões vivas e as estacionadas, e o botão
 // "Pausar tudo" (e "Retomar"). No desktop e na PWA: na web, as contas
-// chegam como `conta-N` (o hub anonimiza).
-import { useCallback, useEffect, useState } from "react";
+// chegam como `conta-N` (o hub anonimiza). Com a análise de dependências
+// (#215), a fila mostra a ordem sugerida, "bloqueada por #N" e as arestas
+// de cada issue, que a pessoa corrige ali (`hub.autopilot.deps.set`).
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import type { AutopilotSettings, AutopilotStatus, ProjectPlan } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
 import { ago } from "../util/time";
 import {
+  AUTOPILOT_DEPS_PROTOCOL,
   AUTOPILOT_STATUS_PROTOCOL,
   PILOT_STATE_HINT,
   PILOT_STATE_TEXT,
   aheadText,
+  analysisText,
   ciText,
   closingText,
+  depText,
   idleText,
   localTime,
   nextBandText,
   pilotState,
+  queueSituation,
   reasonText,
-  skipText,
   weeklyHeadline,
 } from "./autopilot";
 import { errText } from "./calls";
@@ -61,6 +66,21 @@ export function HubAutopilotPanel({ now }: { now: number }) {
       if (e.event === "hub.autopilot.changed") void load();
     });
   }, [api, load, hub.connected]);
+
+  // Correção manual de uma aresta (#215): vale na hora; o push
+  // `hub.autopilot.changed` relê o estado.
+  const editDep = async (e: DepEdit): Promise<string | null> => {
+    try {
+      await api.hubCall("hub.autopilot.deps.set", { ...e });
+      void load();
+      return null;
+    } catch (err) {
+      const t = errText(err);
+      return t.includes("método desconhecido")
+        ? `Este hub não corrige dependências (anterior ao protocolo ${AUTOPILOT_DEPS_PROTOCOL}): atualize o hub.`
+        : t;
+    }
+  };
 
   const toggle = async (pause: boolean) => {
     setBusy(true);
@@ -169,7 +189,9 @@ export function HubAutopilotPanel({ now }: { now: number }) {
           {status.projects.length === 0 ? (
             <p className="muted">Nenhum projeto no modo autônomo.</p>
           ) : (
-            status.projects.map((p) => <ProjectQueue key={`${p.owner}/${p.repo}`} p={p} status={status} />)
+            status.projects.map((p) => (
+                <ProjectQueue key={`${p.owner}/${p.repo}`} p={p} status={status} onEdit={editDep} />
+              ))
           )}
 
           <h3>Sessões autônomas</h3>
@@ -304,9 +326,49 @@ function PilotSettingsForm({
   );
 }
 
-function ProjectQueue({ p, status }: { p: ProjectPlan; status: AutopilotStatus }) {
+/** Correção manual de uma aresta (`hub.autopilot.deps.set`, #215). */
+export interface DepEdit {
+  owner: string;
+  repo: string;
+  number: number;
+  blocker: number;
+  action: "add" | "remove" | "reset";
+  reason?: string;
+}
+
+function ProjectQueue({
+  p,
+  status,
+  onEdit,
+}: {
+  p: ProjectPlan;
+  status: AutopilotStatus;
+  onEdit: (e: DepEdit) => Promise<string | null>;
+}) {
   const wip = status.wip?.find((w) => w.owner === p.owner && w.repo === p.repo);
   const key = `${p.owner}/${p.repo}`;
+  const analysis = analysisText(p);
+  const [depErr, setDepErr] = useState<string | null>(null);
+  const [form, setForm] = useState({ number: "", blocker: "", reason: "" });
+  const edit = async (number: number, blocker: number, action: DepEdit["action"], reason?: string) => {
+    setDepErr(await onEdit({ owner: p.owner, repo: p.repo, number, blocker, action, reason }));
+  };
+  const add = async (ev: FormEvent) => {
+    ev.preventDefault();
+    const n = Number(form.number);
+    const b = Number(form.blocker);
+    if (!Number.isInteger(n) || !Number.isInteger(b) || n <= 0 || b <= 0) {
+      setDepErr("Informe os números da issue e da que a bloqueia.");
+      return;
+    }
+    if (n === b) {
+      setDepErr("Uma issue não bloqueia a si mesma.");
+      return;
+    }
+    await edit(n, b, "add", form.reason.trim() || undefined);
+    setForm({ number: "", blocker: "", reason: "" });
+  };
+  const hasDeps = p.queue.some((q) => q.dependencies?.length || q.order != null);
   return (
     <section className="hub-card" aria-label={`Fila de ${key}`}>
       <div className="hub-card-head">
@@ -324,6 +386,7 @@ function ProjectQueue({ p, status }: { p: ProjectPlan; status: AutopilotStatus }
             ? `Nada inicia agora: ${p.blocked_message}`
             : "Nada inicia agora."}
       </p>
+      {analysis && <p className="muted small">{analysis}</p>}
       {wip && (
         <p className="muted small">
           <span className="mono">{wip.branch}</span>: {aheadText(wip)}
@@ -349,6 +412,8 @@ function ProjectQueue({ p, status }: { p: ProjectPlan; status: AutopilotStatus }
               <th>Issue</th>
               <th>Prioridade</th>
               <th>Modelo</th>
+              {hasDeps && <th>Ordem</th>}
+              {hasDeps && <th>Dependências</th>}
               <th>Situação</th>
             </tr>
           </thead>
@@ -361,11 +426,72 @@ function ProjectQueue({ p, status }: { p: ProjectPlan; status: AutopilotStatus }
                 </td>
                 <td>{q.priority ?? "—"}</td>
                 <td>{q.model ?? "—"}</td>
-                <td>{q.skip ? `fora: ${skipText(q.skip)}` : q.number === p.next ? "inicia agora" : "elegível"}</td>
+                {hasDeps && <td>{q.order ?? "—"}</td>}
+                {hasDeps && (
+                  <td>
+                    {(q.dependencies ?? []).length === 0
+                      ? "—"
+                      : (q.dependencies ?? []).map((d) => (
+                          <span key={d.blocker} className="hub-dep" title={d.reason || undefined}>
+                            {depText(d)}{" "}
+                            {d.removed ? (
+                              <button
+                                type="button"
+                                className="link-btn"
+                                onClick={() => void edit(q.number, d.blocker, "reset")}
+                                aria-label={`Restaurar a dependência de #${q.number} em #${d.blocker}`}
+                              >
+                                restaurar
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="link-btn"
+                                onClick={() => void edit(q.number, d.blocker, "remove")}
+                                aria-label={`Remover a dependência de #${q.number} em #${d.blocker}`}
+                              >
+                                remover
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                  </td>
+                )}
+                <td>{queueSituation(q, p.next)}</td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+      <form className="hub-dep-form" onSubmit={(e) => void add(e)} aria-label={`Adicionar dependência em ${key}`}>
+        <label>
+          Issue #
+          <input
+            inputMode="numeric"
+            value={form.number}
+            onChange={(e) => setForm({ ...form, number: e.target.value })}
+            size={5}
+          />
+        </label>
+        <label>
+          bloqueada por #
+          <input
+            inputMode="numeric"
+            value={form.blocker}
+            onChange={(e) => setForm({ ...form, blocker: e.target.value })}
+            size={5}
+          />
+        </label>
+        <label>
+          motivo
+          <input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+        </label>
+        <button type="submit">Adicionar dependência</button>
+      </form>
+      {depErr && (
+        <p role="alert" className="start-error">
+          {depErr}
+        </p>
       )}
     </section>
   );

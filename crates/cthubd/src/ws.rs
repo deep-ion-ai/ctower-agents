@@ -775,7 +775,8 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         | "hub.autopilot.resume"
         | "hub.autopilot.digest"
         | "hub.autopilot.wip"
-        | "hub.autopilot.set" => {
+        | "hub.autopilot.set"
+        | "hub.autopilot.deps.set" => {
             crate::autopilot::runner::call(st, method, p, web_session.is_some()).await
         }
         // Política de orçamento do piloto automático por conta (#180).
@@ -2184,6 +2185,8 @@ mod export {
         ct_ledger::MorningDigest::export_all_to(&dir).unwrap();
         ct_ledger::AutonomyWip::export_all_to(&dir).unwrap();
         ct_ledger::AutopilotEvent::export_all_to(&dir).unwrap();
+        // `hub.autopilot.deps.set` (#215).
+        ct_ledger::DependencyEdge::export_all_to(&dir).unwrap();
         ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
@@ -3121,14 +3124,15 @@ pub(crate) mod tests {
                 "hub.projects.update",
                 json!({ "owner": "deep-ion-ai", "repo": "demo",
                         "session_templates": { "issue": "Issue {{key}}", "epic": "  ",
-                                               "autonomous": "Faça {{ref}}" } }),
+                                               "autonomous": "Faça {{ref}}",
+                                               "analysis": "Analise {{issues}}" } }),
             )
             .await;
         let t = &v["result"]["session_templates"];
         assert_eq!(
             t,
             &json!({ "issue": "Issue {{key}}", "epic": "", "project": "",
-                     "autonomous": "Faça {{ref}}", "release": "" }),
+                     "autonomous": "Faça {{ref}}", "release": "", "analysis": "Analise {{issues}}" }),
             "{v}"
         );
         let novo = ui.call("hub.info", json!({})).await["result"]["config_rev"].clone();
@@ -3147,6 +3151,40 @@ pub(crate) mod tests {
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// #215: a correção manual de uma aresta vale na hora e vira evento.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dependencia_corrigida_a_mao() {
+        let st = hub_com_dados();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let edit = |action: &str| {
+            json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 12, "blocker": 11,
+                    "action": action, "reason": "migração" })
+        };
+        let v = ui.call("hub.autopilot.deps.set", edit("add")).await;
+        let d = &v["result"]["dependencies"][0];
+        assert_eq!(
+            (&d["number"], &d["blocker"], &d["source"], &d["removed"]),
+            (&json!(12), &json!(11), &json!("manual"), &json!(false)),
+            "{v}"
+        );
+        let v = ui.call("hub.autopilot.deps.set", edit("remove")).await;
+        assert_eq!(v["result"]["dependencies"][0]["removed"], true, "{v}");
+        assert_eq!(v["result"]["dependencies"][0]["reason"], "migração", "{v}");
+        let v = ui.call("hub.autopilot.deps.set", edit("reset")).await;
+        assert_eq!(v["result"]["dependencies"], json!([]), "{v}");
+        let v = ui.call("hub.autopilot.deps.set", edit("talvez")).await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        let mut same = edit("add");
+        same["blocker"] = json!(12);
+        let v = ui.call("hub.autopilot.deps.set", same).await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        let ev = st.hub.lock().list_autopilot_events(10, None).unwrap();
+        assert_eq!(ev.len(), 3);
+        assert_eq!(ev[0].kind, "dependency_edited");
+        assert_eq!(ev[0].scope, "item:deep-ion-ai/demo#12");
     }
 
     /// Modo autônomo (#181): marcar o ambiente, ligar o modo no projeto

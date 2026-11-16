@@ -13,6 +13,8 @@ import { webApi } from "../test/web";
 import { pilotState } from "./autopilot";
 
 const NOW = Date.now();
+/** Item da fila sem dependências (#215). */
+const semDeps = { blocked_by: [], dependencies: [], order: null };
 
 function decision(d: Partial<BudgetDecision> = {}): BudgetDecision {
   return {
@@ -64,10 +66,12 @@ function status(account: string, settings: Partial<AutopilotSettings> = {}): Aut
         next: null,
         probe: false,
         queue: [
-          { number: 123, title: "ACME-123 login", priority: "P1", model: "opus", skip: null },
-          { number: 124, title: "ACME-124 busca", priority: "P1", model: null, skip: "no_model" },
-          { number: 125, title: "ACME-125 cadastro", priority: "P2", model: "opus", skip: "not_approved" },
+          { number: 123, title: "ACME-123 login", priority: "P1", model: "opus", skip: null, ...semDeps },
+          { number: 124, title: "ACME-124 busca", priority: "P1", model: null, skip: "no_model", ...semDeps },
+          { number: 125, title: "ACME-125 cadastro", priority: "P2", model: "opus", skip: "not_approved", ...semDeps },
         ],
+        analysis: null,
+        analysis_unsupported: false,
       },
     ],
     sessions: [
@@ -326,6 +330,7 @@ function digest(account: string): MorningDigest {
         ci: null,
         conflict: false,
         error: null,
+        waiting_blocker: 0,
       },
     ],
     usage: [{ account, weekly_used: 35, resets_at: NOW + 86_400_000, weekly_before: 20, delta: 15 }],
@@ -407,4 +412,69 @@ test("ajustes do agendador: tentativas do CI e “Aguardando você” pelo hub.a
   );
   expect(await within(panel).findByText(/Ajustes do piloto automático salvos/)).toBeInTheDocument();
   expect(within(panel).getByText(/não é bloqueada/)).toBeInTheDocument();
+});
+
+test("fila com dependências (#215): bloqueada por, ordem, análise e correção manual", async () => {
+  const { api, user } = desktop();
+  const base = status("org-a/fulano@example.com");
+  const withDeps: AutopilotStatus = {
+    ...base,
+    projects: [
+      {
+        ...base.projects[0],
+        analysis: {
+          state: "reanalysing",
+          session_id: "s-analise",
+          opened_at: NOW - 3_600_000,
+          planned_at: NOW - 3_000_000,
+          pending: [125],
+          failed_at: null,
+        },
+        queue: [
+          {
+            number: 123,
+            title: "ACME-123 login",
+            priority: "P1",
+            model: "opus",
+            skip: "blocked_by",
+            blocked_by: [120],
+            dependencies: [{ blocker: 120, reason: "usa a tabela nova", source: "analysis", removed: false, state: "pending" }],
+            order: 2,
+          },
+          {
+            number: 124,
+            title: "ACME-124 busca",
+            priority: "P1",
+            model: "opus",
+            skip: null,
+            blocked_by: [],
+            dependencies: [{ blocker: 121, reason: "", source: "manual", removed: true, state: "pending" }],
+            order: 1,
+          },
+        ],
+      },
+    ],
+  };
+  api.onHub("hub.autopilot.status", () => withDeps).onHub("hub.autopilot.deps.set", () => ({ dependencies: [] }));
+  const panel = await screen.findByRole("region", { name: "Painel do piloto automático" });
+  const queue = await within(panel).findByRole("region", { name: "Fila de acme/acme-web" });
+  await waitFor(() => expect(queue).toHaveTextContent("Análise de dependências: reanalisando #125."));
+  const rows = within(queue).getAllByRole("row");
+  expect(rows[1]).toHaveTextContent("fora: bloqueada por #120");
+  expect(rows[1]).toHaveTextContent("#120 (pendente)");
+  expect(rows[2]).toHaveTextContent("#121 (removida, manual)");
+
+  await user.click(within(queue).getByRole("button", { name: "Remover a dependência de #123 em #120" }));
+  await user.click(within(queue).getByRole("button", { name: "Restaurar a dependência de #124 em #121" }));
+  const form = within(queue).getByRole("form", { name: "Adicionar dependência em acme/acme-web" });
+  await user.type(within(form).getByLabelText("Issue #"), "124");
+  await user.type(within(form).getByLabelText("bloqueada por #"), "123");
+  await user.type(within(form).getByLabelText("motivo"), "mesma tela");
+  await user.click(within(form).getByRole("button", { name: "Adicionar dependência" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.autopilot.deps.set")).toHaveLength(3));
+  expect(api.hubCallsTo("hub.autopilot.deps.set").map((c) => c.params)).toEqual([
+    { owner: "acme", repo: "acme-web", number: 123, blocker: 120, action: "remove" },
+    { owner: "acme", repo: "acme-web", number: 124, blocker: 121, action: "reset" },
+    { owner: "acme", repo: "acme-web", number: 124, blocker: 123, action: "add", reason: "mesma tela" },
+  ]);
 });

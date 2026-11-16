@@ -453,6 +453,30 @@
   text-align: right;
 }
 
+/* Dependências da fila do piloto (#215). */
+.hub-dep {
+  display: inline-block;
+  margin-right: 10px;
+  white-space: nowrap;
+}
+
+.hub-dep-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: end;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.hub-dep-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .hub-envs {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));

@@ -145,6 +145,18 @@ fn dispatch(
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         return Ok(tool_result(propose_model(sessions, hub, &session, &args)));
     }
+    // `autopilot_set_dependencies` (#215) vai ao hub pela rede: fora do
+    // ledger. Só a sessão de análise do piloto a vê e a chama.
+    let analysis = sessions.is_analysis_session(&session).unwrap_or(false);
+    if analysis
+        && method == "tools/call"
+        && params.get("name").and_then(Value::as_str) == Some("autopilot_set_dependencies")
+    {
+        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        return Ok(tool_result(set_dependencies(
+            sessions, hub, &session, &args,
+        )));
+    }
     let l = sessions.ledger();
     match method {
         "initialize" => Ok(json!({
@@ -158,7 +170,13 @@ fn dispatch(
             let epic = l
                 .get_work_item(session.work_item_id)
                 .is_ok_and(|wi| wi.kind == WorkItemKind::Epic);
-            Ok(json!({ "tools": tools(epic) }))
+            let mut t = tools(epic);
+            if analysis {
+                if let Some(a) = t.as_array_mut() {
+                    a.push(analysis_tool());
+                }
+            }
+            Ok(json!({ "tools": t }))
         }
         "tools/call" => {
             let name = params
@@ -492,6 +510,76 @@ fn propose_model(
         "justification": justification,
     });
     hub.agent_call("POST", "proposals", &[], Some(&body), &s.id)
+}
+
+/// A ferramenta da sessão de análise de dependências do piloto (#215).
+fn analysis_tool() -> Value {
+    json!({
+        "name": "autopilot_set_dependencies",
+        "description": "Grava no hub do Control Tower as dependências entre as issues da fila do piloto automático e a ordem de execução sugerida. Para cada issue analisada, informe a lista completa de issues que a bloqueiam (vazia se nenhuma), cada uma com uma justificativa curta: ela substitui a análise anterior da issue. As correções manuais da pessoa prevalecem. Não altera nada no rastreador.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "description": "Uma entrada por issue analisada.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "number": { "type": "integer", "description": "Número da issue." },
+                            "blocked_by": {
+                                "type": "array",
+                                "description": "Issues que precisam estar prontas (mescladas na branch de integração) antes desta.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "number": { "type": "integer" },
+                                        "reason": { "type": "string", "description": "Justificativa curta da dependência." }
+                                    },
+                                    "required": ["number", "reason"]
+                                }
+                            }
+                        },
+                        "required": ["number", "blocked_by"]
+                    }
+                },
+                "order": {
+                    "type": "array",
+                    "description": "Ordem de execução sugerida (números das issues, a primeira primeiro).",
+                    "items": { "type": "integer" }
+                }
+            },
+            "required": ["items"]
+        }
+    })
+}
+
+/// `autopilot_set_dependencies` (#215): manda ao hub, pelo token de agente
+/// do ambiente, as dependências do projeto da sessão de análise.
+fn set_dependencies(
+    sessions: &Sessions,
+    hub: Option<&HubSender>,
+    s: &Session,
+    args: &Value,
+) -> Result<Value, String> {
+    let hub = hub.ok_or_else(|| format!("hub indisponível: {}", crate::hub_sync::NOT_LINKED))?;
+    let (owner, repo) = {
+        let l = sessions.ledger();
+        let e = |e: ct_ledger::LedgerError| e.to_string();
+        let wi = l.get_work_item(s.work_item_id).map_err(e)?;
+        let p = l.get_project(wi.project_id).map_err(e)?;
+        (p.gh_owner, p.gh_repo)
+    };
+    let items = args
+        .get("items")
+        .filter(|v| v.is_array())
+        .cloned()
+        .ok_or("parâmetro obrigatório: items (lista)")?;
+    let mut body = json!({ "owner": owner, "repo": repo, "items": items });
+    if let Some(order) = args.get("order").filter(|v| !v.is_null()) {
+        body["order"] = order.clone();
+    }
+    hub.agent_call("POST", "autopilot/dependencies", &[], Some(&body), &s.id)
 }
 
 /// Sub-issues do épico no espelho, com o status do work item; sem work
@@ -1520,6 +1608,66 @@ mod tests {
         let mut req = srv.env.request(10, "Épico");
         req.kind = ct_core::WorkItemKind::Epic;
         srv.env.sessions.start(req).unwrap()
+    }
+
+    /// `autopilot_set_dependencies` (#215): só no `tools/list` da sessão de
+    /// análise do piloto; nas outras, a chamada é desconhecida. Sem hub, o
+    /// erro diz o que falta.
+    #[tokio::test]
+    async fn dependencias_so_na_sessao_de_analise() {
+        let srv = Srv::new(FakeClaude::sleep(30));
+        let agent = ct_sessions::AgentOptions::default();
+        let s = srv
+            .env
+            .sessions
+            .start_project(srv.env.project_id, "analise", None, &agent)
+            .unwrap();
+        let outra = srv
+            .env
+            .sessions
+            .start_project(srv.env.project_id, "planejar", None, &agent)
+            .unwrap();
+        srv.env
+            .sessions
+            .ledger()
+            .append_event(ct_ledger::NewEvent {
+                project_id: srv.env.project_id,
+                work_item_id: Some(s.work_item_id),
+                session_id: Some(&s.id),
+                kind: ct_sessions::autonomy::AUTOPILOT_ANALYSIS,
+                payload: json!({ "session_id": s.id }),
+            })
+            .unwrap();
+        let lista = tool_names(&rpc(&srv, &s.id, "tools/list", json!({})).await);
+        assert_eq!(
+            lista.last().unwrap(),
+            "autopilot_set_dependencies",
+            "{lista:?}"
+        );
+        let lista = tool_names(&rpc(&srv, &outra.id, "tools/list", json!({})).await);
+        assert!(!lista.iter().any(|t| t == "autopilot_set_dependencies"));
+        let args = json!({ "items": [{ "number": 12, "blocked_by": [] }] });
+        let r = call(&srv, &s.id, "autopilot_set_dependencies", args.clone()).await;
+        assert_eq!(r["isError"], true);
+        assert!(
+            r["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("hub indisponível"),
+            "{r}"
+        );
+        let r = call(&srv, &outra.id, "autopilot_set_dependencies", args).await;
+        assert_eq!(r["isError"], true);
+        assert!(
+            r["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("desconhecida"),
+            "{r}"
+        );
+        for id in [&s.id, &outra.id] {
+            srv.env.sessions.kill(id).ok();
+        }
     }
 
     /// `ledger_start_sub_issue` (#458): só no `tools/list` do épico; a

@@ -3,6 +3,7 @@ import { useTower } from "../../state/tower";
 import type { AlignStrategy, HubProjectView } from "../../protocol/hub-gen";
 import {
   AUTONOMY_PROTOCOL,
+  DEFAULT_ANALYSIS_TEMPLATE,
   DEFAULT_AUTONOMOUS_TEMPLATE,
   DEFAULT_AUTONOMY_BRANCH,
   STRATEGY_LABEL,
@@ -14,6 +15,7 @@ import {
   autonomyOf,
   autonomyPatch,
   autonomyTemplatesPatch,
+  analysisTemplateOf,
   autonomousTemplateOf,
   autonomyError,
   autonomyWarning,
@@ -29,7 +31,9 @@ import { DesktopOnly } from "../../web/DesktopOnly";
  * o PR rascunho `branch → base` e alinha a branch com a base antes de cada
  * issue. O relato do ambiente aparece aqui (e o conflito, também na Visão
  * geral). Hub anterior à 1.14: só o aviso. O template do prompt da sessão
- * autônoma (#191, `session_templates.autonomous`) também se edita aqui;
+ * autônoma (#191, `session_templates.autonomous`) e o da sessão de análise
+ * de dependências do piloto (#215, `session_templates.analysis`) também se
+ * editam aqui;
  * vazio = o padrão, que o ambiente renderiza.
  */
 export function AutonomyCard({
@@ -70,6 +74,7 @@ export function AutonomyCard({
   const base = autonomyBase(cur, pr);
   const formError = form ? autonomyFormError(form, pr) : null;
   const template = autonomousTemplateOf(pr);
+  const analysisTemplate = analysisTemplateOf(pr);
 
   const save = async (f: AutonomyForm) => {
     const autonomy = autonomyPatch(f, pr);
@@ -134,6 +139,12 @@ export function AutonomyCard({
             <div>
               <dt>Prompt da sessão</dt>
               <dd>{template.trim() ? "template do projeto" : "template padrão"}</dd>
+            </div>
+          )}
+          {analysisTemplate !== null && (
+            <div>
+              <dt>Prompt da análise de dependências</dt>
+              <dd>{analysisTemplate.trim() ? "template do projeto" : "template padrão"}</dd>
             </div>
           )}
           {cur.enabled && (
@@ -248,6 +259,27 @@ export function AutonomyCard({
                   {"{{kind}} {{number}} {{ref}} {{owner}} {{repo}} {{title}} {{branch}} {{integration_branch}} {{protected}} {{change}} {{closes}}"}
                 </span>{" "}
                 (<span className="mono">{"{{change}}"}</span> = PR ou MR; <span className="mono">{"{{closes}}"}</span> = <span className="mono">Closes #12</span> no GitHub ou a chave no Jira).
+              </span>
+            </div>
+          )}
+          {form.analysisTemplate !== null && (
+            <div className="field hub-wide">
+              <label htmlFor={`au-an-${pr.id}`}>Template do prompt da sessão de análise de dependências</label>
+              <textarea
+                id={`au-an-${pr.id}`}
+                className="mono"
+                rows={8}
+                value={form.analysisTemplate}
+                placeholder={DEFAULT_ANALYSIS_TEMPLATE}
+                onChange={(e) => setForm({ ...form, analysisTemplate: e.target.value })}
+              />
+              <span className="hint muted">
+                Vazio = o padrão acima. O hub monta o prompt quando a janela da política abre e inicia a análise antes das
+                implementações. Variáveis:{" "}
+                <span className="mono">
+                  {"{{owner}} {{repo}} {{integration_branch}} {{issues}} {{in_progress}} {{dependencies}} {{tracker_hint}}"}
+                </span>
+                .
               </span>
             </div>
           )}
