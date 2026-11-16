@@ -19,7 +19,6 @@ export type BoardNode = RowNode & { work_item: { status: WorkItemStatus; branch:
 export function Board<T extends BoardNode>({
   view,
   filters,
-  me = null,
   now,
   focus,
   project,
@@ -28,8 +27,6 @@ export function Board<T extends BoardNode>({
 }: {
   view: TreeView<T>;
   filters: TreeFilters;
-  /** O "eu" do rastreador, para o "Só minhas" (o mesmo da árvore). */
-  me?: string | null;
   now: number;
   focus: number | null;
   /** Rastreador e forja do projeto (#352); sem ele, GitHub. */
@@ -38,7 +35,7 @@ export function Board<T extends BoardNode>({
   liveLabel: (n: T) => string | null;
   onSelect: (ghNumber: number) => void;
 }) {
-  const items = boardItems(view, filters, me);
+  const items = boardItems(view);
   return (
     <div className="board-wrap">
       <p className="board-note">
