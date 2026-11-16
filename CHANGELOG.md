@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.9.0...v1.10.0) (2026-11-16)
+
+
+### Features
+
+* **hub:** análise automática de dependências antes das execuções do piloto ([4975ffe](https://github.com/deep-ion-ai/ctower-agents/commit/4975ffe0f9154fd495b97b37173af2331039da31))
+* **hub:** análise automática de dependências antes das execuções do piloto ([b57afc8](https://github.com/deep-ion-ai/ctower-agents/commit/b57afc822680b211a71210b70f7ce42b05d0e48f)), closes [#215](https://github.com/deep-ion-ai/ctower-agents/issues/215)
+
 ## [1.9.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.8.0...v1.9.0) (2026-11-12)
 
 
