@@ -30,6 +30,11 @@ code_review: boolean,
  */
 started_by: string, 
 /**
+ * Sessão de plano em andamento (a única que grava o rascunho); `None`
+ * = nenhuma.
+ */
+plan_session: string | null, 
+/**
  * Motivo da pausa ou do estacionamento.
  */
 paused_reason: string | null, 

@@ -55,6 +55,9 @@ pub struct EpicRun {
     pub code_review: bool,
     /// Quem disparou a execução.
     pub started_by: String,
+    /// Sessão de plano em andamento (a única que grava o rascunho); `None`
+    /// = nenhuma.
+    pub plan_session: Option<String>,
     /// Motivo da pausa ou do estacionamento.
     pub paused_reason: Option<String>,
     /// Estacionada: quando o motor retoma (ms).
@@ -285,7 +288,8 @@ fn json_vec<T: serde::de::DeserializeOwned>(r: &Row, i: usize) -> rusqlite::Resu
 
 const RUN_COLS: &str = "r.id, r.project_id, p.gh_owner, p.gh_repo, r.epic, r.env_id, r.status, \
                         r.plan_version, r.max_parallel, r.code_review, r.started_by, \
-                        r.paused_reason, r.resume_at, r.created_at, r.updated_at, r.ended_at";
+                        r.plan_session, r.paused_reason, r.resume_at, r.created_at, \
+                        r.updated_at, r.ended_at";
 const RUN_FROM: &str = "epic_run r JOIN project p ON p.id = r.project_id";
 const NODE_COLS: &str = "run_id, number, state, prev_state, session_id, worktree, pr, attempts, \
                          assumed_since, reason, rebase_head, rebase_at, updated_at";
@@ -306,11 +310,12 @@ fn row_to_run(r: &Row) -> rusqlite::Result<EpicRun> {
         max_parallel: r.get::<_, i64>(8)?.clamp(1, u32::MAX as i64) as u32,
         code_review: r.get(9)?,
         started_by: r.get(10)?,
-        paused_reason: r.get(11)?,
-        resume_at: r.get(12)?,
-        created_at: r.get(13)?,
-        updated_at: r.get(14)?,
-        ended_at: r.get(15)?,
+        plan_session: r.get(11)?,
+        paused_reason: r.get(12)?,
+        resume_at: r.get(13)?,
+        created_at: r.get(14)?,
+        updated_at: r.get(15)?,
+        ended_at: r.get(16)?,
     })
 }
 
@@ -578,6 +583,21 @@ impl Hub {
             params![id, to.as_str(), reason, resume_at, now, to.is_terminal()],
         )?;
         tx.commit()?;
+        self.require_epic_run(id)
+    }
+
+    /// Grava (ou limpa) a sessão de plano em andamento.
+    pub fn set_epic_run_plan_session(
+        &self,
+        id: i64,
+        session: Option<&str>,
+        now: i64,
+    ) -> Result<EpicRun> {
+        self.require_epic_run(id)?;
+        self.conn.execute(
+            "UPDATE epic_run SET plan_session = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, session, now],
+        )?;
         self.require_epic_run(id)
     }
 
@@ -1322,7 +1342,11 @@ mod tests {
         let r = hub.create_epic_run(&new_run(pid, 10, "env-a"), 5).unwrap();
         assert_eq!(r.status, EpicRunStatus::Planejando);
         assert_eq!((r.owner.as_str(), r.epic, r.max_parallel), ("acme", 10, 2));
-        assert_eq!(r.plan_version, None);
+        assert_eq!((r.plan_version, r.plan_session.as_deref()), (None, None));
+        let r = hub
+            .set_epic_run_plan_session(r.id, Some("s-plano"), 5)
+            .unwrap();
+        assert_eq!(r.plan_session.as_deref(), Some("s-plano"));
         // Outra para o mesmo épico: recusada.
         assert!(matches!(
             hub.create_epic_run(&new_run(pid, 10, "env-b"), 6),
