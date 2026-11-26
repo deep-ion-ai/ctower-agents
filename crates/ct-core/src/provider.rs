@@ -314,10 +314,7 @@ impl ProviderDescriptor for JiraDescriptor {
     fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
         check_kind(ProviderKind::Jira, c)?;
         check_options(c)?;
-        let url = c.endpoint.to_ascii_lowercase();
-        if !(url.starts_with("https://") || url.starts_with("http://")) || url.len() < 10 {
-            return Err(format!("URL do Jira inválida: {:?}", c.endpoint));
-        }
+        check_jira_url(c)?;
         check_token_source("Jira", "jira", c)
     }
 
@@ -342,16 +339,19 @@ impl JiraDescriptor {
     /// Projeto Jira: chave e campos próprios da tela da issue. Fica no
     /// cadastro do projeto, não na conexão.
     pub fn validate_project(&self, j: &JiraConfig) -> std::result::Result<(), String> {
-        let key_ok = j.project_key.starts_with(|c: char| c.is_ascii_uppercase())
-            && j.project_key
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-        if !key_ok {
-            return Err(format!(
-                "chave do projeto Jira inválida: {:?} (maiúsculas, como PROJ)",
-                j.project_key
-            ));
-        }
+        check_project_key(j)?;
+        validate_extra_fields(&j.extra_fields)
+    }
+
+    /// Cadastro do Jira sem conexão referenciada: a conexão embutida (URL e
+    /// credencial) e o projeto, na ordem de antes da #234 (URL, chave do
+    /// projeto, credencial, campos da tela). Com mais de uma falha, o erro
+    /// da chave vem antes do da credencial (#272).
+    pub fn validate_inline(&self, j: &JiraConfig) -> std::result::Result<(), String> {
+        let c = Connection::from_jira(j);
+        check_jira_url(&c)?;
+        check_project_key(j)?;
+        check_token_source("Jira", "jira", &c)?;
         validate_extra_fields(&j.extra_fields)
     }
 
@@ -376,6 +376,29 @@ impl JiraDescriptor {
         }
         Ok(())
     }
+}
+
+fn check_jira_url(c: &Connection) -> std::result::Result<(), String> {
+    let url = c.endpoint.to_ascii_lowercase();
+    if !(url.starts_with("https://") || url.starts_with("http://")) || url.len() < 10 {
+        return Err(format!("URL do Jira inválida: {:?}", c.endpoint));
+    }
+    Ok(())
+}
+
+/// Chave do projeto Jira: maiúsculas, dígitos e `_`, começando por letra.
+fn check_project_key(j: &JiraConfig) -> std::result::Result<(), String> {
+    let key_ok = j.project_key.starts_with(|c: char| c.is_ascii_uppercase())
+        && j.project_key
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    if !key_ok {
+        return Err(format!(
+            "chave do projeto Jira inválida: {:?} (maiúsculas, como PROJ)",
+            j.project_key
+        ));
+    }
+    Ok(())
 }
 
 /// Campos do projeto na tela da issue: ID e rótulo preenchidos, sem ID
@@ -633,6 +656,40 @@ mod tests {
             .validate(&opcoes_ruins)
             .unwrap_err()
             .contains("opções da conexão"));
+    }
+
+    #[test]
+    fn jira_sem_conexao_mantem_a_ordem_dos_erros_de_antes_da_234() {
+        assert!(JIRA.validate_inline(&jira_cfg()).is_ok());
+        // Chave e credencial inválidas ao mesmo tempo: vale o erro da chave.
+        let chave_e_credencial = JiraConfig {
+            project_key: "acme".into(),
+            credential_cmd: " ".into(),
+            ..jira_cfg()
+        };
+        let err = JIRA.validate_inline(&chave_e_credencial).unwrap_err();
+        assert!(err.contains("chave do projeto Jira inválida"), "{err}");
+        // URL e chave inválidas: vale o erro da URL.
+        let url_e_chave = JiraConfig {
+            url: "jira.example.com".into(),
+            ..chave_e_credencial.clone()
+        };
+        let err = JIRA.validate_inline(&url_e_chave).unwrap_err();
+        assert!(err.contains("URL do Jira inválida"), "{err}");
+        // Credencial e campo da tela inválidos: vale o erro da credencial.
+        let credencial_e_campo = JiraConfig {
+            credential_cmd: " ".into(),
+            extra_fields: vec![JiraExtraField {
+                id: " ".into(),
+                label: "Equipe".into(),
+            }],
+            ..jira_cfg()
+        };
+        let err = JIRA.validate_inline(&credencial_e_campo).unwrap_err();
+        assert!(
+            err.contains("informe o comando de credencial do Jira"),
+            "{err}"
+        );
     }
 
     #[test]
