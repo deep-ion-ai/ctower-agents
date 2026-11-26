@@ -1032,6 +1032,7 @@ mod tests {
                 ..Default::default()
             }),
             ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                connection: None,
                 host: GL_HOST.into(),
                 path: format!("{OWNER}/{NAME}"),
                 clone_url: format!("https://{GL_HOST}/{OWNER}/{NAME}.git"),

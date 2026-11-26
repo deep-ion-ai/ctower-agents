@@ -482,6 +482,7 @@ mod gestor_tests {
             .any(|e| matches!(&e.change, crate::SyncChange::Project(p) if p.owner == "_ctower")));
         // O pull do hub (sem o sentinela) não o desatribui.
         let cfg = ConfigResponse {
+            connections: None,
             config_rev: 1,
             config_epoch: 1,
             changed: true,

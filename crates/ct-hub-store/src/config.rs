@@ -83,13 +83,19 @@ impl ProjectProvider {
             ));
         }
         // Os descritores conferem a conexão e o projeto de cada tipo (#234).
+        // Com conexão referenciada (#235), a credencial e a URL vêm dela e
+        // são conferidas em `Hub::check_project_connections`.
         if let Some(j) = self.tracker.jira() {
-            provider::JIRA.validate(&Connection::from_jira(j))?;
+            if j.connection.is_none() {
+                provider::JIRA.validate(&Connection::from_jira(j))?;
+            }
             provider::JIRA.validate_project(j)?;
         }
         if let Some(g) = self.forge.gitlab() {
             provider::GITLAB.validate_project(g)?;
-            provider::GITLAB.validate(&Connection::from_gitlab(g))?;
+            if g.connection.is_none() {
+                provider::GITLAB.validate(&Connection::from_gitlab(g))?;
+            }
         }
         if let Some(pat) = &self.branch_pattern {
             ct_core::branch::validate_branch_pattern(pat).map_err(|e| e.to_string())?;
@@ -280,6 +286,7 @@ impl Hub {
             ..provider.clone()
         };
         pv.validate().map_err(LedgerError::Conflict)?;
+        self.check_project_connections(pv)?;
         let key = project_key(&p.owner, &p.repo);
         let protected =
             serde_json::to_string(&p.protected_branches).expect("Vec<String> serializa");
@@ -427,6 +434,7 @@ impl Hub {
             ));
         };
         let provider = self.patched_provider(&cur, patch)?;
+        self.check_project_connections(&provider)?;
         // O modo autônomo é conferido contra a base e as protegidas que o
         // projeto terá depois desta edição; sem mudar o modo, a edição da
         // base ou das protegidas também o confere (se estiver ligado).

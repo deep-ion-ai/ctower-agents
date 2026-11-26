@@ -160,6 +160,43 @@ pub fn descriptor(kind: ProviderKind) -> &'static dyn ProviderDescriptor {
         .expect("todo ProviderKind tem descritor no registro")
 }
 
+/// Papel de uma conexão num projeto: o rastreador (issues) ou a forja
+/// (repositório, PRs e MRs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Tracker,
+    Forge,
+}
+
+impl Role {
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::Tracker => "rastreador",
+            Role::Forge => "forja",
+        }
+    }
+}
+
+/// A conexão serve ao papel, pelo que o descritor do tipo diz de si
+/// ([`ProviderDescriptor::capabilities`]).
+pub fn check_role(c: &Connection, role: Role) -> std::result::Result<(), String> {
+    let caps = descriptor(c.kind).capabilities();
+    let serve = match role {
+        Role::Tracker => caps.tracker,
+        Role::Forge => caps.forge,
+    };
+    if serve {
+        Ok(())
+    } else {
+        Err(format!(
+            "conexão {} é do tipo {}, que não serve de {}",
+            c.name,
+            c.kind,
+            role.label()
+        ))
+    }
+}
+
 impl ProviderDescriptor for GithubDescriptor {
     fn kind(&self) -> ProviderKind {
         ProviderKind::Github
@@ -242,7 +279,9 @@ impl GitlabDescriptor {
     /// Repositório do GitLab: host e caminho (`grupo/projeto`). Fica no
     /// cadastro do projeto, não na conexão.
     pub fn validate_project(&self, g: &GitlabConfig) -> std::result::Result<(), String> {
-        if g.host.is_empty() || !g.path.contains('/') {
+        // Com conexão referenciada, o host vem dela.
+        let host_ok = g.connection.is_some() || !g.host.is_empty();
+        if !host_ok || !g.path.contains('/') {
             return Err(format!(
                 "repositório do GitLab inválido: host {:?}, caminho {:?}",
                 g.host, g.path
@@ -778,6 +817,31 @@ mod tests {
             .validate(&de_outro)
             .unwrap_err()
             .contains("não é github"));
+    }
+
+    #[test]
+    fn papel_da_conexao_segue_o_descritor() {
+        let jira_c = conn(
+            ProviderKind::Jira,
+            "https://jira.example.com",
+            CredentialSource::None,
+        );
+        let gitlab_c = conn(
+            ProviderKind::Gitlab,
+            "gitlab.example.com",
+            CredentialSource::None,
+        );
+        let github_c = conn(ProviderKind::Github, "", CredentialSource::Cli);
+        assert!(check_role(&jira_c, Role::Tracker).is_ok());
+        assert!(check_role(&jira_c, Role::Forge)
+            .unwrap_err()
+            .contains("não serve de forja"));
+        assert!(check_role(&gitlab_c, Role::Tracker)
+            .unwrap_err()
+            .contains("não serve de rastreador"));
+        assert!(check_role(&gitlab_c, Role::Forge).is_ok());
+        assert!(check_role(&github_c, Role::Tracker).is_ok());
+        assert!(check_role(&github_c, Role::Forge).is_ok());
     }
 
     #[test]

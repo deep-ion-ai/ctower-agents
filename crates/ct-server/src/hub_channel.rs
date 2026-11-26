@@ -394,6 +394,7 @@ mod tests {
                     approval: Default::default(),
                     tracker: ct_core::TrackerConfig::Jira(jira.clone()),
                     forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                        connection: None,
                         host: "gitlab.example.com".into(),
                         path: "deep-ion-ai/demo".into(),
                         clone_url: "https://gitlab.example.com/deep-ion-ai/demo.git".into(),
@@ -414,6 +415,7 @@ mod tests {
             .ledger()
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
+                    connections: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,

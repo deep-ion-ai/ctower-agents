@@ -2776,6 +2776,7 @@ mod tests {
             .ledger()
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
+                    connections: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,
@@ -3258,6 +3259,7 @@ mod tests {
             .ledger()
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
+                    connections: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,

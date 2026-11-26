@@ -105,6 +105,7 @@ mod tests {
                 ..Default::default()
             }),
             forge: ForgeConfig::Gitlab(GitlabConfig {
+                connection: None,
                 host: "gitlab.example.com".into(),
                 path: "acme/acme-web".into(),
                 clone_url: "https://gitlab.example.com/acme/acme-web.git".into(),

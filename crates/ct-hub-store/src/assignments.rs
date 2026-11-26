@@ -466,6 +466,7 @@ impl Hub {
                 changed: false,
                 projects: None,
                 removed: None,
+                connections: None,
             });
         }
         // Outra época: o `since` do ambiente não vale para este hub.
@@ -546,6 +547,7 @@ impl Hub {
             changed: true,
             projects: Some(projects),
             removed: Some(removed),
+            connections: Some(self.env_connections(env_id)?),
         })
     }
 }

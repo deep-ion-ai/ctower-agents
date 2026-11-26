@@ -305,6 +305,7 @@ impl TestEnv {
             .ledger()
             .apply_hub_config(
                 &ConfigResponse {
+                    connections: None,
                     config_rev: rev,
                     config_epoch: 1,
                     changed: true,

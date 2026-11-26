@@ -675,6 +675,7 @@ mod tests {
                         ..Default::default()
                     }),
                     forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                        connection: None,
                         host: "gitlab.example.com".into(),
                         path: "grupo/projeto/app".into(),
                         clone_url: "https://gitlab.example.com/grupo/projeto/app.git".into(),
