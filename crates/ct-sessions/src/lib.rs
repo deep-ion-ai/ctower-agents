@@ -86,6 +86,14 @@ pub enum SessionsError {
 
 pub type Result<T> = std::result::Result<T, SessionsError>;
 
+/// Depois do `SIGHUP` de [`Sessions::kill`], quanto esperar o agente sair
+/// antes do `SIGKILL` (#312). Depois do `SIGHUP`, o agente pode precisar de
+/// alguns segundos para gravar o transcript e encerrar os filhos; 5 s dão
+/// essa folga, inclusive numa máquina carregada, sem deixar a sessão viva
+/// quando o agente ignora o sinal. Menor que o prazo da limpeza para a
+/// sessão encerrada sair do estado vivo (`cleanup_sessions::END_TIMEOUT`).
+pub(crate) const KILL_GRACE: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone)]
 pub struct SessionsConfig {
     pub dirs: Dirs,
@@ -303,6 +311,9 @@ impl Sessions {
         self.inner.live.lock().unwrap().get(session_id).cloned()
     }
 
+    /// Encerra a sessão a pedido do humano: `SIGHUP` e, se o agente não
+    /// sair em [`KILL_GRACE`], `SIGKILL` (#312). Não espera a saída: o
+    /// estado passa a `exited` quando o processo sai.
     pub fn kill(&self, session_id: &str) -> Result<()> {
         match self.pty(session_id) {
             Some(p) => {
@@ -311,7 +322,7 @@ impl Sessions {
                     .lock()
                     .unwrap()
                     .insert(session_id.to_string());
-                Ok(p.kill()?)
+                Ok(p.terminate(KILL_GRACE)?)
             }
             None => Err(SessionsError::Invalid(format!(
                 "sessão {session_id} não está rodando neste daemon"

@@ -51,6 +51,8 @@ const H: i64 = 3_600_000;
 
 /// Espera máxima para a sessão encerrada pela etapa sair do estado vivo.
 const END_TIMEOUT: Duration = Duration::from_secs(10);
+// O agente que ignora o `SIGHUP` sai com o `SIGKILL` dentro do prazo.
+const _: () = assert!(crate::KILL_GRACE.as_secs() < END_TIMEOUT.as_secs());
 
 /// Nome da pasta do Claude Code para `path` em `~/.claude/projects`: cada
 /// caractere fora de `[A-Za-z0-9]` vira `-` (`/home/u/wt/a.b` →
