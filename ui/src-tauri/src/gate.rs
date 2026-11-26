@@ -337,10 +337,16 @@ mod tests {
                 allowed || excluded,
                 "{m} está no escopo ui do hub, mas nem em HUB_METHODS nem em HUB_NOT_EXPOSED"
             );
-            assert!(!(allowed && excluded), "{m} liberado e excluído ao mesmo tempo");
+            assert!(
+                !(allowed && excluded),
+                "{m} liberado e excluído ao mesmo tempo"
+            );
         }
         for m in HUB_NOT_EXPOSED {
-            assert!(scope.contains(m), "{m} saiu do registro: tire de HUB_NOT_EXPOSED");
+            assert!(
+                scope.contains(m),
+                "{m} saiu do registro: tire de HUB_NOT_EXPOSED"
+            );
         }
     }
 
