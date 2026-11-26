@@ -251,9 +251,48 @@ pub fn cite(text: &str, token: Option<&Secret>) -> String {
     }
 }
 
+/// Se a mensagem de erro do jira-cli ou do glab traz `token` (o código
+/// HTTP, ou a palavra `Forbidden`, `Unauthorized`...) como palavra solta:
+/// `'403 Forbidden'`, `(HTTP 403)` e `403:` contam; `ACME-403`,
+/// `issues/403`, `#403` e `4031` não (#265). Aspas, parênteses e pontuação
+/// em volta da palavra não contam, nem maiúsculas.
+pub fn has_token(msg: &str, token: &str) -> bool {
+    const OPEN: &[char] = &['\'', '"', '(', '['];
+    const CLOSE: &[char] = &['\'', '"', ')', ']', ':', ',', '.', ';'];
+    msg.split_whitespace().any(|w| {
+        w.trim_start_matches(OPEN)
+            .trim_end_matches(CLOSE)
+            .eq_ignore_ascii_case(token)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codigo_http_so_como_palavra_solta() {
+        for m in [
+            "jira: Received unexpected response '403 Forbidden'.",
+            "glab: 403 Forbidden (HTTP 403)",
+            "HTTP 403: acesso negado",
+            "403",
+        ] {
+            assert!(has_token(m, "403"), "{m}");
+        }
+        for m in [
+            "jira: ACME-403 não lida: 500 Internal Server Error",
+            "projects/grupo%2Fapp/repository/branches/feat%2F403-x",
+            "issues/403 falhou",
+            "MR #403 e !403",
+            "4031 ou 1403",
+            "x403y",
+        ] {
+            assert!(!has_token(m, "403"), "{m}");
+        }
+        assert!(has_token("glab: 403 FORBIDDEN", "forbidden"));
+        assert!(!has_token("forbidden-words", "forbidden"));
+    }
 
     fn sh(script: &str) -> Command {
         let mut c = Command::new("/bin/sh");
