@@ -2573,6 +2573,53 @@ mod tests {
         assert!(env.sessions.kill(&s.id).is_err());
     }
 
+    /// Espera `needle` no terminal da sessão.
+    fn wait_output(env: &TestEnv, sid: &str, needle: &str) {
+        let pty = env.sessions.pty(sid).expect("sessão viva");
+        let deadline = std::time::Instant::now() + T;
+        while !String::from_utf8_lossy(&pty.snapshot()).contains(needle) {
+            assert!(std::time::Instant::now() < deadline, "sem {needle:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// #312: o agente que ignora o `SIGHUP` segue vivo durante o prazo e sai
+    /// com o `SIGKILL` depois dele; a sessão fica `exited`, como em todo
+    /// `kill` pedido.
+    #[test]
+    fn kill_mata_o_agente_que_ignora_o_sighup_depois_do_prazo() {
+        let env = TestEnv::new(FakeClaude::script(
+            "trap '' HUP; echo pronto-$((1+1)); read x",
+        ));
+        let s = env.sessions.start(env.request(4, "Teimosa")).unwrap();
+        wait_output(&env, &s.id, "pronto-2");
+        let pty = env.sessions.pty(&s.id).unwrap();
+        let t0 = std::time::Instant::now();
+        env.sessions.kill(&s.id).unwrap();
+        assert_eq!(pty.wait_timeout(Duration::from_millis(500)), None);
+        let ended = env.wait_state(&s.id, SessionState::Exited);
+        assert!(t0.elapsed() >= crate::KILL_GRACE, "{:?}", t0.elapsed());
+        assert_eq!(pty.exit_status(), Some(None), "morto por sinal");
+        assert_eq!(ended.exit_code, None);
+    }
+
+    /// #312: o agente que sai sozinho depois do `SIGHUP` (aqui, depois de
+    /// "gravar o transcript") não leva `SIGKILL`: o código de saída é o dele.
+    #[test]
+    fn kill_deixa_o_agente_sair_sozinho_com_o_sighup() {
+        let env = TestEnv::new(FakeClaude::script(
+            "trap 'sleep 0.5; echo transcript-gravado; exit 0' HUP; echo pronto-$((1+1)); read x",
+        ));
+        let s = env.sessions.start(env.request(4, "Educada")).unwrap();
+        wait_output(&env, &s.id, "pronto-2");
+        let pty = env.sessions.pty(&s.id).unwrap();
+        env.sessions.kill(&s.id).unwrap();
+        let ended = env.wait_state(&s.id, SessionState::Exited);
+        assert_eq!(pty.exit_status(), Some(Some(0)));
+        assert_eq!(ended.exit_code, Some(0));
+        assert!(String::from_utf8_lossy(&pty.snapshot()).contains("transcript-gravado"));
+    }
+
     /// Rótulo de aprovação (#124): com a exigência ligada, a issue sem o
     /// rótulo é recusada sem deixar rastro; o "mesmo assim" inicia e grava a
     /// decisão `orientada`; o épico conta pelo próprio rótulo e a sub-issue

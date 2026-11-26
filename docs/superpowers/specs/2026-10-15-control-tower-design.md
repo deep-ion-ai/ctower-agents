@@ -174,7 +174,7 @@ starting → running ⇄ idle → exited
 - `starting`: registro gravado, processo ainda não confirmado.
 - `running`: processo vivo, agente trabalhando.
 - `idle`: hook `Stop` — agente encerrou o turno e espera entrada.
-- `exited`: processo terminou de forma limpa (hook `SessionEnd`, código 0 ou `session.kill` pedido pelo humano; `exit_code` registrado).
+- `exited`: processo terminou de forma limpa (hook `SessionEnd`, código 0 ou `session.kill` pedido pelo humano; `exit_code` registrado). O `session.kill` manda `SIGHUP` e, se o agente não sair em 5 s (o prazo para gravar o transcript), `SIGKILL` (#312).
 - `interrupted`: processo terminou de forma anormal (código ≠ 0 ou sinal, sem `SessionEnd` antes; `exit_code` registrado) ou, **no boot do daemon**, sessão `starting|running|idle` cujo PTY não pertence ao daemon (o PTY só existe na memória do daemon que a lançou; #283).
 - `archived`: humano descartou na tela de recuperação.
 - Retomar uma sessão `interrupted` cria uma **nova** `session` com o mesmo `tool_session_id` e `cwd`, e a antiga vira `archived` com evento `resumed_as`.
