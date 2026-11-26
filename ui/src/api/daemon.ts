@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toApiError } from "./errors";
+import type { DaemonMethods } from "../protocol/gen/methods";
 import type {
   EnvInput,
   EnvStatus,
@@ -15,6 +16,14 @@ import type {
   Unsubscribe,
 } from "./types";
 
+/**
+ * Argumentos de `call` para `M`: com `null` no registro (sem parâmetros), o
+ * objeto é opcional; sem `null`, é obrigatório.
+ */
+export type MethodArgs<M extends keyof DaemonMethods> = null extends DaemonMethods[M]["params"]
+  ? [params?: DaemonMethods[M]["params"]]
+  : [params: DaemonMethods[M]["params"]];
+
 /** Tudo que a UI faz com os daemons passa por aqui (fácil de trocar nos testes). */
 export interface DaemonApi {
   /**
@@ -26,7 +35,16 @@ export interface DaemonApi {
   listEnvs(): Promise<EnvView[]>;
   saveEnvs(envs: EnvInput[]): Promise<EnvView[]>;
   statuses(): Promise<EnvStatus[]>;
-  /** Requisição ao daemon do ambiente; rejeita com a mensagem de erro. */
+  /**
+   * Requisição tipada ao daemon do ambiente: `method` é um método do registro
+   * (`DaemonMethods`, gerado de `ct_http::methods`). Rejeita com a mensagem de erro.
+   */
+  call<M extends keyof DaemonMethods>(
+    env: string,
+    method: M,
+    ...args: MethodArgs<M>
+  ): Promise<DaemonMethods[M]["result"]>;
+  /** Requisição sem tipo ao daemon do ambiente; rejeita com a mensagem de erro. */
   call<T = unknown>(env: string, method: string, params?: object): Promise<T>;
   /** Conexão com o hub (`null` = não configurada). */
   getHub(): Promise<HubConnView | null>;

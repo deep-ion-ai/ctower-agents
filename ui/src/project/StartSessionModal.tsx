@@ -374,7 +374,7 @@ function ItemStartModal({
   useEffect(() => {
     if (!web || !cloneEnv || webInfos[cloneEnv]) return;
     let alive = true;
-    api.call<EnvInfo>(cloneEnv, "env.info").then(
+    api.call(cloneEnv, "env.info").then(
       (i) => alive && setWebInfos((all) => ({ ...all, [cloneEnv]: i })),
       () => {},
     );
@@ -544,7 +544,7 @@ function ItemStartModal({
     try {
       await killReplaced(tower, target);
       const s = issue
-        ? await api.call<Session>(clone.env, "session.start", {
+        ? await api.call(clone.env, "session.start", {
             ...tgt,
             gh_number: issue.gh_number,
             // Labels só da árvore: o work item não as tem.
@@ -557,8 +557,8 @@ function ItemStartModal({
             ...(unapproved && overrideApproval ? { override_approval: true } : {}),
           })
         : releaseMode
-          ? await api.call<Session>(clone.env, "session.start_release", { ...tgt, prompt, ...agent, ...size })
-          : await api.call<Session>(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
+          ? await api.call(clone.env, "session.start_release", { ...tgt, prompt, ...agent, ...size })
+          : await api.call(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
       // Web: o painel da sessão espera o id do Remote Control e abre o link.
       if (web && withRemote) rcRequested(s.id);
       onStarted(
@@ -1075,7 +1075,7 @@ function GestorStartModal({
     setError(null);
     try {
       await killReplaced(tower, target);
-      const s = await api.call<Session>(env, "session.start_gestor", {
+      const s = await api.call(env, "session.start_gestor", {
         scope,
         prompt,
         ...(model ? { model } : {}),

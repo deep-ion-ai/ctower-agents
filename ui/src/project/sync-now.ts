@@ -5,7 +5,7 @@
 // projeto ficam num store de módulo: disparado da lista ou da paleta, o
 // cartão e o cabeçalho mostram o mesmo "Buscando issues…" e o resultado.
 import { useSyncExternalStore } from "react";
-import type { ProjectSync, SyncState } from "../protocol/gen";
+import type { SyncState } from "../protocol/gen";
 import type { Screen } from "../state/nav";
 import type { Tower } from "../state/tower";
 import { isJira } from "../hub/tracker";
@@ -151,7 +151,7 @@ export async function runProjectSync(api: Pick<Tower["api"], "call">, info: Proj
   const outcomes = await Promise.all(
     info.plan.targets.map(
       (x): Promise<SyncOutcome> =>
-        api.call<ProjectSync[]>(x.env, "sync.now", { project_id: x.projectId }).then(
+        api.call(x.env, "sync.now", { project_id: x.projectId }).then(
           (result) => ({ name: x.name, result }),
           (e) => ({ name: x.name, error: e instanceof Error ? e.message : String(e) }),
         ),

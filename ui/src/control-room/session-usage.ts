@@ -132,7 +132,7 @@ export function useSessionsUsage(api: DaemonApi, keys: { env: string; session: s
       const got = await Promise.all(
         list.map(async (k) => {
           try {
-            const u = await api.call<SessionUsage | null>(k.env, "session.usage", { session_id: k.session });
+            const u = await api.call(k.env, "session.usage", { session_id: k.session });
             return [usageKey(k.env, k.session), u ?? null] as const;
           } catch {
             return null;
