@@ -14,6 +14,7 @@ pub mod plan;
 pub mod release;
 #[macro_use]
 mod model;
+pub mod provider;
 mod repo_url;
 pub mod session_templates;
 pub mod tracker;
