@@ -203,7 +203,7 @@ pub const METHODS: &[MethodSpec] = &[
     MethodSpec { name: "cleanup.status", params: "null", result: "CleanupStatus", scopes: UI },
     MethodSpec {
         name: "worktree.remove",
-        params: "{ work_item_id: number }",
+        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number }",
         result: "WorktreeRemoval",
         scopes: UI_WEB_CHANNEL,
     },

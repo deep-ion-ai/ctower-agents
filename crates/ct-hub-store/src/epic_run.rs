@@ -59,6 +59,11 @@ pub struct EpicRun {
     /// Sessão de plano em andamento (a única que grava o rascunho); `None`
     /// = nenhuma.
     pub plan_session: Option<String>,
+    /// Modelo e esforço da sessão de plano; `None` = o padrão do hub.
+    #[serde(default)]
+    pub plan_model: Option<String>,
+    #[serde(default)]
+    pub plan_effort: Option<String>,
     /// Motivo da pausa ou do estacionamento.
     pub paused_reason: Option<String>,
     /// Estacionada: quando o motor retoma (ms).
@@ -78,6 +83,9 @@ pub struct NewEpicRun {
     pub started_by: String,
     /// `None` = [`EPIC_RUN_PARALLEL_DEFAULT`].
     pub max_parallel: Option<u32>,
+    /// Modelo e esforço da sessão de plano; `None` = o padrão do hub.
+    pub plan_model: Option<String>,
+    pub plan_effort: Option<String>,
 }
 
 /// Uma sub-issue no plano.
@@ -248,6 +256,15 @@ pub struct EpicNodePatch {
     pub rebase_at: Option<Option<i64>>,
 }
 
+/// A sessão de um nó ([`Hub::epic_session_info`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicSessionInfo {
+    pub state: ct_core::SessionState,
+    /// Ociosa desde (vale com `state` = `idle`).
+    pub idle_since: i64,
+    pub cwd: String,
+}
+
 /// Um pedido de decisão ao desenvolvedor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -312,7 +329,7 @@ fn json_vec<T: serde::de::DeserializeOwned>(r: &Row, i: usize) -> rusqlite::Resu
 const RUN_COLS: &str = "r.id, r.project_id, p.gh_owner, p.gh_repo, r.epic, r.env_id, r.status, \
                         r.plan_version, r.max_parallel, r.code_review, r.started_by, \
                         r.plan_session, r.paused_reason, r.resume_at, r.created_at, \
-                        r.updated_at, r.ended_at";
+                        r.updated_at, r.ended_at, r.plan_model, r.plan_effort";
 const RUN_FROM: &str = "epic_run r JOIN project p ON p.id = r.project_id";
 const NODE_COLS: &str = "run_id, number, state, prev_state, session_id, worktree, pr, attempts, \
                          assumed_since, reason, rebase_head, rebase_at, updated_at";
@@ -339,6 +356,8 @@ fn row_to_run(r: &Row) -> rusqlite::Result<EpicRun> {
         created_at: r.get(14)?,
         updated_at: r.get(15)?,
         ended_at: r.get(16)?,
+        plan_model: r.get(17)?,
+        plan_effort: r.get(18)?,
     })
 }
 
@@ -480,6 +499,12 @@ impl Hub {
         }
         let parallel = n.max_parallel.unwrap_or(EPIC_RUN_PARALLEL_DEFAULT);
         check_parallel(parallel)?;
+        IssueAgent {
+            model: n.plan_model.clone(),
+            effort: n.plan_effort.clone(),
+        }
+        .validate()
+        .map_err(|e| LedgerError::Invalid(format!("sessão de plano: {e}")))?;
         let live: Option<i64> = self
             .conn
             .query_row(
@@ -502,8 +527,8 @@ impl Hub {
         }
         self.conn.execute(
             "INSERT INTO epic_run (project_id, epic, env_id, status, max_parallel, started_by,
-                                   created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                                   created_at, updated_at, plan_model, plan_effort)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9)",
             params![
                 n.project_id,
                 n.epic,
@@ -511,7 +536,9 @@ impl Hub {
                 EpicRunStatus::Planejando.as_str(),
                 parallel,
                 n.started_by,
-                now
+                now,
+                n.plan_model,
+                n.plan_effort
             ],
         )?;
         self.require_epic_run(self.conn.last_insert_rowid())
@@ -1222,6 +1249,33 @@ impl Hub {
         self.require_epic_node(run_id, number)
     }
 
+    /// A sessão de um nó como o motor a vê: estado e, ociosa, desde quando
+    /// (o último `session_state` para `idle`, como no piloto); `None` = o
+    /// hub ainda não a conhece.
+    pub fn epic_session_info(&self, id: &str) -> Result<Option<EpicSessionInfo>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT s.state,
+                        coalesce((SELECT max(e.ts) FROM event e
+                                  WHERE e.work_item_id = s.work_item_id AND e.session_id = s.id
+                                    AND e.type = 'session_state'
+                                    AND json_extract(e.payload, '$.to') = 'idle'),
+                                 s.last_event_at),
+                        s.cwd
+                 FROM session s WHERE s.id = ?1",
+                [id],
+                |r| {
+                    Ok(EpicSessionInfo {
+                        state: enum_col(r, 0)?,
+                        idle_since: r.get(1)?,
+                        cwd: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     // --- pedidos de decisão ---------------------------------------------
 
     /// Abre um pedido de decisão, com as opções da origem
@@ -1339,6 +1393,28 @@ impl Hub {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Os últimos `n` eventos da execução, do mais antigo ao mais novo.
+    pub fn epic_run_events_tail(&self, run_id: i64, n: usize) -> Result<Vec<EpicRunEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, at, kind, number, reason, message FROM epic_run_event
+             WHERE run_id = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![run_id, n as i64], |r| {
+            Ok(EpicRunEvent {
+                id: r.get(0)?,
+                run_id: r.get(1)?,
+                at: r.get(2)?,
+                kind: r.get(3)?,
+                number: r.get(4)?,
+                reason: r.get(5)?,
+                message: r.get(6)?,
+            })
+        })?;
+        let mut v: Vec<EpicRunEvent> = rows.collect::<rusqlite::Result<_>>()?;
+        v.reverse();
+        Ok(v)
+    }
+
     /// Eventos da execução depois do id `after` (0 = desde o início), em
     /// ordem, até `limit`.
     pub fn epic_run_events(
@@ -1392,6 +1468,8 @@ mod tests {
             env_id: env.into(),
             started_by: "fulano".into(),
             max_parallel: None,
+            plan_model: None,
+            plan_effort: None,
         }
     }
 
@@ -1937,7 +2015,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 46);
+        assert_eq!(v, crate::HUB_MIGRATIONS.len() as i64);
         let pid = hub.find_project("acme", "acme-web").unwrap().unwrap().id;
         let run = running(&hub, pid);
         let plan = hub.epic_plan(run.id, 1).unwrap().unwrap();

@@ -85,7 +85,8 @@ pub use env_keys::{EnvAssignmentRev, EnvPubkey, EnvSecretsInput};
 pub use epic_run::{
     EpicApproval, EpicDecision, EpicNode, EpicNodePatch, EpicPlan, EpicPlanDraft, EpicPlanEdge,
     EpicPlanNode, EpicPlanNodeInput, EpicPlanSessionInput, EpicPlanSessionNode, EpicProposal,
-    EpicRun, EpicRunEvent, NewEpicRun, EPIC_PLAN_MAX_NODES, EPIC_PLAN_MAX_PROPOSALS,
+    EpicRun, EpicRunEvent, EpicSessionInfo, NewEpicRun, EPIC_PLAN_MAX_NODES,
+    EPIC_PLAN_MAX_PROPOSALS,
 };
 pub use health::{
     HealthCounts, HealthFilter, HealthKind, HealthSignal, HealthThresholds, HubHealth, Severity,
@@ -1049,6 +1050,12 @@ CREATE TABLE epic_run_event (
   message TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX epic_run_event_run ON epic_run_event (run_id, id);
+"#,
+    // 47: modelo e esforço da sessão de plano da execução de épico (#298),
+    // escolhidos no disparo; nulos = o padrão do hub (forte).
+    r#"
+ALTER TABLE epic_run ADD COLUMN plan_model TEXT;
+ALTER TABLE epic_run ADD COLUMN plan_effort TEXT;
 "#,
 ];
 
@@ -5483,7 +5490,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 46);
+        assert_eq!(v, 47);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

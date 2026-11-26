@@ -1211,7 +1211,14 @@ impl Conn {
             // Remoção do worktree da sub-issue da execução de épico já
             // mesclada na `wip` (#298), pedida pelo hub.
             "worktree.remove" => {
-                let id = i64_param(p, "work_item_id")?;
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let n = i64_param(p, "gh_number")?;
+                let id = blocking(&sessions, move |s| {
+                    Ok(s.ledger().find_work_item(project_id, n)?)
+                })
+                .await?
+                .ok_or_else(|| invalid(format!("work item #{n} não está neste ambiente")))?
+                .id;
                 let cfg = self
                     .st
                     .cleanup

@@ -97,8 +97,8 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// `epic_set_plan`, só nela.
 /// 2.26 (#298): `epic_run: { base }` no `session.start` (sub-issue da
 /// execução de épico, que sai da `wip` do épico e aceita texto no
-/// `session.continue`) e `worktree.remove { work_item_id }` (também pelo
-/// canal do hub).
+/// `session.continue`) e `worktree.remove { owner, repo, gh_number }` (também
+/// pelo canal do hub).
 pub const PROTOCOL_VERSION: &str = "2.26";
 
 #[derive(Clone)]

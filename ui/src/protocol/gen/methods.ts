@@ -247,7 +247,7 @@ export interface DaemonMethods {
   "session.input": { params: { session_id: string; data: string }; result: {} };
   "session.resize": { params: { session_id: string; cols: number; rows: number }; result: {} };
   "cleanup.status": { params: null; result: CleanupStatus };
-  "worktree.remove": { params: { work_item_id: number }; result: WorktreeRemoval };
+  "worktree.remove": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number }; result: WorktreeRemoval };
   "cleanup.plan": { params: null; result: CleanupPlan };
   "cleanup.run": { params: { work_item_id?: number | null; step?: string | null; dry_run?: boolean | null } | null; result: CleanupRun };
   "logs.tail": { params: { level?: string | null; q?: string | null; since?: number | null; until?: number | null; limit?: number | null; before?: number | null }; result: unknown };
