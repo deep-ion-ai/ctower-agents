@@ -269,6 +269,32 @@ impl Sessions {
         self.source(project, ct_core::provider::ProviderKind::Gitlab)
     }
 
+    /// Token da conexão do tipo `kind` do projeto pelo resolvedor do
+    /// ambiente (cache, sobrescrita `[connections]`, secret do cache): o
+    /// mesmo do sync, e por isso no mascaramento das sessões. Usado no
+    /// clone do GitLab por HTTPS (#281). Pode rodar o comando de credencial.
+    pub fn connection_token(
+        &self,
+        project: &ct_ledger::Project,
+        kind: ct_core::provider::ProviderKind,
+    ) -> std::result::Result<String, String> {
+        let source = self
+            .source(project, kind)
+            .map_or(ct_core::provider::CredentialSource::None, |s| s.source);
+        let lookup = self.secret_lookup(project);
+        self.credentials()
+            .token(resolver::Ask {
+                key: &resolver::cache_key(kind, project.id),
+                what: ct_core::provider::descriptor(kind).label(),
+                source: &source,
+                lookup: &lookup,
+                deadline: ct_proc::CREDENTIAL_DEADLINE,
+                cli: None,
+            })
+            .map(|t| t.expose().to_string())
+            .map_err(|e| e.to_string())
+    }
+
     /// Fonte do token do GitHub do projeto ([`Self::source`]): sem a
     /// conexão no pull, o `gh auth token`. `None` = o projeto não usa o
     /// GitHub.

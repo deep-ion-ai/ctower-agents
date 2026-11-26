@@ -611,6 +611,24 @@ impl HubSender {
                         })
                         .ok()
                 }
+                // No GitLab por HTTPS, o token da conexão do GitLab (#281);
+                // sem ele, o git usa a credencial do ambiente.
+                (_, ct_core::ForgeConfig::Gitlab(g))
+                    if !Path::new(&p.repo_path).exists()
+                        && g.clone_url.trim().starts_with("https://") =>
+                {
+                    self.sessions
+                        .connection_token(&p, ct_core::provider::ProviderKind::Gitlab)
+                        .map_err(|e| {
+                            tracing::warn!(
+                                "hub: token do GitLab de {}/{} indisponível para o clone ({e}); \
+                                 o git usa a credencial do ambiente",
+                                p.gh_owner,
+                                p.gh_repo
+                            )
+                        })
+                        .ok()
+                }
                 _ => None,
             };
             // `_projeto/` nasce ao aplicar a atribuição (#440). Sem

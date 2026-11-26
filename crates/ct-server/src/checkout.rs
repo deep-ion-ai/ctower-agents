@@ -1,8 +1,9 @@
 //! Clone do repositório de um projeto na aplicação das atribuições vindas
 //! do hub (#177), o fluxo que era o do antigo cadastro por URL (#40). No
 //! GitHub, pelo `gh repo clone`; no GitLab (spec do Jira e GitLab §7.1), pelo
-//! `git clone` da URL do cadastro, HTTPS ou SSH, com a credencial do git do
-//! ambiente. Nos dois, o `origin` é conferido pelo host e pelo caminho
+//! `git clone` da URL do cadastro: por HTTPS, com o token da conexão do
+//! GitLab (#281); por SSH, com a chave do ambiente. Nos dois, o `origin` é
+//! conferido pelo host e pelo caminho
 //! ([`ct_core::repo_from_url`]), e HTTPS e SSH do mesmo repositório valem.
 
 use ct_core::{repo_from_url, ForgeConfig, RepoRef};
@@ -61,9 +62,11 @@ fn expected(owner: &str, repo: &str, forge: &ForgeConfig, gitlab_host: &str) -> 
 }
 
 /// Pasta existente precisa ser um clone do repositório do projeto; ausente
-/// é clonada: no GitHub com o `gh` (e o token do GitHub do ambiente, se
-/// houver), no GitLab com o `git clone` da URL do cadastro. `gitlab_host` é
-/// o host da conexão do GitLab do projeto (ignorado no GitHub).
+/// é clonada: no GitHub com o `gh`, no GitLab com o `git clone` da URL do
+/// cadastro. `token` é o da conexão da forja do projeto (GitHub ou GitLab),
+/// se houver; sem ele, vale a credencial do `gh` ou do git do ambiente.
+/// `gitlab_host` é o host da conexão do GitLab do projeto (ignorado no
+/// GitHub).
 #[allow(clippy::too_many_arguments)]
 pub fn ensure_checkout(
     owner: &str,
@@ -98,13 +101,20 @@ pub fn ensure_checkout(
                         want.path
                     )));
                 }
-                // O credential helper (`osxkeychain` no macOS) pode não
+                // Por HTTPS, o token da conexão do GitLab (#281). Sem ele (ou
+                // por SSH), a credencial do git do ambiente, que pode não
                 // responder ao daemon no launchd: a saída é o clone à mão.
-                ct_git::clone_url(url, path).map_err(|e| {
+                ct_git::clone_url(url, path, token).map_err(|e| {
+                    let hint = if token.is_some() && url.starts_with("https://") {
+                        "confira a credencial da conexão do GitLab (Hub › Conexões) ou a \
+                         sobrescrita dela no ambiente"
+                    } else {
+                        "configure a credencial da conexão do GitLab (Hub › Conexões) ou a \
+                         do git do ambiente"
+                    };
                     CheckoutError::Clone(format!(
-                        "clone de {url} em {repo_path} falhou: {e}. Se a credencial do git \
-                         não responde a partir do ctowerd, clone à mão num terminal do \
-                         ambiente: git clone {url} {repo_path}"
+                        "clone de {url} em {repo_path} falhou: {e}. {hint}; ou clone à mão \
+                         num terminal do ambiente: git clone {url} {repo_path}"
                     ))
                 })?
             }

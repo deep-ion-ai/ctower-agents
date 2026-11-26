@@ -1011,6 +1011,37 @@ mod tests {
         env.sessions.kill(&s.id).unwrap();
     }
 
+    /// #281: o token da conexão do GitLab para o clone sai do resolvedor do
+    /// ambiente (a fonte da conexão), fica no cache como o do sync e entra
+    /// no mascaramento das sessões do projeto.
+    #[test]
+    fn token_da_conexao_para_o_clone_vem_do_resolvedor_e_e_mascarado() {
+        use ct_core::provider::ProviderKind;
+        let env = TestEnv::new(FakeClaude::sleep(30));
+        let marca = env.tmp.path().join("marca-credencial");
+        let gitlab = cmd_com_marca(&marca, "tok-acme-gitlab-654321");
+        assign_jira_gitlab(&env, "true", &gitlab);
+        let p = env.sessions.ledger().get_project(env.project_id).unwrap();
+        assert_eq!(
+            env.sessions
+                .connection_token(&p, ProviderKind::Gitlab)
+                .unwrap(),
+            "tok-acme-gitlab-654321"
+        );
+        let de_novo = env
+            .sessions
+            .connection_token(&p, ProviderKind::Gitlab)
+            .unwrap();
+        assert_eq!(de_novo, "tok-acme-gitlab-654321");
+        let execucoes = std::fs::read_to_string(&marca).unwrap().lines().count();
+        assert_eq!(execucoes, 1, "a segunda leitura veio do cache");
+        let m = env.sessions.connection_mask(&p);
+        assert_eq!(
+            m.pty.apply(b"x tok-acme-gitlab-654321 y"),
+            b"x ***CONEXAO_TOKEN*** y"
+        );
+    }
+
     /// Token que o sync já resolveu sai mascarado no PTY e no transcript da
     /// sessão aberta depois (#266), sem rodar o comando de novo.
     #[test]
