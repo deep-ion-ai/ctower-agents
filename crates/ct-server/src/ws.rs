@@ -627,6 +627,17 @@ impl Conn {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(invalid("override_approval deve ser true ou false")),
                 };
+                // Sub-issue da execução de épico (#298): sai da `wip` do épico.
+                let epic_base = match p.get("epic_run") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => match v.get("base").and_then(Value::as_str).map(str::trim) {
+                        Some(b) if !b.is_empty() => Some(b.to_string()),
+                        _ => return Err(invalid("epic_run deve ser { base: <branch do épico> }")),
+                    },
+                };
+                if autonomous && epic_base.is_some() {
+                    return Err(invalid("autonomous e epic_run não vão juntos"));
+                }
                 // Sessão autônoma sem `prompt` (#191): o ambiente monta com o
                 // template do projeto, depois de decidir a branch.
                 let prompt = if autonomous && matches!(p.get("prompt"), None | Some(Value::Null)) {
@@ -698,7 +709,9 @@ impl Conn {
                 };
                 // Sessão autônoma (#181): alinha a branch de integração e sai
                 // dela; conflito = `AUTONOMY_CONFLICT`, e a issue não começa.
-                let v = if autonomous {
+                let v = if let Some(base) = epic_base {
+                    blocking(&sessions, move |s| s.start_epic_run(req, &base)).await?
+                } else if autonomous {
                     let gh = self.st.github.clone();
                     blocking(&sessions, move |s| {
                         let pr = gh
@@ -1194,6 +1207,22 @@ impl Conn {
                 pty.resize(cols, rows)
                     .map_err(|e| (-32000, e.to_string()))?;
                 Ok(json!({}))
+            }
+            // Remoção do worktree da sub-issue da execução de épico já
+            // mesclada na `wip` (#298), pedida pelo hub.
+            "worktree.remove" => {
+                let id = i64_param(p, "work_item_id")?;
+                let cfg = self
+                    .st
+                    .cleanup
+                    .as_ref()
+                    .map(|c| c.config().clone())
+                    .unwrap_or_default();
+                let v = blocking(&sessions, move |s| {
+                    s.remove_epic_worktree(id, &cfg, ct_core::now_ms())
+                })
+                .await?;
+                Ok(json!(v))
             }
             // Limpeza após a conclusão do work item (issue #287).
             "cleanup.status" | "cleanup.plan" | "cleanup.run" => {

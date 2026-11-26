@@ -95,7 +95,11 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// 2.25 (#299): `epic_plan` (número do épico) no `session.start_project`
 /// (a sessão de plano da execução de épico) e a ferramenta MCP
 /// `epic_set_plan`, só nela.
-pub const PROTOCOL_VERSION: &str = "2.25";
+/// 2.26 (#298): `epic_run: { base }` no `session.start` (sub-issue da
+/// execução de épico, que sai da `wip` do épico e aceita texto no
+/// `session.continue`) e `worktree.remove { work_item_id }` (também pelo
+/// canal do hub).
+pub const PROTOCOL_VERSION: &str = "2.26";
 
 #[derive(Clone)]
 pub struct AppState {
