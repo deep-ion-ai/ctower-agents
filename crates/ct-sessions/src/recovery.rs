@@ -537,7 +537,10 @@ mod tests {
             }),
             epics: vec![],
         };
-        let gh = (ct_core::TrackerConfig::Github, ct_core::ForgeConfig::Github);
+        let gh = (
+            ct_core::TrackerConfig::Github(Default::default()),
+            ct_core::ForgeConfig::Github(Default::default()),
+        );
         env.assign_with_rules(gh.0.clone(), gh.1.clone(), false, 1, regras(1, "antiga"));
         env.mirror_issues(&[(1, None, false)]);
         let t = env.tmp.path().join("t.jsonl");

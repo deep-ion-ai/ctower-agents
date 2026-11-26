@@ -40,7 +40,7 @@ pub fn expand_home(s: &str) -> String {
 /// o host e o caminho do cadastro do GitLab.
 fn expected(owner: &str, repo: &str, forge: &ForgeConfig) -> RepoRef {
     match forge {
-        ForgeConfig::Github => RepoRef {
+        ForgeConfig::Github(_) => RepoRef {
             host: "github.com".into(),
             path: format!("{owner}/{repo}"),
         },
@@ -74,7 +74,7 @@ pub fn ensure_checkout(
     let path = Path::new(repo_path);
     if !path.exists() {
         match forge {
-            ForgeConfig::Github => {
+            ForgeConfig::Github(_) => {
                 ct_git::gh_clone(gh_bin, owner, repo, path, token).map_err(|e| {
                     CheckoutError::Clone(format!(
                         "clone de {owner}/{repo} em {repo_path} falhou: {e}"
@@ -115,7 +115,7 @@ pub fn ensure_checkout(
             "{repo_path} é um clone de {}, não de {}",
             origin.unwrap_or_else(|| "(sem origin)".into()),
             match forge {
-                ForgeConfig::Github => format!("{owner}/{repo}"),
+                ForgeConfig::Github(_) => format!("{owner}/{repo}"),
                 ForgeConfig::Gitlab(_) => format!("{}/{}", want.host, want.path),
             }
         )));
@@ -130,7 +130,7 @@ mod tests {
 
     /// `gh` que falha: nenhum caso aqui pode clonar.
     const NO_GH: &str = "/bin/false";
-    const GH: ForgeConfig = ForgeConfig::Github;
+    const GH: ForgeConfig = ForgeConfig::Github(ct_core::GithubConfig { connection: None });
 
     fn gitlab(clone_url: &str) -> ForgeConfig {
         ForgeConfig::Gitlab(ct_core::GitlabConfig {

@@ -5,9 +5,13 @@ import type { Connection } from "../../protocol/gen";
 import { connectionLabel } from "../../hub/connections";
 import { useHubConnections } from "../../hub/useConnections";
 import {
+  DEFAULT_GITHUB_CONNECTION,
   GITHUB_BRANCH_PATTERN,
   JIRA_BRANCH_PATTERN,
   branchPreview,
+  connectionId,
+  githubConnOf,
+  githubParams,
   gitlabOf,
   hostsOf,
   isJira,
@@ -36,6 +40,7 @@ export function projectEditForm(p: HubProjectView): ProjectForm {
     base_branch: pr.base_branch,
     protected: pr.protected_branches.join(", "),
     jira: jiraFormOf(pr),
+    github_conn: String(githubConnOf(pr) ?? ""),
     docs: docsFormOf(pr),
   };
 }
@@ -132,6 +137,12 @@ export function RepositoryCard({
               </div>
             </>
           )}
+          {!jira && (
+            <div>
+              <dt>Conexão do GitHub</dt>
+              <dd>{githubConnText(githubConnOf(pr), connections)}</dd>
+            </div>
+          )}
           {!jira && pr.branch_pattern && pr.branch_pattern !== GITHUB_BRANCH_PATTERN && (
             <div>
               <dt>Padrão de branch</dt>
@@ -190,6 +201,12 @@ function connText(id: number | undefined, connections: Connection[] | null): Rea
   return <span className="mono">{c ? connectionLabel(c) : `conexão ${id}`}</span>;
 }
 
+/** A conexão GitHub do projeto (#275): a escolhida ou a padrão. */
+function githubConnText(id: number | null, connections: Connection[] | null): ReactNode {
+  if (id === null) return <span className="muted">padrão (conexão {DEFAULT_GITHUB_CONNECTION})</span>;
+  return connText(id, connections);
+}
+
 function RepositoryEdit({
   project: p,
   settings,
@@ -232,6 +249,9 @@ function RepositoryEdit({
       }
       if (j.branch_pattern.trim() !== was.branch_pattern.trim()) patch.branch_pattern = j.branch_pattern.trim();
       if (j.attribution !== was.attribution) patch.attribution = j.attribution;
+    } else if (connectionId(f.github_conn) !== githubConnOf(cur)) {
+      // GitHub (#275): a conexão vai no rastreador e na forja.
+      Object.assign(patch, githubParams(f.github_conn));
     }
     // Docs (#444): o objeto inteiro, se mudou; hub sem `docs` não recebe.
     const docs = docsPatch(f.docs, cur);

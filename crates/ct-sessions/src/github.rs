@@ -498,6 +498,27 @@ mod tests {
             b"t=***CONEXAO_TOKEN***"
         );
 
+        // O projeto que referencia outra conexão GitHub usa a dele.
+        let mut acme = conexao("ghp_ficticio_acme_123456");
+        acme.id = 2;
+        acme.name = "github-acme".into();
+        creds.set_connections(
+            vec![conexao("ghp_ficticio_novo_123456"), acme],
+            Default::default(),
+        );
+        let mut ref_acme = p.clone();
+        let gh_cfg = ct_core::GithubConfig {
+            connection: Some(2),
+        };
+        ref_acme.tracker = ct_core::TrackerConfig::Github(gh_cfg.clone());
+        ref_acme.forge = ct_core::ForgeConfig::Github(gh_cfg);
+        assert_eq!(
+            env.sessions.github_source(&ref_acme).unwrap().source,
+            CredentialSource::Command {
+                cmd: "printf 'ghp_ficticio_acme_123456\\n'".into()
+            }
+        );
+
         // O token do ambiente vale no lugar da conexão até a #276.
         let file = env.sessions.config().dirs.github_token_file();
         std::fs::write(&file, "ghp_ficticio_velho_123456\n").unwrap();
@@ -738,7 +759,7 @@ mod tests {
                             project_key: "PROJ".into(),
                             ..Default::default()
                         }),
-                        forge: ct_core::ForgeConfig::Github,
+                        forge: ct_core::ForgeConfig::Github(Default::default()),
                         branch_pattern: None,
                         attribution: true,
                         sync: true,

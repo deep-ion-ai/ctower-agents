@@ -741,8 +741,8 @@ mod tests {
             protected_branches: vec!["develop".into(), "main".into()],
             repo_path: String::new(),
             rev,
-            tracker: TrackerConfig::Github,
-            forge: ForgeConfig::Github,
+            tracker: TrackerConfig::Github(Default::default()),
+            forge: ForgeConfig::Github(Default::default()),
             branch_pattern: None,
             attribution: true,
             sync: false,
@@ -1096,12 +1096,12 @@ mod tests {
             "protected_branches": [], "repo_path": "", "rev": 3
         });
         let antigo: ConfigProject = serde_json::from_value(v).unwrap();
-        assert_eq!(antigo.tracker, TrackerConfig::Github);
-        assert_eq!(antigo.forge, ForgeConfig::Github);
+        assert_eq!(antigo.tracker, TrackerConfig::Github(Default::default()));
+        assert_eq!(antigo.forge, ForgeConfig::Github(Default::default()));
         assert!(antigo.attribution && !antigo.sync && antigo.branch_pattern.is_none());
         l.apply_hub_config(&resp(4, vec![antigo]), path).unwrap();
         let demo = &l.list_projects().unwrap()[0];
-        assert_eq!(demo.tracker, TrackerConfig::Github);
+        assert_eq!(demo.tracker, TrackerConfig::Github(Default::default()));
         assert_eq!(demo.effective_branch_pattern(), "{prefix}/{n}-{slug}");
         assert_eq!(demo.item_ref(7), "deep-ion-ai/demo#7");
     }

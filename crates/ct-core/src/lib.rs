@@ -36,12 +36,13 @@ pub use release::{
 pub use repo_url::{github_repo_from_url, repo_from_url, RepoRef};
 pub use session_templates::SessionTemplates;
 pub use tracker::{
-    change_label, change_ref, change_short, change_url, default_type_map, glab_cli_prefix,
-    is_assignee, issue_view_cmd, item_key, item_ref, item_short, item_url, jira_cli_prefix,
-    same_identity, supported_combination, ForgeConfig, ForgeKind, GitlabConfig, GitlabReadiness,
-    JiraConfig, JiraExtraField, JiraFieldInfo, JiraReadiness, JiraTypeRole, Sprint, SprintState,
-    TrackerConfig, TrackerKind, TrackerProgress, TrackerReadiness, TrackerRef, ACTIVE_SPRINT_JQL,
-    DEFAULT_MAX_ISSUES, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS,
+    change_label, change_ref, change_short, change_url, default_type_map, github_connection,
+    glab_cli_prefix, is_assignee, issue_view_cmd, item_key, item_ref, item_short, item_url,
+    jira_cli_prefix, same_identity, supported_combination, ForgeConfig, ForgeKind, GithubConfig,
+    GitlabConfig, GitlabReadiness, JiraConfig, JiraExtraField, JiraFieldInfo, JiraReadiness,
+    JiraTypeRole, Sprint, SprintState, TrackerConfig, TrackerKind, TrackerProgress,
+    TrackerReadiness, TrackerRef, ACTIVE_SPRINT_JQL, DEFAULT_MAX_ISSUES, MAX_ISSUES_CEILING,
+    MAX_JIRA_EXTRA_FIELDS,
 };
 pub use wip::{WipLimits, WipUsage, WIP_LIMIT_REACHED};
 

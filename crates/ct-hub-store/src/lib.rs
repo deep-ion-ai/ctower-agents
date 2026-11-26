@@ -4731,8 +4731,8 @@ mod tests {
                 state,
                 error: error.map(String::from),
                 applied_rev,
-                tracker: TrackerConfig::Github,
-                forge: ForgeConfig::Github,
+                tracker: TrackerConfig::Github(Default::default()),
+                forge: ForgeConfig::Github(Default::default()),
                 branch_pattern: None,
                 attribution: true,
                 autonomy: None,
@@ -5538,7 +5538,10 @@ mod tests {
         let p = hub.find_project("deep-ion-ai", "demo").unwrap().unwrap();
         assert_eq!(
             (&p.tracker, &p.forge),
-            (&TrackerConfig::Github, &ForgeConfig::Github)
+            (
+                &TrackerConfig::Github(Default::default()),
+                &ForgeConfig::Github(Default::default())
+            )
         );
         assert_eq!((p.branch_pattern.as_deref(), p.attribution), (None, true));
         assert_eq!(p.sync_env_id, None);
@@ -5562,7 +5565,7 @@ mod tests {
             "protected_branches": [], "created_at": 0
         }))
         .unwrap();
-        assert_eq!(antigo.tracker, TrackerConfig::Github);
+        assert_eq!(antigo.tracker, TrackerConfig::Github(Default::default()));
         assert!(antigo.attribution);
         // O ambiente de sync precisa existir.
         assert!(hub

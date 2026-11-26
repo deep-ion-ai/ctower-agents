@@ -100,12 +100,12 @@ impl HubGithub {
         &self.client
     }
 
-    /// Cliente com o token do projeto (#275): a conexão `github` dele, com
-    /// os secrets do projeto.
+    /// Cliente com o token do projeto (#275): a conexão GitHub dele (ou a
+    /// padrão), com os secrets do projeto.
     pub fn client_for(&self, project: &HubProject) -> GhClient {
         self.client_with(
             format!("github:{}", project.id),
-            None,
+            ct_core::github_connection(&project.tracker, &project.forge),
             Some(format!("{}/{}", project.gh_owner, project.gh_repo)),
         )
     }
@@ -760,6 +760,68 @@ mod tests {
         let r3 = sync.sync_all().unwrap();
         assert!(!r3[0].ok, "o gh dá um token que o GitHub recusa: {r3:?}");
         assert!(ct_gh::fake::fake_gh_calls(tmp.path()) >= 1);
+    }
+
+    /// #275: o projeto que referencia uma conexão GitHub usa o token dela,
+    /// não o da padrão.
+    #[test]
+    fn projeto_usa_a_conexao_github_que_referencia() {
+        use ct_hub_store::{HubProjectPatch, NewConnection};
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("ghp_ficticio_acme");
+        let bin = fake_gh(tmp.path(), "ghp_ficticio_do_gh");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("acme", "acme-web");
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        let hub = hub_com(o, r);
+        let conexao = |name: &str, token: &str| NewConnection {
+            name: name.into(),
+            kind: ct_core::provider::ProviderKind::Github,
+            endpoint: String::new(),
+            credential: CredentialSource::Command {
+                cmd: format!("printf '{token}\\n'"),
+            },
+            options: json!({}),
+        };
+        hub.lock()
+            .add_connection(&conexao("github", "ghp_ficticio_padrao"))
+            .unwrap();
+        let acme = hub
+            .lock()
+            .add_connection(&conexao("github-acme", "ghp_ficticio_acme"))
+            .unwrap();
+        let (events, _) = broadcast::channel(16);
+        let sync = HubGithub::new(hub.clone(), client, "hub-id", events);
+        assert!(!sync.sync_all().unwrap()[0].ok, "a padrão dá outro token");
+
+        let gh_cfg = ct_core::GithubConfig {
+            connection: Some(acme.id),
+        };
+        hub.lock()
+            .update_project(
+                o,
+                r,
+                &HubProjectPatch {
+                    tracker: Some(ct_core::TrackerConfig::Github(gh_cfg.clone())),
+                    forge: Some(ct_core::ForgeConfig::Github(gh_cfg)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let res = sync.sync_all().unwrap();
+        assert!(res[0].ok, "{res:?}");
+        let p = hub.lock().find_project(o, r).unwrap().unwrap();
+        assert!(sync
+            .client_for_new(ct_core::github_connection(&p.tracker, &p.forge))
+            .get_json("/repos/acme/acme-web/issues?x")
+            .is_ok());
     }
 
     /// #89: o hub busca pelo mesmo `fetch`. O épico 1 do espelho do hub é

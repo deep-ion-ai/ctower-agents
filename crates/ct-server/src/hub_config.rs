@@ -513,18 +513,19 @@ impl HubSender {
             // O `gh repo clone` leva o token da conexão `github` do projeto
             // (#275); sem ele, o `gh` usa o próprio login.
             let token = match (&self.config.github, &p.forge) {
-                (Some(g), ct_core::ForgeConfig::Github) if !Path::new(&p.repo_path).exists() => g
-                    .client_for(&p)
-                    .token()
-                    .map_err(|e| {
-                        tracing::warn!(
-                            "hub: token do GitHub de {}/{} indisponível para o clone ({e}); \
+                (Some(g), ct_core::ForgeConfig::Github(_)) if !Path::new(&p.repo_path).exists() => {
+                    g.client_for(&p)
+                        .token()
+                        .map_err(|e| {
+                            tracing::warn!(
+                                "hub: token do GitHub de {}/{} indisponível para o clone ({e}); \
                                  o gh usa o próprio login",
-                            p.gh_owner,
-                            p.gh_repo
-                        )
-                    })
-                    .ok(),
+                                p.gh_owner,
+                                p.gh_repo
+                            )
+                        })
+                        .ok()
+                }
                 _ => None,
             };
             // `_projeto/` nasce ao aplicar a atribuição (#440). Sem

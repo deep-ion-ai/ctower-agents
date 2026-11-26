@@ -231,11 +231,15 @@ impl Sessions {
     }
 
     /// Fonte do token do GitHub do projeto neste ambiente (#275): a de
-    /// [`Self::github_env_source`]. `None` = o projeto não usa o GitHub.
+    /// [`Self::github_env_source`] com a conexão GitHub do projeto
+    /// ([`ct_core::github_connection`]). `None` = o projeto não usa o
+    /// GitHub.
     pub fn github_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
         let github = project.tracker.kind() == ct_core::TrackerKind::Github
             || project.forge.kind() == ct_core::ForgeKind::Github;
-        github.then(|| self.github_env_source(None))
+        github.then(|| {
+            self.github_env_source(ct_core::github_connection(&project.tracker, &project.forge))
+        })
     }
 
     /// Fonte do token do GitHub neste ambiente para a conexão `connection`

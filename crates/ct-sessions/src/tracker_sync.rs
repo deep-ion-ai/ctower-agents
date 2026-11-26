@@ -1564,7 +1564,12 @@ mod tests {
     /// O projeto do `TestEnv` vira Jira (+ GitHub) pelo pull do hub; `sync`
     /// = este é o ambiente de sync.
     fn assign(env: &TestEnv, jira: JiraConfig, sync: bool, rev: i64) {
-        env.assign_provider(TrackerConfig::Jira(jira), ForgeConfig::Github, sync, rev);
+        env.assign_provider(
+            TrackerConfig::Jira(jira),
+            ForgeConfig::Github(Default::default()),
+            sync,
+            rev,
+        );
     }
 
     fn setup_with(sync: bool, edit: impl FnOnce(&mut JiraConfig, &mut TrackerSyncConfig)) -> Jira {

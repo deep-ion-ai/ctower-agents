@@ -956,7 +956,7 @@ fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, 
     // Sessão do projeto (#0) e de release (#-1) não têm issue.
     let item = wi.gh_number > PROJECT_WORK_ITEM;
     match &project.tracker {
-        ct_core::TrackerConfig::Github => {
+        ct_core::TrackerConfig::Github(_) => {
             if item && wi.kind == WorkItemKind::Issue {
                 env.push(("CTOWER_ISSUE".to_string(), wi.gh_number.to_string()));
             }
@@ -1076,7 +1076,7 @@ mod tests {
                         project_key: "PROJ".into(),
                         ..Default::default()
                     }),
-                    forge: ct_core::ForgeConfig::Github,
+                    forge: ct_core::ForgeConfig::Github(Default::default()),
                     branch_pattern: pattern.map(String::from),
                     attribution: true,
                     sync: false,
@@ -1560,8 +1560,8 @@ mod tests {
     fn regras_do_projeto_e_do_epico_chegam_na_ordem_ao_system_prompt() {
         let env = TestEnv::new(FakeClaude::exit(0));
         env.assign_with_rules(
-            ct_core::TrackerConfig::Github,
-            ct_core::ForgeConfig::Github,
+            ct_core::TrackerConfig::Github(Default::default()),
+            ct_core::ForgeConfig::Github(Default::default()),
             false,
             1,
             rules(
@@ -1896,7 +1896,7 @@ mod tests {
                 project_key: "PROJ".into(),
                 ..Default::default()
             }),
-            ct_core::ForgeConfig::Github,
+            ct_core::ForgeConfig::Github(Default::default()),
             false,
             1,
             rules(None, &[(5014, 2, "Avise se a demanda for só de frontend.")]),
@@ -1911,8 +1911,8 @@ mod tests {
         );
         // Sem regras em nenhum escopo: nada de --append-system-prompt.
         env.assign_with_rules(
-            ct_core::TrackerConfig::Github,
-            ct_core::ForgeConfig::Github,
+            ct_core::TrackerConfig::Github(Default::default()),
+            ct_core::ForgeConfig::Github(Default::default()),
             false,
             2,
             Default::default(),

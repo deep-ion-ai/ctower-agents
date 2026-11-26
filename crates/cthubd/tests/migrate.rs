@@ -344,7 +344,10 @@ fn fixtures_antigas_viram_projetos_github() {
     }
     let hub = Hub::open(&db).unwrap();
     for p in hub.list_projects().unwrap() {
-        assert_eq!(p.tracker, ct_core::TrackerConfig::Github);
+        assert_eq!(
+            p.tracker,
+            ct_core::TrackerConfig::Github(Default::default())
+        );
         assert_eq!(p.item_ref(7), format!("{}/{}#7", p.gh_owner, p.gh_repo));
     }
     // O pull leva os padrões do GitHub.
@@ -364,8 +367,11 @@ fn fixtures_antigas_viram_projetos_github() {
     let ps = l.list_all_projects().unwrap();
     assert!(!ps.is_empty());
     for p in ps {
-        assert_eq!(p.tracker, ct_core::TrackerConfig::Github);
-        assert_eq!(p.forge, ct_core::ForgeConfig::Github);
+        assert_eq!(
+            p.tracker,
+            ct_core::TrackerConfig::Github(Default::default())
+        );
+        assert_eq!(p.forge, ct_core::ForgeConfig::Github(Default::default()));
         assert!(p.attribution && !p.sync_role);
         assert_eq!(p.effective_branch_pattern(), "{prefix}/{n}-{slug}");
     }

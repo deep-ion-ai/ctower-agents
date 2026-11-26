@@ -5,6 +5,8 @@ import {
   EMPTY_JIRA,
   branchPreview,
   connectionId,
+  githubConnOf,
+  githubParams,
   hostsOf,
   hubSupportsJira,
   extraFieldErrors,
@@ -221,4 +223,18 @@ test("prontidão: credencial vinda do cache aparece como tal (#268)", () => {
     expect(item?.value).toBe('token em cache; "Buscar issues agora" roda o comando de novo');
   }
   for (const item of cred(readinessChecks(r(false)))) expect(item?.value).toBeUndefined();
+});
+
+test("conexão GitHub do projeto e parâmetros (#275)", () => {
+  expect(githubConnOf({ tracker: { kind: "github" }, forge: { kind: "github" } })).toBeNull();
+  expect(githubConnOf({ tracker: { kind: "github" }, forge: { kind: "github", connection: 4 } })).toBe(4);
+  expect(githubConnOf({ tracker: { kind: "github", connection: 3 }, forge: { kind: "github", connection: 4 } })).toBe(3);
+  expect(githubParams("3")).toEqual({
+    tracker: { kind: "github", connection: 3 },
+    forge: { kind: "github", connection: 3 },
+  });
+  expect(githubParams("")).toEqual({
+    tracker: { kind: "github", connection: null },
+    forge: { kind: "github", connection: null },
+  });
 });

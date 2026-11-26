@@ -212,26 +212,59 @@ pub struct GitlabConfig {
     pub connection: Option<i64>,
 }
 
+/// `tracker_config` e `forge_config` do projeto GitHub (#275): só a conexão.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
+pub struct GithubConfig {
+    /// Conexão GitHub do hub (`tracker.connection`/`forge.connection`). O
+    /// rastreador e a forja do projeto usam a mesma; sem ela, a conexão
+    /// `github` padrão.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub connection: Option<i64>,
+}
+
 /// Rastreador do projeto com a configuração dele.
 // Um por projeto, lido raramente: não vale o `Box` no Jira.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TrackerConfig {
-    #[default]
-    Github,
+    Github(GithubConfig),
     Jira(JiraConfig),
 }
 
+impl Default for TrackerConfig {
+    fn default() -> Self {
+        TrackerConfig::Github(GithubConfig::default())
+    }
+}
+
 /// Forja do projeto com a configuração dela.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ForgeConfig {
-    #[default]
-    Github,
+    Github(GithubConfig),
     Gitlab(GitlabConfig),
+}
+
+impl Default for ForgeConfig {
+    fn default() -> Self {
+        ForgeConfig::Github(GithubConfig::default())
+    }
+}
+
+/// Conexão GitHub do projeto (#275): a do rastreador ou, sem ela, a da
+/// forja. `None` = o projeto não referencia conexão GitHub (vale a padrão,
+/// `provider::github_connection`).
+pub fn github_connection(tracker: &TrackerConfig, forge: &ForgeConfig) -> Option<i64> {
+    tracker
+        .github()
+        .and_then(|g| g.connection)
+        .or_else(|| forge.github().and_then(|g| g.connection))
 }
 
 /// Par de colunas (tipo, JSON) que não forma uma configuração válida.
@@ -247,6 +280,13 @@ fn config_json<T: Serialize>(cfg: Option<&T>) -> String {
         .unwrap_or_else(|| "{}".to_string())
 }
 
+/// Configuração GitHub da coluna (#275): só a conexão. Coluna ilegível
+/// (anterior à conexão, `{}` ou outro texto) vale como sem conexão: o
+/// projeto usa a conexão `github` padrão.
+fn github_config(json: &str) -> GithubConfig {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
 fn parse_config<T: serde::de::DeserializeOwned>(
     column: &'static str,
     json: &str,
@@ -260,7 +300,7 @@ fn parse_config<T: serde::de::DeserializeOwned>(
 impl TrackerConfig {
     pub fn kind(&self) -> TrackerKind {
         match self {
-            TrackerConfig::Github => TrackerKind::Github,
+            TrackerConfig::Github(_) => TrackerKind::Github,
             TrackerConfig::Jira(_) => TrackerKind::Jira,
         }
     }
@@ -268,13 +308,23 @@ impl TrackerConfig {
     pub fn jira(&self) -> Option<&JiraConfig> {
         match self {
             TrackerConfig::Jira(c) => Some(c),
-            TrackerConfig::Github => None,
+            TrackerConfig::Github(_) => None,
         }
     }
 
-    /// Valor da coluna `tracker_config` (`{}` no GitHub).
+    pub fn github(&self) -> Option<&GithubConfig> {
+        match self {
+            TrackerConfig::Github(c) => Some(c),
+            TrackerConfig::Jira(_) => None,
+        }
+    }
+
+    /// Valor da coluna `tracker_config` (`{}` no GitHub sem conexão).
     pub fn config_json(&self) -> String {
-        config_json(self.jira())
+        match self {
+            TrackerConfig::Github(g) => config_json(Some(g)),
+            TrackerConfig::Jira(j) => config_json(Some(j)),
+        }
     }
 
     /// Monta a partir das colunas `tracker_kind` e `tracker_config`.
@@ -284,7 +334,7 @@ impl TrackerConfig {
             message: e.to_string(),
         })?;
         Ok(match kind {
-            TrackerKind::Github => TrackerConfig::Github,
+            TrackerKind::Github => TrackerConfig::Github(github_config(json)),
             TrackerKind::Jira => TrackerConfig::Jira(parse_config("tracker_config", json)?),
         })
     }
@@ -293,7 +343,7 @@ impl TrackerConfig {
 impl ForgeConfig {
     pub fn kind(&self) -> ForgeKind {
         match self {
-            ForgeConfig::Github => ForgeKind::Github,
+            ForgeConfig::Github(_) => ForgeKind::Github,
             ForgeConfig::Gitlab(_) => ForgeKind::Gitlab,
         }
     }
@@ -301,13 +351,23 @@ impl ForgeConfig {
     pub fn gitlab(&self) -> Option<&GitlabConfig> {
         match self {
             ForgeConfig::Gitlab(c) => Some(c),
-            ForgeConfig::Github => None,
+            ForgeConfig::Github(_) => None,
         }
     }
 
-    /// Valor da coluna `forge_config` (`{}` no GitHub).
+    pub fn github(&self) -> Option<&GithubConfig> {
+        match self {
+            ForgeConfig::Github(c) => Some(c),
+            ForgeConfig::Gitlab(_) => None,
+        }
+    }
+
+    /// Valor da coluna `forge_config` (`{}` no GitHub sem conexão).
     pub fn config_json(&self) -> String {
-        config_json(self.gitlab())
+        match self {
+            ForgeConfig::Github(g) => config_json(Some(g)),
+            ForgeConfig::Gitlab(g) => config_json(Some(g)),
+        }
     }
 
     /// Monta a partir das colunas `forge_kind` e `forge_config`.
@@ -317,7 +377,7 @@ impl ForgeConfig {
             message: e.to_string(),
         })?;
         Ok(match kind {
-            ForgeKind::Github => ForgeConfig::Github,
+            ForgeKind::Github => ForgeConfig::Github(github_config(json)),
             ForgeKind::Gitlab => ForgeConfig::Gitlab(parse_config("forge_config", json)?),
         })
     }
@@ -460,7 +520,7 @@ pub struct GitlabReadiness {
     pub error: Option<String>,
 }
 
-static GITHUB: TrackerConfig = TrackerConfig::Github;
+static GITHUB: TrackerConfig = TrackerConfig::Github(GithubConfig { connection: None });
 
 /// O par (`owner/repo`, rastreador) de que as referências de work item
 /// precisam. Todo `Project`/`HubProject` sabe montar o dele.
@@ -490,7 +550,7 @@ impl<'a> TrackerRef<'a> {
 /// Referência completa: `owner/repo#12` no GitHub, `PROJ-5450` no Jira.
 pub fn item_ref(t: &TrackerRef, n: i64) -> String {
     match t.tracker {
-        TrackerConfig::Github => format!("{}/{}#{n}", t.owner, t.repo),
+        TrackerConfig::Github(_) => format!("{}/{}#{n}", t.owner, t.repo),
         TrackerConfig::Jira(c) => c.key(n),
     }
 }
@@ -499,7 +559,7 @@ pub fn item_ref(t: &TrackerRef, n: i64) -> String {
 /// Jira.
 pub fn item_short(t: &TrackerRef, n: i64) -> String {
     match t.tracker {
-        TrackerConfig::Github => format!("#{n}"),
+        TrackerConfig::Github(_) => format!("#{n}"),
         TrackerConfig::Jira(c) => c.key(n),
     }
 }
@@ -507,7 +567,7 @@ pub fn item_short(t: &TrackerRef, n: i64) -> String {
 /// O `{key}` do padrão de branch: `12` no GitHub, `PROJ-5450` no Jira.
 pub fn item_key(t: &TrackerRef, n: i64) -> String {
     match t.tracker {
-        TrackerConfig::Github => n.to_string(),
+        TrackerConfig::Github(_) => n.to_string(),
         TrackerConfig::Jira(c) => c.key(n),
     }
 }
@@ -516,7 +576,7 @@ pub fn item_key(t: &TrackerRef, n: i64) -> String {
 /// `<jira>/browse/PROJ-5450`.
 pub fn item_url(t: &TrackerRef, n: i64) -> String {
     match t.tracker {
-        TrackerConfig::Github => format!("https://github.com/{}/{}/issues/{n}", t.owner, t.repo),
+        TrackerConfig::Github(_) => format!("https://github.com/{}/{}/issues/{n}", t.owner, t.repo),
         TrackerConfig::Jira(c) => {
             format!("{}/browse/{}", c.url.trim_end_matches('/'), c.key(n))
         }
@@ -559,7 +619,7 @@ pub fn change_ref(forge: ForgeKind, n: i64) -> String {
 /// ou `https://<host>/<path>/-/merge_requests/<iid>`.
 pub fn change_url(owner: &str, repo: &str, forge: &ForgeConfig, n: i64) -> String {
     match forge {
-        ForgeConfig::Github => format!("https://github.com/{owner}/{repo}/pull/{n}"),
+        ForgeConfig::Github(_) => format!("https://github.com/{owner}/{repo}/pull/{n}"),
         ForgeConfig::Gitlab(g) => {
             let path = match g.path.trim_matches('/') {
                 "" => format!("{owner}/{repo}"),
@@ -595,7 +655,7 @@ pub fn glab_cli_prefix(g: &GitlabConfig) -> String {
 /// `issue view <KEY>-<n> --plain`. `<n>` fica para o agente trocar.
 pub fn issue_view_cmd(owner: &str, repo: &str, tracker: &TrackerConfig) -> String {
     match tracker {
-        TrackerConfig::Github => format!("gh issue view <n> -R {owner}/{repo}"),
+        TrackerConfig::Github(_) => format!("gh issue view <n> -R {owner}/{repo}"),
         TrackerConfig::Jira(j) => format!(
             "{} issue view {}-<n> --plain",
             jira_cli_prefix(j),
@@ -670,7 +730,7 @@ mod tests {
         assert_eq!(change_ref(ForgeKind::Gitlab, 30), "MR !30");
         assert_eq!(ForgeKind::Gitlab.label(), "GitLab");
         assert_eq!(
-            change_url("o", "r", &ForgeConfig::Github, 30),
+            change_url("o", "r", &ForgeConfig::Github(Default::default()), 30),
             "https://github.com/o/r/pull/30"
         );
         assert_eq!(
@@ -721,14 +781,36 @@ mod tests {
         }
     }
 
+    /// #275: a conexão GitHub do projeto vai no fio ao lado do `kind`; o
+    /// rastreador manda sobre a forja.
+    #[test]
+    fn conexao_github_no_fio_e_no_projeto() {
+        let t: TrackerConfig =
+            serde_json::from_value(json!({ "kind": "github", "connection": 7 })).unwrap();
+        assert_eq!(t.github().unwrap().connection, Some(7));
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            json!({ "kind": "github", "connection": 7 })
+        );
+        let f = ForgeConfig::Github(GithubConfig {
+            connection: Some(8),
+        });
+        assert_eq!(github_connection(&t, &f), Some(7));
+        assert_eq!(github_connection(&TrackerConfig::default(), &f), Some(8));
+        assert_eq!(
+            github_connection(&TrackerConfig::default(), &ForgeConfig::default()),
+            None
+        );
+    }
+
     #[test]
     fn protocolo_marca_o_tipo_e_aceita_ausencia_como_github() {
         assert_eq!(
-            serde_json::to_value(TrackerConfig::Github).unwrap(),
+            serde_json::to_value(TrackerConfig::Github(Default::default())).unwrap(),
             json!({ "kind": "github" })
         );
         assert_eq!(
-            serde_json::to_value(ForgeConfig::Github).unwrap(),
+            serde_json::to_value(ForgeConfig::Github(Default::default())).unwrap(),
             json!({ "kind": "github" })
         );
         let v = serde_json::to_value(jira()).unwrap();
@@ -842,10 +924,13 @@ mod tests {
 
     #[test]
     fn colunas_ida_e_volta() {
-        assert_eq!(TrackerConfig::Github.config_json(), "{}");
+        assert_eq!(
+            TrackerConfig::Github(Default::default()).config_json(),
+            "{}"
+        );
         assert_eq!(
             TrackerConfig::from_columns("github", "{}").unwrap(),
-            TrackerConfig::Github
+            TrackerConfig::Github(Default::default())
         );
         let cfg = jira();
         let (k, j) = (cfg.kind().as_str(), cfg.config_json());
@@ -864,7 +949,15 @@ mod tests {
         );
         assert_eq!(
             ForgeConfig::from_columns("github", "lixo").unwrap(),
-            ForgeConfig::Github
+            ForgeConfig::Github(Default::default())
+        );
+        let gh = ForgeConfig::Github(GithubConfig {
+            connection: Some(3),
+        });
+        assert_eq!(gh.config_json(), r#"{"connection":3}"#);
+        assert_eq!(
+            ForgeConfig::from_columns("github", &gh.config_json()).unwrap(),
+            gh
         );
 
         let err = TrackerConfig::from_columns("linear", "{}").unwrap_err();
@@ -939,7 +1032,7 @@ mod tests {
             r#"JIRA_API_TOKEN="$(pass show jira | head -1)" jira issue view PROJ-<n> --plain"#
         );
         assert_eq!(
-            issue_view_cmd("o", "r", &TrackerConfig::Github),
+            issue_view_cmd("o", "r", &TrackerConfig::Github(Default::default())),
             "gh issue view <n> -R o/r"
         );
     }

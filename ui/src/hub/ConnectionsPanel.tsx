@@ -108,6 +108,10 @@ export function HubConnections() {
     }
   };
 
+  // A conexão em edição, como está no hub: o nome e o tipo dizem se é a GitHub padrão (#275).
+  const editingSaved = editing?.id === undefined ? undefined : connections?.find((c) => c.id === editing.id);
+  const editingUsers = editingSaved ? connectionUsers(editingSaved, hub.projects) : [];
+
   return (
     <section aria-labelledby="hub-conexoes" className="panel settings-section">
       <h2 id="hub-conexoes">Conexões</h2>
@@ -145,7 +149,7 @@ export function HubConnections() {
           {connections.map((c) => {
             const t = tests[c.id];
             const r = t && typeof t !== "string" ? readinessText(t.readiness) : null;
-            const users = connectionUsers(c.id, hub.projects);
+            const users = connectionUsers(c, hub.projects);
             return (
               <li key={c.id} className="hub-card">
                 <div className="hub-card-head">
@@ -218,7 +222,7 @@ export function HubConnections() {
           editing={editing}
           busy={busy}
           error={formError}
-          users={editing.id === undefined ? [] : connectionUsers(editing.id, hub.projects)}
+          users={editingUsers}
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);

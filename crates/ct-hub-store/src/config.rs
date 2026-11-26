@@ -47,8 +47,8 @@ pub struct ProjectProvider {
 impl Default for ProjectProvider {
     fn default() -> Self {
         ProjectProvider {
-            tracker: TrackerConfig::Github,
-            forge: ForgeConfig::Github,
+            tracker: TrackerConfig::Github(Default::default()),
+            forge: ForgeConfig::Github(Default::default()),
             branch_pattern: None,
             attribution: true,
             docs: ct_core::DocsConfig::default(),
@@ -96,6 +96,17 @@ impl ProjectProvider {
             provider::GITLAB.validate_project(g)?;
             if g.connection.is_none() {
                 provider::GITLAB.validate(&Connection::from_gitlab(g))?;
+            }
+        }
+        // GitHub (#275): uma conexão só para o rastreador e a forja.
+        if let (Some(t), Some(f)) = (
+            self.tracker.github().and_then(|g| g.connection),
+            self.forge.github().and_then(|g| g.connection),
+        ) {
+            if t != f {
+                return Err(format!(
+                    "o rastreador e a forja GitHub usam a mesma conexão (rastreador {t}, forja {f})"
+                ));
             }
         }
         if let Some(pat) = &self.branch_pattern {

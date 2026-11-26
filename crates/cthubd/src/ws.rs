@@ -1480,12 +1480,12 @@ fn provider_param(
 ) -> Result<(ct_core::TrackerConfig, ct_core::ForgeConfig), (i64, String)> {
     use ct_core::{ForgeConfig, TrackerConfig};
     let tracker: TrackerConfig = match p.get("tracker") {
-        None | Some(Value::Null) => TrackerConfig::Github,
+        None | Some(Value::Null) => TrackerConfig::Github(Default::default()),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| invalid(format!("tracker inválido: {e}")))?,
     };
     let forge: ForgeConfig = match p.get("forge") {
-        None | Some(Value::Null) => ForgeConfig::Github,
+        None | Some(Value::Null) => ForgeConfig::Github(Default::default()),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| invalid(format!("forge inválido: {e}")))?,
     };
@@ -1548,6 +1548,17 @@ fn provider_param(
             ForgeConfig::Gitlab(g)
         }
         f => f,
+    };
+    // GitHub (#275): o rastreador e a forja usam a mesma conexão; a dada
+    // num lado só vale para os dois. Duas diferentes, o cadastro recusa.
+    let (tracker, forge) = match (tracker, forge) {
+        (TrackerConfig::Github(mut t), ForgeConfig::Github(mut f)) => {
+            let c = t.connection.or(f.connection);
+            t.connection = t.connection.or(c);
+            f.connection = f.connection.or(c);
+            (TrackerConfig::Github(t), ForgeConfig::Github(f))
+        }
+        other => other,
     };
     Ok((tracker, forge))
 }
@@ -1743,7 +1754,10 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         } else {
             let gh = github()?;
             // O token da conexão GitHub do projeto novo (#275).
-            let client = gh.client_for_new(None);
+            let client = gh.client_for_new(ct_core::github_connection(
+                &provider.tracker,
+                &provider.forge,
+            ));
             let (owner, repo) = gh
                 .validate_repo(&client, &owner, &repo)
                 .map_err(|m| (-32000, m))?;
