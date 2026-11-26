@@ -24,7 +24,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 pub use ct_http::sync::{DecisionsQuery, DecisionsReply, PushRequest, PushResponse};
 use ct_http::sync::{VersionInfo, VersionRefusal};
-use ct_ledger::{HubDecision, OutboxEntry};
+use ct_ledger::HubDecision;
+use ct_ledger::OutboxEntry;
 use ct_sessions::Sessions;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -791,7 +792,8 @@ mod tests {
     use crate::test_util::{serve_hub, DeadHub, Srv};
     use axum::body::Bytes;
     use ct_core::WorkItemKind;
-    use ct_ledger::{DecisionScope, Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
+    use ct_ledger::DecisionScope;
     use ct_sessions::test_support::FakeClaude;
 
     fn sender(srv: &Srv, target: HubTarget) -> Arc<HubSender> {
@@ -1069,7 +1071,7 @@ mod tests {
     /// partir de um push).
     fn new_hub() -> SharedHub {
         let hub = Hub::open_in_memory().unwrap();
-        hub.add_project(&ct_ledger::NewHubProject {
+        hub.add_project(&ct_hub_store::NewHubProject {
             owner: "deep-ion-ai".into(),
             repo: "demo".into(),
             name: "demo".into(),

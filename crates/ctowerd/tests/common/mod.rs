@@ -4,7 +4,7 @@
 // Cada teste usa só parte destes auxiliares.
 #![allow(dead_code)]
 
-use ct_ledger::{Hub, NewHubProject, SharedHub};
+use ct_hub_store::{Hub, NewHubProject, SharedHub};
 use std::path::Path;
 use std::process::Command;
 

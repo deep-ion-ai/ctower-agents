@@ -232,7 +232,7 @@ mod tests {
     use crate::test_util::{serve_hub_state, DeadHub, Srv};
     use axum::extract::ws::{Message as AxMsg, WebSocketUpgrade};
     use ct_http::sync::{CHANNEL_ENV_OFFLINE, CHANNEL_METHOD_UNAVAILABLE};
-    use ct_ledger::{Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
     use ct_sessions::test_support::FakeClaude;
     use serde_json::json;
     use std::sync::Arc;
@@ -381,14 +381,14 @@ mod tests {
         {
             let h = hub.hub.lock();
             h.add_project_with(
-                &ct_ledger::NewHubProject {
+                &ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: "demo".into(),
                     name: "demo".into(),
                     base_branch: "develop".into(),
                     protected_branches: vec![],
                 },
-                &ct_ledger::ProjectProvider {
+                &ct_hub_store::ProjectProvider {
                     docs: Default::default(),
                     session_templates: Default::default(),
                     approval: Default::default(),

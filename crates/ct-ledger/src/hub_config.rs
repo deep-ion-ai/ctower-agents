@@ -1,7 +1,7 @@
 //! Configuração vinda do hub (spec do hub como plano de controle §4; issue
 //! #177): o contrato de `GET /sync/config` e o cache dela no `ledger.db`.
 //!
-//! O hub monta a resposta com [`crate::Hub::env_config`]; o ambiente grava
+//! O hub monta a resposta com `Hub::env_config` (`ct-hub-store`); o ambiente grava
 //! com [`Ledger::apply_hub_config`]. A tabela `project` vira **cache somente
 //! leitura**: só o pull escreve nas linhas vindas do hub (`config_rev` não
 //! nulo), e gravar o cache **nunca** põe fotografia de projeto no outbox. A

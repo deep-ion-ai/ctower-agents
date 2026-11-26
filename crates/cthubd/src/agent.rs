@@ -17,10 +17,12 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ct_http::bearer_token;
 use ct_http::sync::ENV_ID_HEADER;
-use ct_ledger::{
-    AgentDecisionFilter, DecisionScope, HealthFilter, Hub, LedgerError, NewProposal,
-    ProposalFilter, RankingFilter, Severity, AGENT_TOKEN_PREFIX, RANKING_LIMIT,
+use ct_hub_store::{
+    AgentDecisionFilter, HealthFilter, Hub, NewProposal, ProposalFilter, RankingFilter, Severity,
+    AGENT_TOKEN_PREFIX, RANKING_LIMIT,
 };
+use ct_ledger::DecisionScope;
+use ct_ledger::LedgerError;
 use serde::Deserialize;
 
 /// Sessão do gestor que fez a chamada (gravada na proposta).
@@ -373,7 +375,7 @@ pub(crate) struct DependenciesBody {
     owner: String,
     repo: String,
     #[serde(flatten)]
-    set: ct_ledger::DependencySet,
+    set: ct_hub_store::DependencySet,
 }
 
 /// `POST /agent/v1/autopilot/dependencies` (#215): o resultado da sessão de
@@ -437,7 +439,7 @@ pub(crate) async fn set_dependencies(
             .autopilot_blocker_states(p.id, p.autonomy.branch(), &cited)
             .map_err(internal)?
             .into_iter()
-            .filter(|(_, s)| *s == ct_ledger::BlockerState::Unknown)
+            .filter(|(_, s)| *s == ct_hub_store::BlockerState::Unknown)
             .map(|(n, _)| n)
             .collect();
         let slug = format!("{}/{}", p.gh_owner, p.gh_repo);
@@ -446,7 +448,7 @@ pub(crate) async fn set_dependencies(
         } else {
             "reanálise gravada"
         };
-        h.record_autopilot_event(&ct_ledger::AutopilotEvent {
+        h.record_autopilot_event(&ct_hub_store::AutopilotEvent {
             at: now,
             kind: crate::autopilot::plan::EV_ANALYSIS_DONE.into(),
             scope: format!("project:{slug}"),
@@ -496,7 +498,8 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use ct_core::{DecisionOrigin, WorkItemKind};
-    use ct_ledger::{GithubSnapshot, Hub, IssueRow, Ledger, NewDecision, NewProject, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
+    use ct_ledger::{GithubSnapshot, IssueRow, Ledger, NewDecision, NewProject};
     use http_body_util::BodyExt;
     use serde_json::{json, Value};
     use tower::ServiceExt;
@@ -537,7 +540,7 @@ mod tests {
         let l = Ledger::open_in_memory().unwrap();
         let (sync, agent) = {
             let h = st.hub.lock();
-            h.add_project(&ct_ledger::NewHubProject {
+            h.add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -988,7 +991,7 @@ mod tests {
             h.update_project(
                 "deep-ion-ai",
                 "demo",
-                &ct_ledger::HubProjectPatch {
+                &ct_hub_store::HubProjectPatch {
                     autonomy: Some(ct_core::AutonomyConfig {
                         enabled: true,
                         env_id: Some(f.env_id.clone()),
@@ -1004,7 +1007,7 @@ mod tests {
         let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
         assert_eq!(s, StatusCode::CONFLICT, "{v}");
         // Rodada de outra sessão.
-        let mut round = ct_ledger::AnalysisRound {
+        let mut round = ct_hub_store::AnalysisRound {
             project_id: pid,
             session_id: Some("s-outra".into()),
             env_id: f.env_id.clone(),

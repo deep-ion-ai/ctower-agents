@@ -6,7 +6,7 @@
 use ct_core::now_ms;
 use ct_gh::sync::{fetch, SyncInput};
 use ct_gh::GhClient;
-use ct_ledger::SharedHub;
+use ct_hub_store::SharedHub;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -154,7 +154,10 @@ impl HubGithub {
             let Some(rev) = h.live_project_rev(project_id)? else {
                 return Ok(skipped);
             };
-            (rev, SyncInput::load_hub(&h, project_id, now_ms())?)
+            (
+                rev,
+                ct_hub_store::sync_input_from_hub(&h, project_id, now_ms())?,
+            )
         };
         // O login do token é o "eu" do projeto (#149); sem ele, fica o
         // último conhecido.
@@ -292,7 +295,8 @@ mod tests {
     use ct_gh::fake::{fake_gh, FakeGitHub};
     use ct_gh::sync::{closed_since, issues_path, pulls_path, sub_issues_path};
     use ct_gh::GhConfig;
-    use ct_ledger::{Hub, Ledger, NewHubProject, NewProject};
+    use ct_hub_store::{Hub, NewHubProject};
+    use ct_ledger::{Ledger, NewProject};
 
     /// Hub com `owner/repo` cadastrado.
     fn hub_com(owner: &str, repo: &str) -> SharedHub {
@@ -662,7 +666,7 @@ mod tests {
                     base_branch: "develop".into(),
                     protected_branches: vec![],
                 },
-                &ct_ledger::ProjectProvider {
+                &ct_hub_store::ProjectProvider {
                     tracker: ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
                         url: "https://jira.example.com".into(),
                         project_key: "PROJ".into(),

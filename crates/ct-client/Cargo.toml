@@ -13,6 +13,7 @@ tokio-tungstenite.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+ct-hub-store.workspace = true
 axum.workspace = true
 ct-core.workspace = true
 ct-server.workspace = true

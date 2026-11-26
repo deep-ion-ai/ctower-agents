@@ -1,5 +1,5 @@
 //! Limite de trabalho em andamento no início de sessão pelo hub (issue
-//! #126, épico #178). O uso e o limite vêm de `ct_ledger::Hub::project_wip`;
+//! #126, épico #178). O uso e o limite vêm de `ct_hub_store::Hub::project_wip`;
 //! aqui fica só a recusa do início automático.
 //!
 //! - `session.start` com `autonomous: true` (o agendador do piloto
@@ -10,7 +10,7 @@
 //! - O início manual nunca é recusado aqui: a UI pede confirmação com o
 //!   `HubProjectView.wip` (o app desktop fala direto com o ambiente).
 
-use ct_ledger::Hub;
+use ct_hub_store::Hub;
 use serde_json::Value;
 
 /// Erro do hub: o projeto está no limite de trabalho em andamento e o
@@ -55,7 +55,7 @@ pub fn start_refusal(hub: &Hub, method: &str, params: &Value) -> Option<(i64, St
 mod tests {
     use super::*;
     use ct_core::WipLimits;
-    use ct_ledger::{HubProjectPatch, NewHubProject};
+    use ct_hub_store::{HubProjectPatch, NewHubProject};
     use serde_json::json;
 
     fn hub_no_limite() -> Hub {

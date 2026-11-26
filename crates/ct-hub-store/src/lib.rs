@@ -31,9 +31,11 @@ mod autopilot_run;
 mod config;
 mod digest;
 mod env_keys;
+mod github_sync;
 mod health;
 mod legacy;
 mod model;
+mod pr_review;
 mod priority;
 mod proposals;
 mod push;
@@ -43,6 +45,12 @@ mod tracker;
 mod views;
 mod web_sessions;
 mod wip;
+
+// Peças do ct-ledger que o hub reusa (leitura de colunas, espelho do GitHub,
+// esquema, sync). Ficam aqui por `crate::x`, como estavam no ct-ledger.
+pub(crate) use ct_ledger::*;
+
+pub use github_sync::sync_input_from_hub;
 
 pub use agent::{
     AgentAssignment, AgentDecision, AgentDecisionFilter, AgentDecisions, AgentEnv, AgentEvent,
@@ -95,8 +103,8 @@ pub use push::{
 pub use web_sessions::{HubWebSession, IssuedWebSession, WEB_SESSION_TOUCH_MS};
 
 pub use views::{
-    DecisionCounts, DecisionScope, HubDashboard, HubDashboardProject, HubDashboardWorkItem,
-    HubHistory, HubLocation, HubProjectView, HubTree, HubTreeItem, HubTreeNode, WorkItemSummary,
+    DecisionCounts, HubDashboard, HubDashboardProject, HubDashboardWorkItem, HubHistory,
+    HubLocation, HubProjectView, HubTree, HubTreeItem, HubTreeNode, WorkItemSummary,
 };
 
 use crate::github::{autonomy_pr_trigger, sub_issue_pr_trigger, GhMirror, PrRoute};
@@ -111,8 +119,8 @@ use crate::{
     ProjectChange, Result, SessionChange, SyncChange, WorkItemChange,
 };
 use ct_core::{
-    hlc, next_status, now_ms, pr_trigger, DecisionOrigin, ForgeConfig, Priority, SessionMode,
-    SessionState, Tool, TrackerConfig, TrackerRef, WorkItemKind, WorkItemStatus, WorkItemTrigger,
+    hlc, next_status, now_ms, pr_trigger, ForgeConfig, Priority, SessionMode, SessionState, Tool,
+    TrackerConfig, TrackerRef, WorkItemKind, WorkItemStatus, WorkItemTrigger,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -1206,24 +1214,6 @@ pub struct HubSession {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct HubDecision {
-    pub id: i64,
-    pub uid: String,
-    pub env_id: String,
-    pub work_item_id: i64,
-    pub session_id: Option<String>,
-    pub origin: DecisionOrigin,
-    pub title: String,
-    pub context: String,
-    pub decision: String,
-    pub consequences: Option<String>,
-    pub reviewed_at: Option<i64>,
-    pub reviewed_in_pr: Option<i64>,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct HubEvent {
     pub id: i64,
     pub uid: String,
@@ -1268,19 +1258,6 @@ pub struct HubEnv {
     /// "desatualizado".
     #[serde(default)]
     pub version: Option<String>,
-}
-
-/// Resumo do último plano de limpeza de um ambiente (issue #287): vai a cada
-/// envio ao hub e aparece na tela Hub.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct CleanupSummary {
-    /// Quando o plano foi montado (ms).
-    pub checked_at: i64,
-    /// Work items com alguma etapa pendente.
-    pub items: i64,
-    /// Espaço estimado das etapas pendentes, em bytes.
-    pub bytes: i64,
 }
 
 const PROJECT_COLS: &str =
@@ -2922,8 +2899,10 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Ledger, NewDecision, NewProject, NewSession, ProjectPatch};
+    use crate::{Ledger, NewDecision, NewProject, NewSession};
+    use ct_core::DecisionOrigin;
     use ct_core::WorkItemTrigger;
+    use ct_ledger::ProjectPatch;
 
     fn ledger(path: &str) -> Ledger {
         let l = Ledger::open_in_memory().unwrap();
@@ -3106,7 +3085,7 @@ mod tests {
         let a = ledger("/a/demo");
         let b = ledger("/b/Demo");
         // Mesmo repositório com outra caixa no segundo ambiente.
-        b.conn
+        b.conn()
             .execute("UPDATE project SET gh_owner = 'Deep-Ion-AI'", [])
             .unwrap();
         let wa = a.ensure_work_item(1, 12, WorkItemKind::Epic).unwrap();
@@ -3189,13 +3168,13 @@ mod tests {
     /// Põe o HLC de `depois` à frente do de `antes`, sem depender do relógio de parede.
     fn adianta_hlc(depois: &Ledger, antes: &Ledger) {
         let atual: i64 = antes
-            .conn
+            .conn()
             .query_row("SELECT value FROM ledger_meta WHERE key = 'hlc'", [], |r| {
                 r.get(0)
             })
             .unwrap();
         depois
-            .conn
+            .conn()
             .execute(
                 "UPDATE ledger_meta SET value = max(value, ?1) WHERE key = 'hlc'",
                 [atual + 1],

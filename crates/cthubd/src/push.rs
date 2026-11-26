@@ -16,7 +16,7 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use ct_ledger::{PushEvent, PushNotice, PushTarget, SharedHub};
+use ct_hub_store::{PushEvent, PushNotice, PushTarget, SharedHub};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use ring::{aead, agreement, hkdf};
@@ -394,7 +394,7 @@ impl WebPush {
                         tracing::warn!(
                             "inscrição de push {} desativada depois de {} falhas seguidas",
                             t.id,
-                            ct_ledger::PUSH_FAILURES_MAX
+                            ct_hub_store::PUSH_FAILURES_MAX
                         );
                     }
                 })

@@ -7,7 +7,7 @@
 //!
 //! Leitura para quem consome: [`crate::Ledger::pr_checks`],
 //! [`crate::Ledger::pr_checks_for_work_item`] e os mesmos no
-//! [`crate::Hub`], além de [`crate::Hub::pr_checks_by_head`].
+//! `Hub` (no `ct-hub-store`), além de `Hub::pr_checks_by_head`.
 
 use crate::github::GhMirror;
 use crate::{json_col, PrRow, Result};
@@ -245,7 +245,7 @@ fn row_to_checks(r: &Row) -> rusqlite::Result<PrChecks> {
 }
 
 impl GhMirror<'_> {
-    pub(crate) fn pr_checks(&self, project_id: i64, number: i64) -> Result<Option<PrChecks>> {
+    pub fn pr_checks(&self, project_id: i64, number: i64) -> Result<Option<PrChecks>> {
         Ok(self
             .0
             .query_row(
@@ -258,7 +258,7 @@ impl GhMirror<'_> {
             .optional()?)
     }
 
-    pub(crate) fn list_pr_checks(&self, project_id: i64) -> Result<Vec<PrChecks>> {
+    pub fn list_pr_checks(&self, project_id: i64) -> Result<Vec<PrChecks>> {
         let mut stmt = self.0.prepare(&format!(
             "SELECT {CHECKS_COLS} FROM pr_checks WHERE project_id = ?1 ORDER BY pr_number"
         ))?;
@@ -267,7 +267,7 @@ impl GhMirror<'_> {
     }
 
     /// Checks dos PRs abertos do work item, do PR mais recente ao mais antigo.
-    pub(crate) fn pr_checks_for_work_item(&self, work_item_id: i64) -> Result<Vec<PrChecks>> {
+    pub fn pr_checks_for_work_item(&self, work_item_id: i64) -> Result<Vec<PrChecks>> {
         let cols = CHECKS_COLS
             .split(", ")
             .map(|c| format!("c.{}", c.trim()))
@@ -286,7 +286,7 @@ impl GhMirror<'_> {
     /// Checks do PR aberto `head → base` (o da branch de integração do modo
     /// autônomo, que não fica no `pr_cache`); o de número maior, se houver
     /// mais de um.
-    pub(crate) fn pr_checks_by_head(
+    pub fn pr_checks_by_head(
         &self,
         project_id: i64,
         head: &str,
@@ -307,7 +307,7 @@ impl GhMirror<'_> {
     }
 
     /// Resumo dos checks do PR, se ele está aberto e tem checks lidos.
-    pub(crate) fn pr_checks_summary(
+    pub fn pr_checks_summary(
         &self,
         project_id: i64,
         pr: Option<&PrRow>,
@@ -321,7 +321,7 @@ impl GhMirror<'_> {
     /// Aplica os checks da rodada: tira os dos PRs que não estão mais em
     /// `open` e grava as leituras que mudaram. Uma fonte em `304` mantém os
     /// checks dela gravados para o mesmo SHA; um SHA novo começa do zero.
-    pub(crate) fn apply_checks(
+    pub fn apply_checks(
         &self,
         project_id: i64,
         s: &PrChecksSnapshot,

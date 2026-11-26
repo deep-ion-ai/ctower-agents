@@ -387,6 +387,19 @@ pub(crate) fn split_uid_suffix(uid: &str) -> (&str, i64) {
     (uid, 1)
 }
 
+/// Resumo do último plano de limpeza de um ambiente (issue #287): vai a cada
+/// envio ao hub e aparece na tela Hub.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CleanupSummary {
+    /// Quando o plano foi montado (ms).
+    pub checked_at: i64,
+    /// Work items com alguma etapa pendente.
+    pub items: i64,
+    /// Espaço estimado das etapas pendentes, em bytes.
+    pub bytes: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

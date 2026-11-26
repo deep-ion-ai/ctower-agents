@@ -15,6 +15,8 @@ uuid.workspace = true
 ts-rs = { workspace = true, optional = true }
 
 [features]
+# Helpers de teste que outros crates usam (ex.: ct-hub-store): ambiente legado.
+test-support = []
 # Tipos TypeScript para a UI (ts-rs).
 ts = ["dep:ts-rs", "ct-core/ts"]
 

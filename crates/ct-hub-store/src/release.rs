@@ -20,7 +20,7 @@ pub(super) fn checked_release(cur: &HubProject, r: &ReleaseConfig) -> Result<Rel
 
 #[cfg(test)]
 mod tests {
-    use crate::hub::{Hub, HubProjectPatch, NewHubProject, ProjectProvider};
+    use crate::{Hub, HubProjectPatch, NewHubProject, ProjectProvider};
     use ct_core::{ForgeConfig, GitlabConfig, JiraConfig, ReleaseConfig, TrackerConfig};
 
     fn novo(owner: &str, repo: &str) -> NewHubProject {

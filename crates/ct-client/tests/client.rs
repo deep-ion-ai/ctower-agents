@@ -385,7 +385,7 @@ async fn daemon_com_protocolo_incompativel() {
 #[tokio::test]
 async fn conecta_ao_hub_com_o_handshake_do_hub() {
     use ct_client::Handshake;
-    use ct_ledger::{Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
     let hub = SharedHub::new(Hub::open_in_memory().unwrap());
     let state = cthubd::HubState::new(hub, UI, "mac-mini", "hub-id");
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();

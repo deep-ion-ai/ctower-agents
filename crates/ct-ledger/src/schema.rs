@@ -433,7 +433,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     migrate_with(conn, MIGRATIONS)
 }
 
-pub(crate) fn migrate_with(conn: &Connection, migrations: &[&str]) -> Result<()> {
+pub fn migrate_with(conn: &Connection, migrations: &[&str]) -> Result<()> {
     conn.execute_batch("BEGIN IMMEDIATE")?;
     let result = apply_pending(conn, migrations)
         .and_then(|()| conn.execute_batch("COMMIT").map_err(Into::into));

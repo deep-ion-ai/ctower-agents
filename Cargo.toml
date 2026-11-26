@@ -12,6 +12,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 ct-core = { path = "crates/ct-core" }
 ct-ledger = { path = "crates/ct-ledger" }
+ct-hub-store = { path = "crates/ct-hub-store" }
 ct-git = { path = "crates/ct-git" }
 ct-pty = { path = "crates/ct-pty" }
 ct-gh = { path = "crates/ct-gh" }

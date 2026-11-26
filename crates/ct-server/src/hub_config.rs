@@ -524,7 +524,7 @@ mod tests {
     use super::*;
     use crate::hub_sync::{HubSyncResult, HubTarget};
     use crate::test_util::{serve_hub, Srv};
-    use ct_ledger::{AssignmentFilter, AssignmentState, Hub, HubProjectPatch, SharedHub};
+    use ct_hub_store::{AssignmentFilter, AssignmentState, Hub, HubProjectPatch, SharedHub};
     use ct_sessions::test_support::{git_in, FakeClaude};
 
     const DEMO: (&str, &str) = ("deep-ion-ai", "demo");
@@ -532,7 +532,7 @@ mod tests {
     fn new_hub() -> SharedHub {
         let hub = Hub::open_in_memory().unwrap();
         for repo in ["demo", "outro"] {
-            hub.add_project(&ct_ledger::NewHubProject {
+            hub.add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: repo.into(),
                 name: repo.into(),

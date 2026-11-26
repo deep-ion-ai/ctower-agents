@@ -14,7 +14,7 @@
 //! delimitadores, nunca como instrução.
 
 use crate::github::{GhMirror, PR_COLS};
-use crate::{Hub, Ledger, PrRow, Result};
+use crate::{Ledger, PrRow, Result};
 use ct_core::ForgeKind;
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,7 @@ pub struct ChangesRequest {
 }
 
 /// Leitura das reviews de um PR pelo sync, aplicada com
-/// [`Ledger::apply_pr_reviews`] / [`Hub::apply_pr_reviews`].
+/// [`Ledger::apply_pr_reviews`] (o `hub.db` tem o seu, no `ct-hub-store`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PrReviews {
     pub number: i64,
@@ -153,7 +153,7 @@ fn row_to_changes(r: &Row) -> rusqlite::Result<ChangesRequest> {
 impl GhMirror<'_> {
     /// PRs abertos de work items do projeto (forja GitHub) com as reviews
     /// por ler: nunca lidas ou lidas com outro `updated_at`.
-    pub(crate) fn pr_review_targets(&self, project_id: i64) -> Result<Vec<ReviewTarget>> {
+    pub fn pr_review_targets(&self, project_id: i64) -> Result<Vec<ReviewTarget>> {
         let mut stmt = self.0.prepare(
             "SELECT c.number, c.updated_at FROM pr_cache c
              JOIN project p ON p.id = c.project_id
@@ -174,7 +174,7 @@ impl GhMirror<'_> {
     /// Troca o feedback gravado de cada PR pelo lido. PR que saiu do
     /// espelho nesse meio-tempo fica de fora. Devolve quantos PRs gravou.
     /// Quem chama abre a transação.
-    pub(crate) fn apply_pr_reviews(&self, project_id: i64, reviews: &[PrReviews]) -> Result<usize> {
+    pub fn apply_pr_reviews(&self, project_id: i64, reviews: &[PrReviews]) -> Result<usize> {
         let mut n = 0;
         for r in reviews {
             let updated = self.0.execute(
@@ -233,7 +233,7 @@ impl GhMirror<'_> {
         Ok(n)
     }
 
-    fn review_items<T>(
+    pub fn review_items<T>(
         &self,
         project_id: i64,
         pr_number: i64,
@@ -249,7 +249,7 @@ impl GhMirror<'_> {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    fn feedback_of(&self, project_id: i64, pr: PrRow) -> Result<PrFeedback> {
+    pub fn feedback_of(&self, project_id: i64, pr: PrRow) -> Result<PrFeedback> {
         let read_at_updated: Option<i64> = self.0.query_row(
             "SELECT reviews_updated_at FROM pr_cache WHERE project_id = ?1 AND number = ?2",
             params![project_id, pr.number],
@@ -268,14 +268,14 @@ impl GhMirror<'_> {
         })
     }
 
-    pub(crate) fn pr_feedback(&self, project_id: i64, number: i64) -> Result<Option<PrFeedback>> {
+    pub fn pr_feedback(&self, project_id: i64, number: i64) -> Result<Option<PrFeedback>> {
         let Some(pr) = self.get_pr(project_id, number)? else {
             return Ok(None);
         };
         self.feedback_of(project_id, pr).map(Some)
     }
 
-    pub(crate) fn pr_feedback_for_work_item(&self, work_item_id: i64) -> Result<Vec<PrFeedback>> {
+    pub fn pr_feedback_for_work_item(&self, work_item_id: i64) -> Result<Vec<PrFeedback>> {
         let project_id: Option<i64> = self
             .0
             .query_row(
@@ -325,35 +325,10 @@ impl Ledger {
     }
 }
 
-impl Hub {
-    /// [`Ledger::pr_review_targets`] no `hub.db`.
-    pub fn pr_review_targets(&self, project_id: i64) -> Result<Vec<ReviewTarget>> {
-        GhMirror(self.conn()).pr_review_targets(project_id)
-    }
-
-    /// [`Ledger::apply_pr_reviews`] no `hub.db`.
-    pub fn apply_pr_reviews(&self, project_id: i64, reviews: &[PrReviews]) -> Result<usize> {
-        let tx = self.tx()?;
-        let n = GhMirror(self.conn()).apply_pr_reviews(project_id, reviews)?;
-        tx.commit()?;
-        Ok(n)
-    }
-
-    /// [`Ledger::pr_feedback`] no `hub.db`.
-    pub fn pr_feedback(&self, project_id: i64, number: i64) -> Result<Option<PrFeedback>> {
-        GhMirror(self.conn()).pr_feedback(project_id, number)
-    }
-
-    /// [`Ledger::pr_feedback_for_work_item`] no `hub.db`.
-    pub fn pr_feedback_for_work_item(&self, work_item_id: i64) -> Result<Vec<PrFeedback>> {
-        GhMirror(self.conn()).pr_feedback_for_work_item(work_item_id)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GithubSnapshot, IssueRow, NewHubProject, NewProject, Project};
+    use crate::{GithubSnapshot, NewProject, Project};
     use ct_core::{PrState, WorkItemKind};
 
     fn ledger() -> (Ledger, Project, i64) {
@@ -553,58 +528,5 @@ mod tests {
             .execute("DELETE FROM pr_cache WHERE number = 30", [])
             .unwrap();
         assert_eq!(count(&l), 0);
-    }
-
-    /// O mesmo no `hub.db`.
-    #[test]
-    fn hub_grava_e_le() {
-        let hub = Hub::open_in_memory().unwrap();
-        hub.add_project(&NewHubProject {
-            owner: "acme".into(),
-            repo: "acme-web".into(),
-            name: "acme-web".into(),
-            base_branch: "develop".into(),
-            protected_branches: vec![],
-        })
-        .unwrap();
-        let pid = hub.find_project("acme", "acme-web").unwrap().unwrap().id;
-        let issue = IssueRow {
-            gh_number: 7,
-            title: "Issue 7".into(),
-            state: "open".into(),
-            url: "https://github.com/acme/acme-web/issues/7".into(),
-            updated_at: 1,
-            ..Default::default()
-        };
-        let mut s = snap(pid, vec![]);
-        s.issues = vec![issue];
-        hub.apply_github(&s, "hub").unwrap();
-        let wi = hub
-            .set_status_manual(
-                "acme",
-                "acme-web",
-                7,
-                ct_core::WorkItemStatus::EmExecucao,
-                None,
-                "hub",
-            )
-            .unwrap();
-        hub.apply_github(&snap(pid, vec![pr(30, wi.id, PrState::Open, 10)]), "hub")
-            .unwrap();
-        assert_eq!(hub.pr_review_targets(pid).unwrap().len(), 1);
-        hub.apply_pr_reviews(
-            pid,
-            &[PrReviews {
-                number: 30,
-                pr_updated_at: 10,
-                threads: vec![thread("T1", "a.rs", Some(1), "NONE", 1)],
-                changes_requested: vec![],
-            }],
-        )
-        .unwrap();
-        assert!(hub.pr_review_targets(pid).unwrap().is_empty());
-        let f = hub.pr_feedback_for_work_item(wi.id).unwrap();
-        assert!(f[0].threads[0].external);
-        assert_eq!(f[0].threads[0].line, Some(1));
     }
 }

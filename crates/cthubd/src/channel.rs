@@ -37,7 +37,8 @@ use ct_http::rpc::RpcResult;
 use ct_http::sync::{channel_method_allowed, channel_push_allowed, VersionInfo, ENV_ID_HEADER};
 pub use ct_http::sync::{CHANNEL_ENV_OFFLINE, CHANNEL_METHOD_UNAVAILABLE, CHANNEL_TIMEOUT};
 use ct_http::{bearer_token, unauthorized};
-use ct_ledger::{HubEnv, LedgerError};
+use ct_hub_store::HubEnv;
+use ct_ledger::LedgerError;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -165,8 +166,8 @@ impl EnvChannels {
     /// canal aberto; `Some(t)` = fechado desde `t` (ms). Ambiente que não
     /// abriu canal desde que o hub subiu (`ctowerd` antigo) fica de fora e
     /// segue pelo último sync.
-    pub fn states(&self) -> ct_ledger::ChannelStates {
-        let mut out: ct_ledger::ChannelStates = self
+    pub fn states(&self) -> ct_hub_store::ChannelStates {
+        let mut out: ct_hub_store::ChannelStates = self
             .closed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -452,7 +453,7 @@ async fn serve(socket: WebSocket, st: HubState, env_id: String, name: String) {
 mod tests {
     use super::*;
     use crate::router;
-    use ct_ledger::{Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::Message as WsMsg;
@@ -711,7 +712,7 @@ mod tests {
         assert_eq!(v[0]["online"], true);
         assert_eq!(
             st.channels.states(),
-            ct_ledger::ChannelStates::from([("env-a".into(), None)])
+            ct_hub_store::ChannelStates::from([("env-a".into(), None)])
         );
         let v = crate::ws::tests::tests_call(&st, "hub.dashboard.get").await;
         assert_eq!(v["envs"][0]["online"], true);

@@ -23,14 +23,14 @@
 //!      valores): a lista "Secrets a rotacionar na origem" da UI, até o
 //!      usuário marcar que já rotacionou (`hub.secrets.rotate_pending_dismiss`).
 //!    - Nos dois casos: o `config_rev` do `hub.db` passa do maior `rev` do
-//!      store restaurado e sobe mais um ([`ct_ledger::Hub::bump_config_rev_past`]),
+//!      store restaurado e sobe mais um ([`ct_hub_store::Hub::bump_config_rev_past`]),
 //!      para os ambientes receberem tudo de novo no próximo pull, e sai um
 //!      snapshot do store restaurado no destino configurado.
 
 use super::{HubSecrets, HubSecretsError};
 use crate::backup::Warning;
 use crate::config::Dirs;
-use ct_ledger::{Hub, SharedHub};
+use ct_hub_store::{Hub, SharedHub};
 use ct_secrets::{Identity, Kind, Scope, SecretsStore, Zeroizing};
 use serde::{Deserialize, Serialize};
 use std::io;

@@ -426,7 +426,7 @@ fn open_file(path: &std::path::Path, identity: &Identity) -> Result<(), HubSecre
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ct_ledger::{Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
     use ct_secrets::{Kind, Scope, SecretValue, SecretsStore};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;

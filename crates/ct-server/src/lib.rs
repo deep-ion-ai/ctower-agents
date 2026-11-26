@@ -215,7 +215,7 @@ pub(crate) mod test_util {
     pub const HOOK: &str = "hook-secreto";
 
     /// `cthubd` (o hub de verdade) servindo `hub` em `listener`.
-    pub async fn serve_hub(hub: ct_ledger::SharedHub, listener: tokio::net::TcpListener) {
+    pub async fn serve_hub(hub: ct_hub_store::SharedHub, listener: tokio::net::TcpListener) {
         serve_hub_state(
             cthubd::HubState::new(hub, "ui-do-hub", "hub", "hub-id"),
             listener,

@@ -6,7 +6,7 @@
 //!   as migrações novas; `env`, `env_token` (hashes e `env_id`) e o
 //!   histórico seguem iguais, então os tokens de sync continuam valendo;
 //! - promove os projetos a origem e cria as atribuições a partir de
-//!   `project_location` ([`ct_ledger::Hub::adopt_legacy`]);
+//!   `project_location` ([`ct_hub_store::Hub::adopt_legacy`]);
 //! - cria o `config.toml` do `cthubd` a partir de `bind` e `hub_backup_*` do
 //!   `ctowerd` e o token de UI do hub;
 //! - transforma o `ctowerd` local num ambiente comum: token de sync preso ao
@@ -28,7 +28,7 @@
 //! `ct-sessions`.
 
 use crate::config::{Dirs, HubConfig, DEFAULT_PORT};
-use ct_ledger::Hub;
+use ct_hub_store::Hub;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
