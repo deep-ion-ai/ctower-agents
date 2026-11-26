@@ -540,12 +540,23 @@ impl Hub {
             }
             Some(ForgeConfig::Gitlab(g)) => {
                 let old = cur.forge.gitlab().expect("mesmo tipo");
-                if !g.host.eq_ignore_ascii_case(&old.host)
+                // Projeto migrado (#237) guarda o caminho sem o host: o host
+                // é o da conexão (visão efetiva, #264).
+                let old_host = match old.host.trim() {
+                    "" => self
+                        .effective_project(cur.clone())?
+                        .forge
+                        .gitlab()
+                        .map(|e| e.host.clone())
+                        .unwrap_or_default(),
+                    h => h.to_string(),
+                };
+                if !g.host.eq_ignore_ascii_case(&old_host)
                     || !g.path.eq_ignore_ascii_case(&old.path)
                 {
                     return refuse(format!(
                         "o repositório do projeto não muda ({}/{} → {}/{}): cadastre outro projeto",
-                        old.host, old.path, g.host, g.path
+                        old_host, old.path, g.host, g.path
                     ));
                 }
                 ForgeConfig::Gitlab(g.clone())

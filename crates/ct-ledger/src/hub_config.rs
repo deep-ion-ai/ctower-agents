@@ -661,16 +661,11 @@ fn materialize_projects(
     conns: &[Connection],
     overrides: &ct_core::ConnectionOverrides,
 ) -> Vec<String> {
-    use ct_core::provider::{CredentialSource, ProviderKind};
-    fn cmd_of(c: &Connection, overrides: &ct_core::ConnectionOverrides) -> String {
-        if let Some(cmd) = overrides.credential_cmd(&c.name) {
-            return cmd.to_string();
-        }
-        match &c.credential {
-            CredentialSource::Command { cmd } => cmd.clone(),
-            _ => String::new(),
-        }
-    }
+    use ct_core::provider::{self, ConnectionGap};
+    let cmd_of = |c: &Connection| match overrides.credential_cmd(&c.name) {
+        Some(cmd) => cmd.to_string(),
+        None => provider::credential_cmd(c).unwrap_or_default(),
+    };
     let mut warnings = Vec::new();
     for key in overrides.0.keys() {
         if !conns.iter().any(|c| &c.name == key) {
@@ -682,55 +677,16 @@ fn materialize_projects(
     }
     for p in projects.iter_mut() {
         let key = format!("{}/{}", p.owner, p.repo);
-        if let TrackerConfig::Jira(j) = &mut p.tracker {
-            if let Some(id) = j.connection {
-                match conns
-                    .iter()
-                    .find(|c| c.id == id && c.kind == ProviderKind::Jira)
-                {
-                    Some(c) => {
-                        j.url = c.endpoint.clone();
-                        j.config_file = c
-                            .options
-                            .get("config_file")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        j.credential_cmd = cmd_of(c, overrides);
-                        if j.credential_cmd.is_empty() {
-                            warnings.push(format!(
-                                "{key}: a conexão {} não tem comando de credencial neste ambiente",
-                                c.name
-                            ));
-                        }
-                    }
-                    None => warnings.push(format!(
-                        "{key}: conexão {id} do Jira ausente na configuração do hub"
-                    )),
+        for gap in provider::resolve_connections(&mut p.tracker, &mut p.forge, conns, cmd_of) {
+            warnings.push(match gap {
+                ConnectionGap::NoCredential { name, .. } => {
+                    format!("{key}: a conexão {name} não tem comando de credencial neste ambiente")
                 }
-            }
-        }
-        if let ForgeConfig::Gitlab(g) = &mut p.forge {
-            if let Some(id) = g.connection {
-                match conns
-                    .iter()
-                    .find(|c| c.id == id && c.kind == ProviderKind::Gitlab)
-                {
-                    Some(c) => {
-                        g.host = c.endpoint.clone();
-                        g.credential_cmd = cmd_of(c, overrides);
-                        if g.credential_cmd.is_empty() {
-                            warnings.push(format!(
-                                "{key}: a conexão {} não tem comando de credencial neste ambiente",
-                                c.name
-                            ));
-                        }
-                    }
-                    None => warnings.push(format!(
-                        "{key}: conexão {id} do GitLab ausente na configuração do hub"
-                    )),
-                }
-            }
+                ConnectionGap::Missing { kind, id } => format!(
+                    "{key}: conexão {id} do {} ausente na configuração do hub",
+                    provider::descriptor(kind).label()
+                ),
+            });
         }
     }
     warnings

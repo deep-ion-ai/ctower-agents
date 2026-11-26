@@ -9,7 +9,9 @@
 //! [`Connection::from_gitlab`] até a migração do épico.
 
 use crate::model::ParseEnumError;
-use crate::tracker::{GitlabConfig, JiraConfig, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS};
+use crate::tracker::{
+    ForgeConfig, GitlabConfig, JiraConfig, TrackerConfig, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS,
+};
 use crate::JiraExtraField;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -195,6 +197,88 @@ pub fn check_role(c: &Connection, role: Role) -> std::result::Result<(), String>
             role.label()
         ))
     }
+}
+
+/// Comando de shell que imprime o token da conexão: o que o cadastro antigo
+/// guardava em `credential_cmd`. Por ora só a fonte `Command` vira comando;
+/// Secret, File e Cli entram aqui (#274), e o ambiente e o hub passam a
+/// recebê-las sem outra mudança.
+pub fn credential_cmd(c: &Connection) -> Option<String> {
+    match &c.credential {
+        CredentialSource::Command { cmd } if !cmd.trim().is_empty() => Some(cmd.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// O que faltou ao resolver as conexões de um projeto
+/// ([`resolve_connections`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionGap {
+    /// O projeto referencia a conexão `id`, mas não há conexão desse tipo
+    /// com esse `id`. O lado fica como está no cadastro.
+    Missing { kind: ProviderKind, id: i64 },
+    /// A conexão existe, mas não deu comando de credencial.
+    NoCredential { kind: ProviderKind, name: String },
+}
+
+/// Visão efetiva do rastreador e da forja (#237, #264): nos lados que
+/// referenciam uma conexão, preenche os campos do cadastro antigo a partir
+/// dela (Jira: `url`, `config_file` e `credential_cmd`; GitLab: `host` e
+/// `credential_cmd`). Só em memória: o cadastro do projeto não volta a
+/// guardar esses campos. `credential_cmd` diz o comando de credencial de
+/// cada conexão (o ambiente aplica as sobrescritas dele; o hub usa
+/// [`credential_cmd`]). Ponto único do ambiente (`materialize_connections`)
+/// e do hub. Devolve o que faltou.
+pub fn resolve_connections(
+    tracker: &mut TrackerConfig,
+    forge: &mut ForgeConfig,
+    conns: &[Connection],
+    credential_cmd: impl Fn(&Connection) -> String,
+) -> Vec<ConnectionGap> {
+    let find = |kind: ProviderKind, id: i64| conns.iter().find(|c| c.id == id && c.kind == kind);
+    let mut gaps = Vec::new();
+    if let TrackerConfig::Jira(j) = tracker {
+        if let Some(id) = j.connection {
+            match find(ProviderKind::Jira, id) {
+                Some(c) => {
+                    j.url = c.endpoint.trim().trim_end_matches('/').to_string();
+                    j.config_file = options_str(c, "config_file").to_string();
+                    j.credential_cmd = credential_cmd(c);
+                    if j.credential_cmd.is_empty() {
+                        gaps.push(ConnectionGap::NoCredential {
+                            kind: c.kind,
+                            name: c.name.clone(),
+                        });
+                    }
+                }
+                None => gaps.push(ConnectionGap::Missing {
+                    kind: ProviderKind::Jira,
+                    id,
+                }),
+            }
+        }
+    }
+    if let ForgeConfig::Gitlab(g) = forge {
+        if let Some(id) = g.connection {
+            match find(ProviderKind::Gitlab, id) {
+                Some(c) => {
+                    g.host = c.endpoint.trim().to_string();
+                    g.credential_cmd = credential_cmd(c);
+                    if g.credential_cmd.is_empty() {
+                        gaps.push(ConnectionGap::NoCredential {
+                            kind: c.kind,
+                            name: c.name.clone(),
+                        });
+                    }
+                }
+                None => gaps.push(ConnectionGap::Missing {
+                    kind: ProviderKind::Gitlab,
+                    id,
+                }),
+            }
+        }
+    }
+    gaps
 }
 
 impl ProviderDescriptor for GithubDescriptor {
@@ -858,5 +942,86 @@ mod tests {
             }
             outro => panic!("esperado NeedsSetup, veio {outro:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_connections_preenche_jira_e_gitlab_em_memoria() {
+        let mut jira = conn(
+            ProviderKind::Jira,
+            "https://jira.example.com/",
+            CredentialSource::Command {
+                cmd: " pass show jira | head -1 ".into(),
+            },
+        );
+        jira.id = 7;
+        jira.options = json!({ "config_file": "/etc/jira/acme.yml" });
+        let mut gitlab = conn(
+            ProviderKind::Gitlab,
+            "gitlab.example.com",
+            CredentialSource::Command {
+                cmd: "pass show gitlab | head -1".into(),
+            },
+        );
+        gitlab.id = 8;
+        let conns = [jira, gitlab];
+        let mut tracker = TrackerConfig::Jira(JiraConfig {
+            project_key: "ACME".into(),
+            connection: Some(7),
+            ..Default::default()
+        });
+        let mut forge = ForgeConfig::Gitlab(GitlabConfig {
+            path: "grupo/app".into(),
+            connection: Some(8),
+            ..Default::default()
+        });
+        let gaps = resolve_connections(&mut tracker, &mut forge, &conns, |c| {
+            credential_cmd(c).unwrap_or_default()
+        });
+        assert!(gaps.is_empty(), "{gaps:?}");
+        let j = tracker.jira().unwrap();
+        assert_eq!(j.url, "https://jira.example.com");
+        assert_eq!(j.config_file, "/etc/jira/acme.yml");
+        assert_eq!(j.credential_cmd, "pass show jira | head -1");
+        let g = forge.gitlab().unwrap();
+        assert_eq!(g.host, "gitlab.example.com");
+        assert_eq!(g.credential_cmd, "pass show gitlab | head -1");
+
+        // Conexão ausente ou de outro tipo: o lado fica como está.
+        let mut tracker = TrackerConfig::Jira(JiraConfig {
+            connection: Some(8),
+            ..Default::default()
+        });
+        let mut forge = ForgeConfig::Github;
+        let gaps = resolve_connections(&mut tracker, &mut forge, &conns, |_| "x".into());
+        assert_eq!(
+            gaps,
+            vec![ConnectionGap::Missing {
+                kind: ProviderKind::Jira,
+                id: 8
+            }]
+        );
+        assert_eq!(tracker.jira().unwrap().url, "");
+    }
+
+    #[test]
+    fn credential_cmd_so_da_fonte_command() {
+        let c = |credential| conn(ProviderKind::Jira, "https://jira.example.com", credential);
+        assert_eq!(
+            credential_cmd(&c(CredentialSource::Command {
+                cmd: "pass show jira".into()
+            })),
+            Some("pass show jira".into())
+        );
+        assert_eq!(
+            credential_cmd(&c(CredentialSource::Command { cmd: " ".into() })),
+            None
+        );
+        assert_eq!(
+            credential_cmd(&c(CredentialSource::Secret {
+                name: "jira-acme".into()
+            })),
+            None
+        );
+        assert_eq!(credential_cmd(&c(CredentialSource::Cli)), None);
     }
 }

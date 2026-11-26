@@ -15,7 +15,10 @@ export const RELEASE_ITEM = -1;
 /**
  * O que as referências precisam do projeto: `owner`/`repo` da forja (no
  * GitLab, `owner` é o caminho sem o último segmento), rastreador e forja.
- * `Project` (ambiente) e `HubProject` (hub) servem os dois.
+ * `Project` (ambiente) e `HubProject` (hub) servem os dois. Com conexão, a
+ * URL do Jira e o host do GitLab vêm dela: o ambiente os preenche ao receber
+ * a configuração, e o hub entrega a visão efetiva em `hub.projects.list`,
+ * `hub.tree.get` e `hub.dashboard.get` (#264).
  */
 export interface ProviderProject {
   gh_owner: string;

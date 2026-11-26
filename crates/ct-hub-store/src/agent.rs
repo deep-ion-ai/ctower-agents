@@ -236,7 +236,8 @@ impl Hub {
     ) -> Result<AgentOverview> {
         let health = self.health(t, gh_interval, &HealthFilter::default(), now)?;
         let mut projects = Vec::new();
-        for p in self.list_projects()? {
+        // Visão efetiva (#264): o `issue_view` leva a credencial da conexão.
+        for p in self.effective_projects(self.list_projects()?)? {
             let rows: Vec<(String, Option<String>)> = {
                 let mut stmt = self.conn.prepare(
                     "SELECT coalesce(w.status, 'backlog'), w.priority FROM issue_cache i
@@ -443,6 +444,7 @@ impl Hub {
         }
         Ok(Some(AgentProject {
             tracker: tree.project.tracker.kind(),
+            // O projeto do `tree` já é a visão efetiva (#264).
             issue_view: ct_core::issue_view_cmd(
                 &tree.project.gh_owner,
                 &tree.project.gh_repo,
