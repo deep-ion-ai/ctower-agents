@@ -7,7 +7,8 @@ import type { QueueDep } from "./QueueDep";
  */
 export type QueueItem = { number: number, title: string | null, priority: Priority | null, model: string | null, 
 /**
- * `None` = elegível. Senão: `epic`, `status`, `not_in_mirror`,
+ * `None` = elegível. Senão: `epic`, `epic_run` (sub-issue de épico em
+ * execução, #303), `status`, `not_in_mirror`,
  * `not_approved`, `no_priority`, `no_model`, `live_session` e, com as
  * dependências (#215), `dependency_cycle`, `blocked_by` (bloqueante
  * ainda não pronto) ou `analysis_pending` (nova ou alterada, esperando
