@@ -1276,6 +1276,25 @@ impl Hub {
             .optional()?)
     }
 
+    /// Última entrada humana (evento `human_input` do ambiente, #301) na
+    /// sessão.
+    pub fn last_human_input(&self, session_id: &str) -> Result<Option<i64>> {
+        Ok(self.conn.query_row(
+            "SELECT max(ts) FROM event WHERE session_id = ?1 AND type = 'human_input'",
+            [session_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// O último evento `kind` do nó na execução (ms).
+    pub fn epic_node_event_at(&self, run_id: i64, number: i64, kind: &str) -> Result<Option<i64>> {
+        Ok(self.conn.query_row(
+            "SELECT max(at) FROM epic_run_event WHERE run_id = ?1 AND number = ?2 AND kind = ?3",
+            params![run_id, number, kind],
+            |r| r.get(0),
+        )?)
+    }
+
     // --- pedidos de decisão ---------------------------------------------
 
     /// Abre um pedido de decisão, com as opções da origem

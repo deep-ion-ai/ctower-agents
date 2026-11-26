@@ -278,11 +278,13 @@ pub(crate) fn snapshot(
     let mut sessions = BTreeMap::new();
     for id in nodes.iter().filter_map(|n| n.session_id.clone()) {
         if let Some(i) = h.epic_session_info(&id)? {
+            let human_input_at = h.last_human_input(&id)?;
             sessions.insert(
                 id,
                 SessionSnap {
                     state: i.state,
                     idle_since: (i.state == ct_core::SessionState::Idle).then_some(i.idle_since),
+                    human_input_at,
                 },
             );
         }
@@ -302,7 +304,14 @@ pub(crate) fn snapshot(
         .into_iter()
         .map(|d| (d.number, d.origin))
         .collect();
+    let mut handback_at = BTreeMap::new();
+    for n in &nodes {
+        if let Some(at) = h.epic_node_event_at(run.id, n.number, "handback")? {
+            handback_at.insert(n.number, at);
+        }
+    }
     Ok(Some(Snapshot {
+        handback_at,
         now,
         run: run.clone(),
         plan: Some(plan),
@@ -492,10 +501,15 @@ async fn tick_run(
                     .map_err(ledger_err)?;
                 }
                 drop(h);
+                let kind = if to == EpicNodeState::Assumida {
+                    "assumed"
+                } else {
+                    "node"
+                };
                 rec(
                     EpicRunEvent {
                         reason: Some(to.as_str().into()),
-                        ..ev(run, now, "node", Some(number), message)
+                        ..ev(run, now, kind, Some(number), message)
                     },
                     &mut out,
                 )?;
@@ -1335,5 +1349,53 @@ mod tests {
                 "{k:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn entrada_humana_no_hub_assume_o_no() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = approved(&hub.lock(), pid);
+        {
+            let h = hub.lock();
+            for to in [EpicNodeState::Pronta, EpicNodeState::EmExecucao] {
+                h.set_epic_node_state(run.id, 11, to, None, T).unwrap();
+            }
+            h.update_epic_node(
+                run.id,
+                11,
+                &EpicNodePatch {
+                    session_id: Some(Some("s-11".into())),
+                    ..Default::default()
+                },
+                T,
+            )
+            .unwrap();
+            let wi = h
+                .find_work_item("acme", "acme-web", 10)
+                .unwrap()
+                .unwrap()
+                .id;
+            h.conn()
+                .execute_batch(&format!(
+                    "INSERT INTO session (id, env_id, work_item_id, tool, cwd, state, started_at,
+                                          last_event_at)
+                       VALUES ('s-11', 'env-a', {wi}, 'claude', '/wt/11', 'running', {T}, {T});
+                     INSERT INTO event (uid, env_id, hlc, ts, project_id, work_item_id,
+                                        session_id, type, payload)
+                       VALUES ('u-1', 'env-a', 1, {t}, {pid}, {wi}, 's-11', 'human_input', '{{}}');",
+                    t = T + 5
+                ))
+                .unwrap();
+            assert_eq!(h.last_human_input("s-11").unwrap(), Some(T + 5));
+        }
+        let port = FakePort::default();
+        tick(&hub, &port, T + 10).await.unwrap();
+        let n = hub.lock().epic_node(run.id, 11).unwrap().unwrap();
+        assert_eq!(
+            (n.state, n.assumed_since),
+            (EpicNodeState::Assumida, Some(T + 10))
+        );
+        assert!(kinds(&hub.lock(), run.id).contains(&"assumed".to_string()));
     }
 }

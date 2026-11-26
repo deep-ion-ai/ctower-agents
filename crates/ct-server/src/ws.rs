@@ -1196,6 +1196,7 @@ impl Conn {
                     .ok_or_else(|| invalid("sessão não está rodando"))?;
                 pty.write(data.as_bytes())
                     .map_err(|e| (-32000, e.to_string()))?;
+                note_human_input(&sessions, id);
                 Ok(json!({}))
             }
             "session.resize" => {
@@ -1313,10 +1314,23 @@ impl Conn {
         let Some((CHANNEL_INPUT, id, data)) = parse_frame(bytes) else {
             return;
         };
-        if let Some(pty) = self.st.sessions.terminal(&id.to_string()) {
+        let id = id.to_string();
+        if let Some(pty) = self.st.sessions.terminal(&id) {
             let _ = pty.write(data);
+            note_human_input(&self.st.sessions, &id);
         }
     }
+}
+
+/// Teclado da UI numa sessão (#301): a da execução de épico fica assumida
+/// no hub. Em segundo plano, sem atrasar a digitação.
+fn note_human_input(sessions: &Sessions, id: &str) {
+    let (s, id) = (sessions.clone(), id.to_string());
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = s.note_human_input(&id, ct_core::now_ms()) {
+            tracing::debug!("entrada humana na sessão {id}: {e}");
+        }
+    });
 }
 
 fn dashboard(s: &Sessions, linked: bool) -> Result<Value, SessionsError> {

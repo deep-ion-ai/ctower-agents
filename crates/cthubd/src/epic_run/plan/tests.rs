@@ -116,6 +116,7 @@ fn snap(status: EpicRunStatus, plan: Vec<EpicPlanNode>, edges: Vec<EpicPlanEdge>
         pending: HashSet::new(),
         max_ci_attempts: 2,
         idle_timeout_min: 30,
+        handback_at: BTreeMap::new(),
     }
 }
 
@@ -135,6 +136,7 @@ fn with_session(s: &mut Snapshot, n: i64, state: EpicNodeState, sess: SessionSta
         SessionSnap {
             state: sess,
             idle_since: (sess == SessionState::Idle).then_some(T - 60_000),
+            human_input_at: None,
         },
     );
 }
@@ -790,4 +792,31 @@ fn sem_plano_aprovado_nada_acontece() {
     let mut s = snap(EpicRunStatus::Cancelado, vec![pnode(11, &[])], vec![]);
     s.items.get_mut(&11).unwrap().merged = Some(111);
     assert!(decide(&s).actions.is_empty());
+}
+
+// --- Assumida pela entrada humana (#301) --------------------------------
+
+#[test]
+fn entrada_humana_assume_e_o_handback_devolve() {
+    let mut s = snap(EpicRunStatus::Executando, vec![pnode(11, &[])], vec![]);
+    with_session(&mut s, 11, EpicNodeState::EmPr, SessionState::Idle);
+    s.sessions.get_mut("s-11").unwrap().idle_since = Some(T - 300 * 60_000);
+    open_pr(&mut s, 11, "h1", "failure", CloseState::default());
+    s.sessions.get_mut("s-11").unwrap().human_input_at = Some(T - 1_000);
+    let o = decide(&s);
+    assert_eq!(node_moves(&o), vec![(11, EpicNodeState::Assumida)]);
+    // Nada vai à sessão no mesmo ciclo, nem pedido de decisão.
+    assert!(!o
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::Send { .. } | Action::Ask { .. })));
+    // Devolvido depois da entrada: o motor volta a dirigir (pede correção).
+    s.handback_at.insert(11, T - 500);
+    let o = decide(&s);
+    assert!(node_moves(&o).is_empty());
+    assert!(o.actions.iter().any(|a| matches!(a, Action::Send { .. })));
+    // Assumida não volta a "assumir".
+    set(&mut s, 11, |x| x.state = EpicNodeState::Assumida);
+    s.handback_at.clear();
+    assert!(node_moves(&decide(&s)).is_empty());
 }

@@ -149,6 +149,9 @@ struct Inner {
     /// Serializa a conferência "uma sessão de release viva por projeto" com
     /// a criação da sessão (#204).
     release_start: Mutex<()>,
+    /// Última entrada humana registrada por sessão da execução de épico
+    /// (#301), para o debounce do evento `human_input`.
+    human_input: Mutex<HashMap<String, i64>>,
     notify: Notifier,
 }
 
@@ -171,6 +174,7 @@ impl Sessions {
                 shells: Mutex::new(HashMap::new()),
                 credentials: Arc::new(resolver::CredentialResolver::new()),
                 release_start: Mutex::new(()),
+                human_input: Mutex::new(HashMap::new()),
                 notify,
             }),
         }
