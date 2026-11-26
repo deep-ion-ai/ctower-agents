@@ -78,8 +78,7 @@ function setup(
     )
     .on("env.info", (_: unknown, env: string) => infos[env])
     .on("env.update", {})
-    .on("env.check_update", (_: unknown, env: string) => infos[env].update)
-    .on("github.status", { source: "gh", login: "x", error: null });
+    .on("env.check_update", (_: unknown, env: string) => infos[env].update);
   prep(api);
   // Manutenção › Atualizações: Ambientes (todos numa tabela) e Este app (#336).
   render(<App api={api} initial={{ name: "maintenance", section }} />);

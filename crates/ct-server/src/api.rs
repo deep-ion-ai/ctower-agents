@@ -138,7 +138,6 @@ mod export {
         crate::hub_sync::HubSyncStatus::export_all_to(&dir).unwrap();
         crate::update::UpdateStatus::export_all_to(&dir).unwrap();
         crate::env_config::ConfigItem::export_all_to(&dir).unwrap();
-        crate::env_config::EnvCredential::export_all_to(&dir).unwrap();
         crate::env_config::EnvConnection::export_all_to(&dir).unwrap();
         crate::permissions::PermissionRequest::export_all_to(&dir).unwrap();
         crate::hub_sync::HubSyncResult::export_all_to(&dir).unwrap();
@@ -177,7 +176,6 @@ mod export {
         ct_git::diff::DiffSummary::export_all_to(&dir).unwrap();
         ct_git::diff::DiffPatch::export_all_to(&dir).unwrap();
         ct_git::diff::BranchCommits::export_all_to(&dir).unwrap();
-        ct_gh::TokenStatus::export_all_to(&dir).unwrap();
         ct_gh::PrComment::export_all_to(&dir).unwrap();
         // Rastreador e forja (#347): os tipos soltos, além dos de `Project`.
         ct_core::TrackerKind::export_all_to(&dir).unwrap();

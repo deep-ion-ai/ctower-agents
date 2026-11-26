@@ -15,6 +15,11 @@
 //! Campo vazio ou ausente = o comando do projeto. A sobrescrita vale só onde
 //! o comando roda neste ambiente (sync, leitura de issue, glab, prompt da
 //! sessão): o cadastro do hub não muda e ela nunca sai do ambiente.
+//!
+//! Com as conexões (#237), a forma atual é por conexão,
+//! `[connections."nome"] credential_cmd` ([`ConnectionOverrides`]), que a UI
+//! edita (`env.connections.set`, #276). O `[credentials]` ficou só como
+//! legado: o pull converte o que dá, e o que sobra continua valendo.
 
 use crate::provider::{self, Connection, CredentialSource, ProviderKind};
 use crate::{ForgeConfig, GitlabConfig, JiraConfig, TrackerConfig};
@@ -118,7 +123,7 @@ impl CredentialOverrides {
 }
 
 /// As sobrescritas em uso no daemon, compartilhadas entre o sync, o glab,
-/// as sessões e a edição pela UI (`env.credentials.set`): a mudança vale no
+/// as sessões e a edição pela UI (`env.connections.set`, #276): a mudança vale no
 /// próximo uso, sem restart.
 ///
 /// Guarda também as conexões do hub deste ambiente e o `[connections]` do

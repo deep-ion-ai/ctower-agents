@@ -43,9 +43,10 @@ impl Dirs {
         self.config.join("hub.token")
     }
 
-    /// Token do GitHub deste ambiente (0600), gravado pela tela de
-    /// configurações do ambiente (`github.set_token`) até a #276. Existindo,
-    /// vale no lugar da conexão `github` neste ambiente (#275).
+    /// Token do GitHub deste ambiente (0600) gravado pela tela antiga do
+    /// ambiente (`github.set_token`, removida na #276). Não vale mais por
+    /// si: a migração o leva para [`Self::github_env_token_file`] e cria a
+    /// sobrescrita da conexão GitHub que o lê.
     pub fn github_token_file(&self) -> PathBuf {
         self.config.join("github.token")
     }

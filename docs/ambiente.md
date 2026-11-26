@@ -20,10 +20,9 @@ pre_trust_worktrees = true          # pré-aceita a confiança do Claude Code na
 git_local_timeout_secs = 30         # status, diff, merge, worktree, config (padrão 30; 0 vira 1)
 git_network_timeout_secs = 120      # fetch, push e clone: remoto que não responde (padrão 120)
 
-# Sincronização com o GitHub (somente leitura). Token: o da conexão `github`
-# do hub (a fonte `cli` é o `gh auth token` do gh_bin; sobrescreva com
-# [connections."github"]) ou, enquanto existir, o configurado na UI
-# (~/.config/ctower/github.token, 0600), que vale no lugar da conexão
+# Sincronização com o GitHub (somente leitura). Token: o da conexão GitHub
+# do projeto no hub, ou da `github` padrão (a fonte `cli` é o `gh auth token`
+# do gh_bin), com a sobrescrita [connections."nome"] deste ambiente abaixo
 gh_sync_interval_secs = 180         # 0 desliga o laço; `sync.now` da UI continua funcionando
 gh_api_url = "https://api.github.com"
 gh_bin = "gh"
@@ -67,14 +66,16 @@ dir = ""                            # vazio = ~/.local/state/ctower/logs (~/Libr
 max_file_mb = 10                    # tamanho de cada arquivo antes de rotacionar; 0 desliga o arquivo
 max_files = 5                       # arquivos guardados, contando o atual (ctowerd.jsonl, .1 … .4)
 
-# Comandos de credencial do Jira e do GitLab só deste ambiente, no lugar dos
-# do cadastro (veja "Credencial por ambiente" abaixo). Uma tabela por projeto.
-[credentials."acme/acme-web"]
-tracker_cmd = "/usr/bin/pass show acme/jira | head -1"     # vazio ou ausente = o do cadastro
-forge_cmd = "/usr/bin/pass show acme/gitlab | head -1"     # idem, para o GitLab
+# Comando de credencial de uma conexão do hub só deste ambiente, no lugar da
+# fonte dela no hub (veja "Credencial por ambiente" abaixo). Uma tabela por
+# conexão, pelo nome dela no hub.
+[connections."jira-acme"]
+credential_cmd = "/usr/bin/pass show acme/jira | head -1"  # vazio ou ausente = a fonte do hub
+[connections."github"]
+credential_cmd = "gh auth token"
 ```
 
-`update_ref` e `gh_sync_interval_secs` também podem ser editados pela UI (`env.config.set`): o daemon grava no `config.toml`, preservando o resto do arquivo, e aplica sem restart. O mesmo vale para `[credentials]`, em Configurações › Ambiente › Credenciais do Jira e GitLab (`env.credentials.get|set`).
+`update_ref` e `gh_sync_interval_secs` também podem ser editados pela UI (`env.config.set`): o daemon grava no `config.toml`, preservando o resto do arquivo, e aplica sem restart. O mesmo vale para `[connections]`, em Configurações › Ambiente › Credenciais das conexões (`env.connections.get|set`, só no app desktop).
 
 ### Permissões pela UI
 
@@ -111,7 +112,11 @@ Cada issue do espelho guarda os identificadores dos responsáveis (`assignees`):
 
 ### Credencial por ambiente
 
-O comando de credencial do Jira e do GitLab vem do cadastro do projeto no hub e é o mesmo para todos os ambientes. Quando o caminho do binário ou o gerenciador de senhas muda de um ambiente para outro (por exemplo, `/opt/homebrew/bin/pass` no macOS e `/usr/bin/pass` no Linux), cada ambiente pode usar o seu próprio comando em `[credentials."owner/repo"]` (`tracker_cmd` para o Jira, `forge_cmd` para o GitLab). Também dá para editar pela UI, em Configurações › Ambiente › Credenciais do Jira e GitLab, que mostra o comando do cadastro, o deste ambiente e o resultado da última leitura (credencial ok ou o erro, e o sync falhando há N ciclos). O comando deste ambiente vale no sync, no "Ver issue", no glab e no prompt da sessão, onde substitui o `"$(<comando>)"` do cadastro. A mudança vale no próximo uso, sem reiniciar. Os outros ambientes e o cadastro do hub continuam iguais, e o comando nunca é enviado ao hub. Na prontidão (`env.info.trackers`), `credential_from_env` indica que a credencial veio deste ambiente.
+A credencial de cada conexão (Jira, GitLab, GitHub) vem da fonte cadastrada no hub (comando, secret do hub, arquivo ou, no GitHub, o `gh auth token`) e é a mesma para todos os ambientes. Quando o caminho do binário, o gerenciador de senhas ou o arquivo muda de um ambiente para outro (por exemplo, `/opt/homebrew/bin/pass` no macOS e `/usr/bin/pass` no Linux), cada ambiente pode usar o seu próprio comando em `[connections."nome"] credential_cmd`, pelo nome da conexão no hub. Pela UI, em Configurações › Ambiente › Credenciais das conexões (app desktop, `env.connections.get|set`): a tela lista as conexões que o ambiente conhece, com a fonte do hub (o tipo e, no secret e no arquivo, o nome e o caminho; nunca o token nem o comando do hub), os projetos daqui que usam cada uma e o comando deste ambiente. A sobrescrita cujo nome não existe mais no hub aparece para ser apagada. O comando deste ambiente vale no sync, no "Ver issue", no glab, no `ct-gh` e no prompt da sessão, onde substitui o `"$(<comando>)"` do cadastro. A gravação edita o `config.toml` no lugar e vale no próximo uso, sem reiniciar (o token em cache dos projetos da conexão é descartado). Os outros ambientes e o hub continuam iguais, e o comando nunca é enviado ao hub.
+
+O antigo `[credentials."owner/repo"]` (`tracker_cmd`, `forge_cmd`, #143) não tem mais tela: o pull o converte em `[connections]`, e o que não converte (projeto sem conexão aqui, ou comando em conflito com outro da mesma conexão) continua valendo por projeto, com aviso no log. Na prontidão (`env.info.trackers`), `credential_from_env` indica que a credencial veio desse `[credentials]`.
+
+**Token do GitHub.** Vem da conexão GitHub do projeto (ou da `github` padrão), com a sobrescrita acima; a tela própria do token do ambiente saiu (#276). O `~/.config/ctower/github.token` que ela gravava é migrado no boot e no pull: cada conexão GitHub em uso aqui, sem sobrescrita, ganha `credential_cmd` que lê o token, e o arquivo vai para `~/.config/ctower/github-env.token` (o comando lê esse caminho; apagar a sobrescrita não a faz voltar). Se a conexão do hub usa `file` com um caminho que não existe nesta máquina (o `github.token` do hub, por exemplo) e não há sobrescrita, o sync do GitHub falha com um erro que pede a sobrescrita da conexão neste ambiente (ex.: `gh auth token`); o ambiente não cai sozinho no `gh` local, que pode ser outra conta. A tela marca essa conexão.
 
 ### Épico da sessão de issue
 
