@@ -100,6 +100,7 @@ impl Glab {
             Err(RunError::NotFound) => return Err(GitlabError::NotFound(self.bin.clone())),
             Err(RunError::Timeout(d)) => return Err(GitlabError::Timeout(d.as_secs().max(1))),
             Err(RunError::Io(e)) => return Err(GitlabError::Failed(e.to_string())),
+            Err(e @ RunError::OutputTooLarge(_)) => return Err(GitlabError::Failed(e.to_string())),
         };
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         if out.status.success() {

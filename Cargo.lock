@@ -561,6 +561,7 @@ dependencies = [
 name = "ct-git"
 version = "1.10.0"
 dependencies = [
+ "ct-proc",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -667,6 +668,7 @@ dependencies = [
  "ct-http",
  "ct-jira",
  "ct-ledger",
+ "ct-proc",
  "ct-secrets",
  "ct-sessions",
  "cthubd",
@@ -696,6 +698,7 @@ dependencies = [
  "ct-gitlab",
  "ct-jira",
  "ct-ledger",
+ "ct-proc",
  "ct-pty",
  "ct-secrets",
  "ct-update",
@@ -796,6 +799,7 @@ dependencies = [
  "clap",
  "ct-core",
  "ct-gh",
+ "ct-git",
  "ct-http",
  "ct-ledger",
  "ct-server",

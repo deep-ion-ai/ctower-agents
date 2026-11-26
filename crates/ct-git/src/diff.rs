@@ -17,13 +17,12 @@
 //! Só lê: nenhum comando escreve na worktree, no index ou nas referências
 //! (`GIT_OPTIONAL_LOCKS=0`; os caminhos são literais, sem glob).
 
-use crate::{run_env, GitError};
+use crate::{git_exec, git_failure, joined, os, run_limit, GitError, Limit};
+use ct_proc::process::{Job, RunError};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// No máximo isto de arquivos na lista (o resto é cortado, com aviso).
@@ -160,18 +159,26 @@ fn envs(index: Option<&Path>) -> Vec<(&'static str, std::ffi::OsString)> {
     v
 }
 
+/// [`envs`] no formato que o [`Job`] pede.
+fn job_envs(index: Option<&Path>) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    envs(index)
+        .into_iter()
+        .map(|(k, v)| (std::ffi::OsString::from(k), v))
+        .collect()
+}
+
 /// `git` com a saída em bytes, sem cortar espaços (patch, `-z`).
 fn raw(dir: &Path, index: Option<&Path>, args: &[&str]) -> Result<Vec<u8>, GitError> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .envs(envs(index))
-        .stdin(Stdio::null())
-        .output()?;
+    let args = os(args);
+    let job = Job {
+        envs: job_envs(index),
+        ..Default::default()
+    };
+    let out = git_exec(dir, &args, job, Limit::local())
+        .map_err(|e| git_failure("git", &args, e, Limit::local()))?;
     if !out.status.success() {
         return Err(failed(
-            &args.join(" "),
+            &joined(&args),
             String::from_utf8_lossy(&out.stderr).trim(),
         ));
     }
@@ -185,50 +192,42 @@ fn raw_limited(
     args: &[&str],
     max: usize,
 ) -> Result<Option<Vec<u8>>, GitError> {
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .envs(envs(index))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let mut buf = Vec::new();
-    child
-        .stdout
-        .take()
-        .expect("stdout")
-        .take(max as u64 + 1)
-        .read_to_end(&mut buf)?;
-    if buf.len() > max {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Ok(None);
-    }
-    let out = child.wait_with_output()?;
-    if !out.status.success() {
-        return Err(failed(
-            &args.join(" "),
+    let args = os(args);
+    let job = Job {
+        envs: job_envs(index),
+        max_stdout: Some(max),
+        ..Default::default()
+    };
+    match git_exec(dir, &args, job, Limit::local()) {
+        Ok(out) if !out.status.success() => Err(failed(
+            &joined(&args),
             String::from_utf8_lossy(&out.stderr).trim(),
-        ));
+        )),
+        Ok(out) => Ok(Some(out.stdout)),
+        Err(RunError::OutputTooLarge(_)) => Ok(None),
+        Err(e) => Err(git_failure("git", &args, e, Limit::local())),
     }
-    Ok(Some(buf))
 }
 
 fn text(dir: &Path, args: &[&str]) -> Result<String, GitError> {
-    run_env(dir, args, &envs(None))
+    run_limit(dir, args, job_envs(None), Limit::local())
 }
 
 /// SHA do commit `rev`, se existir.
 fn commit_sha(dir: &Path, rev: &str) -> Result<Option<String>, GitError> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
-        .arg(format!("{rev}^{{commit}}"))
-        .envs(envs(None))
-        .output()?;
+    let args = [
+        std::ffi::OsString::from("rev-parse"),
+        "--verify".into(),
+        "--quiet".into(),
+        "--end-of-options".into(),
+        format!("{rev}^{{commit}}").into(),
+    ];
+    let job = Job {
+        envs: job_envs(None),
+        ..Default::default()
+    };
+    let out = git_exec(dir, &args, job, Limit::local())
+        .map_err(|e| git_failure("git", &args, e, Limit::local()))?;
     Ok(out
         .status
         .success()
@@ -383,28 +382,25 @@ fn temp_index(dir: &Path, only: Option<&str>) -> Result<Option<TempIndex>, GitEr
     if Path::new(&real).exists() {
         fs::copy(&real, &tmp.path)?;
     }
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "add",
-            "--intent-to-add",
-            "--pathspec-from-file=-",
-            "--pathspec-file-nul",
-        ])
-        .envs(envs(Some(&tmp.path)))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    {
-        let mut stdin = child.stdin.take().expect("stdin");
-        for f in &files {
-            stdin.write_all(f.as_bytes())?;
-            stdin.write_all(&[0])?;
-        }
+    // Lista de caminhos separados por NUL, pela entrada do git.
+    let mut input = Vec::new();
+    for f in &files {
+        input.extend_from_slice(f.as_bytes());
+        input.push(0);
     }
-    let out = child.wait_with_output()?;
+    let args = os(&[
+        "add",
+        "--intent-to-add",
+        "--pathspec-from-file=-",
+        "--pathspec-file-nul",
+    ]);
+    let job = Job {
+        envs: job_envs(Some(&tmp.path)),
+        stdin: Some(&input),
+        ..Default::default()
+    };
+    let out = git_exec(dir, &args, job, Limit::local())
+        .map_err(|e| git_failure("git", &args, e, Limit::local()))?;
     if !out.status.success() {
         return Err(failed(
             "add --intent-to-add",
@@ -648,6 +644,7 @@ pub fn branch_commits(dir: &Path, base: &str) -> Result<BranchCommits, GitError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")

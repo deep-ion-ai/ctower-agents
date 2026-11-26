@@ -11,6 +11,7 @@ ct-gh.workspace = true
 ct-ledger.workspace = true
 ct-http.workspace = true
 ct-server.workspace = true
+ct-git.workspace = true
 ct-sessions.workspace = true
 axum.workspace = true
 tokio.workspace = true

@@ -1333,9 +1333,14 @@ fn hostname() -> String {
         .or_else(|_| std::fs::read_to_string("/etc/hostname"))
         .or_else(|_| {
             // macOS não tem os arquivos acima.
-            std::process::Command::new("hostname")
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            ct_proc::process::exec(
+                std::ffi::OsStr::new("hostname"),
+                &[],
+                ct_proc::process::Job::default(),
+                Duration::from_secs(5),
+            )
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .map_err(std::io::Error::other)
         })
         .map(|s| s.trim().to_string())
         .unwrap_or_default()

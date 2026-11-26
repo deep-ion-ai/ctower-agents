@@ -8,6 +8,7 @@ license.workspace = true
 ct-core.workspace = true
 ct-gh.workspace = true
 ct-git.workspace = true
+ct-proc.workspace = true
 ct-gitlab.workspace = true
 ct-jira.workspace = true
 ct-ledger.workspace = true
