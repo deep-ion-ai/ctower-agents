@@ -5,10 +5,13 @@ import {
   connectionFormOf,
   connectionLabel,
   connectionParams,
+  connectionUsers,
   connectionsOfKind,
   credentialText,
   readinessText,
+  renameLockedText,
 } from "./connections";
+import { hubProject, hubProjectView, jiraHubProject } from "../test/fixtures";
 
 const JIRA: Connection = {
   id: 7,
@@ -114,4 +117,16 @@ test("conexões de um tipo, por nome", () => {
   const jiraB = { ...JIRA, id: 9, name: "jira-beta" };
   expect(connectionsOfKind([JIRA, gl, jiraB], "jira").map((c) => c.name)).toEqual(["jira-acme", "jira-beta"]);
   expect(connectionsOfKind([JIRA, gl], "github")).toEqual([]);
+});
+
+test("connectionUsers lista os projetos que usam a conexão no rastreador ou na forja", () => {
+  const projects = [
+    hubProjectView(jiraHubProject()),
+    hubProjectView(jiraHubProject({ id: 8, gh_owner: "acme", gh_repo: "acme-web" })),
+    hubProjectView(hubProject()),
+  ];
+  expect(connectionUsers(7, projects)).toEqual(["acme/acme-web", "grupo/projeto/app"]);
+  expect(connectionUsers(8, projects)).toEqual(["acme/acme-web", "grupo/projeto/app"]);
+  expect(connectionUsers(9, projects)).toEqual([]);
+  expect(renameLockedText("jira-acme", ["acme/acme-web"])).toContain('[connections."jira-acme"]');
 });

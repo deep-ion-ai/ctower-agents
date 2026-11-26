@@ -4,6 +4,8 @@
 // valor: o hub guarda o nome do secret, o comando que imprime o token ou o
 // caminho do arquivo, e é isso que a tela mostra e edita.
 import type { Connection, CredentialSource, ProviderKind, Readiness } from "../protocol/gen";
+import type { HubProject } from "../protocol/hub-gen";
+import { gitlabOf, jiraOf } from "./tracker";
 
 export const KIND_LABEL: Record<ProviderKind, string> = {
   github: "GitHub",
@@ -152,4 +154,25 @@ export const connectionsOfKind = (list: readonly Connection[], kind: ProviderKin
 /** Rótulo de uma conexão no seletor e nos cartões: `jira-empresa (https://jira.example.com)`. */
 export function connectionLabel(c: Connection): string {
   return c.endpoint ? `${c.name} (${c.endpoint})` : c.name;
+}
+
+/**
+ * Projetos (`owner/repo`, em ordem) que usam a conexão `id`, como
+ * `tracker.connection` ou `forge.connection`: o espelho na UI do que o hub
+ * confere em `connection_users`.
+ */
+export function connectionUsers(id: number, projects: readonly { project: Pick<HubProject, "gh_owner" | "gh_repo" | "tracker" | "forge"> }[]): string[] {
+  return projects
+    .filter(({ project: p }) => jiraOf(p)?.connection === id || gitlabOf(p)?.connection === id)
+    .map(({ project: p }) => `${p.gh_owner}/${p.gh_repo}`)
+    .sort();
+}
+
+/**
+ * Aviso do campo de nome de uma conexão em uso (#271): o hub recusa
+ * renomear, porque as sobrescritas `[connections."nome"]` dos ambientes são
+ * indexadas pelo nome e deixariam de valer.
+ */
+export function renameLockedText(name: string, users: readonly string[]): string {
+  return `Em uso por ${users.join(", ")}: o nome não muda, porque renomear desligaria as sobrescritas [connections."${name}"] dos ambientes. Para trocar o nome, crie uma conexão nova e troque a conexão dos projetos.`;
 }

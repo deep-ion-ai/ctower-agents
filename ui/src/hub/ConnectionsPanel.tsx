@@ -13,8 +13,10 @@ import {
   KIND_LABEL,
   connectionFormOf,
   connectionParams,
+  connectionUsers,
   credentialText,
   readinessText,
+  renameLockedText,
   type ConnectionForm,
   type ConnectionTest,
   type CredKind,
@@ -40,26 +42,30 @@ const CRED_TEXT: Record<CredKind, string> = {
  * (`hub.connections.*`, desktop). O teste confere só o cadastro, sem rede; a
  * identidade na rede ("quem sou eu") fica com o ambiente, que tem a credencial.
  * Os projetos escolhem a conexão no cadastro, em vez de digitar URL e credencial.
+ * O nome de uma conexão em uso não muda (#271): é a chave das sobrescritas
+ * `[connections."nome"]` dos ambientes.
  */
 export function HubConnections() {
-  const { api } = useTower();
+  const { api, hub } = useTower();
   const { connections, error: loadError, reload } = useHubConnections();
   const [editing, setEditing] = useState<Editing | null>(null);
   const [tests, setTests] = useState<Record<number, ConnectionTest | string>>({});
   const [confirm, setConfirm] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Erro ao salvar o formulário: aparece junto dele, onde o usuário está. */
+  const [formError, setFormError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
   const save = async () => {
     if (!editing) return;
     const p = connectionParams(editing.form, editing.id);
     if ("error" in p) {
-      setError(p.error);
+      setFormError(p.error);
       return;
     }
     setBusy(true);
-    setError(null);
+    setFormError(null);
     try {
       const method = editing.id === undefined ? "hub.connections.add" : "hub.connections.update";
       await api.hubCall(method, p.params);
@@ -67,7 +73,8 @@ export function HubConnections() {
       setEditing(null);
       await reload();
     } catch (e) {
-      setError(errText(e));
+      // Ex.: o hub recusa renomear conexão em uso e diz quais projetos a usam.
+      setFormError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -137,6 +144,7 @@ export function HubConnections() {
           {connections.map((c) => {
             const t = tests[c.id];
             const r = t && typeof t !== "string" ? readinessText(t.readiness) : null;
+            const users = connectionUsers(c.id, hub.projects);
             return (
               <li key={c.id} className="hub-card">
                 <div className="hub-card-head">
@@ -151,6 +159,10 @@ export function HubConnections() {
                   <div>
                     <dt>Credencial</dt>
                     <dd>{credentialText(c.credential)}</dd>
+                  </div>
+                  <div>
+                    <dt>Usada por</dt>
+                    <dd>{users.length > 0 ? users.join(", ") : "nenhum projeto"}</dd>
                   </div>
                   {typeof c.options?.config_file === "string" && c.options.config_file && (
                     <div>
@@ -167,7 +179,10 @@ export function HubConnections() {
                     type="button"
                     className="btn"
                     disabled={busy}
-                    onClick={() => setEditing({ id: c.id, form: connectionFormOf(c) })}
+                    onClick={() => {
+                      setFormError(null);
+                      setEditing({ id: c.id, form: connectionFormOf(c) });
+                    }}
                   >
                     Editar
                   </button>
@@ -201,10 +216,12 @@ export function HubConnections() {
         <ConnectionFormView
           editing={editing}
           busy={busy}
+          error={formError}
+          users={editing.id === undefined ? [] : connectionUsers(editing.id, hub.projects)}
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);
-            setError(null);
+            setFormError(null);
           }}
           onSave={() => void save()}
         />
@@ -214,7 +231,10 @@ export function HubConnections() {
             type="button"
             className="btn btn-primary"
             disabled={busy}
-            onClick={() => setEditing({ form: { ...EMPTY_CONNECTION_FORM } })}
+            onClick={() => {
+              setFormError(null);
+              setEditing({ form: { ...EMPTY_CONNECTION_FORM } });
+            }}
           >
             Nova conexão
           </button>
@@ -227,18 +247,24 @@ export function HubConnections() {
 function ConnectionFormView({
   editing,
   busy,
+  error,
+  users,
   onChange,
   onCancel,
   onSave,
 }: {
   editing: Editing;
   busy: boolean;
+  error: string | null;
+  /** Projetos que usam a conexão editada: com algum, o nome não muda (#271). */
+  users: string[];
   onChange: (e: Editing) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
   const { id, form: f } = editing;
   const prefix = id === undefined ? "conn-new" : `conn-${id}`;
+  const nameLocked = id !== undefined && users.length > 0;
   const set = (patch: Partial<ConnectionForm>) => onChange({ ...editing, form: { ...f, ...patch } });
   // Trocar o tipo troca a forma de credencial que ele aceita.
   const kinds = CRED_KINDS[f.kind];
@@ -289,9 +315,13 @@ function ConnectionFormView({
           type="text"
           placeholder={`${f.kind}-empresa`}
           value={f.name}
+          disabled={nameLocked}
+          aria-describedby={`${prefix}-name-hint`}
           onChange={(e) => set({ name: e.target.value })}
         />
-        <span className="hint muted">Único no hub: minúsculas, dígitos, `-`, `_` ou `.`.</span>
+        <span id={`${prefix}-name-hint`} className="hint muted">
+          {nameLocked ? renameLockedText(f.name, users) : "Único no hub: minúsculas, dígitos, `-`, `_` ou `.`."}
+        </span>
       </div>
       <div className="field">
         <label htmlFor={`${prefix}-endpoint`}>{f.kind === "gitlab" ? "Host" : f.kind === "jira" ? "URL" : "API"}</label>
@@ -338,6 +368,11 @@ function ConnectionFormView({
             onChange={(e) => set({ config_file: e.target.value })}
           />
         </div>
+      )}
+      {error && (
+        <p role="alert" className="start-error hub-wide">
+          {error}
+        </p>
       )}
       <div className="form-actions">
         <button type="button" className="btn" onClick={onCancel}>
