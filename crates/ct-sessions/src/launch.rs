@@ -1054,6 +1054,7 @@ mod tests {
             let p = l.get_project(env.project_id).unwrap();
             let cfg = ct_ledger::ConfigResponse {
                 connections: None,
+                connection_names: None,
                 config_rev: rev,
                 config_epoch: 1,
                 changed: true,
@@ -2489,6 +2490,7 @@ mod tests {
         // dia: vale o `config_pulled_at`, e o aviso some.
         let cfg = ct_ledger::ConfigResponse {
             connections: None,
+            connection_names: None,
             config_rev: 1,
             config_epoch: 1,
             changed: false,

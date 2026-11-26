@@ -111,6 +111,12 @@ pub struct ConfigResponse {
     /// num hub anterior, ou `changed: false`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connections: Option<Vec<ct_core::provider::Connection>>,
+    /// Nomes de **todas** as conexões do hub (#270), sem endereço nem
+    /// credencial: a sobrescrita `[connections."nome"]` de uma conexão que
+    /// existe, mas sem projeto atribuído a este ambiente, não é órfã.
+    /// Ausente com `changed: false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_names: Option<Vec<String>>,
 }
 
 /// Work item que o hub deu como `concluido`, em `GET /sync/done`.
@@ -348,28 +354,36 @@ impl Ledger {
             }
             self.set_meta("config_rev", cfg.config_rev)?;
             self.set_meta("config_epoch", cfg.config_epoch)?;
-            self.set_hub_connections(cfg.connections.as_deref().unwrap_or_default())?;
+            self.set_hub_connections(
+                cfg.connections.as_deref().unwrap_or_default(),
+                cfg.connection_names.as_deref().unwrap_or_default(),
+            )?;
             Ok(out)
         })
     }
 
-    /// Conexões do hub do último pull com mudança (`[]` se não havia).
-    fn set_hub_connections(&self, conns: &[Connection]) -> Result<()> {
+    /// Conexões do hub do último pull com mudança (`[]` se não havia) e os
+    /// nomes de todas as conexões do hub (#270).
+    fn set_hub_connections(&self, conns: &[Connection], names: &[String]) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO hub_connection_cache (id, json) VALUES (1, ?1)
-             ON CONFLICT (id) DO UPDATE SET json = excluded.json",
-            [serde_json::to_string(conns).expect("Vec<Connection> serializa")],
+            "INSERT INTO hub_connection_cache (id, json, names) VALUES (1, ?1, ?2)
+             ON CONFLICT (id) DO UPDATE SET json = excluded.json, names = excluded.names",
+            [
+                serde_json::to_string(conns).expect("Vec<Connection> serializa"),
+                serde_json::to_string(names).expect("Vec<String> serializa"),
+            ],
         )?;
         Ok(())
     }
 
-    /// `true` se o cache já tem as conexões do hub (gravado num pull com
-    /// mudança). Sem elas, o próximo pull pede o conjunto completo.
+    /// `true` se o cache já tem as conexões do hub e os nomes de todas
+    /// (gravados num pull com mudança). Sem eles, o próximo pull pede o
+    /// conjunto completo.
     pub fn hub_connections_cached(&self) -> Result<bool> {
         Ok(self
             .conn
             .query_row(
-                "SELECT 1 FROM hub_connection_cache WHERE id = 1",
+                "SELECT 1 FROM hub_connection_cache WHERE id = 1 AND names IS NOT NULL",
                 [],
                 |_| Ok(()),
             )
@@ -385,7 +399,7 @@ impl Ledger {
         &self,
         overrides: &ct_core::ConnectionOverrides,
     ) -> Result<Vec<String>> {
-        let conns = self.hub_connections()?;
+        let (conns, names) = self.hub_connections()?;
         self.atomic(|| {
             let rows: Vec<Project> = {
                 let mut stmt = self.conn.prepare(&format!(
@@ -400,7 +414,7 @@ impl Ledger {
                 .iter()
                 .map(|p| config_project_of(p, p.repo_path.clone()))
                 .collect();
-            let avisos = materialize_projects(&mut cfgs, &conns, overrides);
+            let avisos = materialize_projects(&mut cfgs, &conns, &names, overrides);
             for (p, c) in rows.iter().zip(&cfgs) {
                 if p.tracker != c.tracker || p.forge != c.forge {
                     self.conn.execute(
@@ -414,18 +428,23 @@ impl Ledger {
         })
     }
 
-    fn hub_connections(&self) -> Result<Vec<Connection>> {
-        let json: Option<String> = self
+    /// Conexões e nomes do cache (vazios se não há).
+    fn hub_connections(&self) -> Result<(Vec<Connection>, Vec<String>)> {
+        let row: Option<(String, Option<String>)> = self
             .conn
             .query_row(
-                "SELECT json FROM hub_connection_cache WHERE id = 1",
+                "SELECT json, names FROM hub_connection_cache WHERE id = 1",
                 [],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        Ok(match json {
-            Some(j) => serde_json::from_str(&j).unwrap_or_default(),
-            None => Vec::new(),
+        Ok(match row {
+            Some((j, n)) => (
+                serde_json::from_str(&j).unwrap_or_default(),
+                n.and_then(|n| serde_json::from_str(&n).ok())
+                    .unwrap_or_default(),
+            ),
+            None => (Vec::new(), Vec::new()),
         })
     }
 
@@ -646,19 +665,24 @@ pub fn materialize_connections(
     overrides: &ct_core::ConnectionOverrides,
 ) -> Vec<String> {
     let conns = cfg.connections.clone().unwrap_or_default();
+    let names = cfg.connection_names.clone().unwrap_or_default();
     match cfg.projects.as_deref_mut() {
-        Some(ps) => materialize_projects(ps, &conns, overrides),
-        None => materialize_projects(&mut [], &conns, overrides),
+        Some(ps) => materialize_projects(ps, &conns, &names, overrides),
+        None => materialize_projects(&mut [], &conns, &names, overrides),
     }
 }
 
-/// Núcleo de [`materialize_connections`]: as conexões são `conns`. Avisa
-/// também as sobrescritas que não casam com nenhuma conexão (chave antiga,
-/// depois de renomear a conexão no hub, ou conexão apagada): o ambiente
-/// volta ao comando do hub sem sobrescrita, e o aviso é o único sinal.
+/// Núcleo de [`materialize_connections`]: as conexões são `conns`, e `names`
+/// são os nomes de todas as conexões do hub. Avisa também as sobrescritas
+/// cujo nome não existe no hub (chave antiga, depois de renomear a conexão,
+/// ou conexão apagada): o ambiente volta ao comando do hub sem sobrescrita, e
+/// o aviso é o único sinal. A sobrescrita de uma conexão que existe, mas que
+/// nenhum projeto atribuído a este ambiente usa, não é órfã (#270): fica
+/// guardada para quando um projeto chegar.
 fn materialize_projects(
     projects: &mut [ConfigProject],
     conns: &[Connection],
+    names: &[String],
     overrides: &ct_core::ConnectionOverrides,
 ) -> Vec<String> {
     use ct_core::provider::{self, ConnectionGap};
@@ -668,7 +692,7 @@ fn materialize_projects(
     };
     let mut warnings = Vec::new();
     for key in overrides.0.keys() {
-        if !conns.iter().any(|c| &c.name == key) {
+        if !conns.iter().any(|c| &c.name == key) && !names.contains(key) {
             warnings.push(format!(
                 "conexões: [connections.\"{key}\"] não casa com nenhuma conexão do hub \
                  (renomeada ou apagada?); a sobrescrita não vale"
@@ -725,6 +749,7 @@ mod tests {
     fn resp(rev: i64, projects: Vec<ConfigProject>) -> ConfigResponse {
         ConfigResponse {
             connections: None,
+            connection_names: None,
             config_rev: rev,
             config_epoch: 7,
             changed: true,
@@ -804,6 +829,7 @@ mod tests {
         // `changed: false`: só a hora do pull.
         let sem = ConfigResponse {
             connections: None,
+            connection_names: None,
             config_rev: 7,
             config_epoch: 7,
             changed: false,
@@ -919,6 +945,7 @@ mod tests {
     fn resposta_sem_mudanca_serializa_so_o_rev() {
         let v = serde_json::to_value(ConfigResponse {
             connections: None,
+            connection_names: None,
             config_rev: 4,
             config_epoch: 9,
             changed: false,
@@ -950,6 +977,7 @@ mod tests {
         // Pull sem mudança no hub, com outra raiz.
         let sem = ConfigResponse {
             connections: None,
+            connection_names: None,
             config_rev: 3,
             config_epoch: 7,
             changed: false,
@@ -1348,7 +1376,10 @@ mod conexoes_tests {
                   "endpoint": "https://jira.example.com",
                   "credential": { "kind": "command", "cmd": "pass show a/jira | head -1" },
                   "options": {}, "created_at": 0, "updated_at": 0 }
-            ]
+            ],
+            // Todas as conexões do hub: `jira-livre` existe, sem projeto
+            // atribuído a este ambiente.
+            "connection_names": ["jira-acme", "jira-livre"]
         }))
         .unwrap()
     }
@@ -1412,5 +1443,46 @@ mod conexoes_tests {
             TrackerConfig::Jira(j) => assert_eq!(j.credential_cmd, "pass show a/jira | head -1"),
             _ => panic!("rastreador"),
         }
+    }
+
+    /// Sobrescrita de conexão que existe no hub, mas sem projeto atribuído
+    /// a este ambiente, não é órfã (#270): nem no pull com mudança nem na
+    /// reaplicação do cache.
+    #[test]
+    fn sobrescrita_de_conexao_sem_projeto_nao_e_orfa() {
+        let mut cfg = cfg_com_jira(true);
+        let ov = sobrescrita("jira-livre", "/usr/bin/a");
+        let avisos = materialize_connections(&mut cfg, &ov);
+        assert!(avisos.is_empty(), "{avisos:?}");
+
+        let l = Ledger::open_in_memory().unwrap();
+        l.apply_hub_config(&cfg_com_jira(true), |p| format!("/r/{}", p.repo))
+            .unwrap();
+        l.apply_hub_config(&cfg_com_jira(false), |p| format!("/r/{}", p.repo))
+            .unwrap();
+        let avisos = l.refresh_connection_overrides(&ov).unwrap();
+        assert!(avisos.is_empty(), "{avisos:?}");
+        // Nome que o hub não conhece segue avisando, pelo cache também.
+        let avisos = l
+            .refresh_connection_overrides(&sobrescrita("jira-antigo", "/usr/bin/a"))
+            .unwrap();
+        assert!(
+            avisos.iter().any(|a| a.contains("jira-antigo")),
+            "{avisos:?}"
+        );
+    }
+
+    /// Cache gravado antes da #270 (sem os nomes) não conta como completo:
+    /// o próximo pull pede o conjunto inteiro, que traz os nomes.
+    #[test]
+    fn cache_sem_nomes_pede_conjunto_completo() {
+        let l = Ledger::open_in_memory().unwrap();
+        l.apply_hub_config(&cfg_com_jira(true), |p| format!("/r/{}", p.repo))
+            .unwrap();
+        assert!(l.hub_connections_cached().unwrap());
+        l.conn
+            .execute("UPDATE hub_connection_cache SET names = NULL", [])
+            .unwrap();
+        assert!(!l.hub_connections_cached().unwrap());
     }
 }

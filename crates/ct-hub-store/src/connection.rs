@@ -3,9 +3,10 @@
 //! (`tracker.connection` e `forge.connection`).
 //!
 //! A validação é do descritor do tipo ([`provider::descriptor`]). `delete`
-//! e a troca de nome recusam conexão em uso por projeto vivo. Editar ou apagar conexão em uso
-//! sobe o `config_rev`, para os ambientes receberem o cadastro novo em
-//! `GET /sync/config`.
+//! e a troca de nome recusam conexão em uso por projeto vivo. Editar conexão
+//! em uso sobe o `config_rev`, para os ambientes receberem o cadastro novo em
+//! `GET /sync/config`. Criar, renomear ou apagar qualquer conexão também sobe:
+//! o pull leva os nomes de todas as conexões do hub (#270).
 
 use super::{Hub, HubProject, ProjectProvider};
 use crate::{json_col, LedgerError, Result};
@@ -144,7 +145,8 @@ impl Hub {
     }
 
     /// Cadastra uma conexão (`hub.connections.add`). Nada referencia uma
-    /// conexão nova, então o `config_rev` não sobe.
+    /// conexão nova, mas o `config_rev` sobe: o nome dela entra nos nomes
+    /// que o pull leva aos ambientes (#270).
     pub fn add_connection(&self, new: &NewConnection) -> Result<Connection> {
         let now = now_ms();
         let c = Connection {
@@ -159,6 +161,8 @@ impl Hub {
         };
         validate(&c)?;
         self.check_unique_name(&c.name, None)?;
+        // Sem transação própria: a migração dos cadastros (#237) cadastra
+        // dentro da dela.
         self.conn.execute(
             "INSERT INTO connection (name, kind, endpoint, credential, options, created_at,
                                      updated_at)
@@ -173,6 +177,7 @@ impl Hub {
             ],
         )?;
         let id = self.conn.last_insert_rowid();
+        self.bump_config_rev()?;
         self.connection(id)
     }
 
@@ -219,7 +224,9 @@ impl Hub {
                 )));
             }
         }
-        let in_use = !users.is_empty();
+        // Em uso, o cadastro muda nos ambientes; com outro nome, muda a
+        // lista de nomes que o pull leva (#270).
+        let bump = !users.is_empty() || next.name != cur.name;
         let tx = self.conn.unchecked_transaction()?;
         self.conn.execute(
             "UPDATE connection SET name = ?2, endpoint = ?3, credential = ?4, options = ?5,
@@ -234,7 +241,7 @@ impl Hub {
                 next.updated_at
             ],
         )?;
-        if in_use {
+        if bump {
             self.bump_config_rev()?;
         }
         tx.commit()?;
@@ -242,7 +249,8 @@ impl Hub {
     }
 
     /// Apaga a conexão (`hub.connections.delete`). Recusa se algum projeto
-    /// vivo a referencia, e diz quais.
+    /// vivo a referencia, e diz quais. Sobe o `config_rev`: o nome sai da
+    /// lista que o pull leva aos ambientes (#270).
     pub fn delete_connection(&self, id: i64) -> Result<Connection> {
         let cur = self.connection(id)?;
         let users = self.connection_users(id)?;
@@ -253,8 +261,11 @@ impl Hub {
                 users.join(", ")
             )));
         }
+        let tx = self.conn.unchecked_transaction()?;
         self.conn
             .execute("DELETE FROM connection WHERE id = ?1", [id])?;
+        self.bump_config_rev()?;
+        tx.commit()?;
         Ok(cur)
     }
 
@@ -280,6 +291,18 @@ impl Hub {
              ORDER BY key",
         )?;
         let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Nomes de todas as conexões do hub, em ordem (#270): o pull os leva
+    /// ao ambiente, sem endereço nem credencial, para ele distinguir a
+    /// sobrescrita `[connections."nome"]` de uma conexão sem projeto
+    /// atribuído da de uma conexão que não existe mais.
+    pub(crate) fn connection_names(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM connection ORDER BY name")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -783,5 +806,47 @@ mod tests {
             .map(|c| c.name)
             .collect();
         assert_eq!(nomes, vec!["gitlab-acme", "jira-acme"]);
+        // Os nomes vão todos, inclusive o da conexão sem projeto (#270).
+        assert_eq!(
+            cfg.connection_names.unwrap(),
+            vec!["gitlab-acme", "jira-acme", "jira-outra"]
+        );
+    }
+
+    /// Criar, renomear e apagar conexão sem projeto sobe o `config_rev`: a
+    /// lista de nomes do pull muda (#270). Editar outro campo dela, não.
+    #[test]
+    fn nomes_das_conexoes_sobem_a_config() {
+        let hub = Hub::open_in_memory().unwrap();
+        let rev = hub.config_rev().unwrap();
+        let c = hub
+            .add_connection(&jira("jira-acme", "https://jira.example.com"))
+            .unwrap();
+        let rev_add = hub.config_rev().unwrap();
+        assert!(rev_add > rev);
+
+        hub.update_connection(
+            c.id,
+            &ConnectionPatch {
+                endpoint: Some("https://jira2.example.com".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(hub.config_rev().unwrap(), rev_add);
+
+        hub.update_connection(
+            c.id,
+            &ConnectionPatch {
+                name: Some("jira-empresa".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rev_ren = hub.config_rev().unwrap();
+        assert!(rev_ren > rev_add);
+
+        hub.delete_connection(c.id).unwrap();
+        assert!(hub.config_rev().unwrap() > rev_ren);
     }
 }
