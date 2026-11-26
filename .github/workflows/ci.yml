@@ -50,6 +50,14 @@ jobs:
           dup=$(git ls-files | sed -nE 's/\.(c|m)?(j|t)sx?$//p' | sort -u | sort -f | uniq -di)
           [ -z "$dup" ] || { echo "::error::Módulos JS/TS que colidem sem diferenciar caixa (sem extensão):"; echo "$dup"; exit 1; }
 
+  # Processos externos só por ct_proc (scripts/lint-processos.sh, docs/ci.md).
+  # Roda em todo PR: é barato e não depende do escopo.
+  processos:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_LINUX || '"ubuntu-22.04"') }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/lint-processos.sh
+
   rust:
     needs: changes
     if: needs.changes.outputs.rust == 'true'

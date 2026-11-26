@@ -14,6 +14,12 @@ worktrees_root = "~/worktrees"
 scrollback_bytes = 4194304
 pre_trust_worktrees = true          # pré-aceita a confiança do Claude Code nas pastas das sessões
 
+# Prazos das operações git (ct-git). Lidos ao subir o ctowerd: depois de
+# editar, reinicie o serviço. Passou do prazo, o git é morto e a operação
+# falha com erro de prazo (nada fica pendurado no daemon).
+git_local_timeout_secs = 30         # status, diff, merge, worktree, config (padrão 30; 0 vira 1)
+git_network_timeout_secs = 120      # fetch, push e clone: remoto que não responde (padrão 120)
+
 # Sincronização com o GitHub (somente leitura). Token: o configurado na UI
 # (~/.config/ctower/github.token, 0600) ou, na falta dele, `gh auth token`
 gh_sync_interval_secs = 180         # 0 desliga o laço; `sync.now` da UI continua funcionando

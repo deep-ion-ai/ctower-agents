@@ -193,6 +193,7 @@ impl JiraCli {
             Err(RunError::NotFound) => return Err(JiraError::NotFound(self.bin.clone())),
             Err(RunError::Timeout(d)) => return Err(JiraError::Timeout(d.as_secs().max(1))),
             Err(RunError::Io(e)) => return Err(JiraError::Failed(e.to_string())),
+            Err(e @ RunError::OutputTooLarge(_)) => return Err(JiraError::Failed(e.to_string())),
         };
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         if out.status.success() {

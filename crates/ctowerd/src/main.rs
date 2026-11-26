@@ -71,6 +71,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if cfg.legacy_hub {
         return Err(HUB_REMOVED.into());
     }
+    // Prazos do git (git_local_timeout_secs e git_network_timeout_secs).
+    ct_git::configure(cfg.git_deadlines());
     let ui_token = ensure_token(&dirs.config.join("ui.token"))?;
     let hook_token = ensure_token(&dirs.config.join("hook.token"))?;
     let env_id = ensure_env_id(&dirs.env_id_file())?;

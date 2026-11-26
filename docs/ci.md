@@ -43,6 +43,10 @@ gh workflow run ci --ref <branch>
 gh workflow run ui --ref <branch>
 ```
 
+## Lint de processos externos
+
+O job `processos` do `ci.yml` roda `scripts/lint-processos.sh` em todo PR. Ele falha com `Command::new` fora de `crates/ct-proc` e `crates/ct-pty` e da lista de exceções do próprio script (cada uma com o motivo). Todo processo do daemon sai por `ct_proc` (prazo, `stdin` nulo, sessão e grupo próprios); o git passa por `ct_git`, com prazos em `git_local_timeout_secs` e `git_network_timeout_secs` (`docs/ambiente.md`). Código de teste (`tests/` e o trecho depois de `#[cfg(test)]`) fica de fora. Uma exceção sem `Command::new` também falha, para a lista não envelhecer.
+
 ## App de teste de uma branch
 
 Para testar o app de uma branch antes do merge (ex.: a de um épico), sem criar tag nem release:
