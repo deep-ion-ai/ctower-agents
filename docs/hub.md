@@ -62,7 +62,7 @@ Desenho completo: `docs/superpowers/specs/2026-10-18-hub-plano-de-controle.md` (
 
 O `cthubd` tem config e dados próprios:
 
-- config: `~/.config/cthub/config.toml` (`CTHUB_CONFIG_DIR`), com `ui.token` e `github.token`;
+- config: `~/.config/cthub/config.toml` (`CTHUB_CONFIG_DIR`), com `ui.token` e, de instalações anteriores às conexões, o `github.token`, que só vale como fonte `file` da conexão `github` criada a partir dele (seção 2, "Conexões");
 - dados: `~/.local/share/cthub/` (`CTHUB_DATA_DIR`), com `hub.db` e `backups/`.
 
 ```toml
@@ -306,7 +306,7 @@ Uma **conexão** é um serviço externo cadastrado uma vez no hub: GitHub, GitLa
 - **Campos:** `name` (único; minúsculas, dígitos, `-`, `_` ou `.`; até 64 caracteres; ex.: `jira-empresa`), `kind` (`github`, `gitlab` ou `jira`), `endpoint` (URL do Jira, host do GitLab ou API do GitHub; vazio = a padrão do tipo), `credential` e `options` (específicos do tipo, como o `config_file` do Jira). O tipo não muda depois do cadastro, porque os projetos dependem dele.
 - **Fonte da credencial** (`CredentialSource`, em `crates/ct-core/src/provider.rs`): `secret` (nome de um secret do hub), `command` (comando cuja primeira linha é o token), `cli` (`gh auth token`), `file` (caminho de arquivo) e `none`. Cada tipo aceita só as formas que o descritor permite: Jira e GitLab, `command`, `secret` ou `file` (#274); GitHub, todas. O `cli` é o token da CLI do próprio tipo e só existe no GitHub.
   - `secret`: o ambiente lê o valor do cache de secrets dele (`secrets-cache.age`), pelas regras de sempre, no projeto em uso: a entrada do projeto (`owner/repo`) sobrepõe a global. Para uma conexão que vários projetos usam, grave o secret como **global**; um secret de projeto com o mesmo nome vale só para aquele projeto. Na sessão, o prefixo do `jira`/`glab` leva `$(ctower secret get NOME)`, que lê o valor atual no projeto da sessão (o gestor vê só os globais).
-  - `file`: caminho de um arquivo **no ambiente**; `~` e `~/...` são a pasta pessoal. O token é a primeira linha não vazia, sem espaços nas pontas, no sync e no prefixo da sessão (que lê o arquivo com `awk`).
+  - `file`: caminho de um arquivo **na máquina que lê o token** (o ambiente; no `ct-gh` do hub, a máquina do hub); `~` e `~/...` são a pasta pessoal. O token é a primeira linha não vazia, sem espaços nas pontas, no sync e no prefixo da sessão (que lê o arquivo com `awk`).
 - **Teste:** `hub.connections.test` confere só o cadastro, sem rede. A identidade na rede ("quem sou eu") fica com o ambiente, que tem a credencial.
 - **Exclusão e nome:** `hub.connections.delete` recusa uma conexão que algum projeto referencia. `hub.connections.update` também recusa trocar o nome de uma conexão em uso (#271): as sobrescritas `[connections."nome"]` dos ambientes são indexadas pelo nome e deixariam de valer. A tela mostra os projetos que usam cada conexão e deixa o campo de nome travado enquanto houver algum; para trocar o nome, crie uma conexão nova e troque a conexão dos projetos. Editar ou apagar uma conexão em uso sobe o `config_rev`, e os ambientes recebem a mudança no pull.
 - **Entrega:** `GET /sync/config` leva ao ambiente as conexões referenciadas pelos projetos atribuídos a ele (`connections`) e os nomes de todas as conexões do hub, sem endereço nem credencial (`connection_names`, #270). Criar, renomear ou apagar uma conexão sobe o `config_rev`, para a lista de nomes chegar aos ambientes. O ambiente guarda as conexões no cache (`hub_connection_cache`) e as usa direto (#277): a URL do Jira, o host do GitLab, o `config_file` do jira-cli e o prefixo da sessão saem da conexão, com a sobrescrita do ambiente (`SharedCredentials::resolve`). O prefixo leva o comando que imprime o token (o da conexão, `ctower secret get NOME` ou a leitura do arquivo); o token do sync, da leitura de issue e do glab vem da fonte da conexão em si (#274). O cadastro do projeto no cache só referencia a conexão.
@@ -721,13 +721,13 @@ Na UI, a tela **Hub** tem a seção **Secrets e variáveis** (escopo global, com
 
 ### Secrets e conexões
 
-Uma conexão pode apontar para um secret do hub pelo nome (`credential: { kind: "secret", name }`, "Conexões", acima). Hoje isso é só o cadastro:
+Uma conexão pode apontar para um secret do hub pelo nome (`credential: { kind: "secret", name }`, "Conexões", acima). Quem resolve o valor depende do tipo:
 
-- o hub grava o nome, mas não resolve o valor (o resolvedor de credencial do hub está pendente);
-- o ambiente recebe os secrets pelo cache (acima), mas o resolvedor dele para Jira e GitLab só usa o comando da conexão. Uma conexão com `secret` chega sem comando, e o ambiente avisa no log;
-- o GitHub não lê conexões: o `ct-gh` segue com o próprio caminho de token.
+- **GitHub no hub:** o `ct-gh` do hub lê o secret do store do hub no escopo do projeto; a entrada do projeto (`owner/repo`) sobrepõe a global (#275).
+- **No ambiente** (Jira, GitLab e GitHub): o resolvedor lê o valor do cache de secrets do ambiente (`secrets-cache.age`), pelas mesmas regras, no projeto em uso (#274). O prefixo `{{jira}}`/`{{glab}}` da sessão leva `$(ctower secret get NOME)`, que lê o valor atual no projeto da sessão.
+- **Jira e GitLab no hub:** o hub não resolve o token deles; só monta o prefixo com o `ctower secret get NOME`, que roda no ambiente.
 
-Até o resolvedor do hub existir, use `command` para Jira e GitLab.
+Para uma conexão que vários projetos usam, grave o secret como **global**. No ambiente, o token resolvido entra no mascaramento das sessões do projeto.
 
 ### Chave de recuperação
 

@@ -128,8 +128,9 @@ pub struct SessionsConfig {
     /// Raiz da pasta de docs dos projetos (`docs_root`, #440); `None` = sem
     /// docs neste ambiente.
     pub docs_root: Option<PathBuf>,
-    /// Comandos de credencial do Jira e do GitLab deste ambiente
-    /// (`[credentials]` do `config.toml`, #143).
+    /// Conexões do hub do último pull e as sobrescritas de credencial deste
+    /// ambiente (`[connections]` do `config.toml`, #274; o `[credentials]`
+    /// legado, #143).
     pub credentials: ct_core::SharedCredentials,
 }
 
@@ -220,8 +221,9 @@ impl Sessions {
     }
 
     /// Fonte do token do tipo `kind` do projeto neste ambiente (#274,
-    /// #275): a da conexão do hub (a referenciada ou a padrão do tipo), com
-    /// a sobrescrita `[connections]`, ou o comando de `[credentials]` (#143)
+    /// #275): o comando de `[credentials]` que sobrou da conversão (#143),
+    /// senão a da conexão do hub (a referenciada ou a padrão do tipo) com a
+    /// sobrescrita `[connections]`, senão a de reserva do descritor
     /// ([`ct_core::SharedCredentials::source`]). `None` = nenhum lado do
     /// projeto é do tipo. Só para resolver aqui: o que vai ao hub sai do
     /// ledger, sem a sobrescrita.

@@ -1196,7 +1196,7 @@ mod tests {
     }
 
     /// `[credentials]` do ambiente (#143): o prompt que a UI montou com os
-    /// comandos do cadastro chega ao agente com os deste ambiente; o
+    /// comandos da conexão do hub chega ao agente com os deste ambiente; o
     /// cadastro no ledger não muda.
     #[test]
     fn prompt_usa_a_credencial_do_ambiente() {

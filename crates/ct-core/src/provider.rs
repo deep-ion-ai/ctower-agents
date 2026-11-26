@@ -83,7 +83,7 @@ pub enum CredentialSource {
     Secret { name: String },
     /// Comando de shell; a primeira linha da saída é o token.
     Command { cmd: String },
-    /// Token da CLI do serviço (`gh auth token`; só GitHub por ora).
+    /// Token da CLI do serviço (`gh auth token`; só o GitHub aceita, #279).
     Cli,
     /// Arquivo com o token (compatível com `github.token`).
     File { path: String },

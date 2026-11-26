@@ -81,7 +81,7 @@ Anote o resultado de cada passo (ok / falhou + o que apareceu) e cole no PR.
 
 ## 9. Hub (plano de controle)
 
-Pré-requisito: um `cthubd` no ar (`docs/hub.md`, seção 1) com o token do GitHub configurado, e dois ambientes ligados a ele (`cthubd add-env` + `ctower hub set-token`), os dois cadastrados em **Configurações → Ambientes**. Tenha à mão o token de UI do hub (`~/.config/cthub/ui.token` na máquina do hub).
+Pré-requisito: um `cthubd` no ar (`docs/hub.md`, seção 1) com a conexão `github` resolvendo o token do GitHub (por padrão, o `gh auth token` da máquina do hub; veja "Conexões" em `docs/hub.md`), e dois ambientes ligados a ele (`cthubd add-env` + `ctower hub set-token`), os dois cadastrados em **Configurações → Ambientes**. Tenha à mão o token de UI do hub (`~/.config/cthub/ui.token` na máquina do hub).
 
 1. Antes de configurar o hub na UI. **Esperado:** a faixa "Conexão com o hub não configurada" com o botão **Configurar o hub**; a lateral mostra **Hub · conexão não configurada**. Na lateral, cada ambiente mostra "configuração rev N · há …" (ou "ambiente não ligado a um hub", em vermelho, num ambiente sem `hub_url`).
 2. Em **Configurações → Hub**, **Configurar hub**: URL `http://<máquina do hub>:7879` e o token de UI do hub; **Salvar hub**. **Esperado:** estado "conectado" e a linha "cthubd X · protocolo 1.0 · configuração rev N"; o token aparece só como "•••• definido" (em **Editar conexão** o campo vem vazio). As conexões em **Configurações → Ambientes** não mudam.

@@ -40,7 +40,7 @@ pub struct AgentProjectSummary {
     #[serde(default = "github_tracker")]
     pub tracker: ct_core::TrackerKind,
     /// Como ler uma issue (`gh issue view <n> -R owner/repo`, ou o jira-cli
-    /// com o comando de credencial do cadastro, nunca a senha); `<n>` é o
+    /// com o comando da fonte da conexão do Jira, nunca a senha); `<n>` é o
     /// número.
     #[serde(default)]
     pub issue_view: String,

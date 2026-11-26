@@ -109,8 +109,9 @@ pub struct DaemonConfig {
     pub cleanup: CleanupConfig,
     /// Log em arquivo, que a tela Logs da UI lê (`[logs]`, #65).
     pub logs: ct_core::LogsConfig,
-    /// Comandos de credencial do Jira e do GitLab só deste ambiente
-    /// (`[credentials."owner/repo"]`, #143), no lugar dos do cadastro.
+    /// Legado (#143): comandos de credencial do Jira e do GitLab só deste
+    /// ambiente, por projeto (`[credentials."owner/repo"]`), no lugar da
+    /// fonte da conexão. O pull converte o que dá em `[connections]`.
     pub credentials: ct_core::CredentialOverrides,
     /// Conexões do hub com comando de credencial só deste ambiente
     /// (`[connections."nome"]`, #237), depois da conversão de `[credentials]`.

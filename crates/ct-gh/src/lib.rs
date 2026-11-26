@@ -520,18 +520,6 @@ impl GhClient {
     }
 }
 
-/// Situação do token do GitHub para a UI.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct TokenStatus {
-    /// `token` (o `github.token` do hub), `gh` (conexão com
-    /// `gh auth token`), `conexao` (outra fonte da conexão `github`) ou
-    /// `none`.
-    pub source: String,
-    pub login: Option<String>,
-    pub error: Option<String>,
-}
-
 /// Comentário criado por [`GhClient::comment_pr`] (`github.pr.comment`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
