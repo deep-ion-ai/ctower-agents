@@ -102,7 +102,9 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// 2.27 (#301): o evento `human_input` (teclado da UI numa sessão da
 /// execução de épico, no máximo um por minuto), que o hub usa para marcar a
 /// sub-issue como assumida.
-pub const PROTOCOL_VERSION: &str = "2.27";
+/// 2.28 (#300): a ferramenta MCP `epic_report_blocker`, só na sessão de
+/// sub-issue da execução de épico.
+pub const PROTOCOL_VERSION: &str = "2.28";
 
 #[derive(Clone)]
 pub struct AppState {

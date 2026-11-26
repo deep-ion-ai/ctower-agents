@@ -1110,7 +1110,47 @@ async fn plan_session(
             .filter(|d| d.source == ct_hub_store::DEP_SOURCE_MANUAL && subs.contains(&d.number))
             .map(|d| (d.number, d.blocker, d.removed))
             .collect();
+        // Replanejamento (#300): o plano em vigor, os nós e o motivo.
+        let replan = match run.plan_version {
+            Some(v) if run.status == EpicRunStatus::Replanejando => {
+                let models: BTreeMap<i64, Option<String>> = h
+                    .epic_plan(run.id, v)
+                    .map_err(ledger_err)?
+                    .map(|p| p.nodes.into_iter().map(|n| (n.number, n.model)).collect())
+                    .unwrap_or_default();
+                let nodes = h
+                    .epic_nodes(run.id)
+                    .map_err(ledger_err)?
+                    .into_iter()
+                    .map(|n| {
+                        (
+                            n.number,
+                            n.state.as_str().to_string(),
+                            models.get(&n.number).cloned().flatten(),
+                        )
+                    })
+                    .collect();
+                let reason = h
+                    .epic_run_events_tail(run.id, 200)
+                    .map_err(ledger_err)?
+                    .into_iter()
+                    .rev()
+                    .find(|e| {
+                        e.kind == "replan_requested"
+                            || (e.kind == "decided" && e.message.contains("replanejar"))
+                    })
+                    .map(|e| e.message)
+                    .unwrap_or_default();
+                Some(prompt::ReplanVars {
+                    version: v,
+                    nodes,
+                    reason,
+                })
+            }
+            _ => None,
+        };
         PlanVars {
+            replan,
             owner: run.owner.clone(),
             repo: run.repo.clone(),
             epic_ref: ctx.project.item_ref(run.epic),

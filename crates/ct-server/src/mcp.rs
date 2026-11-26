@@ -171,6 +171,16 @@ fn dispatch(
             )));
         }
     }
+    // `epic_report_blocker` (#300) vai ao hub pela rede: só a sessão de
+    // sub-issue da execução de épico a vê e a chama.
+    let epic_run = sessions.is_epic_run_session(&session).unwrap_or(false);
+    if epic_run
+        && method == "tools/call"
+        && params.get("name").and_then(Value::as_str) == Some("epic_report_blocker")
+    {
+        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        return Ok(tool_result(report_blocker(sessions, hub, &session, &args)));
+    }
     let l = sessions.ledger();
     match method {
         "initialize" => Ok(json!({
@@ -193,6 +203,11 @@ fn dispatch(
             if epic_plan.is_some() {
                 if let Some(a) = t.as_array_mut() {
                     a.push(epic_plan_tool());
+                }
+            }
+            if epic_run {
+                if let Some(a) = t.as_array_mut() {
+                    a.push(blocker_tool());
                 }
             }
             Ok(json!({ "tools": t }))
@@ -690,6 +705,54 @@ fn set_epic_plan(
         }
     }
     hub.agent_call("POST", "epic/plan", &[], Some(&body), &s.id)
+}
+
+/// A ferramenta da sessão de sub-issue da execução de épico (#300).
+fn blocker_tool() -> Value {
+    json!({
+        "name": "epic_report_blocker",
+        "description": "Avisa o hub do Control Tower que o plano de execução do épico está errado para esta sub-issue (falta um pré-requisito, o escopo não cabe, a sub-issue depende de outra que não foi feita). A sub-issue fica bloqueada e o desenvolvedor decide: aguardar ou replanejar o épico. Use só quando não der para seguir; depois de avisar, pare e espere.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": { "type": "string", "description": "O que está errado no plano, em poucas frases." },
+                "suggestion": { "type": "string", "description": "O que você sugere (ex.: esperar a #12, dividir a sub-issue, mudar a ordem)." }
+            },
+            "required": ["reason"]
+        }
+    })
+}
+
+/// `epic_report_blocker` (#300): manda ao hub o bloqueio da sub-issue da
+/// sessão.
+fn report_blocker(
+    sessions: &Sessions,
+    hub: Option<&HubSender>,
+    s: &Session,
+    args: &Value,
+) -> Result<Value, String> {
+    let hub = hub.ok_or_else(|| format!("hub indisponível: {}", crate::hub_sync::NOT_LINKED))?;
+    let reason = args
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .ok_or("parâmetro obrigatório: reason")?;
+    let (owner, repo, number) = {
+        let l = sessions.ledger();
+        let e = |e: ct_ledger::LedgerError| e.to_string();
+        let wi = l.get_work_item(s.work_item_id).map_err(e)?;
+        let p = l.get_project(wi.project_id).map_err(e)?;
+        (p.gh_owner, p.gh_repo, wi.gh_number)
+    };
+    let body = json!({
+        "owner": owner,
+        "repo": repo,
+        "number": number,
+        "reason": reason,
+        "suggestion": args.get("suggestion").and_then(Value::as_str).unwrap_or_default(),
+    });
+    hub.agent_call("POST", "epic/blocker", &[], Some(&body), &s.id)
 }
 
 /// Sub-issues do épico no espelho, com o status do work item; sem work
@@ -1825,6 +1888,48 @@ mod tests {
         for id in [&s.id, &outra.id] {
             srv.env.sessions.kill(id).ok();
         }
+    }
+
+    /// `epic_report_blocker` (#300): só na sessão de sub-issue da execução
+    /// de épico.
+    #[tokio::test]
+    async fn bloqueio_so_na_sessao_da_execucao_de_epico() {
+        let srv = Srv::new(FakeClaude::sleep(30));
+        let s = srv.env.sessions.start(srv.env.request(11, "Tela")).unwrap();
+        let lista = tool_names(&rpc(&srv, &s.id, "tools/list", json!({})).await);
+        assert!(!lista.iter().any(|t| t == "epic_report_blocker"));
+        let wi = s.work_item_id;
+        let project_id = srv.env.project_id;
+        srv.env
+            .sessions
+            .ledger()
+            .append_event(ct_ledger::NewEvent {
+                project_id,
+                work_item_id: Some(wi),
+                session_id: None,
+                kind: ct_sessions::epic_run::EPIC_RUN_SESSION,
+                payload: json!({ "base": "wip/10-x" }),
+            })
+            .unwrap();
+        let lista = tool_names(&rpc(&srv, &s.id, "tools/list", json!({})).await);
+        assert_eq!(lista.last().unwrap(), "epic_report_blocker", "{lista:?}");
+        let r = call(&srv, &s.id, "epic_report_blocker", json!({ "reason": " " })).await;
+        assert_eq!(r["isError"], true);
+        let r = call(
+            &srv,
+            &s.id,
+            "epic_report_blocker",
+            json!({ "reason": "falta a #12" }),
+        )
+        .await;
+        assert!(
+            r["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("hub indisponível"),
+            "{r}"
+        );
+        srv.env.sessions.kill(&s.id).ok();
     }
 
     /// `ledger_start_sub_issue` (#458): só no `tools/list` do épico; a

@@ -403,11 +403,120 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
         })
         .await
         .map_err(|e| (-32603, e.to_string()))??;
+    // Propostas da versão aprovada (#300): viram sub-issues do épico agora,
+    // depois da aprovação.
+    if method == "hub.epic_run.approve" {
+        if let (Some(id), Some(version)) = (
+            v.get("id").and_then(Value::as_i64),
+            v.get("plan_version").and_then(Value::as_i64),
+        ) {
+            let (hub, gh) = (st.hub.clone(), st.github.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                create_proposals(&hub, id, version, |run, p| match &gh {
+                    Some(g) => create_github_sub_issue(g.client(), run, p).map(Some),
+                    None => Ok(None),
+                })
+            })
+            .await;
+        }
+    }
     if changed {
         st.epic_runs_changed();
         st.epic_runs.kick();
     }
     Ok(v)
+}
+
+/// Cria as propostas da versão `version` do plano como sub-issues do
+/// épico, com `create` (`Ok(Some(n))` = criada como #n; `Ok(None)` = o hub
+/// não cria neste rastreador). Grava um evento por proposta:
+/// `proposal_created`, `proposal_manual` ou `proposal_failed`. Só em
+/// projeto do GitHub; nos outros, todas pedem a criação manual.
+pub(crate) fn create_proposals(
+    hub: &ct_hub_store::SharedHub,
+    run_id: i64,
+    version: i64,
+    create: impl Fn(&EpicRun, &ct_hub_store::EpicProposal) -> Result<Option<i64>, String>,
+) {
+    let (run, plan, github) = {
+        let h = hub.lock();
+        let Ok(Some(run)) = h.epic_run(run_id) else {
+            return;
+        };
+        let Ok(Some(plan)) = h.epic_plan(run_id, version) else {
+            return;
+        };
+        let github = h
+            .find_project(&run.owner, &run.repo)
+            .ok()
+            .flatten()
+            .is_some_and(|p| p.tracker.kind() == ct_core::TrackerKind::Github);
+        (run, plan, github)
+    };
+    for p in &plan.proposals {
+        let r = if github { create(&run, p) } else { Ok(None) };
+        let (kind, message) = match r {
+            Ok(Some(n)) => (
+                "proposal_created",
+                format!(
+                    "proposta \"{}\" criada como #{n} (sub-issue do épico)",
+                    p.title
+                ),
+            ),
+            Ok(None) => (
+                "proposal_manual",
+                format!(
+                    "proposta \"{}\" aprovada: crie a sub-issue no rastreador e replaneje para \
+                     incluí-la",
+                    p.title
+                ),
+            ),
+            Err(e) => (
+                "proposal_failed",
+                format!("a criação da proposta \"{}\" falhou: {e}", p.title),
+            ),
+        };
+        event(&hub.lock(), &run, kind, None, message);
+    }
+}
+
+/// Cria a issue no GitHub e a liga como sub-issue do épico.
+fn create_github_sub_issue(
+    gh: &ct_gh::GhClient,
+    run: &EpicRun,
+    p: &ct_hub_store::EpicProposal,
+) -> Result<i64, String> {
+    let mut body = p.body.trim().to_string();
+    if !body.is_empty() {
+        body.push_str("\n\n");
+    }
+    body.push_str(&format!("Parte do épico #{}.", run.epic));
+    if let Some(f) = p.from {
+        body.push_str(&format!(" Divide a #{f}."));
+    }
+    let v = gh
+        .post_json(
+            &format!("/repos/{}/{}/issues", run.owner, run.repo),
+            &json!({ "title": p.title, "body": body }),
+        )
+        .map_err(|e| e.to_string())?;
+    let number = v
+        .get("number")
+        .and_then(Value::as_i64)
+        .ok_or("resposta do GitHub sem number")?;
+    let id = v
+        .get("id")
+        .and_then(Value::as_i64)
+        .ok_or("resposta do GitHub sem id")?;
+    gh.post_json(
+        &format!(
+            "/repos/{}/{}/issues/{}/sub_issues",
+            run.owner, run.repo, run.epic
+        ),
+        &json!({ "sub_issue_id": id }),
+    )
+    .map_err(|e| format!("#{number} criada, mas não foi ligada ao épico: {e}"))?;
+    Ok(number)
 }
 
 /// "Interromper agora": pausa e encerra já as sessões dirigidas pelo motor;
@@ -501,8 +610,25 @@ async fn cancel(st: &HubState, p: &Value, now: i64) -> RpcResult {
 async fn decide(st: &HubState, p: &Value, by: &str, now: i64) -> RpcResult {
     let id = i64_param(p, "decision_id")?;
     let answer = str_param(p, "answer")?.to_string();
+    // "aguardar" (#300): a sub-issue espera este bloqueante.
+    let blocker = match p.get("blocker") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_i64()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| invalid("blocker deve ser o número de uma issue"))?,
+        ),
+    };
     let (run, d, kill) = {
         let h = st.hub.lock();
+        if let Some(b) = blocker {
+            let pending = h.epic_decision(id).map_err(ledger)?;
+            if answer != "aguardar" || pending.as_ref().and_then(|d| d.number) == Some(b) {
+                return Err(invalid(
+                    "blocker só com a resposta aguardar, e diferente da própria sub-issue",
+                ));
+            }
+        }
         let d = h
             .answer_epic_decision(id, &answer, by, now)
             .map_err(ledger)?;
@@ -510,13 +636,22 @@ async fn decide(st: &HubState, p: &Value, by: &str, now: i64) -> RpcResult {
             .epic_run(d.run_id)
             .map_err(ledger)?
             .ok_or_else(|| invalid("execução do pedido não encontrada"))?;
-        let kill = apply_answer(&h, &run, &d, now).map_err(ledger)?;
+        let kill = apply_answer(&h, &run, &d, blocker, now).map_err(ledger)?;
+        let detail = match blocker {
+            Some(b) => format!(" (esperando a #{b})"),
+            None => String::new(),
+        };
+        // O motivo do pedido vai junto: a sessão de plano o recebe no
+        // replanejamento.
         event(
             &h,
             &run,
             "decided",
             d.number,
-            format!("pedido {} ({}) respondido: {answer}", d.id, d.origin),
+            format!(
+                "pedido {} ({}) respondido: {answer}{detail}. Motivo: {}",
+                d.id, d.origin, d.text
+            ),
         );
         (run, d, kill)
     };
@@ -539,6 +674,7 @@ pub(crate) fn apply_answer(
     h: &Hub,
     run: &EpicRun,
     d: &EpicDecision,
+    blocker: Option<i64>,
     now: i64,
 ) -> ct_ledger::Result<Option<String>> {
     let answer = d.answer.as_deref().unwrap_or_default();
@@ -610,7 +746,27 @@ pub(crate) fn apply_answer(
                 }
             }
         }
-        // `aguardar`: o nó fica bloqueado (o bloqueante manual vem no #300).
+        // Com o bloqueante, a sub-issue espera por ele (aresta manual na
+        // versão em vigor) e a sessão sai: volta nova quando ficar pronta.
+        // Sem, fica bloqueada até outra decisão.
+        "aguardar" => {
+            if let Some(b) = blocker {
+                h.add_epic_plan_blocker(run.id, n, b, "aguardar: decisão do desenvolvedor", now)?;
+                if blocked {
+                    h.set_epic_node_state(run.id, n, EpicNodeState::Pendente, None, now)?;
+                    h.update_epic_node(
+                        run.id,
+                        n,
+                        &EpicNodePatch {
+                            session_id: Some(None),
+                            ..Default::default()
+                        },
+                        now,
+                    )?;
+                    return Ok(node.session_id);
+                }
+            }
+        }
         _ => {}
     }
     Ok(None)
@@ -896,5 +1052,176 @@ mod tests {
             st.hub.lock().epic_run(id).unwrap().unwrap().status,
             EpicRunStatus::Replanejando
         );
+    }
+
+    #[tokio::test]
+    async fn aguardar_com_bloqueante_espera_e_replanejar_vai_ao_plano() {
+        let st = state(true);
+        let run = rpc(
+            &st,
+            "hub.epic_run.start",
+            json!({ "owner": "acme", "repo": "acme-web", "epic": 10, "env_id": "env-a" }),
+        )
+        .await
+        .unwrap();
+        let id = run["id"].as_i64().unwrap();
+        st.hub
+            .lock()
+            .save_epic_plan_draft(
+                id,
+                &EpicPlanDraft {
+                    nodes: vec![EpicPlanNodeInput {
+                        number: 11,
+                        model: Some("haiku".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        rpc(
+            &st,
+            "hub.epic_run.approve",
+            json!({ "run_id": id, "version": 1 }),
+        )
+        .await
+        .unwrap();
+        let d = {
+            let h = st.hub.lock();
+            for to in [
+                EpicNodeState::Pronta,
+                EpicNodeState::EmExecucao,
+                EpicNodeState::Bloqueada,
+            ] {
+                h.set_epic_node_state(id, 11, to, None, 2).unwrap();
+            }
+            h.add_epic_decision(
+                id,
+                Some(11),
+                ct_core::EpicDecisionOrigin::PlanoErrado,
+                "falta a #20",
+                2,
+            )
+            .unwrap()
+            .id
+        };
+        // Bloqueante igual à sub-issue: recusado sem responder.
+        assert!(rpc(
+            &st,
+            "hub.epic_run.decide",
+            json!({ "decision_id": d, "answer": "aguardar", "blocker": 11 })
+        )
+        .await
+        .is_err());
+        rpc(
+            &st,
+            "hub.epic_run.decide",
+            json!({ "decision_id": d, "answer": "aguardar", "blocker": 20 }),
+        )
+        .await
+        .unwrap();
+        {
+            let h = st.hub.lock();
+            let n = h.epic_node(id, 11).unwrap().unwrap();
+            assert_eq!((n.state, n.session_id), (EpicNodeState::Pendente, None));
+            let plan = h.epic_plan(id, 1).unwrap().unwrap();
+            assert!(plan.edges.iter().any(|e| (e.number, e.blocker) == (11, 20)));
+        }
+        // Replanejar: a execução vai a replanejando, com o motivo nos eventos.
+        let d = st
+            .hub
+            .lock()
+            .add_epic_decision(
+                id,
+                Some(11),
+                ct_core::EpicDecisionOrigin::PlanoErrado,
+                "escopo errado",
+                3,
+            )
+            .unwrap()
+            .id;
+        rpc(
+            &st,
+            "hub.epic_run.decide",
+            json!({ "decision_id": d, "answer": "replanejar" }),
+        )
+        .await
+        .unwrap();
+        let h = st.hub.lock();
+        assert_eq!(
+            h.epic_run(id).unwrap().unwrap().status,
+            EpicRunStatus::Replanejando
+        );
+        let ev = h.epic_run_events_tail(id, 1).unwrap();
+        assert!(
+            ev[0].message.contains("Motivo: escopo errado"),
+            "{:?}",
+            ev[0]
+        );
+    }
+
+    #[test]
+    fn propostas_viram_sub_issues_depois_da_aprovacao() {
+        let st = state(true);
+        let id = {
+            let h = st.hub.lock();
+            let pid = h.find_project("acme", "acme-web").unwrap().unwrap().id;
+            let r = h
+                .create_epic_run(
+                    &NewEpicRun {
+                        project_id: pid,
+                        epic: 10,
+                        env_id: "env-a".into(),
+                        started_by: "fulano".into(),
+                        max_parallel: None,
+                        plan_model: None,
+                        plan_effort: None,
+                    },
+                    1,
+                )
+                .unwrap();
+            let prop = |t: &str| ct_hub_store::EpicProposal {
+                kind: "nova".into(),
+                title: t.into(),
+                body: String::new(),
+                from: None,
+            };
+            h.save_epic_plan_draft(
+                r.id,
+                &EpicPlanDraft {
+                    nodes: vec![EpicPlanNodeInput {
+                        number: 11,
+                        model: Some("haiku".into()),
+                        ..Default::default()
+                    }],
+                    proposals: vec![prop("Migração"), prop("Docs")],
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+            r.id
+        };
+        // Antes de aprovar, nada é criado: só a aprovação chama.
+        let calls = std::sync::Mutex::new(Vec::new());
+        create_proposals(&st.hub, id, 1, |_, p| {
+            calls.lock().unwrap().push(p.title.clone());
+            if p.title == "Docs" {
+                Err("403".into())
+            } else {
+                Ok(Some(40))
+            }
+        });
+        assert_eq!(*calls.lock().unwrap(), vec!["Migração", "Docs"]);
+        let kinds: Vec<String> = st
+            .hub
+            .lock()
+            .epic_run_events(id, 0, 50)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(kinds, vec!["proposal_created", "proposal_failed"]);
     }
 }

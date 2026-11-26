@@ -32,6 +32,19 @@ pub struct PlanVars {
     /// Arestas corrigidas à mão pelo desenvolvedor: (issue, bloqueante,
     /// removida).
     pub manual: Vec<(i64, i64, bool)>,
+    /// Replanejamento (#300): o plano em vigor, o estado dos nós e o motivo.
+    pub replan: Option<ReplanVars>,
+}
+
+/// O que a sessão de replanejamento recebe além do planejamento (#300).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplanVars {
+    /// Versão do plano em vigor.
+    pub version: i64,
+    /// Cada nó: número, estado e modelo.
+    pub nodes: Vec<(i64, String, Option<String>)>,
+    /// Por que replanejar (o pedido do desenvolvedor ou o bloqueio).
+    pub reason: String,
 }
 
 /// O prompt inicial da sessão de plano.
@@ -67,9 +80,36 @@ pub fn plan_prompt(v: &PlanVars) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let replan = match &v.replan {
+        None => String::new(),
+        Some(r) => {
+            let nodes = r
+                .nodes
+                .iter()
+                .map(|(n, state, model)| match model {
+                    Some(m) => format!("- #{n}: {state} ({m})"),
+                    None => format!("- #{n}: {state}"),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "\n\nREPLANEJAMENTO: a versão v{} do plano está em execução. Estado de cada \
+sub-issue:\n{nodes}\nMotivo do replanejamento: {}\nAs mescladas não voltam: deixe-as no plano \
+como estão. As em andamento continuam enquanto o novo plano não é aprovado; mude-as só se o \
+motivo pedir. Grave o plano inteiro de novo (todas as sub-issues abertas, não só as que \
+mudaram).",
+                r.version,
+                if r.reason.trim().is_empty() {
+                    "(não informado)"
+                } else {
+                    r.reason.trim()
+                }
+            )
+        }
+    };
     format!(
         "Sessão de plano do Control Tower para o épico {epic} ({title}) do repositório \
-{owner}/{repo}.
+{owner}/{repo}.{replan}
 
 Seu trabalho é só planejar: não altere arquivos, não crie branches, issues nem PRs. Leia o \
 épico, as sub-issues e o código do repositório o quanto precisar para decidir.
@@ -196,6 +236,7 @@ mod tests {
             wip: "wip/10-login-novo".into(),
             issues,
             manual,
+            replan: None,
         }
     }
 
@@ -268,5 +309,29 @@ mod tests {
         ] {
             assert!(off.contains(s), "{s}");
         }
+    }
+
+    #[test]
+    fn replanejamento_traz_o_plano_em_vigor_e_o_motivo() {
+        let mut v = vars(vec![], vec![]);
+        v.replan = Some(ReplanVars {
+            version: 2,
+            nodes: vec![
+                (11, "mesclada".into(), Some("haiku".into())),
+                (12, "bloqueada".into(), None),
+            ],
+            reason: "falta a migração".into(),
+        });
+        let p = plan_prompt(&v);
+        for s in [
+            "REPLANEJAMENTO: a versão v2",
+            "- #11: mesclada (haiku)",
+            "- #12: bloqueada",
+            "Motivo do replanejamento: falta a migração",
+            "As mescladas não voltam",
+        ] {
+            assert!(p.contains(s), "{s}\n{p}");
+        }
+        assert!(!plan_prompt(&vars(vec![], vec![])).contains("REPLANEJAMENTO"));
     }
 }
