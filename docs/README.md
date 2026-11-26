@@ -24,6 +24,7 @@ Um documento por linha, com quem deve ler. A visão geral do projeto está no [R
 | --- | --- | --- |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | quem propõe mudanças | fluxo de branches, commits, checks antes do PR e desenvolvimento da `ui/` |
 | [`ci.md`](ci.md) | quem mexe no CI | workflows, matriz de jobs e runners |
+| [`providers.md`](providers.md) | quem adiciona um tipo de conexão (GitHub, GitLab, Jira ou outro) | descritor por tipo, fonte de credencial, registro, tipos TS e UI, e o que ainda não existe |
 | [`release.md`](release.md) | quem mantém o repositório | como uma versão é publicada pelo release-please |
 | [`ui-roteiro-manual.md`](ui-roteiro-manual.md) | quem testa a UI à mão | roteiro de teste manual do app |
 | [`../docker/test/README.md`](../docker/test/README.md) | quem testa uma branch de ponta a ponta | hub e ambiente de teste em Docker, isolados do ambiente de uso diário |
