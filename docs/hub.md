@@ -964,11 +964,21 @@ A execução de épico roda as sub-issues de um épico com um **plano por agente
   - `hub.epic_run.start { owner, repo, epic, env_id, max_parallel?, plan_model?, plan_effort? }`: o épico precisa de sub-issues no espelho e da branch de integração (uma sessão do épico a cria);
   - `hub.epic_run.approve { run_id, version, max_parallel?, code_review? }`: congela a versão e as impressões digitais;
   - `hub.epic_run.replan { run_id, reason? }`, `pause { run_id, reason? }`, `interrupt { run_id }` (pausa e encerra já as sessões, que estacionam e voltam com `session.resume`), `resume`, `cancel`, `set_parallel { run_id, max_parallel }`;
-  - `hub.epic_run.decide { decision_id, answer }`: `assumir`, `mais_tentativas` (zera as tentativas), `reiniciar` (encerra a sessão e a sub-issue volta a pronta), `manter` (aceita a sub-issue alterada), `replanejar` e `aguardar`;
+  - `hub.epic_run.decide { decision_id, answer, blocker? }`: `assumir`, `mais_tentativas` (zera as tentativas), `reiniciar` (encerra a sessão e a sub-issue volta a pronta), `manter` (aceita a sub-issue alterada), `replanejar` e `aguardar` (com `blocker`, a sub-issue espera essa issue: a aresta manual entra na versão em vigor e no projeto, a sessão sai, e a sub-issue volta a `pendente`; sem `blocker`, fica bloqueada);
   - `hub.epic_run.handback { run_id, number }`: devolver ao motor;
   - leitura: `hub.epic_run.list`, `status { run_id }` (`EpicRunView`: execução, plano, nós, pedidos, eventos e títulos) e `events { run_id, after?, limit? }`.
   - A UI recebe `hub.epic_run.changed` a cada mudança.
 - **Eventos:** `created`, `plan_started`, `plan_failed`, `plan_saved`, `plan_session_ended`, `plan_approved`, `replan_requested`, `status`, `node`, `started`, `start_failed`, `resumed`, `feedback_sent`, `merge_requested`, `rebase_requested`, `ended`, `worktree_removed`, `worktree_kept`, `decision_requested`, `decided`, `handback`, `paused`, `unpaused`, `interrupted`, `parallel_set`, `cancelled`, `rescheduled`, `refused` (`env_outdated`, `sem_wip`) e `continue_failed`. As recusas não se repetem enquanto a causa é a mesma.
+- **Pedidos de decisão e replanejamento (#300):**
+  - A sessão de uma sub-issue avisa que o plano está errado com a ferramenta MCP `epic_report_blocker { reason, suggestion? }` (ambiente 2.28), que vai a `POST /agent/v1/epic/blocker`. Só a sessão do nó grava: a sub-issue fica `bloqueada` e entra o pedido `plano_errado`.
+  - As opções por origem são:
+    - `plano_errado`: aguardar ou replanejar;
+    - `ci_esgotado`: assumir, mais tentativas ou replanejar;
+    - `sem_progresso`: assumir, reiniciar ou replanejar;
+    - `conflito_rebase`: assumir ou replanejar;
+    - `issue_alterada`: manter ou replanejar.
+  - **Replanejar** leva a execução a `replanejando`. A nova sessão de plano recebe a versão em vigor, o estado e o modelo de cada sub-issue e o motivo. Nada novo inicia até a aprovação, e as sub-issues vivas continuam. O plano v2 aprovado segue sem reiniciar as mescladas.
+  - Ao aprovar, as propostas da sessão de plano viram sub-issues do épico no GitHub, com o token do hub (evento `proposal_created`, ou `proposal_failed` com a causa). No Jira, ou sem o GitHub no hub, o evento `proposal_manual` pede a criação à mão. As criadas entram no próximo plano.
 - **Web Push:** cada pedido de decisão novo gera a notificação `epic_decision`, com o épico, a sub-issue e o motivo, nunca o texto do pedido.
 
 ### Hub fora do ar

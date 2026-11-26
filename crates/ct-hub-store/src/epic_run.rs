@@ -1112,6 +1112,69 @@ impl Hub {
         Ok(plan)
     }
 
+    /// Acrescenta à versão em vigor do plano a aresta manual `number`
+    /// bloqueada por `blocker` (resposta "aguardar", #300) e grava a mesma
+    /// correção manual no projeto, para os próximos planos.
+    pub fn add_epic_plan_blocker(
+        &self,
+        run_id: i64,
+        number: i64,
+        blocker: i64,
+        reason: &str,
+        now: i64,
+    ) -> Result<()> {
+        if blocker <= 0 || blocker == number {
+            return Err(LedgerError::Invalid(format!(
+                "bloqueante inválido: {blocker}"
+            )));
+        }
+        let run = self.require_epic_run(run_id)?;
+        let Some(v) = run.plan_version else {
+            return Err(LedgerError::Conflict(
+                "a execução não tem plano aprovado".into(),
+            ));
+        };
+        let tx = self.tx()?;
+        self.conn.execute(
+            "INSERT INTO epic_plan_edge (run_id, version, number, blocker, reason, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'manual')
+             ON CONFLICT (run_id, version, number, blocker) DO UPDATE SET
+               reason = excluded.reason, source = excluded.source",
+            params![run_id, v, number, blocker, clip(reason, SHORT_MAX_CHARS)],
+        )?;
+        self.set_dependency_manual(
+            run.project_id,
+            number,
+            blocker,
+            crate::ManualEdit::Add,
+            reason,
+            now,
+        )?;
+        tx.commit()
+    }
+
+    /// A execução ativa e o nó cuja sessão é `session_id`.
+    pub fn epic_node_by_session(&self, session_id: &str) -> Result<Option<(EpicRun, EpicNode)>> {
+        let found: Option<(i64, i64)> = self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT n.run_id, n.number FROM epic_node n JOIN epic_run r ON r.id = n.run_id
+                     WHERE n.session_id = ?1 AND r.{ACTIVE} ORDER BY n.run_id DESC LIMIT 1"
+                ),
+                [session_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((run, n)) = found else {
+            return Ok(None);
+        };
+        Ok(Some((
+            self.require_epic_run(run)?,
+            self.require_epic_node(run, n)?,
+        )))
+    }
+
     // --- nós -------------------------------------------------------------
 
     /// Os nós da execução, por número.
@@ -2227,6 +2290,39 @@ mod tests {
         );
         // O rascunho mostra as arestas vivas dos nós.
         assert_eq!(plan.edges.len(), 2);
+    }
+
+    #[test]
+    fn aguardar_grava_o_bloqueante_na_versao_e_no_projeto() {
+        let (hub, pid) = hub();
+        let run = running(&hub, pid);
+        assert!(hub.add_epic_plan_blocker(run.id, 11, 11, "x", 4).is_err());
+        hub.add_epic_plan_blocker(run.id, 11, 30, "falta a #30", 4)
+            .unwrap();
+        let plan = hub.epic_plan(run.id, 1).unwrap().unwrap();
+        assert!(plan
+            .edges
+            .iter()
+            .any(|e| (e.number, e.blocker, e.source.as_str()) == (11, 30, "manual")));
+        assert!(hub
+            .autopilot_dependencies(pid)
+            .unwrap()
+            .iter()
+            .any(|e| (e.number, e.blocker, e.removed) == (11, 30, false)));
+        // A sessão do nó leva à execução.
+        hub.update_epic_node(
+            run.id,
+            12,
+            &EpicNodePatch {
+                session_id: Some(Some("s-12".into())),
+                ..Default::default()
+            },
+            5,
+        )
+        .unwrap();
+        let (r, n) = hub.epic_node_by_session("s-12").unwrap().unwrap();
+        assert_eq!((r.id, n.number), (run.id, 12));
+        assert!(hub.epic_node_by_session("s-x").unwrap().is_none());
     }
 
     #[test]

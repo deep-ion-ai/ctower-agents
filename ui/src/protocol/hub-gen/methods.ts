@@ -292,7 +292,7 @@ export interface HubMethods {
   "hub.epic_run.resume": { params: { run_id: number }; result: EpicRun };
   "hub.epic_run.cancel": { params: { run_id: number }; result: EpicRun };
   "hub.epic_run.set_parallel": { params: { run_id: number; max_parallel: number }; result: EpicRun };
-  "hub.epic_run.decide": { params: { decision_id: number; answer: string }; result: EpicDecision };
+  "hub.epic_run.decide": { params: { decision_id: number; answer: string; blocker?: number | null }; result: EpicDecision };
   "hub.epic_run.handback": { params: { run_id: number; number: number }; result: EpicNode };
   "hub.autopilot.policy.get": { params: { account: string }; result: AutopilotPolicyView };
   "hub.autopilot.policy.set": { params: { account: string; policy?: BudgetPolicy | null }; result: AutopilotPolicyView };

@@ -267,6 +267,10 @@ pub fn router(state: HubState) -> Router {
         .route(
             "/agent/v1/epic/plan",
             axum::routing::post(agent::set_epic_plan),
+        )
+        .route(
+            "/agent/v1/epic/blocker",
+            axum::routing::post(agent::report_epic_blocker),
         );
     // Desligada, `/`, `/assets/*` e `/web/*` caem no 404 padrão.
     let r = if web {
