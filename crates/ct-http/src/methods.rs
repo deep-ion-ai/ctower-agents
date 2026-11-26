@@ -83,7 +83,7 @@ pub const METHODS: &[MethodSpec] = &[
     },
     MethodSpec {
         name: "session.start_project",
-        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; prompt: string; analysis?: boolean | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: \"native\" | \"subagents\" | null; remote_control?: boolean | null }",
+        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; prompt: string; analysis?: boolean | null; epic_plan?: number | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: \"native\" | \"subagents\" | null; remote_control?: boolean | null }",
         result: "Session",
         scopes: UI_WEB_CHANNEL,
     },
