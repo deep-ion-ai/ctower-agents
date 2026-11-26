@@ -84,8 +84,8 @@ pub use digest::{
 pub use env_keys::{EnvAssignmentRev, EnvPubkey, EnvSecretsInput};
 pub use epic_run::{
     EpicApproval, EpicDecision, EpicNode, EpicNodePatch, EpicPlan, EpicPlanDraft, EpicPlanEdge,
-    EpicPlanNode, EpicPlanNodeInput, EpicProposal, EpicRun, EpicRunEvent, NewEpicRun,
-    EPIC_PLAN_MAX_NODES, EPIC_PLAN_MAX_PROPOSALS,
+    EpicPlanNode, EpicPlanNodeInput, EpicPlanSessionInput, EpicPlanSessionNode, EpicProposal,
+    EpicRun, EpicRunEvent, NewEpicRun, EPIC_PLAN_MAX_NODES, EPIC_PLAN_MAX_PROPOSALS,
 };
 pub use health::{
     HealthCounts, HealthFilter, HealthKind, HealthSignal, HealthThresholds, HubHealth, Severity,

@@ -158,6 +158,19 @@ fn dispatch(
             sessions, hub, &session, &args,
         )));
     }
+    // `epic_set_plan` (#299) vai ao hub pela rede: só a sessão de plano
+    // da execução de épico a vê e a chama.
+    let epic_plan = sessions.epic_plan_of(&session).unwrap_or(None);
+    if let Some(epic) = epic_plan {
+        if method == "tools/call"
+            && params.get("name").and_then(Value::as_str) == Some("epic_set_plan")
+        {
+            let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            return Ok(tool_result(set_epic_plan(
+                sessions, hub, &session, epic, &args,
+            )));
+        }
+    }
     let l = sessions.ledger();
     match method {
         "initialize" => Ok(json!({
@@ -175,6 +188,11 @@ fn dispatch(
             if analysis {
                 if let Some(a) = t.as_array_mut() {
                     a.push(analysis_tool());
+                }
+            }
+            if epic_plan.is_some() {
+                if let Some(a) = t.as_array_mut() {
+                    a.push(epic_plan_tool());
                 }
             }
             Ok(json!({ "tools": t }))
@@ -581,6 +599,97 @@ fn set_dependencies(
         body["order"] = order.clone();
     }
     hub.agent_call("POST", "autopilot/dependencies", &[], Some(&body), &s.id)
+}
+
+/// A ferramenta da sessão de plano da execução de épico (#299).
+fn epic_plan_tool() -> Value {
+    json!({
+        "name": "epic_set_plan",
+        "description": "Grava no hub do Control Tower o plano de execução do épico desta sessão: para cada sub-issue, as que a bloqueiam, o modelo e o esforço do agente, as áreas do repositório que ela toca e uma justificativa curta; a ordem da lista é a ordem sugerida. Propostas de sub-issue nova ou de divisão vão em proposals: não crie issues. O plano fica aguardando a aprovação do desenvolvedor. Grave uma vez e encerre.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "description": "Uma entrada por sub-issue do épico, na ordem sugerida de execução.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "number": { "type": "integer", "description": "Número da sub-issue." },
+                            "model": { "type": "string", "enum": ct_core::CLAUDE_MODELS, "description": "Modelo do agente da sub-issue." },
+                            "effort": { "type": "string", "enum": ct_core::CLAUDE_EFFORTS, "description": "Esforço do agente (opcional)." },
+                            "areas": {
+                                "type": "array",
+                                "description": "Caminhos ou globs relativos à raiz do repositório que a sub-issue altera (ex.: crates/ct-core/, ui/src/**/*.tsx). Sub-issues com áreas sobrepostas não rodam ao mesmo tempo.",
+                                "items": { "type": "string" }
+                            },
+                            "reason": { "type": "string", "description": "Justificativa curta do modelo, das áreas e da posição." },
+                            "blocked_by": {
+                                "type": "array",
+                                "description": "Issues que precisam estar mescladas antes desta (do épico ou de fora).",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "number": { "type": "integer" },
+                                        "reason": { "type": "string", "description": "Justificativa curta da dependência." }
+                                    },
+                                    "required": ["number", "reason"]
+                                }
+                            }
+                        },
+                        "required": ["number", "model", "areas", "blocked_by"]
+                    }
+                },
+                "summary": { "type": "string", "description": "Resumo do plano para o desenvolvedor." },
+                "proposals": {
+                    "type": "array",
+                    "description": "Sub-issues novas (kind nova) ou divisões (kind dividir, com from) que o desenvolvedor pode aprovar.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": { "type": "string", "enum": ["nova", "dividir"] },
+                            "title": { "type": "string" },
+                            "body": { "type": "string" },
+                            "from": { "type": "integer", "description": "Sub-issue dividida (kind dividir)." }
+                        },
+                        "required": ["kind", "title"]
+                    }
+                }
+            },
+            "required": ["nodes"]
+        }
+    })
+}
+
+/// `epic_set_plan` (#299): manda ao hub, pelo token de agente do ambiente,
+/// o plano do épico da sessão de plano.
+fn set_epic_plan(
+    sessions: &Sessions,
+    hub: Option<&HubSender>,
+    s: &Session,
+    epic: i64,
+    args: &Value,
+) -> Result<Value, String> {
+    let hub = hub.ok_or_else(|| format!("hub indisponível: {}", crate::hub_sync::NOT_LINKED))?;
+    let (owner, repo) = {
+        let l = sessions.ledger();
+        let e = |e: ct_ledger::LedgerError| e.to_string();
+        let wi = l.get_work_item(s.work_item_id).map_err(e)?;
+        let p = l.get_project(wi.project_id).map_err(e)?;
+        (p.gh_owner, p.gh_repo)
+    };
+    let nodes = args
+        .get("nodes")
+        .filter(|v| v.is_array())
+        .cloned()
+        .ok_or("parâmetro obrigatório: nodes (lista)")?;
+    let mut body = json!({ "owner": owner, "repo": repo, "epic": epic, "nodes": nodes });
+    for k in ["summary", "proposals"] {
+        if let Some(v) = args.get(k).filter(|v| !v.is_null()) {
+            body[k] = v.clone();
+        }
+    }
+    hub.agent_call("POST", "epic/plan", &[], Some(&body), &s.id)
 }
 
 /// Sub-issues do épico no espelho, com o status do work item; sem work
@@ -1660,6 +1769,51 @@ mod tests {
             "{r}"
         );
         let r = call(&srv, &outra.id, "autopilot_set_dependencies", args).await;
+        assert_eq!(r["isError"], true);
+        assert!(
+            r["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("desconhecida"),
+            "{r}"
+        );
+        for id in [&s.id, &outra.id] {
+            srv.env.sessions.kill(id).ok();
+        }
+    }
+
+    /// `epic_set_plan` (#299): só no `tools/list` da sessão de plano; nas
+    /// outras, a chamada é desconhecida. Sem hub, o erro diz o que falta.
+    #[tokio::test]
+    async fn plano_so_na_sessao_de_plano() {
+        let srv = Srv::new(FakeClaude::sleep(30));
+        let agent = ct_sessions::AgentOptions::default();
+        let s = srv
+            .env
+            .sessions
+            .start_epic_plan(srv.env.project_id, 10, "planeje", None, &agent)
+            .unwrap();
+        let outra = srv
+            .env
+            .sessions
+            .start_project(srv.env.project_id, "outra", None, &agent)
+            .unwrap();
+        let lista = tool_names(&rpc(&srv, &s.id, "tools/list", json!({})).await);
+        assert_eq!(lista.last().unwrap(), "epic_set_plan", "{lista:?}");
+        let lista = tool_names(&rpc(&srv, &outra.id, "tools/list", json!({})).await);
+        assert!(!lista.iter().any(|t| t == "epic_set_plan"));
+        let args =
+            json!({ "nodes": [{ "number": 11, "model": "opus", "areas": [], "blocked_by": [] }] });
+        let r = call(&srv, &s.id, "epic_set_plan", args.clone()).await;
+        assert_eq!(r["isError"], true);
+        assert!(
+            r["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("hub indisponível"),
+            "{r}"
+        );
+        let r = call(&srv, &outra.id, "epic_set_plan", args).await;
         assert_eq!(r["isError"], true);
         assert!(
             r["content"][0]["text"]
