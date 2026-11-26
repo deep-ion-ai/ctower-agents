@@ -98,17 +98,23 @@ pub struct PtySession {
 
 impl PtySession {
     pub fn spawn(spec: SpawnSpec, scrollback: usize) -> io::Result<Self> {
-        Self::spawn_with_hold(spec, scrollback, MASK_HOLD)
+        Self::spawn_held(spec, scrollback, MASK_HOLD)
     }
 
     /// [`PtySession::spawn`] com outro prazo para a cauda do mascaramento.
     /// Só os testes trocam o prazo: o que junta um valor partido não pode
     /// depender de o agendador entregar a segunda escrita em 50 ms (#293).
-    fn spawn_with_hold(
+    /// Fora deste crate, só com a feature `test-support` (#313).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn spawn_with_hold(
         spec: SpawnSpec,
         scrollback: usize,
         mask_hold: Duration,
     ) -> io::Result<Self> {
+        Self::spawn_held(spec, scrollback, mask_hold)
+    }
+
+    fn spawn_held(spec: SpawnSpec, scrollback: usize, mask_hold: Duration) -> io::Result<Self> {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: spec.rows,

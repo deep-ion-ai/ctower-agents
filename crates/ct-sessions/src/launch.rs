@@ -10,7 +10,7 @@ use ct_core::{
 };
 use ct_git::{ensure_worktree, WorktreeSpec};
 use ct_ledger::{Ledger, NewEvent, NewSession, Project, Session, WorkItem};
-use ct_pty::{PtySession, SpawnSpec};
+use ct_pty::SpawnSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -717,19 +717,16 @@ impl Sessions {
             self.epic_unresolved(project, wi, &session.id, reason)?;
         }
         self.set_session_token(&session_token, &session.id);
-        let spawned = PtySession::spawn(
-            SpawnSpec {
-                program: cfg.claude_bin.clone(),
-                args,
-                cwd: PathBuf::from(cwd),
-                env,
-                env_remove: Vec::new(),
-                cols: size.cols,
-                rows: size.rows,
-                mask: pty_mask,
-            },
-            cfg.scrollback,
-        );
+        let spawned = self.spawn_pty(SpawnSpec {
+            program: cfg.claude_bin.clone(),
+            args,
+            cwd: PathBuf::from(cwd),
+            env,
+            env_remove: Vec::new(),
+            cols: size.cols,
+            rows: size.rows,
+            mask: pty_mask,
+        });
         let pty = match spawned {
             Ok(p) => p,
             Err(e) => {
@@ -2517,14 +2514,16 @@ mod tests {
     #[test]
     fn secrets_impressos_saem_mascarados_no_scrollback_e_no_broadcast() {
         use ct_secrets::Kind;
-        // O valor sai partido em duas escritas. As metades vêm de builtins do
-        // bash (`${T_TOKEN:0:5}`), não de `| head`/`| tail`: o fork e o exec
-        // de dois pipelines num runner carregado passavam do `MASK_HOLD`
-        // (50ms), a cauda "token" saía como está e o teste esperava um
-        // `***T_TOKEN***` que nunca vinha.
+        // O valor sai partido em duas escritas, e a segunda só vem depois que
+        // o teste vê a primeira linha com a cauda ("token") retida. A cauda
+        // fica retida até a próxima leitura (prazo longo, #313): o resultado
+        // não depende de o agendador entregar a segunda escrita dentro do
+        // `MASK_HOLD` (50 ms), o que falhava em runner carregado. Sem eco, o
+        // `\n` que libera cada passo não entra no meio do valor.
         let env = TestEnv::new(FakeClaude::script(
-            "echo \"antes=$T_TOKEN\"; read x; printf 'depois=%s/%s/%s\\n' \"$T_TOKEN\" \"$T_CURTO\" \"$T_VAR\"; printf '%s' \"${T_TOKEN:0:5}\"; sleep 0.01; printf '%s\\n' \"${T_TOKEN:5}\"; read y",
+            "stty -echo; echo \"antes=$T_TOKEN\"; read x; printf 'depois=%s/%s/%s\\n' \"$T_TOKEN\" \"$T_CURTO\" \"$T_VAR\"; printf '%s' \"${T_TOKEN:0:5}\"; read y; printf '%s\\n' \"${T_TOKEN:5}\"; read z",
         ));
+        env.sessions.set_mask_hold(Duration::from_secs(3600));
         env.write_secrets_cache_kinds(&[
             (None, "T_TOKEN", Kind::Secret, "token-muito-secreto"),
             (None, "T_CURTO", Kind::Secret, "curto7x"),
@@ -2538,12 +2537,22 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let (snap, rx) = pty.attach();
+        let read_until = |mut acc: Vec<u8>, needle: &str| {
+            while !String::from_utf8_lossy(&acc).contains(needle) {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                acc.extend(rx.recv_timeout(left).expect("sem broadcast"));
+            }
+            acc
+        };
         pty.write(b"\n").unwrap();
-        let mut live = Vec::new();
-        while !String::from_utf8_lossy(&live).contains("***T_TOKEN***\r\n") {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            live.extend(rx.recv_timeout(left).expect("sem broadcast"));
-        }
+        let first = read_until(Vec::new(), "variavel-visivel\r\n");
+        let first = String::from_utf8_lossy(&first).to_string();
+        // A primeira parte ("token") segue retida, por mais que a segunda
+        // demore: pode ser começo do valor.
+        assert!(first.ends_with("variavel-visivel\r\n"), "{first:?}");
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        pty.write(b"\n").unwrap();
+        let live = read_until(first.into_bytes(), "***T_TOKEN***\r\n");
         let live = String::from_utf8_lossy(&live).to_string();
         assert!(
             live.contains("depois=***T_TOKEN***/curto7x/variavel-visivel"),
