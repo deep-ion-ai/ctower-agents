@@ -2064,7 +2064,10 @@ mod tests {
         j.fake.set_issues(&arvore());
         j.fake.fail_401(true);
         let r = j.sync.sync_all().unwrap();
-        assert_eq!(r[0].error.as_deref(), Some("o Jira recusou a senha (401)"));
+        assert_eq!(
+            r[0].error.as_deref(),
+            Some("o Jira recusou a credencial (401)")
+        );
         let rd = &j.sync.readiness()[0];
         assert!(rd.jira.credential_ok && rd.jira.server_version.is_none());
 
@@ -2351,7 +2354,7 @@ mod tests {
         };
         assert_eq!(
             t.last_error.as_deref(),
-            Some("o Jira recusou a senha (401)")
+            Some("o Jira recusou a credencial (401)")
         );
         assert!(t.last_ok_at.is_some(), "o último sucesso continua");
     }
@@ -2401,7 +2404,10 @@ mod tests {
         j.env.sessions.ledger().outbox_ack(i64::MAX).unwrap();
         let r = j.sync.sync_all().unwrap();
         assert!(!r[0].ok);
-        assert_eq!(r[0].error.as_deref(), Some("o Jira recusou a senha (401)"));
+        assert_eq!(
+            r[0].error.as_deref(),
+            Some("o Jira recusou a credencial (401)")
+        );
         assert_eq!(numbers(&j.env), vec![1, 2, 3, 4], "os dois lotes ficaram");
         let l = j.env.sessions.ledger();
         assert_eq!(
@@ -2618,12 +2624,15 @@ mod tests {
         j.fake.fail_view_401("PROJ-4", true);
         j.fake.clear_calls();
         let e = j.sync.issue_description(pid, 4).unwrap_err().to_string();
-        assert!(e.contains("recusou a senha (401)"), "{e}");
+        assert!(e.contains("recusou a credencial (401)"), "{e}");
         assert_eq!(j.fake.viewed(), vec!["PROJ-4", "PROJ-4"]);
         assert_eq!(ran(), 2);
         // 401 no ciclo: o ciclo cai e o próximo resolve o token de novo.
         let r = j.sync.sync_all().unwrap();
-        assert_eq!(r[0].error.as_deref(), Some("o Jira recusou a senha (401)"));
+        assert_eq!(
+            r[0].error.as_deref(),
+            Some("o Jira recusou a credencial (401)")
+        );
         assert_eq!(ran(), 2);
         j.fake.fail_view_401("PROJ-4", false);
         let r = j.sync.sync_all().unwrap();
@@ -3846,7 +3855,7 @@ mod tests {
         );
         // Senha recusada e comando de credencial falhando.
         j.fake.fail_view_401("PROJ-7", true);
-        assert_eq!(err("7"), "Jira, PROJ-7: o Jira recusou a senha (401)");
+        assert_eq!(err("7"), "Jira, PROJ-7: o Jira recusou a credencial (401)");
         j.fake.fail_view_401("PROJ-7", false);
         let mut cfg = jira_config(&j.fake);
         cfg.credential_cmd = "exit 3".into();

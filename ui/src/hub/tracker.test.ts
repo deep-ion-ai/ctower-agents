@@ -220,12 +220,12 @@ test("prontidão: credencial vinda do cache aparece como tal (#268)", () => {
     gitlab: { cli: "1.124.0", credential_ok: true, credential_cached: cached, api_ok: true, error: null },
   });
   const cred = (c: ReturnType<typeof readinessChecks>) => [
-    c.jira.find((i) => i.label === "comando de credencial do Jira ok"),
-    c.gitlab.find((i) => i.label === "comando de credencial do GitLab ok"),
+    c.jira.find((i) => i.label === "credencial do Jira ok"),
+    c.gitlab.find((i) => i.label === "credencial do GitLab ok"),
   ];
   for (const item of cred(readinessChecks(r(true)))) {
     expect(item?.ok).toBe(true);
-    expect(item?.value).toBe('token em cache; "Buscar issues agora" roda o comando de novo');
+    expect(item?.value).toBe('token em cache; "Buscar issues agora" resolve de novo');
   }
   for (const item of cred(readinessChecks(r(false)))) expect(item?.value).toBeUndefined();
 });

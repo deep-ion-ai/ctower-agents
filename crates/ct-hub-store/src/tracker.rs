@@ -735,14 +735,17 @@ mod tests {
         hub.ingest(
             "a",
             "a",
-            &[entry(4, status(None, Some("o Jira recusou a senha (401)")))],
+            &[entry(
+                4,
+                status(None, Some("o Jira recusou a credencial (401)")),
+            )],
         )
         .unwrap();
         let st = hub.sync_state(p.id).unwrap().unwrap();
         assert_eq!(st.last_ok_at, Some(30));
         assert_eq!(
             st.last_error.as_deref(),
-            Some("o Jira recusou a senha (401)")
+            Some("o Jira recusou a credencial (401)")
         );
         // A sequência de falhas vem do ambiente de sync (issue #90).
         assert_eq!((st.failures, st.failing_since), (1, Some(30)));

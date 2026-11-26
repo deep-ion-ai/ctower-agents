@@ -469,7 +469,7 @@ test("prontidão do ambiente de sync: o que falta, com a instrução", async () 
   const r = within(g).getByLabelText("Prontidão de wsl-pc");
   expect(r).toHaveTextContent(/2 item\(ns\) a configurar/);
   expect(within(r).getByRole("list", { name: "Jira" })).toHaveTextContent(
-    'rode "o comando de credencial da conexão do Jira" num terminal do ambiente',
+    "confira a credencial da conexão do Jira (Hub › Conexões) ou a sobrescrita dela no ambiente",
   );
   expect(within(r).getByRole("list", { name: "Jira" })).toHaveTextContent("1.7.0");
   expect(within(r).getByRole("list", { name: "GitLab" })).not.toHaveTextContent(/falta/);

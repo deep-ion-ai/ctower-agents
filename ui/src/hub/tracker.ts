@@ -388,12 +388,14 @@ export interface ReadinessCheck {
  * impede a seguinte, com a instrução de configuração de cada item que falta.
  */
 export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; gitlab: ReadinessCheck[] } {
-  // Credencial e URL vêm da conexão (#238): a instrução fala dela, não do cadastro.
-  const jiraCmd = "o comando de credencial da conexão do Jira";
-  const gitlabCmd = "o comando de credencial da conexão do GitLab";
-  // O laço usa o token em cache sem rodar o comando (#236); "Buscar issues
-  // agora" roda o comando de novo (#268).
-  const cached = (c: boolean | undefined) => (c ? 'token em cache; "Buscar issues agora" roda o comando de novo' : undefined);
+  // Credencial e URL vêm da conexão (#238), de qualquer fonte (secret,
+  // comando ou arquivo, #274): a instrução fala da conexão, não do comando.
+  const credFix = (kind: string) =>
+    `confira a credencial da conexão do ${kind} (Hub › Conexões) ou a sobrescrita dela no ambiente; ` +
+    "se for um comando, rode-o num terminal do ambiente (o cache do gpg-agent pode ter expirado)";
+  // O laço usa o token em cache sem resolver de novo (#236); "Buscar issues
+  // agora" resolve de novo (#268).
+  const cached = (c: boolean | undefined) => (c ? 'token em cache; "Buscar issues agora" resolve de novo' : undefined);
   return {
     jira: [
       {
@@ -413,16 +415,16 @@ export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; 
         fix: 'rode "jira init" de novo com o servidor da conexão do Jira',
       },
       {
-        label: "comando de credencial do Jira ok",
+        label: "credencial do Jira ok",
         ok: r.jira.credential_ok,
         value: cached(r.jira.credential_cached),
-        fix: `rode "${jiraCmd}" num terminal do ambiente: o cache do gpg-agent pode ter expirado`,
+        fix: credFix("Jira"),
       },
       {
         label: "jira me ok",
         ok: r.jira.me_ok,
         value: r.jira.server_version ? `Jira ${r.jira.server_version}` : undefined,
-        fix: "confira o usuário do .config.yml e a senha que o comando de credencial imprime",
+        fix: "confira o usuário do .config.yml e o token da credencial da conexão do Jira",
       },
     ],
     gitlab: [
@@ -433,15 +435,15 @@ export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; 
         fix: "instale o glab no ambiente (ou aponte glab_bin no config.toml do ctowerd)",
       },
       {
-        label: "comando de credencial do GitLab ok",
+        label: "credencial do GitLab ok",
         ok: r.gitlab.credential_ok,
         value: cached(r.gitlab.credential_cached),
-        fix: `rode "${gitlabCmd}" num terminal do ambiente: o cache do gpg-agent pode ter expirado`,
+        fix: credFix("GitLab"),
       },
       {
         label: "API do GitLab ok",
         ok: r.gitlab.api_ok,
-        fix: "confira o token de acesso que o comando de credencial imprime e o host do GitLab",
+        fix: "confira o token da credencial da conexão do GitLab e o host da conexão",
       },
     ],
   };

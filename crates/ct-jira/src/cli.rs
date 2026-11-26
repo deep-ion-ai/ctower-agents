@@ -31,7 +31,7 @@ pub enum JiraError {
     NotFound(String),
     #[error("configuração do jira-cli ausente em {0}: rode \"jira init\" no ambiente")]
     ConfigMissing(String),
-    #[error("o Jira recusou a senha (401)")]
+    #[error("o Jira recusou a credencial (401)")]
     Unauthorized,
     /// 403: a senha vale, mas não dá acesso a isto (uma issue com nível de
     /// segurança, por exemplo). É falha do item, não da credencial (#265).
