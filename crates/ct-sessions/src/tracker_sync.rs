@@ -505,8 +505,28 @@ impl JiraGitlabSync {
     }
 
     /// Todos os projetos Jira atribuídos. A falha de um não impede os
-    /// outros: fica em `sync_state.last_error` e no resultado.
+    /// outros: fica em `sync_state.last_error` e no resultado. É o ciclo do
+    /// laço: a prontidão usa o token em cache (#236) e diz isso
+    /// (`credential_cached`, #268).
     pub fn sync_all(&self) -> Result<Vec<ProjectSync>> {
+        self.sync_all_with(false)
+    }
+
+    /// `sync.now` da UI (#268): o mesmo ciclo, mas com os tokens fora do
+    /// cache antes, então o comando de credencial roda e a prontidão mostra
+    /// o estado dele agora (um comando quebrado aparece como não pronto, com
+    /// a dica do gpg-agent). Sem `project_id`, todos os projetos Jira.
+    pub fn sync_now(&self, project_id: Option<i64>) -> Result<Vec<ProjectSync>> {
+        match project_id {
+            Some(id) => {
+                let _one = self.running.lock().unwrap_or_else(|e| e.into_inner());
+                Ok(vec![self.sync_one(id, true)?])
+            }
+            None => self.sync_all_with(true),
+        }
+    }
+
+    fn sync_all_with(&self, fresh: bool) -> Result<Vec<ProjectSync>> {
         let _one = self.running.lock().unwrap_or_else(|e| e.into_inner());
         let ids: Vec<i64> = self
             .sessions
@@ -520,7 +540,7 @@ impl JiraGitlabSync {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|id, _| ids.contains(id));
-        ids.into_iter().map(|id| self.sync_one(id)).collect()
+        ids.into_iter().map(|id| self.sync_one(id, fresh)).collect()
     }
 
     /// Descrição crua da issue `number` (`issue view --raw`), para o "Ver
@@ -685,24 +705,25 @@ impl JiraGitlabSync {
         })
     }
 
+    /// Um projeto, como no laço (token em cache).
     pub fn sync_project(&self, project_id: i64) -> Result<ProjectSync> {
         let _one = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        self.sync_one(project_id)
+        self.sync_one(project_id, false)
     }
 
     /// Token do Jira do projeto, pelo cache do ambiente (#236): o comando
-    /// de credencial só roda sem token em cache.
+    /// de credencial só roda sem token em cache. `true` = veio do cache.
     fn jira_token(
         &self,
         project_id: i64,
         jira: &JiraConfig,
-    ) -> std::result::Result<Arc<Secret>, String> {
+    ) -> std::result::Result<(Arc<Secret>, bool), String> {
         let source = CredentialSource::Command {
             cmd: jira.credential_cmd.clone(),
         };
         self.sessions
             .credentials()
-            .token(Ask {
+            .token_and_origin(Ask {
                 key: &jira_key(project_id),
                 what: "Jira",
                 source: &source,
@@ -737,7 +758,17 @@ impl JiraGitlabSync {
         )
     }
 
-    fn sync_one(&self, project_id: i64) -> Result<ProjectSync> {
+    /// Um ciclo do projeto. `fresh`: os tokens saem do cache antes da
+    /// prontidão, e o comando de credencial roda de novo (#268).
+    fn sync_one(&self, project_id: i64, fresh: bool) -> Result<ProjectSync> {
+        if fresh {
+            self.sessions
+                .credentials()
+                .invalidate(&jira_key(project_id));
+            self.sessions
+                .credentials()
+                .invalidate(&gitlab_key(project_id));
+        }
         let failed = |error: &str| ProjectSync {
             project_id,
             ok: false,
@@ -1005,8 +1036,9 @@ impl JiraGitlabSync {
         if gl.host.trim().is_empty() {
             return Err("host do GitLab ausente no cadastro do projeto".into());
         }
-        let token = remote.token(project_id, gl)?;
+        let (token, cached) = remote.token(project_id, gl)?;
         g.credential_ok = true;
+        g.credential_cached = cached;
         cli.api_version(&token).map_err(|e| e.to_string())?;
         g.api_ok = true;
         Ok(token)
@@ -1040,8 +1072,9 @@ impl JiraGitlabSync {
         }
         // Catálogo do mesmo servidor do cadastro; sem a seção, lista vazia.
         j.custom_fields = cli.config_custom_fields();
-        let token = self.jira_token(project_id, jira)?;
+        let (token, cached) = self.jira_token(project_id, jira)?;
         j.credential_ok = true;
+        j.credential_cached = cached;
         match cli.me(&token) {
             Ok(me) => {
                 j.me_ok = true;
@@ -2382,6 +2415,71 @@ mod tests {
         assert_eq!(numbers(&j.env), vec![1, 2, 3, 4]);
     }
 
+    /// #268: no laço, a prontidão usa a senha em cache (#236) e diz que ela
+    /// veio do cache; o `sync.now` tira a senha do cache e roda o comando,
+    /// então o comando que quebrou depois do primeiro ciclo aparece como não
+    /// pronto, com a dica do gpg-agent, e segue assim até ser consertado.
+    #[test]
+    fn comando_quebrado_aparece_na_prontidao_do_sync_now() {
+        let mut runs = std::path::PathBuf::new();
+        let mut broken = std::path::PathBuf::new();
+        let j = setup_with(false, |jc, _| {
+            let dir = std::path::Path::new(&jc.config_file).parent().unwrap();
+            runs = dir.join("credencial-rodou");
+            broken = dir.join("credencial-quebrada");
+            jc.credential_cmd = format!(
+                "echo x >> '{}'; if [ -f '{}' ]; then exit 2; fi; printf '{SENHA}\\n'",
+                runs.display(),
+                broken.display()
+            );
+        });
+        let ran = || {
+            std::fs::read_to_string(&runs)
+                .map(|s| s.lines().count())
+                .unwrap_or(0)
+        };
+        let pid = j.env.project_id;
+        let jira = |s: &JiraGitlabSync| s.readiness()[0].jira.clone();
+        j.fake.set_issues(&arvore());
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        let r = jira(&j.sync);
+        assert!(r.credential_ok && !r.credential_cached, "{r:?}");
+        assert_eq!(ran(), 1);
+
+        // O comando quebra (o cache do gpg-agent expirou, por exemplo): o
+        // laço segue com a senha em cache e diz que ela veio de lá.
+        std::fs::write(&broken, "").unwrap();
+        assert!(j.sync.sync_all().unwrap()[0].ok);
+        let r = jira(&j.sync);
+        assert!(r.credential_ok && r.credential_cached, "{r:?}");
+        assert_eq!(ran(), 1);
+
+        // O `sync.now` roda o comando: não pronto, com a dica.
+        let r = j.sync.sync_now(Some(pid)).unwrap();
+        assert!(!r[0].ok);
+        let msg = r[0].error.clone().unwrap();
+        assert!(
+            msg.contains("falhou (saída 2)") && msg.contains("gpg-agent"),
+            "{msg}"
+        );
+        let r = jira(&j.sync);
+        assert!(!r.credential_ok && !r.credential_cached, "{r:?}");
+        assert_eq!(r.error.as_deref(), Some(msg.as_str()));
+        assert_eq!(ran(), 2);
+        // Sem senha no cache, o laço também mostra o comando quebrado.
+        assert!(!j.sync.sync_all().unwrap()[0].ok);
+        assert!(!jira(&j.sync).credential_ok);
+        assert_eq!(ran(), 3);
+
+        // Consertado: o próximo `sync.now` (de todos os projetos) volta a
+        // ficar pronto.
+        std::fs::remove_file(&broken).unwrap();
+        assert!(j.sync.sync_now(None).unwrap()[0].ok);
+        let r = jira(&j.sync);
+        assert!(r.credential_ok && !r.credential_cached, "{r:?}");
+        assert_eq!(ran(), 4);
+    }
+
     #[test]
     fn pagina_da_listagem_falhando_e_pedida_de_novo() {
         let j = setup_with(false, |_, c| {
@@ -2669,6 +2767,13 @@ mod tests {
             gr.credential_ok && gr.api_ok && gr.error.is_none(),
             "{gr:?}"
         );
+        assert!(!gr.credential_cached, "o primeiro ciclo roda o comando");
+        // No laço, o token vem do cache e a prontidão diz isso; o `sync_now`
+        // roda o comando de novo (#268).
+        assert!(g.j.sync.sync_all().unwrap()[0].ok);
+        assert!(g.j.sync.readiness()[0].gitlab.credential_cached);
+        assert!(g.j.sync.sync_now(None).unwrap()[0].ok);
+        assert!(!g.j.sync.readiness()[0].gitlab.credential_cached);
     }
 
     /// GitLab recusando o token, glab ausente ou credencial falhando: o

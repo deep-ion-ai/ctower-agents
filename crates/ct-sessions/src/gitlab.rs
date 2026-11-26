@@ -63,14 +63,15 @@ impl GitlabRemote {
     }
 
     /// O token do projeto, pelo cache (o comando só roda sem token em
-    /// cache). Sem o cadastro desta forja, o token fica de fora.
+    /// cache). Sem o cadastro desta forja, o token fica de fora. `true` =
+    /// veio do cache, sem rodar o comando (#268).
     pub fn token(
         &self,
         project_id: i64,
         gl: &GitlabConfig,
-    ) -> std::result::Result<Arc<Secret>, String> {
+    ) -> std::result::Result<(Arc<Secret>, bool), String> {
         self.resolver
-            .token(Ask {
+            .token_and_origin(Ask {
                 key: &gitlab_key(project_id),
                 what: "GitLab",
                 source: &Self::source(gl),

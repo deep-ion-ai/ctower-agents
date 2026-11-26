@@ -788,6 +788,8 @@ impl Conn {
                 Ok(json!(v))
             }
             // Projeto Jira vai ao sync do jira-cli; os demais, ao do GitHub.
+            // No Jira, o `sync_now` roda o comando de credencial de novo,
+            // para a prontidão mostrar o estado dele agora (#268).
             "sync.now" => {
                 let gh = self.st.github.clone();
                 let tracker = self.st.tracker.clone();
@@ -797,7 +799,7 @@ impl Conn {
                 let project = p.get("project_id").and_then(Value::as_i64);
                 let v = tokio::task::spawn_blocking(move || match project {
                     Some(id) => match (tracker.filter(|t| t.handles(id)), gh) {
-                        (Some(t), _) => t.sync_project(id).map(|r| vec![r]),
+                        (Some(t), _) => t.sync_now(Some(id)),
                         (None, Some(g)) => g.sync_project(id).map(|r| vec![r]),
                         (None, None) => Err(ct_sessions::SessionsError::Invalid(
                             "sincronização com o GitHub desativada".into(),
@@ -809,7 +811,7 @@ impl Conn {
                             None => Vec::new(),
                         };
                         if let Some(t) = &tracker {
-                            all.extend(t.sync_all()?);
+                            all.extend(t.sync_now(None)?);
                         }
                         Ok(all)
                     }

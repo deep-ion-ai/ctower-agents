@@ -22,6 +22,13 @@ server_matches: boolean,
  */
 credential_ok: boolean, 
 /**
+ * A senha veio do cache do ambiente (#236): o comando de credencial
+ * não rodou nesta checagem, e `credential_ok` diz só que ele respondeu
+ * da última vez (#268). O `sync.now` roda o comando de novo. Opcional
+ * no TypeScript: ambiente anterior não manda.
+ */
+credential_cached?: boolean, 
+/**
  * O comando de credencial é o do `config.toml` deste ambiente
  * (`[credentials]`, #143), não o do cadastro. Opcional no TypeScript:
  * ambiente anterior não manda.

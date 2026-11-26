@@ -73,6 +73,8 @@ export const credentialsChanged = (c: TrackerCredentials) =>
 /** Situação da última leitura com a credencial neste ambiente. */
 export function credentialStatus(r: EnvCredential): { ok: boolean; text: string } | null {
   const source = (fromEnv: boolean | undefined) => (fromEnv ? "do ambiente" : "do cadastro");
+  // Token em cache: o comando não rodou na última checagem (#268).
+  const cached = (c: boolean | undefined) => (c ? " (token em cache)" : "");
   const failures = r.sync?.failures ?? 0;
   if (r.readiness) {
     const j = r.readiness.jira;
@@ -81,14 +83,14 @@ export function credentialStatus(r: EnvCredential): { ok: boolean; text: string 
     if (r.tracker === "jira") {
       parts.push(
         j.credential_ok
-          ? `Jira: credencial ${source(j.credential_from_env)} ok`
+          ? `Jira: credencial ${source(j.credential_from_env)} ok${cached(j.credential_cached)}`
           : `Jira: credencial ${source(j.credential_from_env)} falhou${j.error ? `: ${j.error}` : ""}`,
       );
     }
     if (r.forge === "gitlab") {
       parts.push(
         g.credential_ok
-          ? `GitLab: credencial ${source(g.credential_from_env)} ok`
+          ? `GitLab: credencial ${source(g.credential_from_env)} ok${cached(g.credential_cached)}`
           : `GitLab: credencial ${source(g.credential_from_env)} falhou${g.error ? `: ${g.error}` : ""}`,
       );
     }

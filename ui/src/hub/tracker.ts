@@ -375,6 +375,9 @@ export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; 
   // Credencial e URL vêm da conexão (#238): a instrução fala dela, não do cadastro.
   const jiraCmd = "o comando de credencial da conexão do Jira";
   const gitlabCmd = "o comando de credencial da conexão do GitLab";
+  // O laço usa o token em cache sem rodar o comando (#236); "Buscar issues
+  // agora" roda o comando de novo (#268).
+  const cached = (c: boolean | undefined) => (c ? 'token em cache; "Buscar issues agora" roda o comando de novo' : undefined);
   return {
     jira: [
       {
@@ -396,6 +399,7 @@ export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; 
       {
         label: "comando de credencial do Jira ok",
         ok: r.jira.credential_ok,
+        value: cached(r.jira.credential_cached),
         fix: `rode "${jiraCmd}" num terminal do ambiente: o cache do gpg-agent pode ter expirado`,
       },
       {
@@ -415,6 +419,7 @@ export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; 
       {
         label: "comando de credencial do GitLab ok",
         ok: r.gitlab.credential_ok,
+        value: cached(r.gitlab.credential_cached),
         fix: `rode "${gitlabCmd}" num terminal do ambiente: o cache do gpg-agent pode ter expirado`,
       },
       {
