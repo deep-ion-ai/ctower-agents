@@ -3,7 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { Connection } from "../protocol/gen";
-import { HUB_DASHBOARD, NO_HEALTH, NO_PROPOSALS, dashboard, hubEnv, hubInfo, hubStatus } from "../test/fixtures";
+import type { HubProjectView } from "../protocol/hub-gen";
+import {
+  HUB_DASHBOARD,
+  NO_HEALTH,
+  NO_PROPOSALS,
+  dashboard,
+  hubEnv,
+  hubInfo,
+  hubProjectView,
+  hubStatus,
+  jiraHubProject,
+} from "../test/fixtures";
 
 const JIRA: Connection = {
   id: 7,
@@ -16,14 +27,14 @@ const JIRA: Connection = {
   updated_at: 1,
 };
 
-function setup(list: Connection[] = [JIRA]) {
+function setup(list: Connection[] = [JIRA], projects: HubProjectView[] = []) {
   let conns = list;
   const api = new FakeDaemonApi([{ ...FakeDaemonApi.wslEnv(), name: "WSL" }])
     .on("dashboard.get", dashboard({ projects: [] }))
     .withHub("ws://mac-mini:7879/ws", true)
     .onHub("hub.info", hubInfo({ protocol: "1.5" }))
     .onHub("hub.status", hubStatus())
-    .onHub("hub.projects.list", [])
+    .onHub("hub.projects.list", projects)
     .onHub("hub.envs.list", [hubEnv()])
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
     .onHub("hub.proposals.list", NO_PROPOSALS)
@@ -75,4 +86,38 @@ test("sem conexão, o formulário pede o nome antes de chamar o hub", async () =
   await user.click(within(form).getByRole("button", { name: "Salvar conexão" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("informe o nome da conexão");
   expect(api.hubCallsTo("hub.connections.add")).toHaveLength(0);
+});
+
+test("conexão em uso mostra os projetos e não deixa renomear (#271)", async () => {
+  // O projeto Jira do exemplo usa a conexão 7 no rastreador.
+  const { api, user } = setup([JIRA], [hubProjectView(jiraHubProject())]);
+  const list = await screen.findByRole("list", { name: "Conexões cadastradas" });
+  expect(await within(list).findByText("grupo/projeto/app")).toBeInTheDocument();
+  await user.click(within(list).getByRole("button", { name: "Editar" }));
+  const form = screen.getByRole("form", { name: "Editar jira-acme" });
+  const name = within(form).getByLabelText("Nome");
+  expect(name).toBeDisabled();
+  expect(name).toHaveAccessibleDescription(/Em uso por grupo\/projeto\/app/);
+  expect(name).toHaveAccessibleDescription(/\[connections\."jira-acme"\]/);
+  expect(api.hubCallsTo("hub.connections.update")).toHaveLength(0);
+});
+
+test("a recusa do hub ao renomear aparece junto do formulário (#271)", async () => {
+  const { api, user } = setup();
+  api.onHub("hub.connections.update", () => {
+    throw new Error(
+      'a conexão jira-acme está em uso pelos projetos acme/acme-web; renomear desligaria as sobrescritas [connections."jira-acme"] dos ambientes',
+    );
+  });
+  const list = await screen.findByRole("list", { name: "Conexões cadastradas" });
+  expect(within(list).getByText("nenhum projeto")).toBeInTheDocument();
+  await user.click(within(list).getByRole("button", { name: "Editar" }));
+  const form = screen.getByRole("form", { name: "Editar jira-acme" });
+  const name = within(form).getByLabelText("Nome");
+  expect(name).toBeEnabled();
+  await user.clear(name);
+  await user.type(name, "jira-empresa");
+  await user.click(within(form).getByRole("button", { name: "Salvar conexão" }));
+  expect(await within(form).findByRole("alert")).toHaveTextContent("em uso pelos projetos acme/acme-web");
+  expect(api.hubCallsTo("hub.connections.update")[0].params).toMatchObject({ id: 7, name: "jira-empresa" });
 });

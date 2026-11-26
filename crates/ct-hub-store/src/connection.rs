@@ -3,7 +3,7 @@
 //! (`tracker.connection` e `forge.connection`).
 //!
 //! A validação é do descritor do tipo ([`provider::descriptor`]). `delete`
-//! recusa conexão em uso por projeto vivo. Editar ou apagar conexão em uso
+//! e a troca de nome recusam conexão em uso por projeto vivo. Editar ou apagar conexão em uso
 //! sobe o `config_rev`, para os ambientes receberem o cadastro novo em
 //! `GET /sync/config`.
 
@@ -165,7 +165,9 @@ impl Hub {
     }
 
     /// Edita a conexão (`hub.connections.update`). Em uso, sobe o
-    /// `config_rev`: o ambiente recebe o cadastro novo no próximo pull.
+    /// `config_rev`: o ambiente recebe o cadastro novo no próximo pull. O
+    /// nome de uma conexão em uso não muda: é a chave das sobrescritas
+    /// `[connections."nome"]` dos ambientes (#271).
     pub fn update_connection(&self, id: i64, patch: &ConnectionPatch) -> Result<Connection> {
         let cur = self.connection(id)?;
         let next = Connection {
@@ -188,10 +190,24 @@ impl Hub {
             ..cur.clone()
         };
         validate(&next)?;
+        let users = self.connection_users(id)?;
         if next.name != cur.name {
             self.check_unique_name(&next.name, Some(id))?;
+            // As sobrescritas do ambiente são indexadas pelo nome
+            // (`[connections."nome"]`): renomear em uso faria os ambientes
+            // caírem no comando do hub sem aviso (#271).
+            if !users.is_empty() {
+                return Err(LedgerError::Conflict(format!(
+                    "a conexão {} está em uso pelos projetos {}; renomear desligaria as \
+                     sobrescritas [connections.\"{}\"] dos ambientes. Crie uma conexão com o \
+                     nome novo e troque a conexão dos projetos",
+                    cur.name,
+                    users.join(", "),
+                    cur.name
+                )));
+            }
         }
-        let in_use = !self.connection_users(id)?.is_empty();
+        let in_use = !users.is_empty();
         let tx = self.conn.unchecked_transaction()?;
         self.conn.execute(
             "UPDATE connection SET name = ?2, endpoint = ?3, credential = ?4, options = ?5,
@@ -614,6 +630,67 @@ mod tests {
         assert!(hub.connection_users(j.id).unwrap().is_empty());
         hub.delete_connection(j.id).unwrap();
         assert_eq!(hub.list_connections().unwrap().len(), 1);
+    }
+
+    /// Renomear conexão em uso desligaria as sobrescritas
+    /// `[connections."nome"]` dos ambientes (#271): o hub recusa, diz quais
+    /// projetos a usam e não muda nada. Sem projeto, renomeia.
+    #[test]
+    fn renomear_conexao_em_uso_e_recusado() {
+        let hub = Hub::open_in_memory().unwrap();
+        let j = hub
+            .add_connection(&jira("jira-acme", "https://jira.example.com"))
+            .unwrap();
+        let g = hub.add_connection(&gitlab("gitlab-acme")).unwrap();
+        projeto(&hub, j.id, g.id).unwrap();
+        let rev = hub.config_rev().unwrap();
+
+        let err = hub
+            .update_connection(
+                j.id,
+                &ConnectionPatch {
+                    name: Some("jira-empresa".into()),
+                    endpoint: Some("https://jira2.example.com".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, LedgerError::Conflict(_)), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("acme/acme-web"), "{msg}");
+        assert!(msg.contains(r#"[connections."jira-acme"]"#), "{msg}");
+        let cur = hub.connection(j.id).unwrap();
+        assert_eq!(cur.name, "jira-acme");
+        assert_eq!(cur.endpoint, "https://jira.example.com");
+        assert_eq!(hub.config_rev().unwrap(), rev);
+
+        // Mandar o mesmo nome (o formulário manda todos os campos) não é renomear.
+        let ed = hub
+            .update_connection(
+                j.id,
+                &ConnectionPatch {
+                    name: Some(" jira-acme ".into()),
+                    endpoint: Some("https://jira2.example.com".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(ed.endpoint, "https://jira2.example.com");
+
+        // Conexão sem projeto renomeia normalmente.
+        let livre = hub
+            .add_connection(&jira("jira-livre", "https://jira.example.com"))
+            .unwrap();
+        let ren = hub
+            .update_connection(
+                livre.id,
+                &ConnectionPatch {
+                    name: Some("jira-outra".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(ren.name, "jira-outra");
     }
 
     #[test]
