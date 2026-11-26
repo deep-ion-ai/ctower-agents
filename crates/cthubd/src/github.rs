@@ -341,22 +341,24 @@ struct HubToken {
 }
 
 impl HubToken {
-    /// Fonte da conexão GitHub (a referenciada ou a padrão); sem conexão,
-    /// o `gh auth token`.
-    fn source(&self) -> Result<CredentialSource, GhError> {
+    /// Fonte da conexão GitHub (a referenciada ou a padrão) e o nome dela,
+    /// para as mensagens; sem conexão, o `gh auth token`.
+    fn source(&self) -> Result<(CredentialSource, Option<String>), GhError> {
         let conns = self
             .hub
             .lock()
             .list_connections()
             .map_err(|e| GhError::Token(format!("conexões do hub ilegíveis: {e}")))?;
         Ok(provider::github_connection(&conns, self.connection)
-            .map_or(CredentialSource::Cli, |c| c.credential.clone()))
+            .map_or((CredentialSource::Cli, None), |c| {
+                (c.credential.clone(), Some(c.name.clone()))
+            }))
     }
 }
 
 impl TokenProvider for HubToken {
     fn token(&self) -> Result<String, GhError> {
-        let source = self.source()?;
+        let (source, name) = self.source()?;
         let lookup = |name: &str| {
             self.secrets
                 .as_ref()
@@ -372,11 +374,20 @@ impl TokenProvider for HubToken {
                 cli: Some(&self.cli),
             })
             .map(|t| t.expose().to_string())
-            .map_err(|e| GhError::Token(e.to_string()))
+            .map_err(|e| GhError::Token(hub_token_error(name.as_deref(), &e)))
     }
 
     fn invalidate(&self) {
         self.resolver.invalidate(&self.key);
+    }
+}
+
+/// Erro do token no hub com o contexto: qual conexão e que quem leu foi o
+/// hub (não o ambiente), para o usuário saber onde mexer.
+fn hub_token_error(connection: Option<&str>, e: &ct_proc::CredentialError) -> String {
+    match connection {
+        Some(name) => format!("conexão {name}, lida pelo hub: {e}"),
+        None => format!("sem conexão GitHub no hub, lido pelo hub: {e}"),
     }
 }
 
@@ -760,6 +771,36 @@ mod tests {
         let r3 = sync.sync_all().unwrap();
         assert!(!r3[0].ok, "o gh dá um token que o GitHub recusa: {r3:?}");
         assert!(ct_gh::fake::fake_gh_calls(tmp.path()) >= 1);
+    }
+
+    /// O `gh` do hub sem login: o erro diz a conexão, que quem leu foi o hub
+    /// e o que fazer, sem a dica do gpg-agent nem "terminal do ambiente".
+    #[test]
+    fn gh_sem_login_no_hub_cita_a_conexao_e_o_hub() {
+        use ct_hub_store::NewConnection;
+        let gh = FakeGitHub::start("ghp_ficticio");
+        let client = GhClient::new(GhConfig::new(&gh.url(), "/bin/false"));
+        let hub = hub_com("acme", "acme-web");
+        hub.lock()
+            .add_connection(&NewConnection {
+                name: "github".into(),
+                kind: ct_core::provider::ProviderKind::Github,
+                endpoint: String::new(),
+                credential: CredentialSource::Cli,
+                options: json!({}),
+            })
+            .unwrap();
+        let (events, _) = broadcast::channel(16);
+        let sync = HubGithub::new(hub, client, "hub-id", events);
+        let client = sync.client_for_new(None);
+        let msg = sync.validate_repo(&client, "acme", "acme-web").unwrap_err();
+        assert!(msg.contains("conexão github, lida pelo hub"), "{msg}");
+        assert!(msg.contains("a CLI não tem login nesta máquina"), "{msg}");
+        assert!(msg.contains("Hub › Conexões"), "{msg}");
+        assert!(
+            !msg.contains("gpg-agent") && !msg.contains("ambiente"),
+            "{msg}"
+        );
     }
 
     /// #275: o projeto que referencia uma conexão GitHub usa o token dela,

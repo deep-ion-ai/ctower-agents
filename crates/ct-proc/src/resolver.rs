@@ -182,7 +182,7 @@ fn resolve(ask: &Ask<'_>) -> Result<Secret, CredentialError> {
     match ask.source {
         CredentialSource::Command { cmd } => run_credential(what, cmd, ask.deadline),
         CredentialSource::Cli => {
-            run_credential(what, ask.cli.unwrap_or(CLI_TOKEN_CMD), ask.deadline)
+            run_credential(what, ask.cli.unwrap_or(CLI_TOKEN_CMD), ask.deadline).map_err(cli_error)
         }
         CredentialSource::File { path } => read_file(what, path),
         CredentialSource::Secret { name } => (ask.lookup)(name.trim())
@@ -191,9 +191,29 @@ fn resolve(ask: &Ask<'_>) -> Result<Secret, CredentialError> {
             .map(Secret::new)
             .ok_or_else(|| CredentialError::Io {
                 what,
-                message: format!("secret {:?} não existe no ambiente", name.trim()),
+                message: format!(
+                    "secret {:?} não encontrado (nem no projeto nem global); grave-o em \
+                     Hub › Secrets e variáveis ou troque a credencial da conexão em Hub › Conexões",
+                    name.trim()
+                ),
             }),
         CredentialSource::None => Err(CredentialError::Missing { what }),
+    }
+}
+
+/// A CLI (`gh auth token`) que falha é, quase sempre, a CLI sem login na
+/// máquina que lê o token: a dica do gpg-agent do comando de credencial não
+/// se aplica aqui.
+fn cli_error(e: CredentialError) -> CredentialError {
+    match e {
+        CredentialError::Failed { what, status, cmd } => CredentialError::Io {
+            what,
+            message: format!(
+                "\"{cmd}\" falhou ({status}): a CLI não tem login nesta máquina; faça o login \
+                 dela ou troque a credencial da conexão em Hub › Conexões"
+            ),
+        },
+        other => other,
     }
 }
 
@@ -349,6 +369,35 @@ mod tests {
         let none = CredentialSource::None;
         let e = r.token(ask("x:1", "GitLab", &none)).unwrap_err();
         assert_eq!(e, CredentialError::Missing { what: "GitLab" });
+    }
+
+    /// A CLI sem login (`gh auth token` sai com 1) não leva a dica do
+    /// gpg-agent nem manda rodar "num terminal do ambiente": quem lê pode ser
+    /// o hub. O secret ausente aponta para as telas, sem citar o ambiente.
+    #[test]
+    fn cli_sem_login_e_secret_ausente_dizem_o_que_fazer() {
+        let r = CredentialResolver::new();
+        let mut a = ask("gh:1", "GitHub", &CredentialSource::Cli);
+        a.cli = Some("exit 1");
+        let msg = r.token(a).unwrap_err().to_string();
+        assert!(msg.contains("\"exit 1\" falhou (saída 1)"), "{msg}");
+        assert!(msg.contains("a CLI não tem login nesta máquina"), "{msg}");
+        assert!(msg.contains("Hub › Conexões"), "{msg}");
+        assert!(
+            !msg.contains("gpg-agent") && !msg.contains("ambiente"),
+            "{msg}"
+        );
+
+        let sec = CredentialSource::Secret {
+            name: "API_TOKEN_ACME".into(),
+        };
+        let msg = r
+            .token(ask("gh:2", "GitHub", &sec))
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("\"API_TOKEN_ACME\" não encontrado"), "{msg}");
+        assert!(msg.contains("Hub › Secrets e variáveis"), "{msg}");
+        assert!(!msg.contains("ambiente"), "{msg}");
     }
 
     /// `~` e `~/...` expandem pelo `HOME` (#274); outro `~` no começo não.
