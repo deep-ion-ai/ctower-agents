@@ -70,8 +70,13 @@ impl Default for ConfigOptions {
 /// Liga as conexões (#237) à configuração que chegou: converte o
 /// `[credentials]` (se o hub mandou conexões) e preenche os campos de
 /// cadastro antigo dos projetos a partir delas, com as sobrescritas do
-/// ambiente. Falha de leitura ou conversão só registra aviso: o pull segue.
-fn apply_connections(cfg: &mut ConfigResponse, config_file: Option<&Path>) {
+/// ambiente. Devolve as sobrescritas (o pull as reaplica ao cache em todo
+/// pull, inclusive o sem mudança). Falha de leitura ou conversão só registra
+/// aviso: o pull segue.
+fn apply_connections(
+    cfg: &mut ConfigResponse,
+    config_file: Option<&Path>,
+) -> ct_core::ConnectionOverrides {
     use ct_core::provider::Connection;
     let overrides = match (config_file, &cfg.connections) {
         (Some(path), Some(conns)) => {
@@ -117,9 +122,14 @@ fn apply_connections(cfg: &mut ConfigResponse, config_file: Option<&Path>) {
         (Some(path), None) => crate::env_config::read_connection_overrides(path),
         (None, _) => Default::default(),
     };
-    for w in ct_ledger::materialize_connections(cfg, &overrides) {
-        tracing::warn!("conexões: {w}");
+    // Sem mudança, `cfg` não traz projetos: o cache é reaplicado depois da
+    // gravação (`Ledger::refresh_connection_overrides`).
+    if cfg.changed {
+        for w in ct_ledger::materialize_connections(cfg, &overrides) {
+            tracing::warn!("conexões: {w}");
+        }
     }
+    overrides
 }
 
 /// Estado do pull para `env.info` (`hub_config`).
@@ -295,9 +305,12 @@ impl HubSender {
         let (env_id, since, epoch) = {
             let l = self.sessions.ledger();
             let e = |r: ct_ledger::Result<Option<i64>>| r.map_err(|e| e.to_string());
+            // Cache sem as conexões (anterior à #237 reaplicada): pede o
+            // conjunto completo, que as traz.
+            let cached = l.hub_connections_cached().map_err(|e| e.to_string())?;
             (
                 l.env_id().to_string(),
-                e(l.hub_config_rev())?,
+                e(l.hub_config_rev())?.filter(|_| cached),
                 e(l.hub_config_epoch())?,
             )
         };
@@ -352,13 +365,23 @@ impl HubSender {
             None => None,
         };
         let mut cfg = reply.config;
-        apply_connections(&mut cfg, self.config.config_file.as_deref());
+        let overrides = apply_connections(&mut cfg, self.config.config_file.as_deref());
         let root = self.config.repos_root.clone();
-        let applied = self
-            .sessions
-            .ledger()
+        let ledger = self.sessions.ledger();
+        let applied = ledger
             .apply_hub_config(&cfg, |p| resolve_repo_path(&root, p))
             .map_err(|e| e.to_string())?;
+        // Em todo pull: a sobrescrita editada no config.toml vale sem mudança
+        // no hub. Com mudança, os avisos já saíram acima.
+        match ledger.refresh_connection_overrides(&overrides) {
+            Ok(avisos) if !cfg.changed => {
+                for w in avisos {
+                    tracing::warn!("conexões: {w}");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("conexões: cache não reaplicado: {e}"),
+        }
         if !applied.is_empty() {
             tracing::info!(
                 "hub: configuração {} (entraram {:?}, mudaram {:?}, saíram {:?})",

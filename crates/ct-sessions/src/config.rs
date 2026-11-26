@@ -113,6 +113,8 @@ pub struct DaemonConfig {
     pub credentials: ct_core::CredentialOverrides,
     /// Conexões do hub com comando de credencial só deste ambiente
     /// (`[connections."nome"]`, #237), depois da conversão de `[credentials]`.
+    /// Quem as aplica é o ct-server (`env_config`, `hub_config`); este campo
+    /// só existe para o `deny_unknown_fields` aceitar a tabela.
     pub connections: ct_core::ConnectionOverrides,
 }
 

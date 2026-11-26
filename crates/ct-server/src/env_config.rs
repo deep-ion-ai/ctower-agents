@@ -69,8 +69,6 @@ pub struct EnvConfig {
     path: PathBuf,
     gh_sync: watch::Sender<u64>,
     updates: Option<Arc<Updates>>,
-    /// Uma escrita por vez.
-    write: std::sync::Mutex<()>,
     /// `[credentials]` em uso no daemon; `None` = edição desligada.
     credentials: Option<ct_core::SharedCredentials>,
 }
@@ -78,13 +76,21 @@ pub struct EnvConfig {
 /// Limite de cada comando de credencial editado pela UI.
 pub const MAX_CREDENTIAL_CMD: usize = 1000;
 
+/// Uma escrita do `config.toml` por vez no processo. `env.config.set`,
+/// `env.credentials.set` e a conversão do `[credentials]` (#237) leem o
+/// arquivo e o regravam: as três passam por aqui.
+static CONFIG_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn config_write() -> std::sync::MutexGuard<'static, ()> {
+    CONFIG_WRITE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl EnvConfig {
     pub fn new(path: PathBuf, gh_sync_secs: u64, updates: Option<Arc<Updates>>) -> Self {
         EnvConfig {
             path,
             gh_sync: watch::channel(gh_sync_secs).0,
             updates,
-            write: std::sync::Mutex::new(()),
             credentials: None,
         }
     }
@@ -134,7 +140,7 @@ impl EnvConfig {
             }
         }
         let key = format!("{owner}/{repo}");
-        let _guard = self.write.lock().unwrap();
+        let _guard = config_write();
         let mut doc = self.read().map_err(io)?;
         if !doc.contains_key("credentials") {
             let mut t = toml_edit::Table::new();
@@ -223,7 +229,7 @@ impl EnvConfig {
                 )))
             }
         };
-        let _guard = self.write.lock().unwrap();
+        let _guard = config_write();
         let mut doc = self.read().map_err(io)?;
         doc[key] = parsed;
         self.store(&doc).map_err(io)?;
@@ -273,14 +279,8 @@ impl EnvConfig {
         }
     }
 
-    /// Temporário + rename, com a permissão do arquivo atual.
     fn store(&self, doc: &toml_edit::DocumentMut) -> io::Result<()> {
-        let tmp = self.path.with_extension("toml.tmp");
-        std::fs::write(&tmp, doc.to_string())?;
-        if let Ok(m) = std::fs::metadata(&self.path) {
-            std::fs::set_permissions(&tmp, m.permissions())?;
-        }
-        std::fs::rename(&tmp, &self.path)
+        write_atomic(&self.path, &doc.to_string())
     }
 }
 
@@ -320,6 +320,7 @@ pub fn convert_credentials_file(
     path: &Path,
     projects: &[ct_core::ProjectConnections],
 ) -> io::Result<(ct_core::ConnectionOverrides, Vec<String>)> {
+    let _guard = config_write();
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -329,7 +330,16 @@ pub fn convert_credentials_file(
     };
     let invalid = || io::Error::new(io::ErrorKind::InvalidData, "config.toml não lê");
     let creds = toml::from_str::<CredentialsOnly>(&text).map_err(|_| invalid())?;
-    let existing = read_connection_overrides(path);
+    // `[connections]` tem de ler. Se não lê, a conversão espera: a tabela seria
+    // regravada do zero e as entradas do usuário se perderiam.
+    let existing = toml::from_str::<ConnectionsOnly>(&text)
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "[connections] do config.toml não lê; a conversão do [credentials] fica para depois",
+            )
+        })?
+        .connections;
     if creds.credentials.is_empty() {
         return Ok((existing, Vec::new()));
     }
@@ -356,9 +366,12 @@ pub fn convert_credentials_file(
     Ok((conns, warnings))
 }
 
-/// Temporário + rename, com a permissão do arquivo atual.
+/// Temporário + rename, com a permissão do arquivo atual. O temporário leva
+/// o pid e um contador, para não colidir com outra escrita.
 fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
-    let tmp = path.with_extension("toml.tmp");
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("toml.{}.{seq}.tmp", std::process::id()));
     std::fs::write(&tmp, text)?;
     if let Ok(m) = std::fs::metadata(path) {
         std::fs::set_permissions(&tmp, m.permissions())?;
@@ -516,5 +529,29 @@ mod conexoes_tests {
         assert_eq!(de_novo, conns);
         assert!(avisos.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+}
+
+#[cfg(test)]
+mod conexoes_ilegiveis_tests {
+    use super::*;
+
+    /// `[connections]` que não lê (chave desconhecida): a conversão aborta e
+    /// o arquivo fica como estava, sem apagar as entradas do usuário.
+    #[test]
+    fn connections_que_nao_le_aborta_a_conversao_sem_reescrever() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        let original = "[credentials.\"acme/acme-web\"]\ntracker_cmd = \"pass show a/jira\"\n\n\
+                        [connections.\"jira-antigo\"]\ncredencial = \"x\"\n";
+        std::fs::write(&path, original).unwrap();
+        let projetos = [ct_core::ProjectConnections {
+            owner: "acme".into(),
+            repo: "acme-web".into(),
+            tracker: Some("jira-acme".into()),
+            forge: None,
+        }];
+        assert!(convert_credentials_file(&path, &projetos).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 }

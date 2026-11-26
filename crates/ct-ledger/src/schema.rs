@@ -421,6 +421,15 @@ END;
     r#"
 ALTER TABLE project ADD COLUMN release_config TEXT NOT NULL DEFAULT '{}';
 "#,
+    // 26: cache das conexões do hub (#237), como vieram no último pull com
+    // mudança (JSON de `Vec<Connection>`). Sem elas, as sobrescritas
+    // `[connections]` do ambiente não se aplicam num pull sem mudança.
+    r#"
+CREATE TABLE hub_connection_cache (
+  id   INTEGER PRIMARY KEY CHECK (id = 1),
+  json TEXT NOT NULL
+);
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo
