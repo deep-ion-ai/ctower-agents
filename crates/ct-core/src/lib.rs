@@ -24,12 +24,13 @@ pub use approval::{ApprovalConfig, APPROVAL_REFUSAL_PREFIX, DEFAULT_APPROVAL_LAB
 pub use autonomy::{AlignStrategy, AutonomyConfig, AutonomyReport, AutonomyState};
 pub use clock::{civil_from_days, hlc, now_ms, parse_iso8601, utc_stamp};
 pub use credentials::{
-    convert_credentials, ConnectionOverride, ConnectionOverrides, CredentialApplied,
-    CredentialOverride, CredentialOverrides, EnvSource, ProjectConnections, SharedCredentials,
+    convert_credentials, ConnectionOverride, ConnectionOverrides, CredentialOverride,
+    CredentialOverrides, EnvSource, ProjectConnections, SharedCredentials,
 };
 pub use docs::DocsConfig;
 pub use logs::LogsConfig;
 pub use model::*;
+pub use provider::{ProjectEndpoints, ResolvedConnections};
 pub use release::{
     ReleaseConfig, ReleaseStatus, ReleaseStep, RELEASE_SESSION_KIND, RELEASE_WORK_ITEM,
 };
@@ -37,12 +38,11 @@ pub use repo_url::{github_repo_from_url, repo_from_url, RepoRef};
 pub use session_templates::SessionTemplates;
 pub use tracker::{
     change_label, change_ref, change_short, change_url, default_type_map, github_connection,
-    glab_cli_prefix, is_assignee, issue_view_cmd, item_key, item_ref, item_short, item_url,
-    jira_cli_prefix, same_identity, supported_combination, ForgeConfig, ForgeKind, GithubConfig,
-    GitlabConfig, GitlabReadiness, JiraConfig, JiraExtraField, JiraFieldInfo, JiraReadiness,
-    JiraTypeRole, Sprint, SprintState, TrackerConfig, TrackerKind, TrackerProgress,
-    TrackerReadiness, TrackerRef, ACTIVE_SPRINT_JQL, DEFAULT_MAX_ISSUES, MAX_ISSUES_CEILING,
-    MAX_JIRA_EXTRA_FIELDS,
+    is_assignee, issue_view_cmd, item_key, item_ref, item_short, item_url, same_identity,
+    supported_combination, ForgeConfig, ForgeKind, GithubConfig, GitlabConfig, GitlabReadiness,
+    JiraConfig, JiraExtraField, JiraFieldInfo, JiraReadiness, JiraTypeRole, Sprint, SprintState,
+    TrackerConfig, TrackerKind, TrackerProgress, TrackerReadiness, TrackerRef, ACTIVE_SPRINT_JQL,
+    DEFAULT_MAX_ISSUES, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS,
 };
 pub use wip::{WipLimits, WipUsage, WIP_LIMIT_REACHED};
 

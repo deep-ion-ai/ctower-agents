@@ -23,6 +23,24 @@ mod tests {
     use crate::{Hub, HubProjectPatch, NewHubProject, ProjectProvider};
     use ct_core::{ForgeConfig, GitlabConfig, JiraConfig, ReleaseConfig, TrackerConfig};
 
+    /// Conexão do tipo no hub (#277); devolve o `id`.
+    fn conexao(hub: &Hub, kind: ct_core::provider::ProviderKind) -> i64 {
+        hub.add_connection(&crate::connection::NewConnection {
+            name: format!("{kind}-acme"),
+            kind,
+            endpoint: match kind {
+                ct_core::provider::ProviderKind::Jira => "https://jira.example.com".into(),
+                _ => "gitlab.example.com".into(),
+            },
+            credential: ct_core::provider::CredentialSource::Command {
+                cmd: format!("pass show {kind} | head -1"),
+            },
+            options: serde_json::json!({}),
+        })
+        .unwrap()
+        .id
+    }
+
     fn novo(owner: &str, repo: &str) -> NewHubProject {
         NewHubProject {
             owner: owner.into(),
@@ -97,19 +115,16 @@ mod tests {
         let hub = Hub::open_in_memory().unwrap();
         let pv = ProjectProvider {
             tracker: TrackerConfig::Jira(JiraConfig {
-                url: "https://jira.example.com".into(),
                 project_key: "ACME".into(),
-                credential_cmd: "pass show jira | head -1".into(),
                 type_map: ct_core::default_type_map(),
                 active_sprint_only: true,
+                connection: Some(conexao(&hub, ct_core::provider::ProviderKind::Jira)),
                 ..Default::default()
             }),
             forge: ForgeConfig::Gitlab(GitlabConfig {
-                connection: None,
-                host: "gitlab.example.com".into(),
+                connection: Some(conexao(&hub, ct_core::provider::ProviderKind::Gitlab)),
                 path: "acme/acme-web".into(),
                 clone_url: "https://gitlab.example.com/acme/acme-web.git".into(),
-                credential_cmd: "pass show gitlab | head -1".into(),
             }),
             branch_pattern: Some("{key}".into()),
             attribution: false,

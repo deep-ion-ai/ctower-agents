@@ -51,8 +51,8 @@ use crate::resolver::{gitlab_key, jira_key, Ask, CredentialResolver};
 use crate::{Result, Sessions, SessionsError};
 use ct_core::provider::CredentialSource;
 use ct_core::{
-    now_ms, GitlabConfig, GitlabReadiness, JiraConfig, JiraReadiness, PrState, TrackerIssueAdded,
-    TrackerKind, TrackerProgress, TrackerReadiness, WorkItemStatus,
+    now_ms, GitlabConfig, GitlabReadiness, JiraConfig, JiraReadiness, PrState, ResolvedConnections,
+    TrackerIssueAdded, TrackerKind, TrackerProgress, TrackerReadiness, WorkItemStatus,
 };
 use ct_gitlab::{mr_row, Glab};
 use ct_jira::{
@@ -182,8 +182,10 @@ const PRUNE_MAX_SHARE: f64 = 0.5;
 /// muda o conjunto espelhado, não o que se lê de cada issue.
 ///
 /// Os campos do projeto (`extra_fields`, ID e rótulo) só entram quando há
-/// algum: a marca do projeto sem eles fica igual à de antes.
-fn read_fingerprint(c: &JiraConfig) -> serde_json::Value {
+/// algum: a marca do projeto sem eles fica igual à de antes. `url` é a URL
+/// da conexão do Jira (#277): a mesma de antes, quando o pull a copiava para
+/// o cadastro, então a marca gravada não muda.
+fn read_fingerprint(c: &JiraConfig, url: &str) -> serde_json::Value {
     let mut v = json!({
         "mirror": MIRROR_VERSION,
         "project_key": c.project_key,
@@ -191,7 +193,7 @@ fn read_fingerprint(c: &JiraConfig) -> serde_json::Value {
         "epic_link_field": c.epic_link_field,
         "epic_name_field": c.epic_name_field,
         "sprint_field": c.sprint_field.trim(),
-        "url": c.url,
+        "url": url,
     });
     if !c.extra_fields.is_empty() {
         v["extra_fields"] = c
@@ -218,8 +220,8 @@ fn filter_fingerprint(c: &JiraConfig) -> [serde_json::Value; 3] {
 
 /// A configuração da marca da reconciliação: a da leitura mais o filtro.
 /// Com outro valor, o ciclo é uma reconciliação.
-fn fingerprint(c: &JiraConfig) -> String {
-    let mut v = read_fingerprint(c);
+fn fingerprint(c: &JiraConfig, url: &str) -> String {
+    let mut v = read_fingerprint(c, url);
     for (k, f) in FILTER_KEYS.iter().zip(filter_fingerprint(c)) {
         v[*k] = f;
     }
@@ -315,8 +317,8 @@ struct Plan {
     filter_changed: bool,
 }
 
-fn plan(cfg: &JiraConfig, input: &TrackerInput, now: i64) -> Plan {
-    let fp = fingerprint(cfg);
+fn plan(cfg: &JiraConfig, url: &str, input: &TrackerInput, now: i64) -> Plan {
+    let fp = fingerprint(cfg, url);
     let filter = cfg.effective_jql();
     let wrap = |cond: &str| match filter.as_str() {
         "" => cond.to_string(),
@@ -341,7 +343,7 @@ fn plan(cfg: &JiraConfig, input: &TrackerInput, now: i64) -> Plan {
                 o
             })
             .as_ref()
-            != Some(&read_fingerprint(cfg));
+            != Some(&read_fingerprint(cfg, url));
     // A marca anterior ao modo e ao limite não tem essas chaves: conta como
     // filtro mudado (a primeira poda pelo limite é esperada).
     let filter_changed = input.mark.is_some()
@@ -550,11 +552,9 @@ impl JiraGitlabSync {
     /// Síncrono: chame fora do runtime.
     pub fn issue_description(&self, project_id: i64, number: i64) -> Result<serde_json::Value> {
         let project = self.sessions.ledger().get_project(project_id)?;
-        let Some(jira) = project.tracker.jira().cloned() else {
-            return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
-        };
+        let (_, conns) = self.jira_of(&project)?;
         let key = ct_core::item_key(&project.tracker_ref(), number);
-        let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
+        let cli = JiraCli::new(&self.cfg.jira_bin, &conns.jira_config_file())
             .with_deadline(self.cfg.view_deadline);
         let fail = |e: String| SessionsError::Invalid(format!("Jira, {key}: {e}"));
         let v = self
@@ -563,7 +563,7 @@ impl JiraGitlabSync {
         Ok(json!({
             "title": v.pointer("/fields/summary").cloned().unwrap_or_default(),
             "description": v.pointer("/fields/description").cloned().unwrap_or_default(),
-            "url": ct_core::item_url(&project.tracker_ref(), number),
+            "url": ct_core::item_url(&project.tracker_ref(), &conns.jira_url(), number),
         }))
     }
 
@@ -577,17 +577,15 @@ impl JiraGitlabSync {
             return Ok(Some(i));
         }
         let project = self.sessions.ledger().get_project(project_id)?;
-        let Some(jira) = project.tracker.jira().cloned() else {
-            return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
-        };
+        let (jira, conns) = self.jira_of(&project)?;
         let key = ct_core::item_key(&project.tracker_ref(), number);
-        let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
+        let cli = JiraCli::new(&self.cfg.jira_bin, &conns.jira_config_file())
             .with_deadline(self.cfg.view_deadline);
         let fail = |e: String| SessionsError::Invalid(format!("Jira, {key}: {e}"));
         let v = self
             .jira_call(&project, |t| cli.view(t, &key))
             .map_err(|e| fail(e.to_string()))?;
-        let Some(row) = issue_row(&v, &jira) else {
+        let Some(row) = issue_row(&v, &jira, &conns.jira_url()) else {
             return Ok(None);
         };
         self.sessions
@@ -619,9 +617,8 @@ impl JiraGitlabSync {
     /// fora do runtime.
     pub fn add_issue(&self, project_id: i64, key: &str) -> Result<TrackerIssueAdded> {
         let project = self.sessions.ledger().get_project(project_id)?;
-        let Some(jira) = project.tracker.jira().cloned() else {
-            return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
-        };
+        let (jira, conns) = self.jira_of(&project)?;
+        let url = conns.jira_url();
         let (key, number) = normalize_issue_key(&jira, key).map_err(SessionsError::Invalid)?;
         let work_item =
             |l: &Ledger| -> Result<bool> { Ok(l.find_work_item(project_id, number)?.is_some()) };
@@ -639,12 +636,12 @@ impl JiraGitlabSync {
                 });
             }
         }
-        let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
+        let cli = JiraCli::new(&self.cfg.jira_bin, &conns.jira_config_file())
             .with_deadline(self.cfg.view_deadline);
         let v = self
             .jira_call(&project, |t| cli.view(t, &key))
             .map_err(|e| SessionsError::Invalid(view_error(&key, &e)))?;
-        let row = match issue_row(&v, &jira) {
+        let row = match issue_row(&v, &jira, &url) {
             Some(r) => r,
             None => return Err(SessionsError::Invalid(row_refused(&key, &v, &jira))),
         };
@@ -664,7 +661,7 @@ impl JiraGitlabSync {
             }
             let pkey = ct_core::item_key(&project.tracker_ref(), p);
             let parent_row = match self.jira_call(&project, |t| cli.view(t, &pkey)) {
-                Ok(pv) => issue_row(&pv, &jira).ok_or_else(|| row_refused(&pkey, &pv, &jira)),
+                Ok(pv) => issue_row(&pv, &jira, &url).ok_or_else(|| row_refused(&pkey, &pv, &jira)),
                 Err(e) => Err(view_error(&pkey, &e)),
             };
             match parent_row {
@@ -701,6 +698,20 @@ impl JiraGitlabSync {
             work_item: work_item(&l)?,
             warning,
         })
+    }
+
+    /// O cadastro Jira do projeto e as conexões dele neste ambiente (#277):
+    /// a URL, o `config_file` e a credencial vêm da conexão. Sem rastreador
+    /// Jira ou sem a conexão, erro que diz o que falta.
+    fn jira_of(&self, project: &Project) -> Result<(JiraConfig, ResolvedConnections)> {
+        let Some(jira) = project.tracker.jira().cloned() else {
+            return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
+        };
+        let conns = self.sessions.project_connections(project);
+        if conns.jira.is_none() {
+            return Err(SessionsError::Invalid(no_connection(project, "Jira")));
+        }
+        Ok((jira, conns))
     }
 
     /// Um projeto, como no laço (token em cache).
@@ -807,14 +818,16 @@ impl JiraGitlabSync {
         let Some(jira) = project.tracker.jira().cloned() else {
             return Ok(failed("projeto sem rastreador Jira"));
         };
+        // URL, `config_file`, host e fontes vêm das conexões (#277).
+        let conns = self.sessions.project_connections(&project);
         let now = now_ms();
-        let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
+        let cli = JiraCli::new(&self.cfg.jira_bin, &conns.jira_config_file())
             .with_deadline(self.cfg.view_deadline)
             .with_list_deadline(self.cfg.list_deadline)
             .with_list_retry_waits(self.cfg.list_retry_waits.clone());
 
         let gitlab = project.forge.gitlab().cloned();
-        let (mut readiness, tokens) = self.check(&project, &jira, &cli, gitlab.as_ref(), now);
+        let (mut readiness, tokens) = self.check(&project, &conns, &cli, gitlab.as_ref(), now);
         readiness.jira.credential_from_env = jira_from_env;
         readiness.gitlab.credential_from_env = gitlab_from_env;
         let slug = format!("{}/{}", project.gh_owner, project.gh_repo);
@@ -859,6 +872,7 @@ impl JiraGitlabSync {
                     &cli,
                     &token,
                     &jira,
+                    &conns.jira_url(),
                     &project,
                     &input,
                     now,
@@ -888,7 +902,7 @@ impl JiraGitlabSync {
                         ..GithubSnapshot::default()
                     };
                     if let (Some(gl), Some(t)) = (&gitlab, &gl_token) {
-                        snap.prs = fetch_mrs(&self.gitlab_cli(gl), t, &project, gl, &input)?;
+                        snap.prs = fetch_mrs(&self.gitlab_cli(&conns), t, &project, gl, &input)?;
                     }
                     Ok((snap, f.failed, f.pruned))
                 })
@@ -996,8 +1010,8 @@ impl JiraGitlabSync {
         Ok(())
     }
 
-    fn gitlab_cli(&self, gl: &GitlabConfig) -> Glab {
-        self.cfg.gitlab().cli(gl)
+    fn gitlab_cli(&self, conns: &ResolvedConnections) -> Glab {
+        self.cfg.gitlab().cli(conns)
     }
 
     /// Prontidão do jira-cli e do glab (§8.4) e as credenciais do ciclo
@@ -1009,7 +1023,7 @@ impl JiraGitlabSync {
     fn check(
         &self,
         project: &Project,
-        jira: &JiraConfig,
+        conns: &ResolvedConnections,
         cli: &JiraCli,
         gitlab: Option<&GitlabConfig>,
         now: i64,
@@ -1020,14 +1034,14 @@ impl JiraGitlabSync {
             checked_at: now,
             ..TrackerReadiness::default()
         };
-        let token = self.check_jira(&mut r.jira, project, jira, cli);
+        let token = self.check_jira(&mut r.jira, project, conns, cli);
         if let Err(e) = &token {
             r.jira.error.get_or_insert_with(|| e.clone());
         }
         let gl_token = match gitlab {
             None => Ok(None),
-            Some(gl) => {
-                let t = self.check_gitlab(&mut r.gitlab, project, gl);
+            Some(_) => {
+                let t = self.check_gitlab(&mut r.gitlab, project, conns);
                 if let Err(e) = &t {
                     r.gitlab.error.get_or_insert_with(|| e.clone());
                 }
@@ -1045,12 +1059,12 @@ impl JiraGitlabSync {
         &self,
         g: &mut GitlabReadiness,
         project: &Project,
-        gl: &GitlabConfig,
+        conns: &ResolvedConnections,
     ) -> std::result::Result<Arc<Secret>, CycleError> {
-        let cli = self.gitlab_cli(gl);
+        let cli = self.gitlab_cli(conns);
         g.cli = Some(cli.version().map_err(|e| e.to_string())?);
-        if gl.host.trim().is_empty() {
-            return Err("host do GitLab ausente no cadastro do projeto".into());
+        if conns.gitlab.is_none() {
+            return Err(no_connection(project, "GitLab"));
         }
         let (token, cached) = self.gitlab_token(project)?;
         g.credential_ok = true;
@@ -1064,29 +1078,32 @@ impl JiraGitlabSync {
         &self,
         j: &mut JiraReadiness,
         project: &Project,
-        jira: &JiraConfig,
+        conns: &ResolvedConnections,
         cli: &JiraCli,
     ) -> std::result::Result<Arc<Secret>, CycleError> {
         j.cli = Some(cli.version().map_err(|e| e.to_string())?);
+        if conns.jira.is_none() {
+            return Err(no_connection(project, "Jira"));
+        }
         j.config_present = cli.config_path().is_file();
         if !j.config_present {
-            let path = match jira.config_file.trim() {
+            let path = match conns.jira_config_file().as_str() {
                 "" => ct_jira::DEFAULT_CONFIG.to_string(),
                 f => f.to_string(),
             };
             return Err(JiraError::ConfigMissing(path).to_string());
         }
         let server = cli.config_server();
-        j.server_matches = server.as_deref().map(normalize_url) == Some(normalize_url(&jira.url));
+        let url = conns.jira_url();
+        j.server_matches = server.as_deref().map(normalize_url) == Some(normalize_url(&url));
         if !j.server_matches {
             return Err(format!(
-                "o server da configuração do jira-cli ({}) não é a URL do cadastro ({}): \
-                 rode \"jira init\" no ambiente com a URL do cadastro",
+                "o server da configuração do jira-cli ({}) não é a URL da conexão do Jira ({url}): \
+                 rode \"jira init\" no ambiente com a URL da conexão",
                 server.as_deref().unwrap_or("ausente"),
-                jira.url
             ));
         }
-        // Catálogo do mesmo servidor do cadastro; sem a seção, lista vazia.
+        // Catálogo do mesmo servidor da conexão; sem a seção, lista vazia.
         j.custom_fields = cli.config_custom_fields();
         let (token, cached) = self.jira_token(project)?;
         j.credential_ok = true;
@@ -1103,6 +1120,16 @@ impl JiraGitlabSync {
         j.server_version = server_version(&info);
         Ok(token)
     }
+}
+
+/// O projeto não tem a conexão `what` (Jira ou GitLab) neste ambiente
+/// (#277): cadastro sem conexão, ou conexão fora do último pull.
+fn no_connection(project: &Project, what: &str) -> String {
+    format!(
+        "{}/{} sem conexão do {what} neste ambiente: escolha a conexão em Hub › Projetos \
+         (ou aguarde o próximo pull da configuração)",
+        project.gh_owner, project.gh_repo
+    )
 }
 
 /// `https://Jira.X/` e `https://jira.x` são o mesmo servidor.
@@ -1145,13 +1172,14 @@ fn fetch(
     cli: &JiraCli,
     token: &Secret,
     jira: &JiraConfig,
+    url: &str,
     project: &Project,
     input: &TrackerInput,
     now: i64,
     batch_size: usize,
     on_batch: &mut OnBatch<'_>,
 ) -> std::result::Result<Fetched, CycleError> {
-    let plan = plan(jira, input, now);
+    let plan = plan(jira, url, input, now);
     let slug = format!("{}/{}", project.gh_owner, project.gh_repo);
     let mut progress_err = None;
     let listed = list_logged(
@@ -1224,7 +1252,7 @@ fn fetch(
             );
             failed.push((key, e.to_string()));
         }
-        let rows = batch_rows(read.ok, jira, input, &mut applied, &mut parents);
+        let rows = batch_rows(read.ok, jira, url, input, &mut applied, &mut parents);
         // O que o lote leu fica gravado mesmo se o ciclo cair agora.
         on_batch(rows, done, total)?;
         if let Some(e) = read.fatal {
@@ -1391,13 +1419,14 @@ fn prune_plan(
 fn batch_rows(
     views: Vec<serde_json::Value>,
     jira: &JiraConfig,
+    url: &str,
     input: &TrackerInput,
     applied: &mut HashMap<i64, IssueRow>,
     parents: &mut HashSet<i64>,
 ) -> Vec<IssueRow> {
     let mut rows: BTreeMap<i64, IssueRow> = BTreeMap::new();
     for v in views {
-        if let Some(r) = issue_row(&v, jira) {
+        if let Some(r) = issue_row(&v, jira, url) {
             rows.insert(r.gh_number, r);
         }
     }
@@ -1543,36 +1572,102 @@ mod tests {
         sync: JiraGitlabSync,
     }
 
-    fn jira_config(fake: &FakeJira) -> JiraConfig {
-        JiraConfig {
-            connection: None,
-            url: FAKE_SERVER.into(),
-            project_key: "PROJ".into(),
-            jql: String::new(),
-            active_sprint_only: false,
-            max_issues: ct_core::MAX_ISSUES_CEILING,
-            credential_cmd: format!("printf '{SENHA}\\n'"),
-            config_file: fake.config_file().display().to_string(),
-            epic_link_field: "customfield_10601".into(),
-            epic_name_field: "customfield_10604".into(),
-            sprint_field: String::new(),
-            type_map: default_type_map(),
-            extra_fields: Vec::new(),
+    /// Id da conexão do Jira e da do GitLab do projeto nos testes.
+    const JIRA_CONN: i64 = 7;
+    const GITLAB_CONN: i64 = 8;
+
+    /// O cadastro Jira do projeto e a conexão que ele referencia (#277),
+    /// como os testes os editam: `url`, `credential_cmd` e `config_file`
+    /// são da conexão; o resto, do projeto (pelo `Deref`).
+    #[derive(Clone)]
+    struct Cadastro {
+        cfg: JiraConfig,
+        url: String,
+        credential_cmd: String,
+        config_file: String,
+    }
+
+    impl std::ops::Deref for Cadastro {
+        type Target = JiraConfig;
+        fn deref(&self) -> &JiraConfig {
+            &self.cfg
         }
     }
 
-    /// O projeto do `TestEnv` vira Jira (+ GitHub) pelo pull do hub; `sync`
-    /// = este é o ambiente de sync.
-    fn assign(env: &TestEnv, jira: JiraConfig, sync: bool, rev: i64) {
+    impl std::ops::DerefMut for Cadastro {
+        fn deref_mut(&mut self) -> &mut JiraConfig {
+            &mut self.cfg
+        }
+    }
+
+    impl Cadastro {
+        fn tracker(&self) -> TrackerConfig {
+            TrackerConfig::Jira(JiraConfig {
+                connection: Some(JIRA_CONN),
+                ..self.cfg.clone()
+            })
+        }
+
+        fn connection(&self) -> ct_core::provider::Connection {
+            ct_core::provider::Connection {
+                options: json!({ "config_file": self.config_file }),
+                ..conexao(
+                    JIRA_CONN,
+                    ct_core::provider::ProviderKind::Jira,
+                    &self.url,
+                    CredentialSource::Command {
+                        cmd: self.credential_cmd.clone(),
+                    },
+                )
+            }
+        }
+    }
+
+    fn jira_config(fake: &FakeJira) -> Cadastro {
+        Cadastro {
+            cfg: JiraConfig {
+                connection: Some(JIRA_CONN),
+                project_key: "PROJ".into(),
+                jql: String::new(),
+                active_sprint_only: false,
+                max_issues: ct_core::MAX_ISSUES_CEILING,
+                epic_link_field: "customfield_10601".into(),
+                epic_name_field: "customfield_10604".into(),
+                sprint_field: String::new(),
+                type_map: default_type_map(),
+                extra_fields: Vec::new(),
+            },
+            url: FAKE_SERVER.into(),
+            credential_cmd: format!("printf '{SENHA}\\n'"),
+            config_file: fake.config_file().display().to_string(),
+        }
+    }
+
+    /// O projeto do `TestEnv` vira Jira (+ GitHub) pelo pull do hub, e o
+    /// ambiente recebe a conexão do Jira; `sync` = este é o ambiente de
+    /// sync.
+    fn assign(env: &TestEnv, jira: Cadastro, sync: bool, rev: i64) {
         env.assign_provider(
-            TrackerConfig::Jira(jira),
+            jira.tracker(),
             ForgeConfig::Github(Default::default()),
             sync,
             rev,
         );
+        env.cfg
+            .credentials
+            .set_connections(vec![jira.connection()], Default::default());
     }
 
-    fn setup_with(sync: bool, edit: impl FnOnce(&mut JiraConfig, &mut TrackerSyncConfig)) -> Jira {
+    /// Troca a fonte da conexão `kind` em uso no ambiente; as outras ficam.
+    fn set_source(env: &TestEnv, kind: ct_core::provider::ProviderKind, source: CredentialSource) {
+        let (mut conns, overrides) = env.cfg.credentials.connections();
+        for c in conns.iter_mut().filter(|c| c.kind == kind) {
+            c.credential = source.clone();
+        }
+        env.cfg.credentials.set_connections(conns, overrides);
+    }
+
+    fn setup_with(sync: bool, edit: impl FnOnce(&mut Cadastro, &mut TrackerSyncConfig)) -> Jira {
         let env = TestEnv::new(FakeClaude::exit(0));
         let fake = FakeJira::new(env.tmp.path(), SENHA);
         let mut jira = jira_config(&fake);
@@ -1706,18 +1801,20 @@ mod tests {
         assert!(r.ok, "{r:?}");
         let ready = j.sync.readiness();
         assert!(ready[0].jira.credential_ok && ready[0].jira.credential_from_env);
-        // O cadastro no ledger continua com o comando do hub.
+        // O cadastro no ledger continua só com a conexão, e a conexão com o
+        // comando do hub.
+        let p = j
+            .env
+            .sessions
+            .ledger()
+            .get_project(j.env.project_id)
+            .unwrap();
+        assert_eq!(p.tracker.jira().unwrap().connection, Some(JIRA_CONN));
         assert_eq!(
-            j.env
-                .sessions
-                .ledger()
-                .get_project(j.env.project_id)
-                .unwrap()
-                .tracker
-                .jira()
-                .unwrap()
-                .credential_cmd,
-            "/caminho/que/nao/existe/pass show jira"
+            j.env.cfg.credentials.connections().0[0].credential,
+            CredentialSource::Command {
+                cmd: "/caminho/que/nao/existe/pass show jira".into()
+            }
         );
     }
 
@@ -1745,22 +1842,14 @@ mod tests {
     /// secrets do ambiente, e a entrada do projeto sobrepõe a global (#279).
     #[test]
     fn conexao_jira_com_secret_funciona_no_sync() {
-        let j = setup_with(false, |jira, _| {
-            jira.connection = Some(7);
-            // O que o pull materializa para o prefixo da sessão.
-            jira.credential_cmd = "ctower secret get JIRA_TOKEN_ACME".into();
-        });
+        let j = setup(false);
         j.fake.set_issues(&arvore());
-        j.env.cfg.credentials.set_connections(
-            vec![conexao(
-                7,
-                ct_core::provider::ProviderKind::Jira,
-                FAKE_SERVER,
-                CredentialSource::Secret {
-                    name: "JIRA_TOKEN_ACME".into(),
-                },
-            )],
-            Default::default(),
+        set_source(
+            &j.env,
+            ct_core::provider::ProviderKind::Jira,
+            CredentialSource::Secret {
+                name: "JIRA_TOKEN_ACME".into(),
+            },
         );
         // Sem o secret no cache: falha, citando o nome, nunca um valor.
         let r = &j.sync.sync_all().unwrap()[0];
@@ -1801,22 +1890,15 @@ mod tests {
     /// não vazia do arquivo, sem espaços nas pontas.
     #[test]
     fn conexao_gitlab_com_arquivo_funciona_no_sync() {
-        let g = setup_gitlab(true, |gl| {
-            gl.connection = Some(8);
-            gl.credential_cmd = String::new();
-        });
+        let g = setup_gitlab(true, |gl| gl.credential_cmd = String::new());
         let arquivo = g.j.env.tmp.path().join("gitlab token");
         std::fs::write(&arquivo, format!("\n  {TOKEN}  \nresto\n")).unwrap();
-        g.j.env.cfg.credentials.set_connections(
-            vec![conexao(
-                8,
-                ct_core::provider::ProviderKind::Gitlab,
-                HOST,
-                CredentialSource::File {
-                    path: arquivo.display().to_string(),
-                },
-            )],
-            Default::default(),
+        set_source(
+            &g.j.env,
+            ct_core::provider::ProviderKind::Gitlab,
+            CredentialSource::File {
+                path: arquivo.display().to_string(),
+            },
         );
         g.work_item();
         g.mr("opened");
@@ -1930,7 +2012,7 @@ mod tests {
 
         let j = setup_with(false, |c, _| c.url = "https://outro.jira".into());
         assert!(!j.sync.sync_all().unwrap()[0].ok);
-        assert!(error_of(&j.env).contains("não é a URL do cadastro"));
+        assert!(error_of(&j.env).contains("não é a URL da conexão do Jira"));
         let rd = &j.sync.readiness()[0];
         assert!(rd.jira.config_present && !rd.jira.server_matches);
     }
@@ -2379,12 +2461,14 @@ mod tests {
             let input = TrackerInput::load(&l, &p).unwrap();
             (p.tracker.jira().cloned().unwrap(), p, input)
         };
-        let cli = JiraCli::new(j.fake.bin().to_str().unwrap(), &cfg.config_file);
+        let config_file = j.fake.config_file().display().to_string();
+        let cli = JiraCli::new(j.fake.bin().to_str().unwrap(), &config_file);
         let mut calls: Vec<(Vec<i64>, usize, usize)> = Vec::new();
         let f = fetch(
             &cli,
             &Secret::new(SENHA),
             &cfg,
+            FAKE_SERVER,
             &project,
             &input,
             now_ms(),
@@ -2684,27 +2768,47 @@ mod tests {
         glab: ct_gitlab::fake::FakeGlab,
     }
 
-    fn gitlab_config() -> ct_core::GitlabConfig {
-        ct_core::GitlabConfig {
-            connection: None,
+    /// O cadastro GitLab do projeto e a conexão dele (#277): `host` e
+    /// `credential_cmd` são da conexão.
+    struct GlCadastro {
+        cfg: ct_core::GitlabConfig,
+        host: String,
+        credential_cmd: String,
+    }
+
+    fn gitlab_config() -> GlCadastro {
+        GlCadastro {
+            cfg: ct_core::GitlabConfig {
+                connection: Some(GITLAB_CONN),
+                path: PATH.into(),
+                clone_url: format!("https://{HOST}/{PATH}.git"),
+            },
             host: HOST.into(),
-            path: PATH.into(),
-            clone_url: format!("https://{HOST}/{PATH}.git"),
             credential_cmd: format!("printf '{TOKEN}\\n'"),
         }
     }
 
-    fn setup_gitlab(sync: bool, edit: impl FnOnce(&mut ct_core::GitlabConfig)) -> Gitlab {
+    fn setup_gitlab(sync: bool, edit: impl FnOnce(&mut GlCadastro)) -> Gitlab {
         let env = TestEnv::new(FakeClaude::exit(0));
         let fake = FakeJira::new(env.tmp.path(), SENHA);
         let glab = ct_gitlab::fake::FakeGlab::new(env.tmp.path(), HOST, TOKEN);
         let mut gl = gitlab_config();
         edit(&mut gl);
-        env.assign_provider(
-            TrackerConfig::Jira(jira_config(&fake)),
-            ForgeConfig::Gitlab(gl),
-            sync,
-            1,
+        let jira = jira_config(&fake);
+        env.assign_provider(jira.tracker(), ForgeConfig::Gitlab(gl.cfg), sync, 1);
+        env.cfg.credentials.set_connections(
+            vec![
+                jira.connection(),
+                conexao(
+                    GITLAB_CONN,
+                    ct_core::provider::ProviderKind::Gitlab,
+                    &gl.host,
+                    CredentialSource::Command {
+                        cmd: gl.credential_cmd,
+                    },
+                ),
+            ],
+            Default::default(),
         );
         let cfg = TrackerSyncConfig::new(fake.bin().to_str().unwrap())
             .with_glab_bin(glab.bin().to_str().unwrap());
@@ -3109,7 +3213,7 @@ mod tests {
                 "type_map": cfg.type_map,
                 "epic_link_field": cfg.epic_link_field,
                 "epic_name_field": cfg.epic_name_field,
-                "url": cfg.url,
+                "url": FAKE_SERVER,
             });
             l.apply_github(&GithubSnapshot {
                 project_id: j.env.project_id,
@@ -3157,7 +3261,7 @@ mod tests {
             project_key: "P".into(),
             ..JiraConfig::default()
         };
-        let fp = fingerprint(&cfg);
+        let fp = fingerprint(&cfg, "");
         let now = 10 * FULL_EVERY_MS;
         let input = |mark: Option<(i64, String)>, last_ok: Option<i64>| TrackerInput {
             cached: HashMap::new(),
@@ -3169,12 +3273,13 @@ mod tests {
             watched: Vec::new(),
         };
         // Primeiro ciclo: reconciliação.
-        let p = plan(&cfg, &input(None, None), now);
+        let p = plan(&cfg, "", &input(None, None), now);
         assert_eq!(p.jql, "(statusCategory != 3 OR updated >= -30d)");
         assert!(!p.reread_all && p.mark.is_some());
         // 12 min e 1 s desde o sucesso: 13 + 5.
         let p = plan(
             &cfg,
+            "",
             &input(Some((now - 3_600_000, fp.clone())), Some(now - 721_000)),
             now,
         );
@@ -3183,49 +3288,53 @@ mod tests {
         // Reconciliação diária.
         let p = plan(
             &cfg,
+            "",
             &input(Some((now - FULL_EVERY_MS, fp.clone())), Some(now - 60_000)),
             now,
         );
         assert!(p.jql.contains("statusCategory") && !p.reread_all);
         // Configuração mudou: relê tudo.
-        let p = plan(&cfg, &input(Some((now, "x".into())), Some(now)), now);
+        let p = plan(&cfg, "", &input(Some((now, "x".into())), Some(now)), now);
         assert!(p.jql.contains("statusCategory") && p.reread_all);
         // Só o JQL mudou: reconciliação com poda, sem reler o que não mudou.
         let novo = JiraConfig {
             jql: "labels = web".into(),
             ..cfg.clone()
         };
-        let p = plan(&novo, &input(Some((now, fp.clone())), Some(now)), now);
+        let p = plan(&novo, "", &input(Some((now, fp.clone())), Some(now)), now);
         assert_eq!(
             p.jql,
             "(labels = web) AND (statusCategory != 3 OR updated >= -30d)"
         );
         assert!(!p.reread_all && p.prune && p.filter_changed);
         // Reconciliação diária com o mesmo JQL: poda, com a proteção.
-        let fp_novo = fingerprint(&novo);
+        let fp_novo = fingerprint(&novo, "");
         let p = plan(
             &novo,
+            "",
             &input(Some((now - FULL_EVERY_MS, fp_novo)), Some(now - 60_000)),
             now,
         );
         assert!(p.prune && !p.filter_changed && !p.reread_all);
         // Cadastro anterior sem JQL: poda pelo limite; o incremental nunca
         // poda.
-        let p = plan(&cfg, &input(None, None), now);
+        let p = plan(&cfg, "", &input(None, None), now);
         assert!(p.prune);
         let p = plan(
             &cfg,
+            "",
             &input(Some((now - 3_600_000, fp.clone())), Some(now - 721_000)),
             now,
         );
         assert!(!p.prune && !p.filter_changed);
         // Marca de antes do modo e do limite (só com o `jql`): o filtro
         // mudou (a primeira poda pelo limite passa pela proteção), sem reler.
-        let mut antiga: serde_json::Value = serde_json::from_str(&fingerprint(&novo)).unwrap();
+        let mut antiga: serde_json::Value = serde_json::from_str(&fingerprint(&novo, "")).unwrap();
         antiga.as_object_mut().unwrap().remove("active_sprint_only");
         antiga.as_object_mut().unwrap().remove("max_issues");
         let p = plan(
             &novo,
+            "",
             &input(Some((now - 60_000, antiga.to_string())), Some(now - 60_000)),
             now,
         );
@@ -3237,7 +3346,7 @@ mod tests {
             active_sprint_only: true,
             ..novo.clone()
         };
-        let p = plan(&sprint, &input(None, None), now);
+        let p = plan(&sprint, "", &input(None, None), now);
         assert_eq!(
             p.jql,
             "(sprint in openSprints()) AND (statusCategory != 3 OR updated >= -30d)"
@@ -3245,7 +3354,8 @@ mod tests {
         assert!(p.prune);
         let p = plan(
             &sprint,
-            &input(Some((now, fingerprint(&novo))), Some(now)),
+            "",
+            &input(Some((now, fingerprint(&novo, ""))), Some(now)),
             now,
         );
         assert!(p.filter_changed && !p.reread_all);
@@ -3255,7 +3365,8 @@ mod tests {
         };
         let p = plan(
             &limite,
-            &input(Some((now, fingerprint(&novo))), Some(now)),
+            "",
+            &input(Some((now, fingerprint(&novo, ""))), Some(now)),
             now,
         );
         assert!(p.filter_changed && !p.reread_all && p.mark.is_some());
@@ -3273,7 +3384,7 @@ mod tests {
             project_key: "P".into(),
             ..JiraConfig::default()
         };
-        assert!(read_fingerprint(&cfg).get("extra_fields").is_none());
+        assert!(read_fingerprint(&cfg, "").get("extra_fields").is_none());
         let now = 10 * FULL_EVERY_MS;
         let input = |fp: String| TrackerInput {
             cached: HashMap::new(),
@@ -3289,14 +3400,14 @@ mod tests {
             ..cfg.clone()
         };
         let um = com(vec![extra("customfield_1", "A")]);
-        let p = plan(&um, &input(fingerprint(&cfg)), now);
+        let p = plan(&um, "", &input(fingerprint(&cfg, "")), now);
         assert!(
             p.reread_all && p.mark.is_some() && !p.filter_changed,
             "{p:?}"
         );
         // Mesma lista (espaços à parte): incremental, sem reler.
         let igual = com(vec![extra(" customfield_1 ", "A ")]);
-        let p = plan(&igual, &input(fingerprint(&um)), now);
+        let p = plan(&igual, "", &input(fingerprint(&um, "")), now);
         assert!(!p.reread_all && p.mark.is_none(), "{p:?}");
         for outro in [
             com(vec![extra("customfield_1", "B")]),
@@ -3310,7 +3421,7 @@ mod tests {
             ]),
             cfg.clone(),
         ] {
-            let p = plan(&outro, &input(fingerprint(&um)), now);
+            let p = plan(&outro, "", &input(fingerprint(&um, "")), now);
             assert!(p.reread_all, "{:?}", outro.extra_fields);
         }
     }
@@ -3557,7 +3668,7 @@ mod tests {
         let fake = FakeJira::new(env.tmp.path(), SENHA);
         let cfg = JiraConfig {
             project_key: "ACME".into(),
-            ..jira_config(&fake)
+            ..jira_config(&fake).cfg
         };
         let ok = |s: &str| normalize_issue_key(&cfg, s).unwrap();
         assert_eq!(ok("ACME-123"), ("ACME-123".into(), 123));

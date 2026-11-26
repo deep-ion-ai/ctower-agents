@@ -72,17 +72,18 @@ impl Default for ConfigOptions {
 }
 
 /// Liga as conexões (#237) à configuração que chegou: converte o
-/// `[credentials]` (se o hub mandou conexões) e preenche os campos de
-/// cadastro antigo dos projetos a partir delas, com as sobrescritas do
-/// ambiente. Devolve as sobrescritas (o pull as reaplica ao cache em todo
-/// pull, inclusive o sem mudança). Falha de leitura ou conversão só registra
-/// aviso: o pull segue.
+/// `[credentials]` (se o hub mandou conexões) e avisa o que falta nas
+/// conexões dos projetos, com as sobrescritas do ambiente. O cadastro não
+/// muda: o runtime lê a conexão (`SharedCredentials::resolve`, #277).
+/// Devolve as sobrescritas (o pull as põe em uso em todo pull, inclusive o
+/// sem mudança). Falha de leitura ou conversão só registra aviso: o pull
+/// segue.
 ///
 /// Depois da conversão, `credentials` (as sobrescritas por projeto em uso no
 /// daemon) passa a ser o que sobrou em `[credentials]` (#267): o que foi
-/// para `[connections]` não volta por cima do comando materializado.
+/// para `[connections]` não volta por cima da sobrescrita da conexão.
 fn apply_connections(
-    cfg: &mut ConfigResponse,
+    cfg: &ConfigResponse,
     config_file: Option<&Path>,
     credentials: Option<&ct_core::SharedCredentials>,
 ) -> ct_core::ConnectionOverrides {
@@ -136,10 +137,10 @@ fn apply_connections(
         (Some(path), None) => crate::env_config::read_connection_overrides(path),
         (None, _) => Default::default(),
     };
-    // Sem mudança, `cfg` não traz projetos: o cache é reaplicado depois da
-    // gravação (`Ledger::refresh_connection_overrides`).
+    // Sem mudança, `cfg` não traz projetos: os avisos saem do cache depois
+    // da gravação (`Ledger::connection_warnings`).
     if cfg.changed {
-        for w in ct_ledger::materialize_connections(cfg, &overrides) {
+        for w in ct_ledger::connection_warnings(cfg, &overrides) {
             tracing::warn!("conexões: {w}");
         }
     }
@@ -443,9 +444,9 @@ impl HubSender {
             }
             None => None,
         };
-        let mut cfg = reply.config;
+        let cfg = reply.config;
         let overrides = apply_connections(
-            &mut cfg,
+            &cfg,
             self.config.config_file.as_deref(),
             self.config.credentials.as_ref(),
         );
@@ -463,14 +464,14 @@ impl HubSender {
         };
         // Em todo pull: a sobrescrita editada no config.toml vale sem mudança
         // no hub. Com mudança, os avisos já saíram acima.
-        match ledger.refresh_connection_overrides(&overrides) {
+        match ledger.connection_warnings(&overrides) {
             Ok(avisos) if !cfg.changed => {
                 for w in avisos {
                     tracing::warn!("conexões: {w}");
                 }
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!("conexões: cache não reaplicado: {e}"),
+            Err(e) => tracing::warn!("conexões: avisos do cache indisponíveis: {e}"),
         }
         // As conexões e a sobrescrita em uso no daemon: delas sai a fonte de
         // credencial de cada projeto no sync e nas sessões (#274).
@@ -607,6 +608,7 @@ impl HubSender {
                 &p.gh_owner,
                 &p.gh_repo,
                 &p.forge,
+                &self.sessions.project_connections(&p).gitlab_host(),
                 &p.repo_path,
                 &gh_bin,
                 token.as_deref(),
@@ -898,7 +900,7 @@ mod tests {
 
     /// A fonte de credencial do projeto vem da conexão do hub (#274): o
     /// pull atualiza as conexões em uso no daemon, e o sync e as sessões
-    /// passam a ver o secret da conexão, não o comando materializado.
+    /// passam a ver o secret da conexão; o cadastro só a referencia (#277).
     #[tokio::test(flavor = "multi_thread")]
     async fn pull_leva_a_fonte_da_conexao_ao_ambiente() {
         use ct_core::provider::{CredentialSource, ProviderKind};
@@ -974,11 +976,15 @@ mod tests {
             .into_iter()
             .find(|p| p.gh_repo == "acme-web")
             .expect("projeto do hub no cache");
-        // O cadastro antigo leva o comando do prefixo da sessão...
+        // O cadastro só referencia a conexão; o prefixo da sessão sai dela
+        // (#277)...
+        assert_eq!(p.tracker.jira().unwrap().connection, Some(conn.id));
+        let conns = a.env.sessions.project_connections(&p);
         assert_eq!(
-            p.tracker.jira().unwrap().credential_cmd,
-            "ctower secret get JIRA_TOKEN_ACME"
+            conns.jira_prefix(),
+            r#"JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira"#
         );
+        assert_eq!(conns.gitlab_host(), "gitlab.example.com");
         // ...e o resolvedor do ambiente, a fonte da conexão.
         let s = a.env.sessions.jira_source(&p).unwrap();
         assert_eq!((s.source, s.from_env), (secret, false));
@@ -1416,18 +1422,22 @@ mod credenciais_tests {
         .unwrap()
     }
 
-    fn jira_cmd(cfg: &ConfigResponse) -> String {
-        cfg.projects.as_ref().unwrap()[0]
-            .tracker
-            .jira()
-            .unwrap()
-            .credential_cmd
-            .clone()
+    /// O comando do Jira que o ambiente usa com as conexões do pull e as
+    /// sobrescritas `o` (#277: o runtime lê a conexão).
+    fn jira_cmd(
+        cfg: &ConfigResponse,
+        shared: &ct_core::SharedCredentials,
+        o: ct_core::ConnectionOverrides,
+    ) -> String {
+        shared.set_connections(cfg.connections.clone().unwrap(), o);
+        let p = &cfg.projects.as_ref().unwrap()[0];
+        let (r, _) = shared.resolve(&p.owner, &p.repo, &p.tracker, &p.forge);
+        ct_core::provider::source_cmd(&r.jira.unwrap().credential).unwrap()
     }
 
     /// #267: o `[credentials]` convertido sai também da memória. Antes, o
     /// `SharedCredentials` carregado no início do `ctowerd` continuava
-    /// trocando o comando materializado da conexão pelo antigo, por projeto.
+    /// trocando o comando da conexão pelo antigo, por projeto.
     #[test]
     fn conversao_troca_as_credenciais_em_memoria() {
         let d = tempfile::tempdir().unwrap();
@@ -1447,26 +1457,21 @@ mod credenciais_tests {
                 .unwrap();
         let shared = ct_core::SharedCredentials::new(inicial);
 
-        let mut cfg = cfg_com_jira();
-        apply_connections(&mut cfg, Some(&path), Some(&shared));
-        assert_eq!(jira_cmd(&cfg), "pass show a");
+        let cfg = cfg_com_jira();
+        let o = apply_connections(&cfg, Some(&path), Some(&shared));
+        assert_eq!(jira_cmd(&cfg, &shared, o), "pass show a");
         assert!(shared.snapshot().is_empty(), "{:?}", shared.snapshot());
 
-        // O usuário edita a conexão; o pull seguinte materializa o novo.
+        // O usuário edita a conexão; o pull seguinte usa o novo, sem a
+        // credencial antiga por cima.
         std::fs::write(
             &path,
             "[connections.jira-acme]\ncredential_cmd = \"pass show b\"\n",
         )
         .unwrap();
-        let mut cfg = cfg_com_jira();
-        apply_connections(&mut cfg, Some(&path), Some(&shared));
-        assert_eq!(jira_cmd(&cfg), "pass show b");
-
-        // O uso aplica as credenciais do ambiente por cima.
-        let p = &mut cfg.projects.as_mut().unwrap()[0];
-        let applied = shared.apply("acme", "acme-web", &mut p.tracker, &mut p.forge);
-        assert!(!applied.tracker, "credencial antiga aplicada por cima");
-        assert_eq!(jira_cmd(&cfg), "pass show b");
+        let cfg = cfg_com_jira();
+        let o = apply_connections(&cfg, Some(&path), Some(&shared));
+        assert_eq!(jira_cmd(&cfg, &shared, o), "pass show b");
     }
 
     /// #276: o `github.token` do ambiente vira a sobrescrita da conexão

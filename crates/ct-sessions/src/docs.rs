@@ -167,7 +167,14 @@ pub fn find_epic_dir(epics: &Path, number: i64) -> io::Result<Option<PathBuf>> {
 
 /// Cria (ou reaproveita) `epicos/<n>-<slug>/` com o `README.md`, gerado só
 /// se não existe, e as `epic_dirs`. Devolve a pasta do épico.
-pub fn ensure_epic(root: &Path, p: &Project, epic: &EpicDocs) -> io::Result<PathBuf> {
+/// `jira_url` é a URL da conexão do Jira do projeto (links do `README.md`;
+/// ignorada no GitHub).
+pub fn ensure_epic(
+    root: &Path,
+    p: &Project,
+    jira_url: &str,
+    epic: &EpicDocs,
+) -> io::Result<PathBuf> {
     let epics = project_dir(root, &p.gh_owner, &p.gh_repo).join(EPICS_DOCS_DIR);
     let dir = match find_epic_dir(&epics, epic.number)? {
         Some(d) => d,
@@ -182,7 +189,7 @@ pub fn ensure_epic(root: &Path, p: &Project, epic: &EpicDocs) -> io::Result<Path
     {
         Ok(mut f) => {
             use std::io::Write;
-            f.write_all(epic_readme(&p.tracker_ref(), epic).as_bytes())?;
+            f.write_all(epic_readme(&p.tracker_ref(), jira_url, epic).as_bytes())?;
         }
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e),
@@ -329,7 +336,8 @@ impl Sessions {
             }
         };
         if let Some(epic) = epic {
-            out.epic = Some(ensure_epic(root, project, &epic)?);
+            let url = self.project_connections(project).jira_url();
+            out.epic = Some(ensure_epic(root, project, &url, &epic)?);
         }
         Ok(out)
     }
@@ -371,7 +379,8 @@ impl Sessions {
             epic_docs(&l, project.id, n, "")?
         };
         ensure_project(root, &project)?;
-        Ok(ensure_epic(root, &project, &docs)?)
+        let url = self.project_connections(&project).jira_url();
+        Ok(ensure_epic(root, &project, &url, &docs)?)
     }
 
     /// Só `_projeto/` (aplicação da atribuição pelo pull do hub).
@@ -426,7 +435,7 @@ mod tests {
         let nota = dir.join("_projeto/analises/nota.md");
         std::fs::write(&nota, "minha").unwrap();
 
-        let e = ensure_epic(root, &p, &epic(445, "Épico: docs fora do repositório")).unwrap();
+        let e = ensure_epic(root, &p, "", &epic(445, "Épico: docs fora do repositório")).unwrap();
         assert_eq!(e, dir.join("epicos/445-epico-docs-fora-do-repositorio"));
         assert!(e.join("prompts").is_dir() && e.join("evidencias").is_dir());
         let readme = std::fs::read_to_string(e.join("README.md")).unwrap();
@@ -436,7 +445,7 @@ mod tests {
 
         // De novo: nada muda, nada é sobrescrito.
         ensure_project(root, &p).unwrap();
-        let e2 = ensure_epic(root, &p, &epic(445, "Épico: docs fora do repositório")).unwrap();
+        let e2 = ensure_epic(root, &p, "", &epic(445, "Épico: docs fora do repositório")).unwrap();
         assert_eq!(e2, e);
         assert_eq!(std::fs::read_to_string(&nota).unwrap(), "minha");
         assert_eq!(
@@ -449,8 +458,8 @@ mod tests {
     fn titulo_alterado_reaproveita_a_pasta_do_epico() {
         let tmp = tempfile::tempdir().unwrap();
         let p = project(modelo());
-        let antiga = ensure_epic(tmp.path(), &p, &epic(12, "Título antigo")).unwrap();
-        let nova = ensure_epic(tmp.path(), &p, &epic(12, "Título novo")).unwrap();
+        let antiga = ensure_epic(tmp.path(), &p, "", &epic(12, "Título antigo")).unwrap();
+        let nova = ensure_epic(tmp.path(), &p, "", &epic(12, "Título novo")).unwrap();
         assert_eq!(nova, antiga);
         assert!(antiga.ends_with("12-titulo-antigo"));
         let epicos = tmp.path().join("deep-ion-ai__demo/epicos");

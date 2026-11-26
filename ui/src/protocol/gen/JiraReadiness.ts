@@ -14,7 +14,7 @@ cli: string | null,
  */
 config_present: boolean, 
 /**
- * O `server` do `.config.yml` é a `url` do cadastro.
+ * O `server` do `.config.yml` é a URL da conexão do Jira.
  */
 server_matches: boolean, 
 /**

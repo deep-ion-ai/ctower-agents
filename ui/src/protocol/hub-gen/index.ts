@@ -104,6 +104,7 @@ export type { PrState } from "./PrState";
 export type { Priority } from "./Priority";
 export type { ProjectAdded } from "./ProjectAdded";
 export type { ProjectDeleted } from "./ProjectDeleted";
+export type { ProjectEndpoints } from "./ProjectEndpoints";
 export type { ProjectPlan } from "./ProjectPlan";
 export type { ProposalDecided } from "./ProposalDecided";
 export type { ProposalKind } from "./ProposalKind";

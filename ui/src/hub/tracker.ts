@@ -337,14 +337,11 @@ export function providerParams(f: JiraForm): { tracker: object; forge: object } 
   return {
     tracker: {
       kind: "jira",
-      url: "",
       project_key: f.jira_key.trim(),
       active_sprint_only: f.active_sprint_only,
       // Com a sprint ativa, o JQL e o limite são ignorados pelo sync; vão como estão.
       jql: f.jql.trim(),
       max_issues: Number.isInteger(max) && max >= 1 && max <= MAX_ISSUES_CEILING ? max : DEFAULT_MAX_ISSUES,
-      credential_cmd: "",
-      config_file: "",
       connection: jiraConn,
       epic_link_field: f.epic_link_field.trim(),
       epic_name_field: f.epic_name_field.trim(),
@@ -352,7 +349,7 @@ export function providerParams(f: JiraForm): { tracker: object; forge: object } 
       type_map: tm.map,
       extra_fields: extra.fields,
     },
-    forge: { kind: "gitlab", clone_url: f.gitlab_url.trim(), credential_cmd: "", connection: gitlabConn },
+    forge: { kind: "gitlab", clone_url: f.gitlab_url.trim(), connection: gitlabConn },
   };
 }
 

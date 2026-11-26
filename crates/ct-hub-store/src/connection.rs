@@ -112,19 +112,13 @@ fn row_to_connection(r: &Row) -> rusqlite::Result<Connection> {
     })
 }
 
-/// Preenche, em memória, o rastreador e a forja do projeto a partir das
-/// conexões que ele referencia: URL, `config_file` e comando de credencial
-/// do Jira; host e comando de credencial do GitLab
-/// ([`provider::resolve_connections`]). O comando é o que imprime o token
-/// da fonte da conexão ([`provider::credential_cmd`]: o comando, o
-/// `ctower secret get` do secret ou a leitura do arquivo), que só vai a
-/// prefixos de sessão: o hub não resolve token de Jira nem de GitLab, e não
-/// conhece as sobrescritas dos ambientes. Conexão ausente deixa o lado como
-/// está.
-fn resolve_project(p: &mut HubProject, conns: &[Connection]) {
-    provider::resolve_connections(&mut p.tracker, &mut p.forge, conns, |c| {
-        provider::credential_cmd(c).unwrap_or_default()
-    });
+/// As conexões que o projeto referencia, com a fonte de credencial da
+/// própria conexão ([`provider::resolve_connections`]): o hub não conhece as
+/// sobrescritas dos ambientes e não resolve token de Jira nem de GitLab. O
+/// comando da fonte (`provider::source_cmd`: o comando, o `ctower secret
+/// get` do secret ou a leitura do arquivo) só vai a prefixos de sessão.
+fn resolve_project(p: &HubProject, conns: &[Connection]) -> ct_core::ResolvedConnections {
+    provider::resolve_connections(&p.tracker, &p.forge, conns, |c| c.credential.clone()).0
 }
 
 impl Hub {
@@ -354,26 +348,25 @@ impl Hub {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Visão efetiva do projeto no hub (#264): o cadastro com o que as
-    /// conexões referenciadas fornecem (ver [`resolve_project`]). Só em
-    /// memória, para o que o hub lê ou entrega (gestor, links, telas); quem
-    /// grava o cadastro usa a linha como está.
-    pub fn effective_project(&self, p: HubProject) -> Result<HubProject> {
-        Ok(self.effective_projects(vec![p])?.remove(0))
+    /// As conexões do projeto no hub (#277): de onde o hub lê a URL do
+    /// Jira, o host do GitLab e o prefixo das sessões (gestor, links),
+    /// sem o cadastro do projeto guardar nada disso.
+    pub fn project_connections(&self, p: &HubProject) -> Result<ct_core::ResolvedConnections> {
+        let linked = p.tracker.jira().is_some_and(|j| j.connection.is_some())
+            || p.forge.gitlab().is_some_and(|g| g.connection.is_some());
+        if !linked {
+            return Ok(Default::default());
+        }
+        Ok(resolve_project(p, &self.list_connections()?))
     }
 
-    /// [`Hub::effective_project`] de vários projetos, lendo as conexões uma
-    /// vez só.
-    pub fn effective_projects(&self, mut ps: Vec<HubProject>) -> Result<Vec<HubProject>> {
-        let linked = |p: &HubProject| {
-            p.tracker.jira().is_some_and(|j| j.connection.is_some())
-                || p.forge.gitlab().is_some_and(|g| g.connection.is_some())
-        };
-        if ps.iter().any(linked) {
-            let conns = self.list_connections()?;
-            for p in &mut ps {
-                resolve_project(p, &conns);
-            }
+    /// Os projetos com os endereços e prefixos das conexões (`endpoints`,
+    /// #277), como a UI os recebe em `hub.projects.list`, `hub.tree.get` e
+    /// `hub.dashboard.get`. Lê as conexões uma vez só.
+    pub fn with_endpoints(&self, mut ps: Vec<HubProject>) -> Result<Vec<HubProject>> {
+        let conns = self.list_connections()?;
+        for p in &mut ps {
+            p.endpoints = Some(resolve_project(p, &conns).endpoints());
         }
         Ok(ps)
     }
@@ -645,8 +638,8 @@ mod tests {
         assert!(matches!(err, LedgerError::Invalid(_)), "{err}");
         assert_eq!(hub.connection(j.id).unwrap().credential, arquivo);
 
-        // A visão efetiva do projeto (gestor, telas) leva o comando que
-        // imprime o token: o prefixo da sessão resolve o secret no ambiente
+        // As conexões do projeto (gestor, telas) levam o comando que imprime
+        // o token: o prefixo da sessão resolve o secret no ambiente
         // (`ctower secret get`); o hub não resolve token de Jira e GitLab.
         hub.update_connection(
             j.id,
@@ -657,18 +650,30 @@ mod tests {
         )
         .unwrap();
         projeto(&hub, j.id, g.id).unwrap();
-        let p = hub
-            .effective_projects(hub.list_projects().unwrap())
-            .unwrap()
-            .remove(0);
+        let p = hub.list_projects().unwrap().remove(0);
+        let conns = hub.project_connections(&p).unwrap();
         assert_eq!(
-            ct_core::issue_view_cmd("acme", "acme-web", &p.tracker),
+            ct_core::issue_view_cmd("acme", "acme-web", &p.tracker, &conns),
             r#"JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira issue view ACME-<n> --plain"#
         );
         assert_eq!(
-            p.forge.gitlab().unwrap().credential_cmd,
-            provider::file_cmd("~/.config/acme/gitlab.token")
+            conns.glab_prefix(),
+            format!(
+                r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$({})" glab"#,
+                provider::file_cmd("~/.config/acme/gitlab.token")
+            )
         );
+        // O que a UI recebe junto do projeto (#277).
+        let e = hub
+            .with_endpoints(hub.list_projects().unwrap())
+            .unwrap()
+            .remove(0)
+            .endpoints
+            .unwrap();
+        assert_eq!(e.jira_url, "https://jira.example.com");
+        assert_eq!(e.gitlab_host, "gitlab.example.com");
+        assert_eq!(e.jira_cli, conns.jira_prefix());
+        assert_eq!(e.glab_cli, conns.glab_prefix());
 
         let gh = hub
             .add_connection(&NewConnection {
@@ -750,26 +755,46 @@ mod tests {
         .unwrap();
         assert!(hub.config_rev().unwrap() > rev);
 
-        // Tirar a referência do projeto libera a exclusão.
-        let cfg = JiraConfig {
-            url: "https://jira.example.com".into(),
+        // Sem conexão, o projeto Jira é recusado (#277).
+        let sem = JiraConfig {
             project_key: "ACME".into(),
             jql: "labels = acme-web".into(),
-            credential_cmd: "pass show jira | head -1".into(),
             ..Default::default()
         };
+        let err = hub
+            .update_project(
+                "acme",
+                "acme-web",
+                &HubProjectPatch {
+                    tracker: Some(TrackerConfig::Jira(sem.clone())),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("escolha a conexão do Jira"),
+            "{err}"
+        );
+
+        // Trocar a referência do projeto por outra conexão libera a exclusão.
+        let j2 = hub
+            .add_connection(&jira("jira-acme-2", "https://jira2.example.com"))
+            .unwrap();
         hub.update_project(
             "acme",
             "acme-web",
             &HubProjectPatch {
-                tracker: Some(TrackerConfig::Jira(cfg)),
+                tracker: Some(TrackerConfig::Jira(JiraConfig {
+                    connection: Some(j2.id),
+                    ..sem
+                })),
                 ..Default::default()
             },
         )
         .unwrap();
         assert!(hub.connection_users(j.id).unwrap().is_empty());
         hub.delete_connection(j.id).unwrap();
-        assert_eq!(hub.list_connections().unwrap().len(), 1);
+        assert_eq!(hub.list_connections().unwrap().len(), 2);
     }
 
     /// Renomear conexão em uso desligaria as sobrescritas

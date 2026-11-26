@@ -953,6 +953,28 @@ mod tests {
         let bin = fake_gh(tmp.path(), "errado");
         let client = GhClient::new(GhConfig::new(&gh.url(), bin.to_str().unwrap()));
         let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let conexao = |kind: ct_core::provider::ProviderKind, endpoint: &str| {
+            hub.lock()
+                .add_connection(&ct_hub_store::NewConnection {
+                    name: format!("{kind}-acme"),
+                    kind,
+                    endpoint: endpoint.into(),
+                    credential: ct_core::provider::CredentialSource::Command {
+                        cmd: format!("pass show {kind}"),
+                    },
+                    options: serde_json::json!({}),
+                })
+                .unwrap()
+                .id
+        };
+        let jira = conexao(
+            ct_core::provider::ProviderKind::Jira,
+            "https://jira.example.com",
+        );
+        let gitlab = conexao(
+            ct_core::provider::ProviderKind::Gitlab,
+            "gitlab.example.com",
+        );
         hub.lock()
             .add_project_with(
                 &NewHubProject {
@@ -964,18 +986,15 @@ mod tests {
                 },
                 &ct_hub_store::ProjectProvider {
                     tracker: ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                        url: "https://jira.example.com".into(),
                         project_key: "PROJ".into(),
-                        credential_cmd: "pass show jira".into(),
                         active_sprint_only: true,
+                        connection: Some(jira),
                         ..Default::default()
                     }),
                     forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                        connection: None,
-                        host: "gitlab.example.com".into(),
+                        connection: Some(gitlab),
                         path: "grupo/projeto/app".into(),
                         clone_url: "https://gitlab.example.com/grupo/projeto/app.git".into(),
-                        credential_cmd: "pass show gitlab".into(),
                     }),
                     ..Default::default()
                 },

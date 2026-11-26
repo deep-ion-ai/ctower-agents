@@ -151,7 +151,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // Projetos Jira + GitLab (#349, #350): o jira-cli e o glab do ambiente,
-    // com os comandos de credencial do cadastro; o laço do GitHub pula esses
+    // com as conexões do hub (#277); o laço do GitHub pula esses
     // projetos.
     let tracker_cfg = TrackerSyncConfig::new(&cfg.jira_bin)
         .with_glab_bin(&cfg.glab_bin)

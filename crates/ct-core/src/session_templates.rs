@@ -389,7 +389,6 @@ mod tests {
     #[test]
     fn padrao_renderizado_no_jira_com_mr() {
         let jira = TrackerConfig::Jira(JiraConfig {
-            url: "https://jira.example.com".into(),
             project_key: "ACME".into(),
             ..Default::default()
         });

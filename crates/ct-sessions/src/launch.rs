@@ -617,6 +617,7 @@ impl Sessions {
                     Some((
                         crate::autonomy::agent_instruction(
                             project,
+                            &self.project_connections(project),
                             branch,
                             e.payload["base"].as_str()?,
                         ),
@@ -652,9 +653,9 @@ impl Sessions {
         let docs_line = (!docs_line.is_empty()).then(|| docs_line.join("\n\n"));
         args.extend(agent.args(gestor, rules.as_deref(), docs_line.as_deref()));
         if !prompt.is_empty() {
-            // Os comandos de credencial deste ambiente no lugar dos do
-            // cadastro (`[credentials]`, #143).
-            args.push(cfg.credentials.snapshot().rewrite_prompt(
+            // Os comandos de credencial deste ambiente no lugar dos da
+            // conexão do hub (`[credentials]`, #143; `[connections]`, #274).
+            args.push(cfg.credentials.rewrite_prompt(
                 &project.gh_owner,
                 &project.gh_repo,
                 &project.tracker,
@@ -708,7 +709,12 @@ impl Sessions {
             // em PR com base na branch de integração.
             env.push((ct_core::autonomy::AUTONOMY_BRANCH_ENV.to_string(), branch));
         }
-        env.extend(provider_env(project, wi, gestor));
+        env.extend(provider_env(
+            project,
+            &self.project_connections(project),
+            wi,
+            gestor,
+        ));
         env.extend(docs.env());
         if docs.unreachable {
             self.docs_unreachable(project, wi, &session.id)?;
@@ -942,10 +948,17 @@ pub(crate) fn mcp_config(port: u16, hook_token: &str, session_id: &str) -> Value
 /// - GitHub: `CTOWER_ISSUE` na sessão de issue, para o `ctower hook` exigir
 ///   `Closes #n` no `gh pr create` (#375).
 /// - Jira: `CTOWER_TRACKER=jira` (perfil Jira do hook) e, na sessão de issue
-///   ou de épico, `CTOWER_ISSUE_KEY` (`PROJ-5450`); `JIRA_CONFIG_FILE` se
-///   configurado. Sem `CTOWER_ISSUE`: o `Closes #n` é do GitHub.
-/// - GitLab: `GITLAB_HOST`.
-fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, String)> {
+///   ou de épico, `CTOWER_ISSUE_KEY` (`PROJ-5450`); `JIRA_CONFIG_FILE` se a
+///   conexão do Jira diz um. Sem `CTOWER_ISSUE`: o `Closes #n` é do GitHub.
+/// - GitLab: `GITLAB_HOST`, o host da conexão do GitLab.
+///
+/// O arquivo e o host vêm das conexões do projeto neste ambiente (#277).
+fn provider_env(
+    project: &Project,
+    conns: &ct_core::ResolvedConnections,
+    wi: &WorkItem,
+    gestor: bool,
+) -> Vec<(String, String)> {
     let mut env = Vec::new();
     if gestor {
         return env;
@@ -958,7 +971,7 @@ fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, 
                 env.push(("CTOWER_ISSUE".to_string(), wi.gh_number.to_string()));
             }
         }
-        ct_core::TrackerConfig::Jira(j) => {
+        ct_core::TrackerConfig::Jira(_) => {
             env.push(("CTOWER_TRACKER".to_string(), "jira".to_string()));
             if item {
                 env.push((
@@ -966,17 +979,16 @@ fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, 
                     ct_core::item_key(&project.tracker_ref(), wi.gh_number),
                 ));
             }
-            if !j.config_file.trim().is_empty() {
-                env.push((
-                    "JIRA_CONFIG_FILE".to_string(),
-                    j.config_file.trim().to_string(),
-                ));
+            let config_file = conns.jira_config_file();
+            if !config_file.is_empty() {
+                env.push(("JIRA_CONFIG_FILE".to_string(), config_file));
             }
         }
     }
-    if let Some(g) = project.forge.gitlab() {
-        if !g.host.trim().is_empty() {
-            env.push(("GITLAB_HOST".to_string(), g.host.trim().to_string()));
+    if project.forge.gitlab().is_some() {
+        let host = conns.gitlab_host();
+        if !host.is_empty() {
+            env.push(("GITLAB_HOST".to_string(), host));
         }
     }
     env
@@ -1124,27 +1136,63 @@ mod tests {
     const GITLAB_CMD: &str = "printf 'token-do-%s' gitlab";
 
     fn assign_jira_gitlab(env: &TestEnv, attribution: bool) {
+        use ct_core::provider::CredentialSource;
+        assign_jira_gitlab_with(
+            env,
+            attribution,
+            CredentialSource::Command {
+                cmd: JIRA_CMD.into(),
+            },
+            CredentialSource::Command {
+                cmd: GITLAB_CMD.into(),
+            },
+        );
+    }
+
+    /// O projeto Jira + GitLab do exemplo, com as conexões 7 (Jira) e 8
+    /// (GitLab) e as fontes dadas (#277).
+    fn assign_jira_gitlab_with(
+        env: &TestEnv,
+        attribution: bool,
+        jira: ct_core::provider::CredentialSource,
+        gitlab: ct_core::provider::CredentialSource,
+    ) {
+        use crate::test_support::connection;
+        use ct_core::provider::ProviderKind;
         env.assign_config(1, |p| {
             p.owner = "grupo/projeto".into();
             p.repo = "app".into();
             p.name = "app".into();
             p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.example.com".into(),
                 project_key: "PROJ".into(),
-                credential_cmd: JIRA_CMD.into(),
-                config_file: "/home/u/.config/.jira/jira.yml".into(),
+                connection: Some(7),
                 ..Default::default()
             });
             p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                connection: None,
-                host: "gitlab.example.com".into(),
+                connection: Some(8),
                 path: "grupo/projeto/app".into(),
                 clone_url: "https://gitlab.example.com/grupo/projeto/app.git".into(),
-                credential_cmd: GITLAB_CMD.into(),
             });
             p.branch_pattern = Some("{key}".into());
             p.attribution = attribution;
         });
+        env.connect(vec![
+            ct_core::provider::Connection {
+                options: json!({ "config_file": "/etc/acme/jira.yml" }),
+                ..connection(7, ProviderKind::Jira, "https://jira.example.com", jira)
+            },
+            connection(8, ProviderKind::Gitlab, "gitlab.example.com", gitlab),
+        ]);
+    }
+
+    /// Os prefixos como o hub os monta (a fonte da conexão, sem as
+    /// sobrescritas do ambiente): o que a UI renderiza no template.
+    fn hub_prefixes(env: &TestEnv, p: &Project) -> (String, String) {
+        let (conns, _) = env.cfg.credentials.connections();
+        let (r, _) = ct_core::provider::resolve_connections(&p.tracker, &p.forge, &conns, |c| {
+            c.credential.clone()
+        });
+        (r.jira_prefix(), r.glab_prefix())
     }
 
     /// `[credentials]` do ambiente (#143): o prompt que a UI montou com os
@@ -1165,8 +1213,7 @@ mod tests {
             )]
             .into(),
         ));
-        let jira = ct_core::jira_cli_prefix(p.tracker.jira().unwrap());
-        let glab = ct_core::glab_cli_prefix(p.forge.gitlab().unwrap());
+        let (jira, glab) = hub_prefixes(&env, &p);
         let prompt = format!("Leia com `{jira} issue view PROJ-1`. MR com `{glab} mr create`.");
         let s = env
             .sessions
@@ -1187,13 +1234,10 @@ mod tests {
             sent.contains(&format!("GITLAB_TOKEN=\"$({GITLAB_CMD})\" glab")),
             "{sent}"
         );
+        // O cadastro no ledger só referencia a conexão.
         assert_eq!(
-            jira_gitlab_project(&env)
-                .tracker
-                .jira()
-                .unwrap()
-                .credential_cmd,
-            JIRA_CMD
+            jira_gitlab_project(&env).tracker.jira().unwrap().connection,
+            Some(7)
         );
         let jira = env.sessions.jira_source(&p).unwrap();
         assert!(jira.from_env);
@@ -1251,8 +1295,8 @@ mod tests {
         let env = TestEnv::new(FakeClaude::exit(0));
         assign_jira_gitlab(&env, false);
         let p = jira_gitlab_project(&env);
-        let jira = ct_core::jira_cli_prefix(p.tracker.jira().unwrap());
-        let glab = ct_core::glab_cli_prefix(p.forge.gitlab().unwrap());
+        let conns = env.sessions.project_connections(&p);
+        let (jira, glab) = (conns.jira_prefix(), conns.glab_prefix());
         // O que a UI manda depois de renderizar o template `jira_issue`.
         let prompt = format!(
             "Trabalhe na issue PROJ-5450 do Jira.\n\
@@ -1283,7 +1327,7 @@ mod tests {
         assert!(out.contains("CTOWER_ISSUE_KEY=PROJ-5450\n"), "{out}");
         assert!(out.contains("GITLAB_HOST=gitlab.example.com\n"), "{out}");
         assert!(
-            out.contains("JIRA_CONFIG_FILE=/home/u/.config/.jira/jira.yml\n"),
+            out.contains("JIRA_CONFIG_FILE=/etc/acme/jira.yml\n"),
             "{out}"
         );
         assert!(!out.contains("CTOWER_ISSUE="), "{out}");
@@ -1296,6 +1340,88 @@ mod tests {
         assert_eq!(settings["attribution"], json!({ "commit": "", "pr": "" }));
         assert_eq!(settings["includeCoAuthoredBy"], false);
         assert_eq!(settings["hooks"], hook_settings("ctower")["hooks"]);
+    }
+
+    /// #277: com `Secret` no Jira e `File` no GitLab, o prefixo da sessão
+    /// sai da conexão (o `ctower secret get` e a leitura do arquivo), o
+    /// endereço e o `config_file` também, e a sobrescrita do ambiente troca
+    /// o comando no prompt que a UI montou com os prefixos do hub.
+    #[test]
+    fn prefixo_da_sessao_com_secret_e_arquivo_vem_da_conexao() {
+        use ct_core::provider::{file_cmd, CredentialSource};
+        let env = TestEnv::new(FakeClaude::exit(0));
+        assign_jira_gitlab_with(
+            &env,
+            true,
+            CredentialSource::Secret {
+                name: "JIRA_TOKEN_ACME".into(),
+            },
+            CredentialSource::File {
+                path: "~/.acme/gitlab".into(),
+            },
+        );
+        let p = jira_gitlab_project(&env);
+        let conns = env.sessions.project_connections(&p);
+        assert_eq!(
+            conns.jira_prefix(),
+            r#"JIRA_CONFIG_FILE=/etc/acme/jira.yml JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira"#
+        );
+        assert_eq!(
+            conns.glab_prefix(),
+            format!(
+                r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$({})" glab"#,
+                file_cmd("~/.acme/gitlab")
+            )
+        );
+        // O que a UI recebe junto do projeto (`endpoints`).
+        let e = env.sessions.with_endpoints(p.clone()).endpoints.unwrap();
+        assert_eq!(e.jira_url, "https://jira.example.com");
+        assert_eq!(e.gitlab_host, "gitlab.example.com");
+        assert_eq!(
+            (e.jira_cli, e.glab_cli),
+            (conns.jira_prefix(), conns.glab_prefix())
+        );
+
+        // A sobrescrita do GitLab neste ambiente vale no prompt.
+        let (hub, _) = env.cfg.credentials.connections();
+        env.cfg.credentials.set_connections(
+            hub,
+            ct_core::ConnectionOverrides(
+                [(
+                    "gitlab-acme".to_string(),
+                    ct_core::ConnectionOverride {
+                        credential_cmd: "pass show acme/gitlab".into(),
+                    },
+                )]
+                .into(),
+            ),
+        );
+        let (jira, glab) = hub_prefixes(&env, &p);
+        let s = env
+            .sessions
+            .start(StartRequest {
+                project_id: p.id,
+                prompt: format!("Leia com `{jira} issue view PROJ-1`. MR com `{glab} mr create`."),
+                ..env.request(1, "Um")
+            })
+            .unwrap();
+        let sent = s.launch_cmd.last().unwrap();
+        assert!(
+            sent.contains(
+                r#"JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira issue view"#
+            ),
+            "{sent}"
+        );
+        assert!(
+            sent.contains(r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show acme/gitlab)" glab mr create"#),
+            "{sent}"
+        );
+        let out = env.wait_fake_output(&s.id);
+        assert!(
+            out.contains("JIRA_CONFIG_FILE=/etc/acme/jira.yml\n"),
+            "{out}"
+        );
+        assert!(out.contains("GITLAB_HOST=gitlab.example.com\n"), "{out}");
     }
 
     /// Épico e sessão do projeto num projeto Jira: o épico também tem a

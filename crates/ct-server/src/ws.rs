@@ -450,8 +450,8 @@ impl Conn {
                     .map(|v| json!(v))
             }
             // Sobrescrita de credencial por conexão (#276): vale no próximo
-            // uso, sem restart (o `SharedCredentials`, o cache do resolvedor
-            // e o comando materializado dos projetos).
+            // uso, sem restart (o `SharedCredentials`, de onde saem a fonte
+            // e o prefixo da sessão, e o cache do resolvedor).
             "env.connections.get" | "env.connections.set" => {
                 let Some(c) = self.st.env_config.clone() else {
                     return Err(invalid("edição do config.toml desativada neste ambiente"));
@@ -477,7 +477,7 @@ impl Conn {
                             .await
                             .map_err(|e| (-32603, e.to_string()))??;
                     blocking(&sessions, move |s| {
-                        for w in s.ledger().refresh_connection_overrides(&overrides)? {
+                        for w in s.ledger().connection_warnings(&overrides)? {
                             tracing::warn!("conexões: {w}");
                         }
                         s.invalidate_connection(&name)?;
@@ -509,12 +509,19 @@ impl Conn {
                 let unassigned = p.get("unassigned").and_then(Value::as_bool) == Some(true);
                 let linked = self.linked();
                 let v = blocking(&sessions, move |s| {
-                    let l = s.ledger();
-                    Ok(if unassigned {
-                        l.list_unassigned_projects()?
-                    } else {
-                        assigned_projects(&l, linked)?
-                    })
+                    let ps = {
+                        let l = s.ledger();
+                        if unassigned {
+                            l.list_unassigned_projects()?
+                        } else {
+                            assigned_projects(&l, linked)?
+                        }
+                    };
+                    // Endereços e prefixos das conexões deste ambiente (#277).
+                    Ok(ps
+                        .into_iter()
+                        .map(|p| s.with_endpoints(p))
+                        .collect::<Vec<_>>())
                 })
                 .await?;
                 Ok(json!(v))
@@ -1254,7 +1261,8 @@ fn dashboard(s: &Sessions, linked: bool) -> Result<Value, SessionsError> {
             });
         }
         projects.push(DashboardProject {
-            project,
+            // Endereços e prefixos das conexões deste ambiente (#277).
+            project: s.with_endpoints(project),
             work_items,
         });
     }
@@ -1842,8 +1850,8 @@ mod tests {
 
     /// #276: `env.connections.get|set` lista as conexões do hub com a
     /// sobrescrita deste ambiente e grava no config.toml; a mudança vale no
-    /// próximo uso, sem restart: a fonte do resolvedor e o comando
-    /// materializado do projeto (o do prompt da sessão).
+    /// próximo uso, sem restart: a fonte do resolvedor e o prefixo da sessão
+    /// (#277: lidos da conexão, não do cadastro).
     #[tokio::test(flavor = "multi_thread")]
     async fn sobrescrita_da_conexao_editavel_pelo_ws() {
         let mut srv = Srv::linked(FakeClaude::exit(0));
@@ -1856,9 +1864,7 @@ mod tests {
                 "base_branch": "develop", "protected_branches": [],
                 "repo_path": srv.env.repo.display().to_string(), "rev": 2,
                 "tracker": { "kind": "jira", "project_key": "ACME",
-                             "jql": "labels = acme-web", "connection": 1,
-                             "url": "https://jira.example.com",
-                             "credential_cmd": "pass show hub/jira" }
+                             "jql": "labels = acme-web", "connection": 1 }
             }],
             "removed": [],
             "connections": [{
@@ -1924,9 +1930,21 @@ mod tests {
             }
         );
         assert_eq!(
-            p.tracker.jira().unwrap().credential_cmd,
-            "pass show acme/jira",
-            "comando materializado do projeto"
+            srv.env.sessions.project_connections(&p).jira_prefix(),
+            r#"JIRA_API_TOKEN="$(pass show acme/jira)" jira"#,
+            "prefixo da sessão"
+        );
+        // A UI recebe o prefixo deste ambiente junto do projeto (#277).
+        let v = ui.call("projects.list", json!({})).await;
+        assert_eq!(
+            v["result"][0]["endpoints"],
+            json!({
+                "jira_url": "https://jira.example.com",
+                "gitlab_host": "",
+                "jira_cli": r#"JIRA_API_TOKEN="$(pass show acme/jira)" jira"#,
+                "glab_cli": "",
+            }),
+            "{v}"
         );
 
         // Vazio volta à fonte do hub.
@@ -1941,8 +1959,8 @@ mod tests {
             .get_project(srv.env.project_id)
             .unwrap();
         assert_eq!(
-            p.tracker.jira().unwrap().credential_cmd,
-            "pass show hub/jira"
+            srv.env.sessions.project_connections(&p).jira_prefix(),
+            r#"JIRA_API_TOKEN="$(pass show hub/jira)" jira"#
         );
 
         for params in [
@@ -2812,11 +2830,9 @@ mod tests {
                         repo_path,
                         rev: 1,
                         tracker: ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                            url: FAKE_SERVER.into(),
                             project_key: "PROJ".into(),
-                            credential_cmd: "printf 'senha-de-teste\\n'".into(),
-                            config_file: fake.config_file().display().to_string(),
                             type_map: ct_core::default_type_map(),
+                            connection: Some(1),
                             ..Default::default()
                         }),
                         forge: ct_core::ForgeConfig::Github(Default::default()),
@@ -2830,6 +2846,22 @@ mod tests {
                 |p| p.repo_path.clone(),
             )
             .unwrap();
+        // URL, credencial e `config_file` vêm da conexão do Jira (#277).
+        srv.env.cfg.credentials.set_connections(
+            vec![ct_core::provider::Connection {
+                id: 1,
+                name: "jira-acme".into(),
+                kind: ct_core::provider::ProviderKind::Jira,
+                endpoint: FAKE_SERVER.into(),
+                credential: ct_core::provider::CredentialSource::Command {
+                    cmd: "printf 'senha-de-teste\\n'".into(),
+                },
+                options: json!({ "config_file": fake.config_file().display().to_string() }),
+                created_at: 0,
+                updated_at: 0,
+            }],
+            Default::default(),
+        );
         fake.set_issues(&[
             api_issue("PROJ-1", "Épico", "new"),
             api_issue("PROJ-2", "Tarefa", "done"),

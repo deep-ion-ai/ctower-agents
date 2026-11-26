@@ -834,21 +834,45 @@ mod tests {
         format!("echo x >> {}; printf '{token}\\n'", marca.display())
     }
 
-    /// O projeto do ambiente vira Jira + GitLab, com os comandos dados.
+    /// O projeto do ambiente vira Jira + GitLab, com as conexões 7 e 8 e os
+    /// comandos dados (#277).
     fn assign_jira_gitlab(env: &TestEnv, jira_cmd: &str, gitlab_cmd: &str) {
+        use crate::test_support::connection;
+        use ct_core::provider::ProviderKind;
+        assign_jira_gitlab_conns(env);
+        env.connect(vec![
+            connection(
+                7,
+                ProviderKind::Jira,
+                "https://jira.example.com",
+                CredentialSource::Command {
+                    cmd: jira_cmd.into(),
+                },
+            ),
+            connection(
+                8,
+                ProviderKind::Gitlab,
+                "gitlab.example.com",
+                CredentialSource::Command {
+                    cmd: gitlab_cmd.into(),
+                },
+            ),
+        ]);
+    }
+
+    /// O projeto do ambiente vira Jira + GitLab, referenciando as conexões
+    /// 7 (Jira) e 8 (GitLab).
+    fn assign_jira_gitlab_conns(env: &TestEnv) {
         env.assign_config(1, |p| {
             p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.example.com".into(),
                 project_key: "ACME".into(),
-                credential_cmd: jira_cmd.into(),
+                connection: Some(7),
                 ..Default::default()
             });
             p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                connection: None,
-                host: "gitlab.example.com".into(),
+                connection: Some(8),
                 path: "acme/acme-web".into(),
                 clone_url: "https://gitlab.example.com/acme/acme-web.git".into(),
-                credential_cmd: gitlab_cmd.into(),
             });
         });
     }
@@ -961,21 +985,7 @@ mod tests {
         ));
         let arquivo = env.tmp.path().join("gitlab token");
         std::fs::write(&arquivo, " tok-acme-arquivo-424242 \n").unwrap();
-        env.assign_config(1, |p| {
-            p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                connection: Some(7),
-                url: "https://jira.example.com".into(),
-                project_key: "ACME".into(),
-                ..Default::default()
-            });
-            p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                connection: Some(8),
-                host: "gitlab.example.com".into(),
-                path: "acme/acme-web".into(),
-                clone_url: "https://gitlab.example.com/acme/acme-web.git".into(),
-                credential_cmd: String::new(),
-            });
-        });
+        assign_jira_gitlab_conns(&env);
         let conn = |id, kind, credential| Connection {
             id,
             name: format!("{kind}-acme"),

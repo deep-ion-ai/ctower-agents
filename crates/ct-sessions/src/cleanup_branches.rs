@@ -1027,26 +1027,34 @@ mod tests {
         let glab = ct_gitlab::fake::FakeGlab::new(e.env.tmp.path(), GL_HOST, "tok-gl");
         e.env.assign_provider(
             ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.exemplo.test".into(),
                 project_key: "PROJ".into(),
+                connection: Some(7),
                 ..Default::default()
             }),
             ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                connection: None,
-                host: GL_HOST.into(),
+                connection: Some(8),
                 path: format!("{OWNER}/{NAME}"),
                 clone_url: format!("https://{GL_HOST}/{OWNER}/{NAME}.git"),
-                credential_cmd: "printf 'tok-gl\\n'".into(),
             }),
             false,
             1,
         );
+        e.env.connect(vec![crate::test_support::connection(
+            8,
+            ct_core::provider::ProviderKind::Gitlab,
+            GL_HOST,
+            ct_core::provider::CredentialSource::Command {
+                cmd: "printf 'tok-gl\\n'".into(),
+            },
+        )]);
         Gitlab { e, glab }
     }
 
     impl Gitlab {
         fn cleaner(&self) -> Cleaner {
-            let remote = crate::gitlab::GitlabRemote::new(self.glab.bin().to_str().unwrap());
+            // Host e token vêm da conexão do GitLab em uso no ambiente (#277).
+            let remote = crate::gitlab::GitlabRemote::new(self.glab.bin().to_str().unwrap())
+                .with_credentials(self.e.env.cfg.credentials.clone());
             Cleaner::standard(cfg())
                 .with_github(Some(Arc::clone(&self.e.github)))
                 .with_gitlab(Some(Arc::new(remote)))
