@@ -87,9 +87,10 @@ impl ProjectProvider {
         // são conferidas em `Hub::check_project_connections`.
         if let Some(j) = self.tracker.jira() {
             if j.connection.is_none() {
-                provider::JIRA.validate(&Connection::from_jira(j))?;
+                provider::JIRA.validate_inline(j)?;
+            } else {
+                provider::JIRA.validate_project(j)?;
             }
-            provider::JIRA.validate_project(j)?;
         }
         if let Some(g) = self.forge.gitlab() {
             provider::GITLAB.validate_project(g)?;
