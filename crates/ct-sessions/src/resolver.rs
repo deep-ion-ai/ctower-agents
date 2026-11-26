@@ -111,9 +111,19 @@ impl CredentialResolver {
 
     /// Token da chave: do cache se a fonte não mudou, senão resolvido agora.
     pub(crate) fn token(&self, ask: Ask<'_>) -> Result<Arc<Secret>, CredentialError> {
+        self.token_and_origin(ask).map(|(t, _)| t)
+    }
+
+    /// Como [`token`](Self::token), dizendo se o token veio do cache
+    /// (`true`: a fonte não foi consultada agora). A prontidão mostra isso
+    /// (#268).
+    pub(crate) fn token_and_origin(
+        &self,
+        ask: Ask<'_>,
+    ) -> Result<(Arc<Secret>, bool), CredentialError> {
         if let Some(e) = self.cache.lock().unwrap().get(ask.key) {
             if e.source == *ask.source {
-                return Ok(e.token.clone());
+                return Ok((e.token.clone(), true));
             }
         }
         let token = Arc::new(resolve(&ask)?);
@@ -127,7 +137,7 @@ impl CredentialResolver {
         if let Some(f) = &self.on_new {
             f();
         }
-        Ok(token)
+        Ok((token, false))
     }
 
     /// Descarta o token da chave: a próxima chamada resolve de novo.

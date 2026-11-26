@@ -397,6 +397,12 @@ pub struct JiraReadiness {
     pub server_matches: bool,
     /// O comando de credencial respondeu com uma linha não vazia.
     pub credential_ok: bool,
+    /// A senha veio do cache do ambiente (#236): o comando de credencial
+    /// não rodou nesta checagem, e `credential_ok` diz só que ele respondeu
+    /// da última vez (#268). O `sync.now` roda o comando de novo. Opcional
+    /// no TypeScript: ambiente anterior não manda.
+    #[cfg_attr(feature = "ts", ts(as = "Option<bool>", optional))]
+    pub credential_cached: bool,
     /// O comando de credencial é o do `config.toml` deste ambiente
     /// (`[credentials]`, #143), não o do cadastro. Opcional no TypeScript:
     /// ambiente anterior não manda.
@@ -442,6 +448,10 @@ pub struct GitlabReadiness {
     /// Versão do glab; `None` = não encontrado.
     pub cli: Option<String>,
     pub credential_ok: bool,
+    /// O token veio do cache do ambiente, sem rodar o comando nesta
+    /// checagem (#268).
+    #[cfg_attr(feature = "ts", ts(as = "Option<bool>", optional))]
+    pub credential_cached: bool,
     /// O comando de credencial é o do `config.toml` deste ambiente (#143).
     #[cfg_attr(feature = "ts", ts(as = "Option<bool>", optional))]
     pub credential_from_env: bool,

@@ -1,4 +1,4 @@
-import type { HubTrackerStatus } from "../protocol/hub-gen";
+import type { HubTrackerStatus, TrackerReadiness } from "../protocol/hub-gen";
 import { jiraHubProject } from "../test/fixtures";
 import {
   DEFAULT_TYPE_MAP,
@@ -15,6 +15,7 @@ import {
   kindOf,
   parseTypeMap,
   providerParams,
+  readinessChecks,
   searchJiraFields,
   typedFieldId,
 } from "./tracker";
@@ -191,4 +192,33 @@ test("campos do projeto: ida e volta no formulário e validação como no hub", 
   expect(extraFieldsChanged([{ id: "a ", label: "b" }], [{ id: "a", label: " b" }])).toBe(false);
   expect(extraFieldsChanged([{ id: "a", label: "b" }], [{ id: "a", label: "c" }])).toBe(true);
   expect(extraFieldsChanged([], [{ id: "a", label: "b" }])).toBe(true);
+});
+
+test("prontidão: credencial vinda do cache aparece como tal (#268)", () => {
+  const r = (cached: boolean): TrackerReadiness => ({
+    owner: "acme",
+    repo: "acme-web",
+    checked_at: 1,
+    jira: {
+      cli: "1.7.0",
+      config_present: true,
+      server_matches: true,
+      credential_ok: true,
+      credential_cached: cached,
+      me_ok: true,
+      server_version: "8.5.2",
+      error: null,
+      custom_fields: [],
+    },
+    gitlab: { cli: "1.124.0", credential_ok: true, credential_cached: cached, api_ok: true, error: null },
+  });
+  const cred = (c: ReturnType<typeof readinessChecks>) => [
+    c.jira.find((i) => i.label === "comando de credencial do Jira ok"),
+    c.gitlab.find((i) => i.label === "comando de credencial do GitLab ok"),
+  ];
+  for (const item of cred(readinessChecks(r(true)))) {
+    expect(item?.ok).toBe(true);
+    expect(item?.value).toBe('token em cache; "Buscar issues agora" roda o comando de novo');
+  }
+  for (const item of cred(readinessChecks(r(false)))) expect(item?.value).toBeUndefined();
 });
