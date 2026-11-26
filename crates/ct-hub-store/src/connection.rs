@@ -352,8 +352,12 @@ impl Hub {
     /// Jira, o host do GitLab e o prefixo das sessões (gestor, links),
     /// sem o cadastro do projeto guardar nada disso.
     pub fn project_connections(&self, p: &HubProject) -> Result<ct_core::ResolvedConnections> {
-        let linked = p.tracker.jira().is_some_and(|j| j.connection.is_some())
-            || p.forge.gitlab().is_some_and(|g| g.connection.is_some());
+        // Só os tipos com prefixo de sessão entram em `ResolvedConnections`.
+        let linked = provider::project_sides(&p.tracker, &p.forge)
+            .iter()
+            .any(|s| {
+                s.connection.is_some() && provider::descriptor(s.kind).session_cli().is_some()
+            });
         if !linked {
             return Ok(Default::default());
         }
@@ -376,17 +380,10 @@ impl Hub {
     /// pelas duas (#275). Conexão inexistente, de outro tipo ou que o
     /// descritor recusa: erro.
     pub(crate) fn check_project_connections(&self, p: &ProjectProvider) -> Result<()> {
-        if let Some(id) = p.tracker.jira().and_then(|j| j.connection) {
-            self.check_ref(id, ProviderKind::Jira, Role::Tracker)?;
-        }
-        if let Some(id) = p.tracker.github().and_then(|g| g.connection) {
-            self.check_ref(id, ProviderKind::Github, Role::Tracker)?;
-        }
-        if let Some(id) = p.forge.gitlab().and_then(|g| g.connection) {
-            self.check_ref(id, ProviderKind::Gitlab, Role::Forge)?;
-        }
-        if let Some(id) = p.forge.github().and_then(|g| g.connection) {
-            self.check_ref(id, ProviderKind::Github, Role::Forge)?;
+        for side in provider::project_sides(&p.tracker, &p.forge) {
+            if let Some(id) = side.connection {
+                self.check_ref(id, side.kind, side.role)?;
+            }
         }
         Ok(())
     }

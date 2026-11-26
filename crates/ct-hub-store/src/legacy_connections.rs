@@ -20,7 +20,10 @@
 
 use crate::connection::NewConnection;
 use crate::{Hub, LedgerError, Result};
-use ct_core::provider::{Connection, CredentialSource, ProviderKind};
+use ct_core::provider::{
+    Connection, CredentialSource, ProviderDescriptor, ProviderKind, DEFAULT_GITHUB_CONNECTION,
+    GITHUB,
+};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -249,11 +252,15 @@ impl Hub {
         endpoint: &str,
         token_file: Option<&Path>,
     ) -> Result<Option<Connection>> {
-        if self.connection_by_name("github")?.is_some() {
+        if self
+            .connection_by_name(DEFAULT_GITHUB_CONNECTION)?
+            .is_some()
+        {
             return Ok(None);
         }
+        // A API padrão do tipo fica vazia na conexão (vazio = a padrão).
         let endpoint = match endpoint.trim().trim_end_matches('/') {
-            "" | "https://api.github.com" => String::new(),
+            e if e.is_empty() || Some(e) == GITHUB.default_endpoint() => String::new(),
             e => e.to_string(),
         };
         let credential = match token_file {
@@ -263,7 +270,7 @@ impl Hub {
             _ => CredentialSource::Cli,
         };
         self.add_connection(&NewConnection {
-            name: "github".into(),
+            name: DEFAULT_GITHUB_CONNECTION.into(),
             kind: ProviderKind::Github,
             endpoint,
             credential,

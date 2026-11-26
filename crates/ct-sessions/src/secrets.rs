@@ -78,8 +78,9 @@
 //! pertence a um repositório: recebe só as entradas **globais**, nunca as
 //! de algum projeto (`resolve(None)`). O mascaramento segue a mesma regra.
 
-use crate::resolver::{github_key, gitlab_key, jira_key};
+use crate::resolver::cache_key;
 use crate::Sessions;
+use ct_core::provider::{ProviderDescriptor, GITHUB};
 use ct_core::ProjectKind;
 use ct_ledger::{Project, Session};
 use ct_proc::Secret;
@@ -267,18 +268,12 @@ impl Sessions {
     ///
     /// Vale para qualquer fonte (comando, secret ou arquivo, #274): o cache
     /// guarda o token com a fonte que o resolveu, a mesma que o sync usa
-    /// ([`Sessions::jira_source`], [`Sessions::gitlab_source`]).
+    /// ([`Sessions::sources`]), de todos os tipos que o projeto usa.
     pub(crate) fn connection_mask(&self, project: &Project) -> SessionMask {
         let resolver = self.credentials();
         let mut found: Vec<std::sync::Arc<Secret>> = Vec::new();
-        if let Some(s) = self.jira_source(project) {
-            found.extend(resolver.cached(&jira_key(project.id), &s.source));
-        }
-        if let Some(s) = self.gitlab_source(project) {
-            found.extend(resolver.cached(&gitlab_key(project.id), &s.source));
-        }
-        if let Some(s) = self.github_source(project) {
-            found.extend(resolver.cached(&github_key(project.id), &s.source));
+        for (kind, s) in self.sources(project) {
+            found.extend(resolver.cached(&cache_key(kind, project.id), &s.source));
         }
         let pairs: Vec<(&str, &str)> = found
             .iter()
@@ -546,14 +541,12 @@ fn injected(
         env.push((name, entry.value.expose().to_string()));
     }
     if let Some(t) = release_token {
-        env.retain(|(n, _)| n != RELEASE_GH_TOKEN_ENV);
-        env.push((RELEASE_GH_TOKEN_ENV.to_string(), t));
+        let name = GITHUB.token_env();
+        env.retain(|(n, _)| n != name);
+        env.push((name.to_string(), t));
     }
     env
 }
-
-/// Variável que o `gh` e o `ctower release` leem para o token (#204).
-pub(crate) const RELEASE_GH_TOKEN_ENV: &str = "GH_TOKEN";
 
 /// Projeto (`owner/repo`) cujas entradas a sessão recebe além das globais.
 /// `None` no gestor, que não está preso a um projeto: só as globais.

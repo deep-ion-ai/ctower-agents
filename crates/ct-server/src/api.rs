@@ -162,6 +162,8 @@ mod export {
         ct_core::provider::Connection::export_all_to(&dir).unwrap();
         ct_core::provider::Capabilities::export_all_to(&dir).unwrap();
         ct_core::provider::Readiness::export_all_to(&dir).unwrap();
+        // Os dados dos descritores (#278), para o registro da UI.
+        ct_core::provider::ProviderInfo::export_all_to(&dir).unwrap();
         crate::plan::EnvAccount::export_all_to(&dir).unwrap();
         ct_sessions::ProjectSync::export_all_to(&dir).unwrap();
         ct_sessions::GestorScope::export_all_to(&dir).unwrap();
@@ -210,6 +212,25 @@ mod export {
         )
         .unwrap();
         write_methods(&dir, &names);
+        write_providers(&dir);
+    }
+
+    /// `providers.ts`: `PROVIDER_INFOS`, os dados dos descritores
+    /// (`ct_core::provider::PROVIDERS`, #278) na ordem do registro. A UI
+    /// completa com os textos do formulário (`ui/src/hub/providers.ts`), sem
+    /// repetir a regra das formas de credencial aceitas. Fora do
+    /// `index.ts`, que só lista tipos.
+    fn write_providers(dir: &Path) {
+        let infos = serde_json::to_string_pretty(&ct_core::provider::provider_infos()).unwrap();
+        fs::write(
+            dir.join("providers.ts"),
+            format!(
+                "// Gerado por `cargo test -p ct-server --features ts export_ts`.\n\
+                 import type {{ ProviderInfo }} from \"./ProviderInfo\";\n\n\
+                 export const PROVIDER_INFOS: ProviderInfo[] = {infos};\n"
+            ),
+        )
+        .unwrap();
     }
 
     /// `methods.ts`: `DaemonMethods` (parâmetros e resultado por método) e

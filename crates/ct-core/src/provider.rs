@@ -1,12 +1,16 @@
 //! Conexões externas (épico #224, análise de providers §3): o tipo de
-//! provider, a fonte de credencial e um descritor por tipo, que leva a
-//! validação, o prefixo das instruções da sessão e o nome da variável do
-//! token. Puro, sem I/O: a checagem de "quem sou eu" na rede fica com o
-//! ambiente.
+//! provider, a fonte de credencial e um descritor por tipo, que leva o que
+//! era `match` de configuração e credencial por tipo (#278): validação da
+//! conexão e do lado do projeto que a usa, formas de credencial aceitas,
+//! endpoint padrão, variável do token, prefixo das instruções da sessão,
+//! conexão padrão e prontidão. Puro, sem I/O: a checagem de "quem sou eu"
+//! na rede fica com o ambiente.
 //!
 //! O projeto só referencia a conexão (`JiraConfig::connection`,
-//! `GitlabConfig::connection`). Quem precisa do endereço, do `config_file`
-//! ou do prefixo da sessão lê de [`ResolvedConnections`], que
+//! `GitlabConfig::connection`, `GithubConfig::connection`). Os lados do
+//! projeto saem de [`project_sides`], e a conexão que cada tipo usa, de
+//! [`project_connection`]. Quem precisa do endereço, do `config_file` ou do
+//! prefixo da sessão lê de [`ResolvedConnections`], que
 //! [`resolve_connections`] monta com as conexões e a fonte de credencial que
 //! vale onde se lê (#277).
 
@@ -25,6 +29,29 @@ str_enum!(ProviderKind, "provider_kind", {
     Gitlab => "gitlab",
     Jira => "jira",
 });
+
+// Forma da fonte de credencial (a tag `kind` de [`CredentialSource`]): o
+// que o descritor diz que o tipo aceita ([`ProviderDescriptor::credential_kinds`]).
+str_enum!(CredentialKind, "credential_kind", {
+    Secret => "secret",
+    Command => "command",
+    Cli => "cli",
+    File => "file",
+    None => "none",
+});
+
+impl CredentialKind {
+    /// Nome da forma nas mensagens de erro.
+    fn text(self) -> &'static str {
+        match self {
+            CredentialKind::Secret => "secret",
+            CredentialKind::Command => "comando de credencial",
+            CredentialKind::Cli => "login da CLI",
+            CredentialKind::File => "arquivo",
+            CredentialKind::None => "sem autenticação",
+        }
+    }
+}
 
 /// Conexão com um serviço externo (GitHub, GitLab, Jira).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +91,19 @@ pub enum CredentialSource {
     None,
 }
 
+impl CredentialSource {
+    /// A forma da fonte, sem o valor.
+    pub fn kind(&self) -> CredentialKind {
+        match self {
+            CredentialSource::Secret { .. } => CredentialKind::Secret,
+            CredentialSource::Command { .. } => CredentialKind::Command,
+            CredentialSource::Cli => CredentialKind::Cli,
+            CredentialSource::File { .. } => CredentialKind::File,
+            CredentialSource::None => CredentialKind::None,
+        }
+    }
+}
+
 /// O que o tipo sabe fazer: rastrear issues e/ou operar a forja (PRs, MRs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -81,8 +121,9 @@ pub enum Readiness {
     NeedsSetup { reason: String },
 }
 
-/// Descritor de um tipo de provider: o que os `match` por tipo faziam
-/// espalhados pelo código.
+/// Descritor de um tipo de provider: a configuração e a credencial que os
+/// `match` por tipo faziam espalhados pelo código (#278). O comportamento
+/// (sync, leitura de issue, PRs e MRs) não mora aqui.
 pub trait ProviderDescriptor: Sync {
     fn kind(&self) -> ProviderKind;
     fn label(&self) -> &'static str;
@@ -91,12 +132,49 @@ pub trait ProviderDescriptor: Sync {
     fn default_endpoint(&self) -> Option<&'static str> {
         None
     }
-    /// Variável de ambiente que leva o token (`GH_TOKEN`...).
+    /// Variável de ambiente que leva o token (`GH_TOKEN`...): a do prefixo
+    /// da sessão e a que o ambiente passa à CLI do tipo.
     fn token_env(&self) -> &'static str;
+    /// Formas de credencial que o tipo aceita, na ordem do formulário da UI
+    /// (`ui/src/protocol/gen/providers.ts`).
+    fn credential_kinds(&self) -> &'static [CredentialKind];
+    /// Fonte do token quando a conexão do projeto não veio ao ambiente. O
+    /// padrão, `None`, faz o resolvedor recusar com o motivo.
+    fn fallback_credential(&self) -> CredentialSource {
+        CredentialSource::None
+    }
+    /// Conexão que vale para o projeto que não referencia uma (GitHub:
+    /// [`DEFAULT_GITHUB_CONNECTION`]). `None` = o projeto precisa
+    /// referenciar (Jira e GitLab, #277).
+    fn default_connection(&self) -> Option<&'static str> {
+        None
+    }
+    /// CLI que a sessão chama com o prefixo ([`Self::session_prefix`]):
+    /// `jira`, `glab`. `None` = o tipo não leva prefixo (o `gh` lê o token
+    /// do ambiente da sessão) e fica fora de [`resolve_connections`].
+    fn session_cli(&self) -> Option<&'static str> {
+        None
+    }
+    /// Variáveis do prefixo antes do token (`JIRA_CONFIG_FILE=...`,
+    /// `GITLAB_HOST=...`).
+    fn session_env(&self, _c: &Connection) -> Vec<String> {
+        Vec::new()
+    }
     /// Confere a conexão sem rede: tipo, endpoint, credencial e opções.
     fn validate(&self, c: &Connection) -> std::result::Result<(), String>;
-    /// Prefixo das instruções da sessão (`JIRA_API_TOKEN="$(...)" jira`).
-    fn session_prefix(&self, c: &Connection) -> Option<String>;
+    /// Prefixo das instruções da sessão (`JIRA_API_TOKEN="$(...)" jira`):
+    /// [`Self::session_env`], o token em [`Self::token_env`] com o comando
+    /// da fonte ([`source_cmd`]) e a [`Self::session_cli`]. Leva o comando,
+    /// nunca o token. `None` = o tipo não leva prefixo.
+    fn session_prefix(&self, c: &Connection) -> Option<String> {
+        let cli = self.session_cli()?;
+        let mut parts = self.session_env(c);
+        if let Some(expr) = token_expr(&c.credential) {
+            parts.push(format!("{}=\"{expr}\"", self.token_env()));
+        }
+        parts.push(cli.into());
+        Some(parts.join(" "))
+    }
     /// Prontidão estática; o "quem sou eu" na rede é do ambiente.
     fn readiness(&self, c: &Connection) -> Readiness {
         match self.validate(c) {
@@ -104,6 +182,56 @@ pub trait ProviderDescriptor: Sync {
             Err(reason) => Readiness::NeedsSetup { reason },
         }
     }
+    /// Confere o rastreador do projeto deste tipo, sem rede.
+    fn validate_tracker(&self, _t: &TrackerConfig) -> std::result::Result<(), String> {
+        Ok(())
+    }
+    /// Confere a forja do projeto deste tipo, sem rede.
+    fn validate_forge(&self, _f: &ForgeConfig) -> std::result::Result<(), String> {
+        Ok(())
+    }
+    /// Confere o filtro do sync do rastreador (o Jira exige JQL e limite).
+    fn validate_sync(&self, _t: &TrackerConfig) -> std::result::Result<(), String> {
+        Ok(())
+    }
+    /// Normaliza o rastreador do cadastro antes de gravar.
+    fn normalize_tracker(&self, _t: &mut TrackerConfig) {}
+    /// Normaliza a forja do cadastro antes de gravar. `url` é a URL do
+    /// cadastro (`hub.projects.add`), quando veio.
+    fn normalize_forge(
+        &self,
+        _f: &mut ForgeConfig,
+        _url: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        Ok(())
+    }
+    /// O que a UI recebe do descritor ([`provider_infos`]).
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo {
+            kind: self.kind(),
+            label: self.label().into(),
+            capabilities: self.capabilities(),
+            default_endpoint: self.default_endpoint().map(Into::into),
+            token_env: self.token_env().into(),
+            credential_kinds: self.credential_kinds().to_vec(),
+            default_connection: self.default_connection().map(Into::into),
+        }
+    }
+}
+
+/// Os dados de um descritor que a UI usa, gerados do Rust em
+/// `ui/src/protocol/gen/providers.ts` (`export_ts` do `ct-server`): a regra
+/// das formas de credencial aceitas não se repete na UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ProviderInfo {
+    pub kind: ProviderKind,
+    pub label: String,
+    pub capabilities: Capabilities,
+    pub default_endpoint: Option<String>,
+    pub token_env: String,
+    pub credential_kinds: Vec<CredentialKind>,
+    pub default_connection: Option<String>,
 }
 
 pub struct GithubDescriptor;
@@ -117,8 +245,9 @@ pub static GITLAB: GitlabDescriptor = GitlabDescriptor;
 /// Descritor do Jira.
 pub static JIRA: JiraDescriptor = JiraDescriptor;
 
-/// Registro estático: um descritor por [`ProviderKind`].
-pub static PROVIDERS: &[&dyn ProviderDescriptor] = &[&GITHUB, &GITLAB, &JIRA];
+/// Registro estático: um descritor por [`ProviderKind`], na ordem do
+/// formulário da UI.
+pub static PROVIDERS: &[&dyn ProviderDescriptor] = &[&JIRA, &GITLAB, &GITHUB];
 
 /// Descritor do tipo. Panics só se um tipo novo ficar sem descritor, o que
 /// o teste `registro_tem_um_descritor_por_tipo` pega.
@@ -130,22 +259,14 @@ pub fn descriptor(kind: ProviderKind) -> &'static dyn ProviderDescriptor {
         .expect("todo ProviderKind tem descritor no registro")
 }
 
+/// Os dados de todos os descritores, na ordem do registro, para a UI.
+pub fn provider_infos() -> Vec<ProviderInfo> {
+    PROVIDERS.iter().map(|d| d.info()).collect()
+}
+
 /// Nome da conexão GitHub padrão (#275): a que a migração cria (#237) e
 /// que vale para o projeto GitHub sem conexão.
 pub const DEFAULT_GITHUB_CONNECTION: &str = "github";
-
-/// Conexão GitHub de um projeto (#275): a referenciada (`id`) ou, sem
-/// referência, a padrão ([`DEFAULT_GITHUB_CONNECTION`]). Conexão de outro
-/// tipo não serve. `None` = nenhuma: quem usa cai no `gh auth token`.
-pub fn github_connection(conns: &[Connection], id: Option<i64>) -> Option<&Connection> {
-    let github = conns.iter().filter(|c| c.kind == ProviderKind::Github);
-    match id {
-        Some(id) => github.into_iter().find(|c| c.id == id),
-        None => github
-            .into_iter()
-            .find(|c| c.name == DEFAULT_GITHUB_CONNECTION),
-    }
-}
 
 /// Papel de uma conexão num projeto: o rastreador (issues) ou a forja
 /// (repositório, PRs e MRs).
@@ -162,6 +283,131 @@ impl Role {
             Role::Forge => "forja",
         }
     }
+}
+
+/// Um lado do projeto (rastreador ou forja): o tipo e a conexão que ele
+/// referencia.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectSide {
+    pub role: Role,
+    pub kind: ProviderKind,
+    /// `None` = sem referência (vale a conexão padrão do tipo, se houver).
+    pub connection: Option<i64>,
+}
+
+/// Os dois lados do projeto, o rastreador antes da forja.
+pub fn project_sides(tracker: &TrackerConfig, forge: &ForgeConfig) -> [ProjectSide; 2] {
+    [
+        ProjectSide {
+            role: Role::Tracker,
+            kind: tracker.provider(),
+            connection: tracker.connection(),
+        },
+        ProjectSide {
+            role: Role::Forge,
+            kind: forge.provider(),
+            connection: forge.connection(),
+        },
+    ]
+}
+
+/// A referência do projeto a uma conexão do tipo `kind`: `None` = nenhum
+/// lado é do tipo; `Some(None)` = o projeto usa o tipo sem referenciar
+/// conexão; `Some(Some(id))` = a do primeiro lado do tipo que referencia
+/// uma (no GitHub, o rastreador e a forja usam a mesma, #275).
+pub fn project_ref(
+    tracker: &TrackerConfig,
+    forge: &ForgeConfig,
+    kind: ProviderKind,
+) -> Option<Option<i64>> {
+    let sides = project_sides(tracker, forge);
+    let of_kind: Vec<&ProjectSide> = sides.iter().filter(|s| s.kind == kind).collect();
+    if of_kind.is_empty() {
+        return None;
+    }
+    Some(of_kind.iter().find_map(|s| s.connection))
+}
+
+/// A conexão do tipo `kind` entre `conns`: a `id` ou, sem referência, a
+/// padrão do descritor ([`ProviderDescriptor::default_connection`]).
+/// Conexão de outro tipo não serve.
+pub fn connection_of(
+    conns: &[Connection],
+    kind: ProviderKind,
+    id: Option<i64>,
+) -> Option<&Connection> {
+    let mut of_kind = conns.iter().filter(|c| c.kind == kind);
+    match id {
+        Some(id) => of_kind.find(|c| c.id == id),
+        None => {
+            let name = descriptor(kind).default_connection()?;
+            of_kind.find(|c| c.name == name)
+        }
+    }
+}
+
+/// A conexão do tipo `kind` que o projeto usa, entre `conns`
+/// ([`project_ref`] e [`connection_of`]). `None` = o projeto não usa o
+/// tipo, ou a conexão não está entre as dadas.
+pub fn project_connection<'a>(
+    tracker: &TrackerConfig,
+    forge: &ForgeConfig,
+    kind: ProviderKind,
+    conns: &'a [Connection],
+) -> Option<&'a Connection> {
+    connection_of(conns, kind, project_ref(tracker, forge, kind)?)
+}
+
+/// O projeto usa a conexão `c` (que está em `conns`)? O espelho de
+/// `Hub::connection_users` para quem tem o projeto em memória.
+pub fn uses_connection(
+    tracker: &TrackerConfig,
+    forge: &ForgeConfig,
+    conns: &[Connection],
+    c: &Connection,
+) -> bool {
+    project_connection(tracker, forge, c.kind, conns).is_some_and(|u| u.id == c.id)
+}
+
+/// Conexão GitHub de um projeto (#275): a referenciada (`id`) ou, sem
+/// referência, a padrão ([`DEFAULT_GITHUB_CONNECTION`]). `None` = nenhuma:
+/// quem usa cai no `gh auth token`.
+pub fn github_connection(conns: &[Connection], id: Option<i64>) -> Option<&Connection> {
+    connection_of(conns, ProviderKind::Github, id)
+}
+
+/// Rastreador e forja do mesmo tipo usam uma conexão só (o GitHub, #275):
+/// a dada num lado vale para os dois.
+pub fn share_connection(tracker: &mut TrackerConfig, forge: &mut ForgeConfig) {
+    if tracker.provider() != forge.provider() {
+        return;
+    }
+    let (t, f) = (tracker.connection(), forge.connection());
+    *tracker.connection_mut() = t.or(f);
+    *forge.connection_mut() = f.or(t);
+}
+
+/// Confere os dois lados do projeto pelos descritores dos tipos, o
+/// rastreador antes da forja, e a conexão única quando os dois lados são do
+/// mesmo tipo. Não confere as conexões em si (isso é do hub, que as tem).
+pub fn validate_project(
+    tracker: &TrackerConfig,
+    forge: &ForgeConfig,
+) -> std::result::Result<(), String> {
+    descriptor(tracker.provider()).validate_tracker(tracker)?;
+    descriptor(forge.provider()).validate_forge(forge)?;
+    let [t, f] = project_sides(tracker, forge);
+    if t.kind == f.kind {
+        if let (Some(a), Some(b)) = (t.connection, f.connection) {
+            if a != b {
+                return Err(format!(
+                    "o rastreador e a forja {} usam a mesma conexão (rastreador {a}, forja {b})",
+                    descriptor(t.kind).label()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A conexão serve ao papel, pelo que o descritor do tipo diz de si
@@ -265,24 +511,44 @@ pub enum ConnectionGap {
     NoCredential { kind: ProviderKind, name: String },
 }
 
-/// As conexões de um projeto (#277): a do Jira (rastreador) e a do GitLab
-/// (forja), cada uma com a fonte de credencial que vale onde se lê (no hub,
-/// a da própria conexão; no ambiente, com as sobrescritas dele,
+/// As conexões de um projeto (#277) cujos tipos levam prefixo de sessão
+/// ([`ProviderDescriptor::session_cli`]; hoje a do Jira no rastreador e a do
+/// GitLab na forja), cada uma com a fonte de credencial que vale onde se lê
+/// (no hub, a da própria conexão; no ambiente, com as sobrescritas dele,
 /// `SharedCredentials::resolve`). Ponto único de leitura do endereço, do
 /// `config_file` do jira-cli e do prefixo das sessões: o cadastro do projeto
-/// não guarda nada disso. `None` = o lado não é Jira/GitLab, ou a conexão
+/// não guarda nada disso. `None` = o lado não leva prefixo, ou a conexão
 /// não está entre as dadas.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolvedConnections {
-    pub jira: Option<Connection>,
-    pub gitlab: Option<Connection>,
+    pub tracker: Option<Connection>,
+    pub forge: Option<Connection>,
 }
 
 impl ResolvedConnections {
+    /// A conexão do tipo `kind`, de qualquer lado.
+    pub fn get(&self, kind: ProviderKind) -> Option<&Connection> {
+        [&self.tracker, &self.forge]
+            .into_iter()
+            .flatten()
+            .find(|c| c.kind == kind)
+    }
+
+    /// Prefixo da sessão do tipo `kind` (`{{jira}}`, `{{glab}}` dos
+    /// templates, spec §8.2 e §9.2): o do descritor
+    /// ([`ProviderDescriptor::session_prefix`]). Leva o comando da fonte,
+    /// nunca a senha. Sem conexão, só a CLI; tipo sem prefixo, vazio.
+    pub fn prefix(&self, kind: ProviderKind) -> String {
+        let d = descriptor(kind);
+        self.get(kind)
+            .and_then(|c| d.session_prefix(c))
+            .or_else(|| d.session_cli().map(Into::into))
+            .unwrap_or_default()
+    }
+
     /// URL do Jira, sem barra final; vazio sem conexão.
     pub fn jira_url(&self) -> String {
-        self.jira
-            .as_ref()
+        self.get(ProviderKind::Jira)
             .map(|c| c.endpoint.trim().trim_end_matches('/').to_string())
             .unwrap_or_default()
     }
@@ -290,56 +556,43 @@ impl ResolvedConnections {
     /// Configuração do jira-cli (`options.config_file` da conexão); vazio =
     /// a padrão (`~/.config/.jira/.config.yml`).
     pub fn jira_config_file(&self) -> String {
-        self.jira
-            .as_ref()
+        self.get(ProviderKind::Jira)
             .map(|c| options_str(c, "config_file").trim().to_string())
             .unwrap_or_default()
     }
 
     /// Host do GitLab; vazio sem conexão.
     pub fn gitlab_host(&self) -> String {
-        self.gitlab
-            .as_ref()
+        self.get(ProviderKind::Gitlab)
             .map(|c| c.endpoint.trim().to_string())
             .unwrap_or_default()
     }
 
-    /// Prefixo do jira-cli nas sessões (`{{jira}}` dos templates, spec §8.2
-    /// e §9.2): o do descritor ([`ProviderDescriptor::session_prefix`]),
-    /// `JIRA_CONFIG_FILE=<arquivo> JIRA_API_TOKEN="$(<comando>)" jira`. Leva
-    /// o comando da fonte, nunca a senha. Sem conexão, só `jira`.
+    /// Prefixo do jira-cli nas sessões:
+    /// `JIRA_CONFIG_FILE=<arquivo> JIRA_API_TOKEN="$(<comando>)" jira`. Sem
+    /// conexão, só `jira`.
     pub fn jira_prefix(&self) -> String {
-        self.jira
-            .as_ref()
-            .and_then(|c| JIRA.session_prefix(c))
-            .unwrap_or_else(|| "jira".into())
+        self.prefix(ProviderKind::Jira)
     }
 
-    /// Prefixo do glab nas sessões (`{{glab}}`):
+    /// Prefixo do glab nas sessões:
     /// `GITLAB_HOST=<host> GITLAB_TOKEN="$(<comando>)" glab`. Sem conexão,
     /// só `glab`.
     pub fn glab_prefix(&self) -> String {
-        self.gitlab
-            .as_ref()
-            .and_then(|c| GITLAB.session_prefix(c))
-            .unwrap_or_else(|| "glab".into())
+        self.prefix(ProviderKind::Gitlab)
     }
 
     /// O que a UI usa nos links e nos templates ([`ProjectEndpoints`]).
     pub fn endpoints(&self) -> ProjectEndpoints {
+        let cli = |kind| match self.get(kind) {
+            Some(_) => self.prefix(kind),
+            None => String::new(),
+        };
         ProjectEndpoints {
             jira_url: self.jira_url(),
             gitlab_host: self.gitlab_host(),
-            jira_cli: self
-                .jira
-                .as_ref()
-                .map(|_| self.jira_prefix())
-                .unwrap_or_default(),
-            glab_cli: self
-                .gitlab
-                .as_ref()
-                .map(|_| self.glab_prefix())
-                .unwrap_or_default(),
+            jira_cli: cli(ProviderKind::Jira),
+            glab_cli: cli(ProviderKind::Gitlab),
         }
     }
 }
@@ -365,9 +618,10 @@ pub struct ProjectEndpoints {
 
 /// As conexões que o rastreador e a forja do projeto referenciam (#277),
 /// entre `conns`, com a fonte de credencial que `source` diz para cada uma
-/// (no hub, a da conexão; no ambiente, com as sobrescritas). Devolve também
-/// o que faltou: projeto Jira/GitLab sem conexão, conexão ausente ou de
-/// outro tipo, fonte sem comando para o prefixo.
+/// (no hub, a da conexão; no ambiente, com as sobrescritas). Só os lados
+/// cujo tipo leva prefixo de sessão ([`ProviderDescriptor::session_cli`]).
+/// Devolve também o que faltou: lado sem conexão (e sem padrão), conexão
+/// ausente ou de outro tipo, fonte sem comando para o prefixo.
 pub fn resolve_connections(
     tracker: &TrackerConfig,
     forge: &ForgeConfig,
@@ -375,13 +629,14 @@ pub fn resolve_connections(
     source: impl Fn(&Connection) -> CredentialSource,
 ) -> (ResolvedConnections, Vec<ConnectionGap>) {
     let mut gaps = Vec::new();
-    let mut pick = |kind: ProviderKind, id: Option<i64>| -> Option<Connection> {
-        let Some(id) = id else {
-            gaps.push(ConnectionGap::Unlinked { kind });
-            return None;
-        };
-        let Some(c) = conns.iter().find(|c| c.id == id && c.kind == kind) else {
-            gaps.push(ConnectionGap::Missing { kind, id });
+    let mut pick = |side: &ProjectSide| -> Option<Connection> {
+        let kind = side.kind;
+        descriptor(kind).session_cli()?;
+        let Some(c) = connection_of(conns, kind, side.connection) else {
+            gaps.push(match side.connection {
+                Some(id) => ConnectionGap::Missing { kind, id },
+                None => ConnectionGap::Unlinked { kind },
+            });
             return None;
         };
         let mut c = c.clone();
@@ -394,13 +649,10 @@ pub fn resolve_connections(
         }
         Some(c)
     };
-    let jira = tracker
-        .jira()
-        .and_then(|j| pick(ProviderKind::Jira, j.connection));
-    let gitlab = forge
-        .gitlab()
-        .and_then(|g| pick(ProviderKind::Gitlab, g.connection));
-    (ResolvedConnections { jira, gitlab }, gaps)
+    let [t, f] = project_sides(tracker, forge);
+    let tracker = pick(&t);
+    let forge = pick(&f);
+    (ResolvedConnections { tracker, forge }, gaps)
 }
 
 impl ProviderDescriptor for GithubDescriptor {
@@ -427,14 +679,30 @@ impl ProviderDescriptor for GithubDescriptor {
         "GH_TOKEN"
     }
 
-    fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
-        check_kind(ProviderKind::Github, c)?;
-        check_options(c)
+    /// Todas: o `cli` é o `gh auth token`.
+    fn credential_kinds(&self) -> &'static [CredentialKind] {
+        &[
+            CredentialKind::Cli,
+            CredentialKind::File,
+            CredentialKind::Command,
+            CredentialKind::Secret,
+            CredentialKind::None,
+        ]
     }
 
-    /// O GitHub não leva prefixo: o `gh` lê o token do ambiente da sessão.
-    fn session_prefix(&self, _c: &Connection) -> Option<String> {
-        None
+    /// Sem a conexão no ambiente, o `gh auth token`, como antes das
+    /// conexões (#275).
+    fn fallback_credential(&self) -> CredentialSource {
+        CredentialSource::Cli
+    }
+
+    fn default_connection(&self) -> Option<&'static str> {
+        Some(DEFAULT_GITHUB_CONNECTION)
+    }
+
+    fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
+        check_kind(self.kind(), c)?;
+        check_options(c)
     }
 }
 
@@ -458,26 +726,63 @@ impl ProviderDescriptor for GitlabDescriptor {
         "GITLAB_TOKEN"
     }
 
+    fn credential_kinds(&self) -> &'static [CredentialKind] {
+        TOKEN_SOURCES
+    }
+
+    fn session_cli(&self) -> Option<&'static str> {
+        Some("glab")
+    }
+
+    /// `GITLAB_HOST=<host>`.
+    fn session_env(&self, c: &Connection) -> Vec<String> {
+        let host = c.endpoint.trim();
+        if host.is_empty() {
+            return Vec::new();
+        }
+        vec![format!("GITLAB_HOST={}", shell_word(host))]
+    }
+
     fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
-        check_kind(ProviderKind::Gitlab, c)?;
+        check_kind(self.kind(), c)?;
         check_options(c)?;
         if c.endpoint.is_empty() {
             return Err("informe o host do GitLab".into());
         }
-        check_token_source("GitLab", "gitlab", c)
+        check_token_source(self, c)
     }
 
-    /// `GITLAB_HOST=<host> GITLAB_TOKEN="$(<cmd>)" glab`.
-    fn session_prefix(&self, c: &Connection) -> Option<String> {
-        let mut parts = Vec::new();
-        if !c.endpoint.trim().is_empty() {
-            parts.push(format!("GITLAB_HOST={}", shell_word(c.endpoint.trim())));
+    fn validate_forge(&self, f: &ForgeConfig) -> std::result::Result<(), String> {
+        f.gitlab().map_or(Ok(()), |g| self.validate_project(g))
+    }
+
+    /// O repositório pela URL de clone (`clone_url`, ou a `url` do
+    /// cadastro): o `path` sai dela e, quando veio, tem de bater.
+    fn normalize_forge(
+        &self,
+        f: &mut ForgeConfig,
+        url: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        let ForgeConfig::Gitlab(g) = f else {
+            return Ok(());
+        };
+        let url = Some(g.clone_url.trim())
+            .filter(|u| !u.is_empty())
+            .or_else(|| url.map(str::trim))
+            .filter(|u| !u.is_empty())
+            .map(String::from);
+        let url = url.ok_or("informe a URL de clone do GitLab")?;
+        let r = crate::repo_from_url(&url)
+            .ok_or_else(|| format!("URL do GitLab não reconhecida: {url}"))?;
+        let path = g.path.trim().trim_matches('/');
+        if !path.is_empty() && !path.eq_ignore_ascii_case(&r.path) {
+            return Err(format!(
+                "caminho do GitLab ({path}) não bate com a URL {url}"
+            ));
         }
-        if let Some(expr) = token_expr(&c.credential) {
-            parts.push(format!("GITLAB_TOKEN=\"{expr}\""));
-        }
-        parts.push("glab".into());
-        Some(parts.join(" "))
+        g.path = r.path;
+        g.clone_url = url;
+        Ok(())
     }
 }
 
@@ -519,27 +824,53 @@ impl ProviderDescriptor for JiraDescriptor {
         "JIRA_API_TOKEN"
     }
 
-    fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
-        check_kind(ProviderKind::Jira, c)?;
-        check_options(c)?;
-        check_jira_url(c)?;
-        check_token_source("Jira", "jira", c)
+    fn credential_kinds(&self) -> &'static [CredentialKind] {
+        TOKEN_SOURCES
     }
 
-    /// `JIRA_CONFIG_FILE=<arquivo> JIRA_API_TOKEN="$(<cmd>)" jira`. O
-    /// `$(...)` é expandido pelo shell do agente, só no processo do `jira`:
-    /// o prefixo nunca leva a senha.
-    fn session_prefix(&self, c: &Connection) -> Option<String> {
-        let mut parts = Vec::new();
+    /// O `$(...)` do prefixo é expandido pelo shell do agente, só no
+    /// processo do `jira`: o prefixo nunca leva a senha.
+    fn session_cli(&self) -> Option<&'static str> {
+        Some("jira")
+    }
+
+    /// `JIRA_CONFIG_FILE=<arquivo>`, quando a conexão diz qual.
+    fn session_env(&self, c: &Connection) -> Vec<String> {
         let config_file = options_str(c, "config_file").trim();
-        if !config_file.is_empty() {
-            parts.push(format!("JIRA_CONFIG_FILE={}", shell_word(config_file)));
+        if config_file.is_empty() {
+            return Vec::new();
         }
-        if let Some(expr) = token_expr(&c.credential) {
-            parts.push(format!("JIRA_API_TOKEN=\"{expr}\""));
+        vec![format!("JIRA_CONFIG_FILE={}", shell_word(config_file))]
+    }
+
+    fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
+        check_kind(self.kind(), c)?;
+        check_options(c)?;
+        check_jira_url(c)?;
+        check_token_source(self, c)
+    }
+
+    fn validate_tracker(&self, t: &TrackerConfig) -> std::result::Result<(), String> {
+        t.jira().map_or(Ok(()), |j| self.validate_project(j))
+    }
+
+    fn validate_sync(&self, t: &TrackerConfig) -> std::result::Result<(), String> {
+        t.jira().map_or(Ok(()), |j| self.validate_sync_filter(j))
+    }
+
+    /// Chave em maiúsculas, textos aparados e o mapa de tipos padrão quando
+    /// vazio.
+    fn normalize_tracker(&self, t: &mut TrackerConfig) {
+        let TrackerConfig::Jira(j) = t else {
+            return;
+        };
+        j.project_key = j.project_key.trim().to_ascii_uppercase();
+        j.jql = j.jql.trim().to_string();
+        j.epic_link_field = j.epic_link_field.trim().to_string();
+        j.epic_name_field = j.epic_name_field.trim().to_string();
+        if j.type_map.is_empty() {
+            j.type_map = crate::default_type_map();
         }
-        parts.push("jira".into());
-        Some(parts.join(" "))
     }
 }
 
@@ -649,10 +980,30 @@ fn check_options(c: &Connection) -> std::result::Result<(), String> {
     }
 }
 
-/// Jira e GitLab aceitam comando de credencial, secret do hub ou arquivo
-/// (#279). O `Cli` é o token da CLI do próprio tipo e só existe no GitHub
-/// (`gh auth token`).
-fn check_token_source(label: &str, slug: &str, c: &Connection) -> std::result::Result<(), String> {
+/// Fontes de um token que o ambiente lê sozinho: comando de credencial,
+/// secret do hub ou arquivo (#279). O `Cli` é o token da CLI do próprio
+/// tipo e só existe no GitHub (`gh auth token`).
+const TOKEN_SOURCES: &[CredentialKind] = &[
+    CredentialKind::Command,
+    CredentialKind::Secret,
+    CredentialKind::File,
+];
+
+/// A fonte é uma das que o descritor aceita
+/// ([`ProviderDescriptor::credential_kinds`]) e diz o comando, o secret ou
+/// o caminho.
+fn check_token_source(
+    d: &dyn ProviderDescriptor,
+    c: &Connection,
+) -> std::result::Result<(), String> {
+    let (label, slug) = (d.label(), d.kind());
+    let accepted = d.credential_kinds();
+    if !accepted.contains(&c.credential.kind()) {
+        return Err(format!(
+            "credencial do {label} precisa de {}",
+            or_list(accepted.iter().map(|k| k.text()))
+        ));
+    }
     match &c.credential {
         CredentialSource::Command { cmd } if cmd.trim().is_empty() => Err(format!(
             "informe o comando de credencial do {label} (ex.: pass show {slug} | head -1)"
@@ -663,12 +1014,17 @@ fn check_token_source(label: &str, slug: &str, c: &Connection) -> std::result::R
         CredentialSource::File { path } if path.trim().is_empty() => Err(format!(
             "informe o caminho do arquivo com o token do {label}"
         )),
-        CredentialSource::Command { .. }
-        | CredentialSource::Secret { .. }
-        | CredentialSource::File { .. } => Ok(()),
-        CredentialSource::Cli | CredentialSource::None => Err(format!(
-            "credencial do {label} precisa de comando de credencial, secret ou arquivo"
-        )),
+        _ => Ok(()),
+    }
+}
+
+/// `a, b ou c`.
+fn or_list<'a>(items: impl Iterator<Item = &'a str>) -> String {
+    let items: Vec<&str> = items.collect();
+    match items.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} ou {last}", rest.join(", ")),
+        Some((last, _)) => last.to_string(),
+        None => String::new(),
     }
 }
 
@@ -766,6 +1122,214 @@ mod tests {
         assert_eq!(GITHUB.token_env(), "GH_TOKEN");
         assert_eq!(GITLAB.token_env(), "GITLAB_TOKEN");
         assert_eq!(JIRA.token_env(), "JIRA_API_TOKEN");
+    }
+
+    /// #278: o descritor leva a configuração que era `match` por tipo, e a
+    /// UI recebe os dados dele na ordem do registro.
+    #[test]
+    fn descritor_leva_credencial_conexao_padrao_e_cli() {
+        use CredentialKind as K;
+        assert_eq!(JIRA.credential_kinds(), &[K::Command, K::Secret, K::File]);
+        assert_eq!(GITLAB.credential_kinds(), JIRA.credential_kinds());
+        assert_eq!(GITHUB.credential_kinds().len(), CredentialKind::ALL.len());
+        assert_eq!(GITHUB.fallback_credential(), CredentialSource::Cli);
+        assert_eq!(JIRA.fallback_credential(), CredentialSource::None);
+        assert_eq!(GITHUB.default_connection(), Some(DEFAULT_GITHUB_CONNECTION));
+        assert_eq!(JIRA.default_connection(), None);
+        assert_eq!(
+            (
+                JIRA.session_cli(),
+                GITLAB.session_cli(),
+                GITHUB.session_cli()
+            ),
+            (Some("jira"), Some("glab"), None)
+        );
+        let infos = provider_infos();
+        let kinds: Vec<ProviderKind> = infos.iter().map(|i| i.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                ProviderKind::Jira,
+                ProviderKind::Gitlab,
+                ProviderKind::Github
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(&infos[2]).unwrap(),
+            json!({
+                "kind": "github",
+                "label": "GitHub",
+                "capabilities": { "tracker": true, "forge": true },
+                "default_endpoint": "https://api.github.com",
+                "token_env": "GH_TOKEN",
+                "credential_kinds": ["cli", "file", "command", "secret", "none"],
+                "default_connection": "github",
+            })
+        );
+        for c in [
+            CredentialSource::Secret { name: "x".into() },
+            CredentialSource::Command { cmd: "x".into() },
+            CredentialSource::Cli,
+            CredentialSource::File { path: "x".into() },
+            CredentialSource::None,
+        ] {
+            assert_eq!(serde_json::to_value(&c).unwrap()["kind"], c.kind().as_str());
+        }
+        // A recusa da forma lista as aceitas, pelo descritor.
+        let cli = conn(
+            ProviderKind::Gitlab,
+            "gitlab.example.com",
+            CredentialSource::Cli,
+        );
+        assert_eq!(
+            GITLAB.validate(&cli).unwrap_err(),
+            "credencial do GitLab precisa de comando de credencial, secret ou arquivo"
+        );
+    }
+
+    /// Os lados do projeto e a conexão que cada tipo usa (#278): a
+    /// referenciada ou, sem referência, a padrão do tipo (só o GitHub tem).
+    #[test]
+    fn conexao_do_projeto_pelos_lados() {
+        let mut gh_padrao = conn(ProviderKind::Github, "", CredentialSource::Cli);
+        gh_padrao.id = 1;
+        gh_padrao.name = DEFAULT_GITHUB_CONNECTION.into();
+        let mut gh_acme = gh_padrao.clone();
+        gh_acme.id = 2;
+        gh_acme.name = "github-acme".into();
+        let mut jira = jira_conn();
+        jira.id = 3;
+        let conns = vec![gh_padrao.clone(), gh_acme.clone(), jira.clone()];
+
+        let (t, f) = (TrackerConfig::default(), ForgeConfig::default());
+        let [ts, fs] = project_sides(&t, &f);
+        assert_eq!(
+            (ts.role, ts.kind, ts.connection),
+            (Role::Tracker, ProviderKind::Github, None)
+        );
+        assert_eq!((fs.role, fs.kind), (Role::Forge, ProviderKind::Github));
+        assert_eq!(project_ref(&t, &f, ProviderKind::Github), Some(None));
+        assert_eq!(project_ref(&t, &f, ProviderKind::Jira), None);
+        assert!(uses_connection(&t, &f, &conns, &gh_padrao));
+        assert!(!uses_connection(&t, &f, &conns, &gh_acme));
+        assert!(!uses_connection(&t, &f, &conns, &jira));
+
+        // A referência de um lado vale para os dois (o GitHub usa uma só).
+        let f2 = ForgeConfig::Github(crate::GithubConfig {
+            connection: Some(2),
+        });
+        assert_eq!(project_ref(&t, &f2, ProviderKind::Github), Some(Some(2)));
+        assert!(uses_connection(&t, &f2, &conns, &gh_acme));
+        assert!(!uses_connection(&t, &f2, &conns, &gh_padrao));
+
+        // Jira: só a referenciada, do tipo certo; sem referência, nenhuma.
+        let tj = TrackerConfig::Jira(JiraConfig {
+            connection: Some(3),
+            ..Default::default()
+        });
+        let fg = ForgeConfig::Gitlab(GitlabConfig::default());
+        assert_eq!(
+            project_connection(&tj, &fg, ProviderKind::Jira, &conns),
+            Some(&jira)
+        );
+        assert_eq!(
+            project_connection(&tj, &fg, ProviderKind::Gitlab, &conns),
+            None
+        );
+        assert!(uses_connection(&tj, &fg, &conns, &jira));
+        let errado = TrackerConfig::Jira(JiraConfig {
+            connection: Some(2),
+            ..Default::default()
+        });
+        assert_eq!(
+            project_connection(&errado, &fg, ProviderKind::Jira, &conns),
+            None
+        );
+    }
+
+    #[test]
+    fn mesma_conexao_nos_dois_lados_do_mesmo_tipo() {
+        let gh = |c| crate::GithubConfig { connection: c };
+        let mut t = TrackerConfig::Github(gh(None));
+        let mut f = ForgeConfig::Github(gh(Some(4)));
+        share_connection(&mut t, &mut f);
+        assert_eq!((t.connection(), f.connection()), (Some(4), Some(4)));
+        assert!(validate_project(&t, &f).is_ok());
+        let f = ForgeConfig::Github(gh(Some(5)));
+        assert_eq!(
+            validate_project(&t, &f).unwrap_err(),
+            "o rastreador e a forja GitHub usam a mesma conexão (rastreador 4, forja 5)"
+        );
+        // Tipos diferentes: cada lado com a sua.
+        let mut tj = TrackerConfig::Jira(jira_cfg());
+        let mut fg = ForgeConfig::Gitlab(GitlabConfig {
+            path: "grupo/app".into(),
+            connection: Some(2),
+            ..Default::default()
+        });
+        share_connection(&mut tj, &mut fg);
+        assert_eq!((tj.connection(), fg.connection()), (Some(1), Some(2)));
+        assert!(validate_project(&tj, &fg).is_ok());
+        // O rastreador é conferido antes da forja (#272).
+        let sem = TrackerConfig::Jira(JiraConfig {
+            connection: None,
+            ..jira_cfg()
+        });
+        let fg_ruim = ForgeConfig::Gitlab(GitlabConfig::default());
+        assert!(validate_project(&sem, &fg_ruim)
+            .unwrap_err()
+            .contains("conexão do Jira"));
+        assert!(JIRA.validate_sync(&TrackerConfig::Jira(jira_cfg())).is_ok());
+        assert!(JIRA
+            .validate_sync(&TrackerConfig::Jira(JiraConfig {
+                jql: String::new(),
+                ..jira_cfg()
+            }))
+            .is_err());
+    }
+
+    #[test]
+    fn normalizacoes_do_cadastro_pelo_descritor() {
+        let mut t = TrackerConfig::Jira(JiraConfig {
+            project_key: " acme ".into(),
+            jql: " labels = acme-web ".into(),
+            ..Default::default()
+        });
+        JIRA.normalize_tracker(&mut t);
+        let j = t.jira().unwrap();
+        assert_eq!(
+            (j.project_key.as_str(), j.jql.as_str()),
+            ("ACME", "labels = acme-web")
+        );
+        assert_eq!(j.type_map, crate::default_type_map());
+
+        let mut f = ForgeConfig::Gitlab(GitlabConfig::default());
+        assert_eq!(
+            GITLAB.normalize_forge(&mut f, None).unwrap_err(),
+            "informe a URL de clone do GitLab"
+        );
+        GITLAB
+            .normalize_forge(&mut f, Some(" https://gitlab.example.com/grupo/app.git "))
+            .unwrap();
+        let g = f.gitlab().unwrap();
+        assert_eq!(
+            (g.path.as_str(), g.clone_url.as_str()),
+            ("grupo/app", "https://gitlab.example.com/grupo/app.git")
+        );
+        let mut outro = ForgeConfig::Gitlab(GitlabConfig {
+            path: "grupo/outro".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            GITLAB
+                .normalize_forge(&mut outro, Some("https://gitlab.example.com/grupo/app.git"))
+                .unwrap_err(),
+            "caminho do GitLab (grupo/outro) não bate com a URL https://gitlab.example.com/grupo/app.git"
+        );
+        // Outro tipo: nada muda.
+        let mut gh = ForgeConfig::default();
+        GITLAB.normalize_forge(&mut gh, None).unwrap();
+        assert_eq!(gh, ForgeConfig::default());
     }
 
     #[test]

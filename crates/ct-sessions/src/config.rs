@@ -1,6 +1,7 @@
 //! `config.toml` do daemon (spec §13), com padrões para tudo.
 
 use crate::paths::Dirs;
+use ct_core::provider::{ProviderDescriptor, GITHUB};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::PathBuf;
@@ -185,7 +186,7 @@ impl Default for DaemonConfig {
             scrollback_bytes: 4 * 1024 * 1024,
             pre_trust_worktrees: true,
             gh_sync_interval_secs: 180,
-            gh_api_url: "https://api.github.com".into(),
+            gh_api_url: GITHUB.default_endpoint().unwrap_or_default().into(),
             gh_bin: "gh".into(),
             jira_sync_interval_secs: 300,
             jira_bin: "jira".into(),

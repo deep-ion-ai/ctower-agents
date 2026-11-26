@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { CMD_HINT, KIND_LABEL } from "../hub/connections";
+import { providerOf } from "../hub/providers";
 import type { EnvConnection, HubSource } from "../protocol/gen";
 import { useTower } from "../state/tower";
 
@@ -89,7 +89,8 @@ function ConnectionRow({ row, save }: { row: EnvConnection; save: EnvConnections
   useEffect(() => setCmd(row.credential_cmd), [row.credential_cmd]);
   const valid = validCredentialCmd(cmd.trim());
   const dirty = cmd.trim() !== row.credential_cmd;
-  const kind = row.kind ? KIND_LABEL[row.kind] : null;
+  const provider = row.kind ? providerOf(row.kind) : null;
+  const kind = provider?.label ?? null;
 
   const run = async (c: string) => {
     setBusy(true);
@@ -117,7 +118,7 @@ function ConnectionRow({ row, save }: { row: EnvConnection; save: EnvConnections
           {row.file_missing && (
             <span role="alert" className="state-off hint">
               O arquivo {row.hub_source?.detail} não existe neste ambiente: o uso da conexão aqui falha. Configure o
-              comando deste ambiente{row.kind === "github" ? " (por exemplo, gh auth token)" : ""}.
+              comando deste ambiente{provider?.cliTokenCmd ? ` (por exemplo, ${provider.cliTokenCmd})` : ""}.
             </span>
           )}
           <label className="set-stack">
@@ -126,7 +127,7 @@ function ConnectionRow({ row, save }: { row: EnvConnection; save: EnvConnections
               aria-label={`Comando de ${row.name} neste ambiente`}
               className="set-input mono"
               value={cmd}
-              placeholder={row.kind ? `vazio = a fonte do hub; ex.: ${CMD_HINT[row.kind]}` : "vazio = a fonte do hub"}
+              placeholder={provider ? `vazio = a fonte do hub; ex.: ${provider.cmdHint}` : "vazio = a fonte do hub"}
               aria-invalid={!valid}
               onChange={(e) => setCmd(e.target.value)}
             />

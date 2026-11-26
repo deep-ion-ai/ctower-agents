@@ -1,5 +1,4 @@
 import {
-  DEFAULT_GITHUB_CONNECTION,
   DEFAULT_MAX_ISSUES,
   JIRA_BRANCH_PATTERN,
   MAX_ISSUES_CEILING,
@@ -7,8 +6,9 @@ import {
   type JiraForm,
 } from "../../hub/tracker";
 import type { JiraFieldInfo } from "../../protocol/hub-gen";
-import type { Connection } from "../../protocol/gen";
-import { KIND_LABEL, connectionLabel, connectionsOfKind } from "../../hub/connections";
+import type { Connection, ProviderKind } from "../../protocol/gen";
+import { connectionLabel, connectionsOfKind } from "../../hub/connections";
+import { providerOf } from "../../hub/providers";
 import type { ProjectForm } from "./form";
 import { JiraExtraFields } from "./JiraExtraFields";
 
@@ -22,8 +22,8 @@ interface FieldsProps {
 
 /**
  * Seletor da conexão do projeto (#238): a URL e a credencial vêm dela. Sem
- * conexão do tipo, aponta a tela de Conexões. No GitHub (#275), a escolha é
- * opcional: vazio = a conexão `github` padrão.
+ * conexão do tipo, aponta a tela de Conexões. No tipo com conexão padrão
+ * (o GitHub, #275), a escolha é opcional: vazio = a padrão.
  */
 function ConnectionSelect({
   id,
@@ -33,13 +33,13 @@ function ConnectionSelect({
   onChange,
 }: {
   id: string;
-  kind: "jira" | "gitlab" | "github";
+  kind: ProviderKind;
   value: string;
   connections: Connection[] | null | undefined;
   onChange: (v: string) => void;
 }) {
-  const optional = kind === "github";
-  const label = `Conexão do ${KIND_LABEL[kind]}`;
+  const { label: kindLabel, default_connection: fallback } = providerOf(kind);
+  const label = `Conexão do ${kindLabel}`;
   if (connections === null || connections === undefined) {
     return (
       <div className="field hub-wide">
@@ -56,7 +56,7 @@ function ConnectionSelect({
       <label htmlFor={id}>{label}</label>
       <select id={id} value={value} aria-describedby={`${id}-hint`} onChange={(e) => onChange(e.target.value)}>
         <option value="">
-          {optional ? `Padrão (conexão ${DEFAULT_GITHUB_CONNECTION})` : options.length ? "Escolha uma conexão" : "Nenhuma conexão do tipo"}
+          {fallback ? `Padrão (conexão ${fallback})` : options.length ? "Escolha uma conexão" : "Nenhuma conexão do tipo"}
         </option>
         {options.map((c) => (
           <option key={c.id} value={String(c.id)}>
@@ -66,11 +66,11 @@ function ConnectionSelect({
         {missing && <option value={value}>Conexão {value} (não existe mais no hub)</option>}
       </select>
       <span id={`${id}-hint`} className="hint muted">
-        {optional
-          ? `O token do GitHub vem da conexão; sem escolha, da conexão ${DEFAULT_GITHUB_CONNECTION}. Crie ou edite conexões em Hub › Conexões.`
+        {fallback
+          ? `O token do ${kindLabel} vem da conexão; sem escolha, da conexão ${fallback}. Crie ou edite conexões em Hub › Conexões.`
           : options.length
             ? "A URL e a credencial vêm da conexão. Crie ou edite conexões em Hub › Conexões."
-            : `Cadastre uma conexão do ${KIND_LABEL[kind]} em Hub › Conexões antes de salvar o projeto.`}
+            : `Cadastre uma conexão do ${kindLabel} em Hub › Conexões antes de salvar o projeto.`}
       </span>
     </div>
   );

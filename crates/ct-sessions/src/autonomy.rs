@@ -921,7 +921,7 @@ mod tests {
         };
         // O prefixo do glab vem da conexão do GitLab (#277).
         let conns = ct_core::ResolvedConnections {
-            gitlab: Some(crate::test_support::connection(
+            forge: Some(crate::test_support::connection(
                 8,
                 ct_core::provider::ProviderKind::Gitlab,
                 "gitlab.example.com",

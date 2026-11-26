@@ -195,14 +195,12 @@ fn github_connection_names(ledger: &ct_ledger::Ledger) -> ct_ledger::Result<Vec<
     let mut names: Vec<String> = ledger
         .list_projects()?
         .iter()
-        .filter(|p| {
-            p.tracker.kind() == ct_core::TrackerKind::Github
-                || p.forge.kind() == ct_core::ForgeKind::Github
-        })
         .filter_map(|p| {
-            ct_core::provider::github_connection(
+            ct_core::provider::project_connection(
+                &p.tracker,
+                &p.forge,
+                ct_core::provider::ProviderKind::Github,
                 &conns,
-                ct_core::github_connection(&p.tracker, &p.forge),
             )
         })
         .map(|c| c.name.clone())
@@ -1432,7 +1430,7 @@ mod credenciais_tests {
         shared.set_connections(cfg.connections.clone().unwrap(), o);
         let p = &cfg.projects.as_ref().unwrap()[0];
         let (r, _) = shared.resolve(&p.owner, &p.repo, &p.tracker, &p.forge);
-        ct_core::provider::source_cmd(&r.jira.unwrap().credential).unwrap()
+        ct_core::provider::source_cmd(&r.tracker.unwrap().credential).unwrap()
     }
 
     /// #267: o `[credentials]` convertido sai também da memória. Antes, o

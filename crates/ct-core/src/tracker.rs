@@ -14,7 +14,7 @@
 //! projeto (`{project_key}-{n}`), nunca gravada. As referências saem todas
 //! de [`item_ref`], [`item_short`], [`item_key`] e [`item_url`].
 
-use crate::provider::ResolvedConnections;
+use crate::provider::{ProviderKind, ResolvedConnections};
 use crate::ParseEnumError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -252,10 +252,27 @@ impl Default for ForgeConfig {
 /// forja. `None` = o projeto não referencia conexão GitHub (vale a padrão,
 /// `provider::github_connection`).
 pub fn github_connection(tracker: &TrackerConfig, forge: &ForgeConfig) -> Option<i64> {
-    tracker
-        .github()
-        .and_then(|g| g.connection)
-        .or_else(|| forge.github().and_then(|g| g.connection))
+    crate::provider::project_ref(tracker, forge, ProviderKind::Github).flatten()
+}
+
+/// O tipo de conexão de mesmo nome no fio: todo tipo de rastreador e de
+/// forja é um [`ProviderKind`] (o teste `tipos_do_projeto_sao_tipos_de_conexao`
+/// confere).
+fn provider_of(wire: &str) -> ProviderKind {
+    wire.parse()
+        .expect("tipo de rastreador e de forja é tipo de conexão")
+}
+
+impl From<TrackerKind> for ProviderKind {
+    fn from(k: TrackerKind) -> Self {
+        provider_of(k.as_str())
+    }
+}
+
+impl From<ForgeKind> for ProviderKind {
+    fn from(k: ForgeKind) -> Self {
+        provider_of(k.as_str())
+    }
 }
 
 /// Par de colunas (tipo, JSON) que não forma uma configuração válida.
@@ -293,6 +310,26 @@ impl TrackerConfig {
         match self {
             TrackerConfig::Github(_) => TrackerKind::Github,
             TrackerConfig::Jira(_) => TrackerKind::Jira,
+        }
+    }
+
+    /// Tipo da conexão do rastreador ([`crate::provider::descriptor`]).
+    pub fn provider(&self) -> ProviderKind {
+        self.kind().into()
+    }
+
+    /// Conexão do hub que o rastreador referencia (`tracker.connection`).
+    pub fn connection(&self) -> Option<i64> {
+        match self {
+            TrackerConfig::Github(c) => c.connection,
+            TrackerConfig::Jira(c) => c.connection,
+        }
+    }
+
+    pub fn connection_mut(&mut self) -> &mut Option<i64> {
+        match self {
+            TrackerConfig::Github(c) => &mut c.connection,
+            TrackerConfig::Jira(c) => &mut c.connection,
         }
     }
 
@@ -336,6 +373,26 @@ impl ForgeConfig {
         match self {
             ForgeConfig::Github(_) => ForgeKind::Github,
             ForgeConfig::Gitlab(_) => ForgeKind::Gitlab,
+        }
+    }
+
+    /// Tipo da conexão da forja ([`crate::provider::descriptor`]).
+    pub fn provider(&self) -> ProviderKind {
+        self.kind().into()
+    }
+
+    /// Conexão do hub que a forja referencia (`forge.connection`).
+    pub fn connection(&self) -> Option<i64> {
+        match self {
+            ForgeConfig::Github(c) => c.connection,
+            ForgeConfig::Gitlab(c) => c.connection,
+        }
+    }
+
+    pub fn connection_mut(&mut self) -> &mut Option<i64> {
+        match self {
+            ForgeConfig::Github(c) => &mut c.connection,
+            ForgeConfig::Gitlab(c) => &mut c.connection,
         }
     }
 
@@ -578,10 +635,7 @@ pub fn item_url(t: &TrackerRef, jira_url: &str, n: i64) -> String {
 impl ForgeKind {
     /// Nome da forja nas mensagens: `GitHub` ou `GitLab`.
     pub fn label(self) -> &'static str {
-        match self {
-            ForgeKind::Github => "GitHub",
-            ForgeKind::Gitlab => "GitLab",
-        }
+        crate::provider::descriptor(self.into()).label()
     }
 }
 
@@ -703,6 +757,18 @@ mod tests {
             type_map: [("Épico".to_string(), JiraTypeRole::Epic)].into(),
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn tipos_do_projeto_sao_tipos_de_conexao() {
+        for k in TrackerKind::ALL {
+            assert_eq!(ProviderKind::from(*k).as_str(), k.as_str());
+        }
+        for k in ForgeKind::ALL {
+            assert_eq!(ProviderKind::from(*k).as_str(), k.as_str());
+        }
+        assert_eq!(jira().provider(), ProviderKind::Jira);
+        assert_eq!(ForgeKind::Gitlab.label(), "GitLab");
     }
 
     #[test]
