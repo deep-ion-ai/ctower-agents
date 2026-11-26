@@ -2209,6 +2209,13 @@ mod export {
         ct_hub_store::AutopilotEvent::export_all_to(&dir).unwrap();
         // `hub.autopilot.deps.set` (#215).
         ct_hub_store::DependencyEdge::export_all_to(&dir).unwrap();
+        // Execução de épico (#296).
+        ct_hub_store::EpicRun::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicPlan::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicPlanDraft::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicNode::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicDecision::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicRunEvent::export_all_to(&dir).unwrap();
         ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
