@@ -77,6 +77,7 @@ export type { PrComment } from "./PrComment";
 export type { PrRow } from "./PrRow";
 export type { PrState } from "./PrState";
 export type { Project } from "./Project";
+export type { ProjectEndpoints } from "./ProjectEndpoints";
 export type { ProjectKind } from "./ProjectKind";
 export type { ProjectSync } from "./ProjectSync";
 export type { ProjectTree } from "./ProjectTree";

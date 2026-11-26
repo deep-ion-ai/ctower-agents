@@ -2,16 +2,16 @@
 //! #350): os MRs da branch de cada work item, para o sync, e a branch remota,
 //! para a limpeza. O token vem do resolvedor de credencial (#236), pela fonte
 //! efetiva da forja do projeto (a conexão do hub com a sobrescrita do
-//! ambiente, ou o comando do cadastro, #274): a fonte só é consultada sem
-//! token em cache, e uma recusa de autenticação descarta o token e tenta de
-//! novo uma vez. O host vem do cadastro (`forge.host`). Nada disso passa
-//! pela configuração global do glab.
+//! ambiente, #274): a fonte só é consultada sem token em cache, e uma recusa
+//! de autenticação descarta o token e tenta de novo uma vez. O host vem da
+//! conexão do GitLab (#277). Nada disso passa pela configuração global do
+//! glab.
 
 use crate::cleanup::RemoteBranches;
 use crate::resolver::{gitlab_key, Ask, CredentialResolver};
 use crate::{Result, SessionsError};
 use ct_core::provider::CredentialSource;
-use ct_core::GitlabConfig;
+use ct_core::{GitlabConfig, ResolvedConnections};
 use ct_gitlab::{GitlabError, Glab};
 use ct_jira::{Secret, CREDENTIAL_DEADLINE};
 use ct_ledger::{PrRow, Project};
@@ -62,9 +62,9 @@ impl GitlabRemote {
         self
     }
 
-    /// O glab para o host do cadastro.
-    pub fn cli(&self, gl: &GitlabConfig) -> Glab {
-        Glab::new(&self.glab_bin, &gl.host).with_deadline(self.cli_deadline)
+    /// O glab para o host da conexão do GitLab do projeto.
+    pub fn cli(&self, conns: &ResolvedConnections) -> Glab {
+        Glab::new(&self.glab_bin, &conns.gitlab_host()).with_deadline(self.cli_deadline)
     }
 
     /// Configuração, glab e fonte do token de um projeto GitLab neste
@@ -76,11 +76,23 @@ impl GitlabRemote {
                 project.gh_owner, project.gh_repo
             ))
         })?;
+        let (conns, _) = self.credentials.resolve(
+            &project.gh_owner,
+            &project.gh_repo,
+            &project.tracker,
+            &project.forge,
+        );
+        if conns.gitlab.is_none() {
+            return Err(SessionsError::Invalid(format!(
+                "{}/{} sem conexão do GitLab neste ambiente",
+                project.gh_owner, project.gh_repo
+            )));
+        }
         let source = self
             .credentials
             .gitlab_source(&project.gh_owner, &project.gh_repo, &gl)
             .source;
-        let cli = self.cli(&gl);
+        let cli = self.cli(&conns);
         Ok((gl, cli, source))
     }
 
@@ -165,16 +177,14 @@ mod tests {
         let glab = ct_gitlab::fake::FakeGlab::new(env.tmp.path(), HOST, TOKEN);
         env.assign_provider(
             ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.example.com".into(),
                 project_key: "ACME".into(),
+                connection: Some(7),
                 ..Default::default()
             }),
             ct_core::ForgeConfig::Gitlab(GitlabConfig {
                 connection: Some(8),
-                host: HOST.into(),
                 path: "acme/acme-web".into(),
                 clone_url: format!("https://{HOST}/acme/acme-web.git"),
-                credential_cmd: "ctower secret get GITLAB_TOKEN_ACME".into(),
             }),
             false,
             1,

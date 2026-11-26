@@ -1160,6 +1160,12 @@ pub struct HubProject {
     /// Configuração de release (#204). Ausente num hub anterior: desligada.
     #[serde(default)]
     pub release: ct_core::ReleaseConfig,
+    /// Endereços e prefixos das conexões do projeto (#277), derivados pelo
+    /// hub nas respostas à UI (`Hub::with_endpoints`). Não é cadastro:
+    /// `None` no que sai do banco.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub endpoints: Option<ct_core::ProjectEndpoints>,
 }
 
 fn attribution_default() -> bool {
@@ -1320,6 +1326,7 @@ fn row_to_project(r: &Row) -> rusqlite::Result<HubProject> {
         wip_limits: json_col(r, 19)?,
         approval: json_col(r, 20)?,
         release: json_col(r, 21)?,
+        endpoints: None,
     })
 }
 
@@ -5578,13 +5585,13 @@ mod tests {
     /// no cadastro, com `env` como ambiente de sync.
     fn projeto_jira(hub: &Hub, env: &str) -> TrackerConfig {
         let tracker = TrackerConfig::Jira(ct_core::JiraConfig {
-            url: "https://jira.example.com".into(),
             project_key: "PROJ".into(),
+            connection: Some(1),
             ..Default::default()
         });
         let forge = ForgeConfig::Gitlab(ct_core::GitlabConfig {
-            host: "gitlab.example.com".into(),
             path: "grupo/projeto/app".into(),
+            connection: Some(2),
             ..Default::default()
         });
         hub.add_project(&novo("grupo/projeto", "app")).unwrap();

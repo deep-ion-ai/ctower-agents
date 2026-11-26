@@ -427,6 +427,7 @@ function ItemStartModal({
           base: project.base_branch,
           tracker: project.tracker,
           forge: project.forge,
+          endpoints: project.endpoints,
         }) + (gh === target.ghNumber ? (target.note ?? "") : "")
       : "";
   // Prévia do "Criar release" (#204): `hub.release.status`, com o token do hub.

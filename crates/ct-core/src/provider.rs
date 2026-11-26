@@ -4,9 +4,11 @@
 //! token. Puro, sem I/O: a checagem de "quem sou eu" na rede fica com o
 //! ambiente.
 //!
-//! Ainda não há conexão gravada. O cadastro atual (`JiraConfig`,
-//! `GitlabConfig`) entra por [`Connection::from_jira`] e
-//! [`Connection::from_gitlab`] até a migração do épico.
+//! O projeto só referencia a conexão (`JiraConfig::connection`,
+//! `GitlabConfig::connection`). Quem precisa do endereço, do `config_file`
+//! ou do prefixo da sessão lê de [`ResolvedConnections`], que
+//! [`resolve_connections`] monta com as conexões e a fonte de credencial que
+//! vale onde se lê (#277).
 
 use crate::model::ParseEnumError;
 use crate::tracker::{
@@ -14,7 +16,7 @@ use crate::tracker::{
 };
 use crate::JiraExtraField;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::fmt;
 use std::str::FromStr;
 
@@ -43,40 +45,6 @@ pub struct Connection {
     pub created_at: i64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub updated_at: i64,
-}
-
-impl Connection {
-    /// Conexão equivalente ao cadastro atual do Jira (ponte até a migração).
-    pub fn from_jira(j: &JiraConfig) -> Self {
-        Connection {
-            id: 0,
-            name: String::new(),
-            kind: ProviderKind::Jira,
-            endpoint: j.url.clone(),
-            credential: CredentialSource::Command {
-                cmd: j.credential_cmd.clone(),
-            },
-            options: json!({ "config_file": j.config_file }),
-            created_at: 0,
-            updated_at: 0,
-        }
-    }
-
-    /// Conexão equivalente ao cadastro atual do GitLab (ponte até a migração).
-    pub fn from_gitlab(g: &GitlabConfig) -> Self {
-        Connection {
-            id: 0,
-            name: String::new(),
-            kind: ProviderKind::Gitlab,
-            endpoint: g.host.clone(),
-            credential: CredentialSource::Command {
-                cmd: g.credential_cmd.clone(),
-            },
-            options: json!({}),
-            created_at: 0,
-            updated_at: 0,
-        }
-    }
 }
 
 /// De onde vem o token de uma conexão.
@@ -216,13 +184,6 @@ pub fn check_role(c: &Connection, role: Role) -> std::result::Result<(), String>
     }
 }
 
-/// Comando de shell que imprime o token da conexão: o que o cadastro antigo
-/// guardava em `credential_cmd` e o que o prefixo da sessão expande
-/// ([`source_cmd`]).
-pub fn credential_cmd(c: &Connection) -> Option<String> {
-    source_cmd(&c.credential)
-}
-
 /// Comando de shell que imprime o token da fonte, para o prefixo das
 /// instruções da sessão (`JIRA_API_TOKEN="$(<comando>)"`, #274):
 ///
@@ -293,71 +254,153 @@ fn file_word(path: &str) -> String {
 /// ([`resolve_connections`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionGap {
+    /// O projeto Jira ou GitLab não referencia conexão: cadastro anterior à
+    /// #237 que a migração não converteu.
+    Unlinked { kind: ProviderKind },
     /// O projeto referencia a conexão `id`, mas não há conexão desse tipo
-    /// com esse `id`. O lado fica como está no cadastro.
+    /// com esse `id`.
     Missing { kind: ProviderKind, id: i64 },
-    /// A conexão existe, mas não deu comando de credencial.
+    /// A conexão existe, mas a fonte de credencial não dá comando para o
+    /// prefixo da sessão.
     NoCredential { kind: ProviderKind, name: String },
 }
 
-/// Visão efetiva do rastreador e da forja (#237, #264): nos lados que
-/// referenciam uma conexão, preenche os campos do cadastro antigo a partir
-/// dela (Jira: `url`, `config_file` e `credential_cmd`; GitLab: `host` e
-/// `credential_cmd`). Só em memória: o cadastro do projeto não volta a
-/// guardar esses campos. `credential_cmd` diz o comando de credencial de
-/// cada conexão (o ambiente aplica as sobrescritas dele; o hub usa
-/// [`credential_cmd`]). Ponto único do ambiente (`materialize_connections`)
-/// e do hub. Devolve o que faltou.
+/// As conexões de um projeto (#277): a do Jira (rastreador) e a do GitLab
+/// (forja), cada uma com a fonte de credencial que vale onde se lê (no hub,
+/// a da própria conexão; no ambiente, com as sobrescritas dele,
+/// `SharedCredentials::resolve`). Ponto único de leitura do endereço, do
+/// `config_file` do jira-cli e do prefixo das sessões: o cadastro do projeto
+/// não guarda nada disso. `None` = o lado não é Jira/GitLab, ou a conexão
+/// não está entre as dadas.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedConnections {
+    pub jira: Option<Connection>,
+    pub gitlab: Option<Connection>,
+}
+
+impl ResolvedConnections {
+    /// URL do Jira, sem barra final; vazio sem conexão.
+    pub fn jira_url(&self) -> String {
+        self.jira
+            .as_ref()
+            .map(|c| c.endpoint.trim().trim_end_matches('/').to_string())
+            .unwrap_or_default()
+    }
+
+    /// Configuração do jira-cli (`options.config_file` da conexão); vazio =
+    /// a padrão (`~/.config/.jira/.config.yml`).
+    pub fn jira_config_file(&self) -> String {
+        self.jira
+            .as_ref()
+            .map(|c| options_str(c, "config_file").trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Host do GitLab; vazio sem conexão.
+    pub fn gitlab_host(&self) -> String {
+        self.gitlab
+            .as_ref()
+            .map(|c| c.endpoint.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Prefixo do jira-cli nas sessões (`{{jira}}` dos templates, spec §8.2
+    /// e §9.2): o do descritor ([`ProviderDescriptor::session_prefix`]),
+    /// `JIRA_CONFIG_FILE=<arquivo> JIRA_API_TOKEN="$(<comando>)" jira`. Leva
+    /// o comando da fonte, nunca a senha. Sem conexão, só `jira`.
+    pub fn jira_prefix(&self) -> String {
+        self.jira
+            .as_ref()
+            .and_then(|c| JIRA.session_prefix(c))
+            .unwrap_or_else(|| "jira".into())
+    }
+
+    /// Prefixo do glab nas sessões (`{{glab}}`):
+    /// `GITLAB_HOST=<host> GITLAB_TOKEN="$(<comando>)" glab`. Sem conexão,
+    /// só `glab`.
+    pub fn glab_prefix(&self) -> String {
+        self.gitlab
+            .as_ref()
+            .and_then(|c| GITLAB.session_prefix(c))
+            .unwrap_or_else(|| "glab".into())
+    }
+
+    /// O que a UI usa nos links e nos templates ([`ProjectEndpoints`]).
+    pub fn endpoints(&self) -> ProjectEndpoints {
+        ProjectEndpoints {
+            jira_url: self.jira_url(),
+            gitlab_host: self.gitlab_host(),
+            jira_cli: self
+                .jira
+                .as_ref()
+                .map(|_| self.jira_prefix())
+                .unwrap_or_default(),
+            glab_cli: self
+                .gitlab
+                .as_ref()
+                .map(|_| self.glab_prefix())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// Endereços e prefixos das conexões de um projeto, como a UI os recebe
+/// junto do projeto (`endpoints`, #277): derivados das conexões por quem
+/// responde (o hub, com a fonte da conexão; o ambiente, com as sobrescritas
+/// dele), nunca gravados no cadastro. Vazio = o lado não é Jira/GitLab ou
+/// está sem conexão.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
+pub struct ProjectEndpoints {
+    /// URL do Jira, sem barra final (`{{jira_url}}` e os links das issues).
+    pub jira_url: String,
+    /// Host do GitLab (links do repositório e dos MRs).
+    pub gitlab_host: String,
+    /// Prefixo do jira-cli (`{{jira}}`).
+    pub jira_cli: String,
+    /// Prefixo do glab (`{{glab}}`).
+    pub glab_cli: String,
+}
+
+/// As conexões que o rastreador e a forja do projeto referenciam (#277),
+/// entre `conns`, com a fonte de credencial que `source` diz para cada uma
+/// (no hub, a da conexão; no ambiente, com as sobrescritas). Devolve também
+/// o que faltou: projeto Jira/GitLab sem conexão, conexão ausente ou de
+/// outro tipo, fonte sem comando para o prefixo.
 pub fn resolve_connections(
-    tracker: &mut TrackerConfig,
-    forge: &mut ForgeConfig,
+    tracker: &TrackerConfig,
+    forge: &ForgeConfig,
     conns: &[Connection],
-    credential_cmd: impl Fn(&Connection) -> String,
-) -> Vec<ConnectionGap> {
-    let find = |kind: ProviderKind, id: i64| conns.iter().find(|c| c.id == id && c.kind == kind);
+    source: impl Fn(&Connection) -> CredentialSource,
+) -> (ResolvedConnections, Vec<ConnectionGap>) {
     let mut gaps = Vec::new();
-    if let TrackerConfig::Jira(j) = tracker {
-        if let Some(id) = j.connection {
-            match find(ProviderKind::Jira, id) {
-                Some(c) => {
-                    j.url = c.endpoint.trim().trim_end_matches('/').to_string();
-                    j.config_file = options_str(c, "config_file").to_string();
-                    j.credential_cmd = credential_cmd(c);
-                    if j.credential_cmd.is_empty() {
-                        gaps.push(ConnectionGap::NoCredential {
-                            kind: c.kind,
-                            name: c.name.clone(),
-                        });
-                    }
-                }
-                None => gaps.push(ConnectionGap::Missing {
-                    kind: ProviderKind::Jira,
-                    id,
-                }),
-            }
+    let mut pick = |kind: ProviderKind, id: Option<i64>| -> Option<Connection> {
+        let Some(id) = id else {
+            gaps.push(ConnectionGap::Unlinked { kind });
+            return None;
+        };
+        let Some(c) = conns.iter().find(|c| c.id == id && c.kind == kind) else {
+            gaps.push(ConnectionGap::Missing { kind, id });
+            return None;
+        };
+        let mut c = c.clone();
+        c.credential = source(&c);
+        if source_cmd(&c.credential).is_none() {
+            gaps.push(ConnectionGap::NoCredential {
+                kind,
+                name: c.name.clone(),
+            });
         }
-    }
-    if let ForgeConfig::Gitlab(g) = forge {
-        if let Some(id) = g.connection {
-            match find(ProviderKind::Gitlab, id) {
-                Some(c) => {
-                    g.host = c.endpoint.trim().to_string();
-                    g.credential_cmd = credential_cmd(c);
-                    if g.credential_cmd.is_empty() {
-                        gaps.push(ConnectionGap::NoCredential {
-                            kind: c.kind,
-                            name: c.name.clone(),
-                        });
-                    }
-                }
-                None => gaps.push(ConnectionGap::Missing {
-                    kind: ProviderKind::Gitlab,
-                    id,
-                }),
-            }
-        }
-    }
-    gaps
+        Some(c)
+    };
+    let jira = tracker
+        .jira()
+        .and_then(|j| pick(ProviderKind::Jira, j.connection));
+    let gitlab = forge
+        .gitlab()
+        .and_then(|g| pick(ProviderKind::Gitlab, g.connection));
+    (ResolvedConnections { jira, gitlab }, gaps)
 }
 
 impl ProviderDescriptor for GithubDescriptor {
@@ -439,15 +482,17 @@ impl ProviderDescriptor for GitlabDescriptor {
 }
 
 impl GitlabDescriptor {
-    /// Repositório do GitLab: host e caminho (`grupo/projeto`). Fica no
-    /// cadastro do projeto, não na conexão.
+    /// Repositório do GitLab: a conexão (de onde vêm o host e a
+    /// credencial, #277) e o caminho (`grupo/projeto`), que fica no cadastro
+    /// do projeto.
     pub fn validate_project(&self, g: &GitlabConfig) -> std::result::Result<(), String> {
-        // Com conexão referenciada, o host vem dela.
-        let host_ok = g.connection.is_some() || !g.host.is_empty();
-        if !host_ok || !g.path.contains('/') {
+        if g.connection.is_none() {
+            return Err("escolha a conexão do GitLab do projeto (Hub › Conexões)".into());
+        }
+        if !g.path.contains('/') {
             return Err(format!(
-                "repositório do GitLab inválido: host {:?}, caminho {:?}",
-                g.host, g.path
+                "repositório do GitLab inválido: caminho {:?}",
+                g.path
             ));
         }
         Ok(())
@@ -499,22 +544,13 @@ impl ProviderDescriptor for JiraDescriptor {
 }
 
 impl JiraDescriptor {
-    /// Projeto Jira: chave e campos próprios da tela da issue. Fica no
-    /// cadastro do projeto, não na conexão.
+    /// Projeto Jira: a conexão (de onde vêm a URL, a credencial e o
+    /// `config_file`, #277), a chave e os campos próprios da tela da issue.
     pub fn validate_project(&self, j: &JiraConfig) -> std::result::Result<(), String> {
+        if j.connection.is_none() {
+            return Err("escolha a conexão do Jira do projeto (Hub › Conexões)".into());
+        }
         check_project_key(j)?;
-        validate_extra_fields(&j.extra_fields)
-    }
-
-    /// Cadastro do Jira sem conexão referenciada: a conexão embutida (URL e
-    /// credencial) e o projeto, na ordem de antes da #234 (URL, chave do
-    /// projeto, credencial, campos da tela). Com mais de uma falha, o erro
-    /// da chave vem antes do da credencial (#272).
-    pub fn validate_inline(&self, j: &JiraConfig) -> std::result::Result<(), String> {
-        let c = Connection::from_jira(j);
-        check_jira_url(&c)?;
-        check_project_key(j)?;
-        check_token_source("Jira", "jira", &c)?;
         validate_extra_fields(&j.extra_fields)
     }
 
@@ -662,16 +698,26 @@ pub fn shell_word(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn jira_cfg() -> JiraConfig {
         JiraConfig {
-            url: "https://jira.example.com".into(),
             project_key: "ACME".into(),
             jql: "labels = acme-web".into(),
             max_issues: 100,
-            credential_cmd: "pass show jira | head -1".into(),
+            connection: Some(1),
             ..Default::default()
         }
+    }
+
+    fn jira_conn() -> Connection {
+        conn(
+            ProviderKind::Jira,
+            "https://jira.example.com",
+            CredentialSource::Command {
+                cmd: "pass show jira | head -1".into(),
+            },
+        )
     }
 
     fn conn(kind: ProviderKind, endpoint: &str, credential: CredentialSource) -> Connection {
@@ -759,20 +805,18 @@ mod tests {
 
     #[test]
     fn jira_valida_tipo_url_credencial_e_opcoes() {
-        assert!(JIRA.validate(&Connection::from_jira(&jira_cfg())).is_ok());
-        let url_ruim = JiraConfig {
-            url: "jira.example.com".into(),
-            ..jira_cfg()
+        assert!(JIRA.validate(&jira_conn()).is_ok());
+        let url_ruim = Connection {
+            endpoint: "jira.example.com".into(),
+            ..jira_conn()
         };
-        let err = JIRA
-            .validate(&Connection::from_jira(&url_ruim))
-            .unwrap_err();
+        let err = JIRA.validate(&url_ruim).unwrap_err();
         assert!(err.contains("URL do Jira inválida"), "{err}");
-        let sem_cmd = JiraConfig {
-            credential_cmd: "  ".into(),
-            ..jira_cfg()
+        let sem_cmd = Connection {
+            credential: CredentialSource::Command { cmd: "  ".into() },
+            ..jira_conn()
         };
-        let err = JIRA.validate(&Connection::from_jira(&sem_cmd)).unwrap_err();
+        let err = JIRA.validate(&sem_cmd).unwrap_err();
         assert!(
             err.contains("informe o comando de credencial do Jira"),
             "{err}"
@@ -856,42 +900,17 @@ mod tests {
     }
 
     #[test]
-    fn jira_sem_conexao_mantem_a_ordem_dos_erros_de_antes_da_234() {
-        assert!(JIRA.validate_inline(&jira_cfg()).is_ok());
-        // Chave e credencial inválidas ao mesmo tempo: vale o erro da chave.
-        let chave_e_credencial = JiraConfig {
-            project_key: "acme".into(),
-            credential_cmd: " ".into(),
-            ..jira_cfg()
-        };
-        let err = JIRA.validate_inline(&chave_e_credencial).unwrap_err();
-        assert!(err.contains("chave do projeto Jira inválida"), "{err}");
-        // URL e chave inválidas: vale o erro da URL.
-        let url_e_chave = JiraConfig {
-            url: "jira.example.com".into(),
-            ..chave_e_credencial.clone()
-        };
-        let err = JIRA.validate_inline(&url_e_chave).unwrap_err();
-        assert!(err.contains("URL do Jira inválida"), "{err}");
-        // Credencial e campo da tela inválidos: vale o erro da credencial.
-        let credencial_e_campo = JiraConfig {
-            credential_cmd: " ".into(),
-            extra_fields: vec![JiraExtraField {
-                id: " ".into(),
-                label: "Equipe".into(),
-            }],
-            ..jira_cfg()
-        };
-        let err = JIRA.validate_inline(&credencial_e_campo).unwrap_err();
-        assert!(
-            err.contains("informe o comando de credencial do Jira"),
-            "{err}"
-        );
-    }
-
-    #[test]
     fn jira_valida_chave_campos_e_filtro_do_projeto() {
         assert!(JIRA.validate_project(&jira_cfg()).is_ok());
+        // Sem conexão (#277): recusa, mesmo com o resto em ordem.
+        let sem_conexao = JiraConfig {
+            connection: None,
+            ..jira_cfg()
+        };
+        assert!(JIRA
+            .validate_project(&sem_conexao)
+            .unwrap_err()
+            .contains("escolha a conexão do Jira"));
         let chave = JiraConfig {
             project_key: "acme".into(),
             ..jira_cfg()
@@ -958,22 +977,22 @@ mod tests {
     fn jira_prefixo_leva_o_comando_nunca_a_senha() {
         let prefixo = |c: &Connection| JIRA.session_prefix(c).unwrap();
         assert_eq!(
-            prefixo(&Connection::from_jira(&jira_cfg())),
+            prefixo(&jira_conn()),
             r#"JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#
         );
-        let com_arquivo = JiraConfig {
-            config_file: "acme/jira config.yml".into(),
-            ..jira_cfg()
+        let com_arquivo = Connection {
+            options: json!({ "config_file": "acme/jira config.yml" }),
+            ..jira_conn()
         };
         assert_eq!(
-            prefixo(&Connection::from_jira(&com_arquivo)),
+            prefixo(&com_arquivo),
             r#"JIRA_CONFIG_FILE='acme/jira config.yml' JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#
         );
-        let sem_cmd = JiraConfig {
-            credential_cmd: "   ".into(),
-            ..jira_cfg()
+        let sem_cmd = Connection {
+            credential: CredentialSource::Command { cmd: "   ".into() },
+            ..jira_conn()
         };
-        assert_eq!(prefixo(&Connection::from_jira(&sem_cmd)), "jira");
+        assert_eq!(prefixo(&sem_cmd), "jira");
         let secret = conn(
             ProviderKind::Jira,
             "https://jira.example.com",
@@ -988,23 +1007,29 @@ mod tests {
     }
 
     #[test]
-    fn gitlab_valida_repositorio_host_e_credencial() {
+    fn gitlab_valida_repositorio_conexao_e_credencial() {
         let g = GitlabConfig {
-            host: "gitlab.example.com".into(),
             path: "acme/web".into(),
-            credential_cmd: "pass show gitlab | head -1".into(),
+            connection: Some(2),
             ..Default::default()
         };
         assert!(GITLAB.validate_project(&g).is_ok());
-        assert!(GITLAB.validate(&Connection::from_gitlab(&g)).is_ok());
-        let sem_host = GitlabConfig {
-            host: String::new(),
+        let gl_conn = conn(
+            ProviderKind::Gitlab,
+            "gitlab.example.com",
+            CredentialSource::Command {
+                cmd: "pass show gitlab | head -1".into(),
+            },
+        );
+        assert!(GITLAB.validate(&gl_conn).is_ok());
+        let sem_conexao = GitlabConfig {
+            connection: None,
             ..g.clone()
         };
         assert!(GITLAB
-            .validate_project(&sem_host)
+            .validate_project(&sem_conexao)
             .unwrap_err()
-            .contains("repositório do GitLab inválido"));
+            .contains("escolha a conexão do GitLab"));
         let sem_barra = GitlabConfig {
             path: "acme".into(),
             ..g.clone()
@@ -1013,12 +1038,12 @@ mod tests {
             .validate_project(&sem_barra)
             .unwrap_err()
             .contains("caminho \"acme\""));
-        let sem_cmd = GitlabConfig {
-            credential_cmd: String::new(),
-            ..g.clone()
+        let sem_cmd = Connection {
+            credential: CredentialSource::Command { cmd: String::new() },
+            ..gl_conn
         };
         assert!(GITLAB
-            .validate(&Connection::from_gitlab(&sem_cmd))
+            .validate(&sem_cmd)
             .unwrap_err()
             .contains("informe o comando de credencial do GitLab"));
         let sem_endpoint = conn(ProviderKind::Gitlab, "", CredentialSource::Cli);
@@ -1030,24 +1055,23 @@ mod tests {
 
     #[test]
     fn gitlab_prefixo_leva_host_e_comando() {
-        let g = GitlabConfig {
-            host: "gitlab.example.com".into(),
-            path: "acme/web".into(),
-            credential_cmd: "pass show gitlab | head -1".into(),
-            ..Default::default()
-        };
+        let g = conn(
+            ProviderKind::Gitlab,
+            "gitlab.example.com",
+            CredentialSource::Command {
+                cmd: "pass show gitlab | head -1".into(),
+            },
+        );
         assert_eq!(
-            GITLAB.session_prefix(&Connection::from_gitlab(&g)).unwrap(),
+            GITLAB.session_prefix(&g).unwrap(),
             r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab"#
         );
-        let sem_cmd = GitlabConfig {
-            credential_cmd: String::new(),
+        let sem_cmd = Connection {
+            credential: CredentialSource::Command { cmd: String::new() },
             ..g
         };
         assert_eq!(
-            GITLAB
-                .session_prefix(&Connection::from_gitlab(&sem_cmd))
-                .unwrap(),
+            GITLAB.session_prefix(&sem_cmd).unwrap(),
             "GITLAB_HOST=gitlab.example.com glab"
         );
         let secret = conn(
@@ -1125,7 +1149,7 @@ mod tests {
 
     #[test]
     fn prontidao_reflete_a_validacao() {
-        let ok = Connection::from_jira(&jira_cfg());
+        let ok = jira_conn();
         assert_eq!(JIRA.readiness(&ok), Readiness::Ready);
         let sem_cmd = Connection {
             credential: CredentialSource::Command { cmd: String::new() },
@@ -1139,102 +1163,188 @@ mod tests {
         }
     }
 
+    fn projeto() -> (TrackerConfig, ForgeConfig) {
+        (
+            TrackerConfig::Jira(JiraConfig {
+                project_key: "ACME".into(),
+                connection: Some(7),
+                ..Default::default()
+            }),
+            ForgeConfig::Gitlab(GitlabConfig {
+                path: "grupo/app".into(),
+                connection: Some(8),
+                ..Default::default()
+            }),
+        )
+    }
+
+    fn conexoes(jira: CredentialSource, gitlab: CredentialSource) -> Vec<Connection> {
+        let mut j = conn(ProviderKind::Jira, " https://jira.example.com/ ", jira);
+        j.id = 7;
+        j.name = "jira-acme".into();
+        j.options = json!({ "config_file": " /etc/jira/acme.yml " });
+        let mut g = conn(ProviderKind::Gitlab, "gitlab.example.com", gitlab);
+        g.id = 8;
+        g.name = "gitlab-acme".into();
+        vec![j, g]
+    }
+
+    /// #277: endereço, `config_file` e prefixo da sessão saem da conexão,
+    /// com a fonte que quem lê diz (`Command`, `Secret` e `File`).
     #[test]
-    fn resolve_connections_preenche_jira_e_gitlab_em_memoria() {
-        let mut jira = conn(
-            ProviderKind::Jira,
-            "https://jira.example.com/",
+    fn resolve_connections_le_endereco_arquivo_e_prefixo_da_conexao() {
+        let (tracker, forge) = projeto();
+        let conns = conexoes(
             CredentialSource::Command {
                 cmd: " pass show jira | head -1 ".into(),
             },
-        );
-        jira.id = 7;
-        jira.options = json!({ "config_file": "/etc/jira/acme.yml" });
-        let mut gitlab = conn(
-            ProviderKind::Gitlab,
-            "gitlab.example.com",
-            CredentialSource::Command {
-                cmd: "pass show gitlab | head -1".into(),
+            CredentialSource::Secret {
+                name: "GITLAB_TOKEN_ACME".into(),
             },
         );
-        gitlab.id = 8;
-        let conns = [jira, gitlab];
-        let mut tracker = TrackerConfig::Jira(JiraConfig {
-            project_key: "ACME".into(),
-            connection: Some(7),
-            ..Default::default()
-        });
-        let mut forge = ForgeConfig::Gitlab(GitlabConfig {
-            path: "grupo/app".into(),
-            connection: Some(8),
-            ..Default::default()
-        });
-        let gaps = resolve_connections(&mut tracker, &mut forge, &conns, |c| {
-            credential_cmd(c).unwrap_or_default()
-        });
+        let (r, gaps) = resolve_connections(&tracker, &forge, &conns, |c| c.credential.clone());
         assert!(gaps.is_empty(), "{gaps:?}");
-        let j = tracker.jira().unwrap();
-        assert_eq!(j.url, "https://jira.example.com");
-        assert_eq!(j.config_file, "/etc/jira/acme.yml");
-        assert_eq!(j.credential_cmd, "pass show jira | head -1");
-        let g = forge.gitlab().unwrap();
-        assert_eq!(g.host, "gitlab.example.com");
-        assert_eq!(g.credential_cmd, "pass show gitlab | head -1");
-
-        // Conexão ausente ou de outro tipo: o lado fica como está.
-        let mut tracker = TrackerConfig::Jira(JiraConfig {
-            connection: Some(8),
-            ..Default::default()
-        });
-        let mut forge = ForgeConfig::Github(Default::default());
-        let gaps = resolve_connections(&mut tracker, &mut forge, &conns, |_| "x".into());
+        assert_eq!(r.jira_url(), "https://jira.example.com");
+        assert_eq!(r.jira_config_file(), "/etc/jira/acme.yml");
+        assert_eq!(r.gitlab_host(), "gitlab.example.com");
         assert_eq!(
-            gaps,
-            vec![ConnectionGap::Missing {
-                kind: ProviderKind::Jira,
-                id: 8
-            }]
+            r.jira_prefix(),
+            r#"JIRA_CONFIG_FILE=/etc/jira/acme.yml JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#
         );
-        assert_eq!(tracker.jira().unwrap().url, "");
+        assert_eq!(
+            r.glab_prefix(),
+            r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(ctower secret get GITLAB_TOKEN_ACME)" glab"#
+        );
+        assert_eq!(
+            r.endpoints(),
+            ProjectEndpoints {
+                jira_url: "https://jira.example.com".into(),
+                gitlab_host: "gitlab.example.com".into(),
+                jira_cli: r.jira_prefix(),
+                glab_cli: r.glab_prefix(),
+            }
+        );
+        assert_eq!(
+            crate::issue_view_cmd("grupo", "app", &tracker, &r),
+            format!("{} issue view ACME-<n> --plain", r.jira_prefix())
+        );
+
+        // A fonte de quem lê (a sobrescrita do ambiente) vale sobre a da
+        // conexão: aqui, um arquivo no Jira.
+        let (r, _) = resolve_connections(&tracker, &forge, &conns, |c| match c.kind {
+            ProviderKind::Jira => CredentialSource::File {
+                path: "~/.acme/jira".into(),
+            },
+            _ => c.credential.clone(),
+        });
+        assert_eq!(
+            r.jira_prefix(),
+            format!(
+                r#"JIRA_CONFIG_FILE=/etc/jira/acme.yml JIRA_API_TOKEN="$({})" jira"#,
+                file_cmd("~/.acme/jira")
+            )
+        );
+        // O cadastro do projeto não muda.
+        assert_eq!(projeto(), (tracker, forge));
     }
 
     #[test]
-    fn credential_cmd_de_comando_secret_e_arquivo() {
-        let c = |credential| conn(ProviderKind::Jira, "https://jira.example.com", credential);
+    fn resolve_connections_diz_o_que_faltou() {
+        let (tracker, forge) = projeto();
+        let conns = conexoes(CredentialSource::None, CredentialSource::Cli);
+        let (r, gaps) = resolve_connections(&tracker, &forge, &conns, |c| c.credential.clone());
         assert_eq!(
-            credential_cmd(&c(CredentialSource::Command {
+            gaps,
+            vec![
+                ConnectionGap::NoCredential {
+                    kind: ProviderKind::Jira,
+                    name: "jira-acme".into()
+                },
+                ConnectionGap::NoCredential {
+                    kind: ProviderKind::Gitlab,
+                    name: "gitlab-acme".into()
+                },
+            ]
+        );
+        // Sem comando, o prefixo fica sem o token.
+        assert_eq!(r.jira_prefix(), "JIRA_CONFIG_FILE=/etc/jira/acme.yml jira");
+        assert_eq!(r.glab_prefix(), "GITLAB_HOST=gitlab.example.com glab");
+
+        // Conexão ausente, de outro tipo ou nenhuma: o lado fica sem conexão.
+        let tracker = TrackerConfig::Jira(JiraConfig {
+            connection: Some(8),
+            ..Default::default()
+        });
+        let forge = ForgeConfig::Gitlab(GitlabConfig::default());
+        let (r, gaps) = resolve_connections(&tracker, &forge, &conns, |c| c.credential.clone());
+        assert_eq!(
+            gaps,
+            vec![
+                ConnectionGap::Missing {
+                    kind: ProviderKind::Jira,
+                    id: 8
+                },
+                ConnectionGap::Unlinked {
+                    kind: ProviderKind::Gitlab
+                },
+            ]
+        );
+        assert_eq!(r, ResolvedConnections::default());
+        assert_eq!(
+            (r.jira_url(), r.gitlab_host()),
+            (String::new(), String::new())
+        );
+        assert_eq!(
+            (r.jira_prefix(), r.glab_prefix()),
+            ("jira".to_string(), "glab".to_string())
+        );
+        assert_eq!(r.endpoints(), ProjectEndpoints::default());
+        // GitHub não tem o que resolver.
+        let (r, gaps) = resolve_connections(
+            &TrackerConfig::default(),
+            &ForgeConfig::default(),
+            &conns,
+            |c| c.credential.clone(),
+        );
+        assert!(gaps.is_empty() && r == ResolvedConnections::default());
+    }
+
+    #[test]
+    fn source_cmd_de_comando_secret_e_arquivo() {
+        assert_eq!(
+            source_cmd(&CredentialSource::Command {
                 cmd: "pass show jira".into()
-            })),
+            }),
             Some("pass show jira".into())
         );
         assert_eq!(
-            credential_cmd(&c(CredentialSource::Command { cmd: " ".into() })),
+            source_cmd(&CredentialSource::Command { cmd: " ".into() }),
             None
         );
         assert_eq!(
-            credential_cmd(&c(CredentialSource::Secret {
+            source_cmd(&CredentialSource::Secret {
                 name: " JIRA_TOKEN_ACME ".into()
-            })),
+            }),
             Some("ctower secret get JIRA_TOKEN_ACME".into())
         );
         assert_eq!(
-            credential_cmd(&c(CredentialSource::Secret { name: " ".into() })),
+            source_cmd(&CredentialSource::Secret { name: " ".into() }),
             None
         );
-        let arquivo = credential_cmd(&c(CredentialSource::File {
+        let arquivo = source_cmd(&CredentialSource::File {
             path: "~/.config/acme/jira token".into(),
-        }))
+        })
         .unwrap();
         assert!(
             arquivo.ends_with(r#" < "$HOME"/'.config/acme/jira token'"#),
             "{arquivo}"
         );
         assert_eq!(
-            credential_cmd(&c(CredentialSource::File { path: "".into() })),
+            source_cmd(&CredentialSource::File { path: "".into() }),
             None
         );
-        assert_eq!(credential_cmd(&c(CredentialSource::Cli)), None);
-        assert_eq!(credential_cmd(&c(CredentialSource::None)), None);
+        assert_eq!(source_cmd(&CredentialSource::Cli), None);
+        assert_eq!(source_cmd(&CredentialSource::None), None);
     }
 
     #[test]

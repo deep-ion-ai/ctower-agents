@@ -147,8 +147,14 @@ struct Mode {
 }
 
 /// Instrução ao agente da sessão autônoma (no system prompt, a cada início
-/// e retomada), com o rótulo (PR ou MR) e o comando da forja do projeto.
-pub fn agent_instruction(project: &Project, branch: &str, base: &str) -> String {
+/// e retomada), com o rótulo (PR ou MR) e o comando da forja do projeto. O
+/// prefixo do glab vem da conexão do GitLab neste ambiente (#277).
+pub fn agent_instruction(
+    project: &Project,
+    conns: &ct_core::ResolvedConnections,
+    branch: &str,
+    base: &str,
+) -> String {
     let forge = project.forge.kind();
     let label = ct_core::change_label(forge);
     let create = match &project.forge {
@@ -160,10 +166,7 @@ pub fn agent_instruction(project: &Project, branch: &str, base: &str) -> String 
             } else {
                 path.to_string()
             };
-            format!(
-                "{} mr create -R {path} -b {branch}",
-                ct_core::glab_cli_prefix(g)
-            )
+            format!("{} mr create -R {path} -b {branch}", conns.glab_prefix())
         }
     };
     format!(
@@ -716,8 +719,8 @@ mod tests {
             };
             p.autonomy_runner = true;
             p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                host: "gitlab.example.com".into(),
                 path: "grupo/acme-web".into(),
+                connection: Some(8),
                 ..Default::default()
             });
         });
@@ -897,7 +900,8 @@ mod tests {
             gh_repo: "acme-web".into(),
             ..Default::default()
         };
-        let i = agent_instruction(&gh, "wip/autonoma", "develop");
+        let sem = ct_core::ResolvedConnections::default();
+        let i = agent_instruction(&gh, &sem, "wip/autonoma", "develop");
         assert!(
             i.contains("abra o PR contra ela (`gh pr create --base wip/autonoma`)"),
             "{i}"
@@ -909,15 +913,27 @@ mod tests {
         );
         let gl = Project {
             forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                host: "gitlab.example.com".into(),
                 path: "/acme/web/app/".into(),
+                connection: Some(8),
                 ..Default::default()
             }),
             ..gh.clone()
         };
-        let i = agent_instruction(&gl, "wip/autonoma", "develop");
+        // O prefixo do glab vem da conexão do GitLab (#277).
+        let conns = ct_core::ResolvedConnections {
+            gitlab: Some(crate::test_support::connection(
+                8,
+                ct_core::provider::ProviderKind::Gitlab,
+                "gitlab.example.com",
+                ct_core::provider::CredentialSource::Secret {
+                    name: "GITLAB_TOKEN_ACME".into(),
+                },
+            )),
+            ..Default::default()
+        };
+        let i = agent_instruction(&gl, &conns, "wip/autonoma", "develop");
         assert!(
-            i.contains("abra o MR contra ela (`GITLAB_HOST=gitlab.example.com glab mr create -R acme/web/app -b wip/autonoma`)"),
+            i.contains("abra o MR contra ela (`GITLAB_HOST=gitlab.example.com GITLAB_TOKEN=\"$(ctower secret get GITLAB_TOKEN_ACME)\" glab mr create -R acme/web/app -b wip/autonoma`)"),
             "{i}"
         );
         assert!(i.contains("pelo MR rascunho"), "{i}");
@@ -936,14 +952,14 @@ mod tests {
             };
             p.autonomy_runner = true;
             p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.example.com".into(),
                 project_key: "ACME".into(),
                 jql: "project = ACME".into(),
+                connection: Some(7),
                 ..Default::default()
             });
             p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                host: "gitlab.example.com".into(),
                 path: "deep-ion-ai/demo".into(),
+                connection: Some(8),
                 ..Default::default()
             });
         });

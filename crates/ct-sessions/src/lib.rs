@@ -261,6 +261,33 @@ impl Sessions {
         })
     }
 
+    /// As conexões do projeto neste ambiente (#277): as do último pull, com
+    /// a fonte efetiva daqui ([`ct_core::SharedCredentials::resolve`]). É
+    /// daqui que o sync, as sessões, os templates e os links leem a URL do
+    /// Jira, o host do GitLab, o `config_file` do jira-cli e os prefixos.
+    pub fn project_connections(
+        &self,
+        project: &ct_ledger::Project,
+    ) -> ct_core::ResolvedConnections {
+        self.inner
+            .cfg
+            .credentials
+            .resolve(
+                &project.gh_owner,
+                &project.gh_repo,
+                &project.tracker,
+                &project.forge,
+            )
+            .0
+    }
+
+    /// O projeto com os endereços e prefixos das conexões deste ambiente
+    /// (`endpoints`, #277), como a UI o recebe.
+    pub fn with_endpoints(&self, mut project: ct_ledger::Project) -> ct_ledger::Project {
+        project.endpoints = Some(self.project_connections(&project).endpoints());
+        project
+    }
+
     /// Tira do cache do resolvedor os tokens dos projetos que usam a conexão
     /// `name` (#276): a sobrescrita editada pela UI vale no próximo uso,
     /// mesmo quando o comando não muda (o token por trás dele mudou).

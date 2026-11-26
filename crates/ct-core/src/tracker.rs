@@ -4,15 +4,17 @@
 //! No banco, cada um vira duas colunas: o tipo (`tracker_kind`,
 //! `forge_kind`) e a configuração em JSON (`tracker_config`,
 //! `forge_config`; `{}` no GitHub). No protocolo, o par vira um objeto
-//! marcado por `kind` (`{ "kind": "github" }`, `{ "kind": "jira", "url":
-//! ... }`).
+//! marcado por `kind` (`{ "kind": "github" }`, `{ "kind": "jira",
+//! "project_key": ... }`). Endereço e credencial do Jira e do GitLab não
+//! ficam aqui: vêm da conexão que o projeto referencia (#277,
+//! [`crate::provider::ResolvedConnections`]).
 //!
 //! O work item guarda só o número (`gh_number`). No Jira, é o número da
 //! chave (`PROJ-5450` → `5450`), e a chave em texto é sempre derivada do
 //! projeto (`{project_key}-{n}`), nunca gravada. As referências saem todas
 //! de [`item_ref`], [`item_short`], [`item_key`] e [`item_url`].
 
-use crate::provider::{self, Connection, ProviderDescriptor};
+use crate::provider::ResolvedConnections;
 use crate::ParseEnumError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -77,8 +79,6 @@ fn default_max_issues() -> u32 {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(default)]
 pub struct JiraConfig {
-    /// URL do servidor, sem barra final (`https://jira.example.com`).
-    pub url: String,
     /// Chave do projeto Jira (`PROJ`).
     pub project_key: String,
     /// Filtro JQL do sync (obrigatório sem `active_sprint_only`); ignorado
@@ -96,11 +96,6 @@ pub struct JiraConfig {
     #[serde(default = "default_max_issues")]
     #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
     pub max_issues: u32,
-    /// Comando que imprime a senha (`pass show jira | head -1`). Texto do
-    /// cadastro, não secret: roda no ambiente.
-    pub credential_cmd: String,
-    /// Configuração do jira-cli; vazio = `~/.config/.jira/.config.yml`.
-    pub config_file: String,
     /// Campo do Epic Link (`customfield_10601`).
     pub epic_link_field: String,
     /// Campo do Epic Name (`customfield_10604`).
@@ -116,8 +111,10 @@ pub struct JiraConfig {
     /// na ordem do cadastro. Ausente (cadastro anterior) = nenhum.
     #[cfg_attr(feature = "ts", ts(as = "Option<Vec<JiraExtraField>>", optional))]
     pub extra_fields: Vec<JiraExtraField>,
-    /// Conexão do hub com o Jira (`tracker.connection`, #235). Quando há,
-    /// URL e credencial vêm dela, não do cadastro do projeto.
+    /// Conexão do hub com o Jira (`tracker.connection`, #235). URL,
+    /// credencial e `config_file` do jira-cli vêm dela
+    /// ([`crate::provider::resolve_connections`]); o cadastro do projeto
+    /// exige uma (#277).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(type = "number", optional))]
     pub connection: Option<i64>,
@@ -140,13 +137,10 @@ pub struct JiraExtraField {
 impl Default for JiraConfig {
     fn default() -> Self {
         JiraConfig {
-            url: String::new(),
             project_key: String::new(),
             jql: String::new(),
             active_sprint_only: false,
             max_issues: DEFAULT_MAX_ISSUES,
-            credential_cmd: String::new(),
-            config_file: String::new(),
             epic_link_field: String::new(),
             epic_name_field: String::new(),
             sprint_field: String::new(),
@@ -197,16 +191,13 @@ impl JiraConfig {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(default)]
 pub struct GitlabConfig {
-    /// Host do GitLab (`gitlab.example.com`).
-    pub host: String,
     /// Caminho do projeto (`grupo/projeto/app`).
     pub path: String,
     /// URL de clone como o usuário colou (HTTPS ou SSH).
     pub clone_url: String,
-    /// Comando que imprime o token (`pass show gitlab | head -1`).
-    pub credential_cmd: String,
-    /// Conexão do hub com o GitLab (`forge.connection`, #235). Quando há,
-    /// host e credencial vêm dela, não do cadastro do projeto.
+    /// Conexão do hub com o GitLab (`forge.connection`, #235). Host e
+    /// credencial vêm dela ([`crate::provider::resolve_connections`]); o
+    /// cadastro do projeto exige uma (#277).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(type = "number", optional))]
     pub connection: Option<i64>,
@@ -453,7 +444,7 @@ pub struct JiraReadiness {
     pub cli: Option<String>,
     /// `.config.yml` do jira-cli presente (`jira init`).
     pub config_present: bool,
-    /// O `server` do `.config.yml` é a `url` do cadastro.
+    /// O `server` do `.config.yml` é a URL da conexão do Jira.
     pub server_matches: bool,
     /// O comando de credencial respondeu com uma linha não vazia.
     pub credential_ok: bool,
@@ -573,12 +564,13 @@ pub fn item_key(t: &TrackerRef, n: i64) -> String {
 }
 
 /// Link da issue: `https://github.com/owner/repo/issues/12` ou
-/// `<jira>/browse/PROJ-5450`.
-pub fn item_url(t: &TrackerRef, n: i64) -> String {
+/// `<jira>/browse/PROJ-5450`, com `jira_url` a URL da conexão do Jira
+/// ([`crate::provider::ResolvedConnections::jira_url`]; ignorada no GitHub).
+pub fn item_url(t: &TrackerRef, jira_url: &str, n: i64) -> String {
     match t.tracker {
         TrackerConfig::Github(_) => format!("https://github.com/{}/{}/issues/{n}", t.owner, t.repo),
         TrackerConfig::Jira(c) => {
-            format!("{}/browse/{}", c.url.trim_end_matches('/'), c.key(n))
+            format!("{}/browse/{}", jira_url.trim_end_matches('/'), c.key(n))
         }
     }
 }
@@ -616,8 +608,17 @@ pub fn change_ref(forge: ForgeKind, n: i64) -> String {
 
 /// Link da mudança quando a forja não deu um (o sync guarda o `html_url`
 /// do PR ou o `web_url` do MR): `https://github.com/<owner>/<repo>/pull/<n>`
-/// ou `https://<host>/<path>/-/merge_requests/<iid>`.
-pub fn change_url(owner: &str, repo: &str, forge: &ForgeConfig, n: i64) -> String {
+/// ou `https://<host>/<path>/-/merge_requests/<iid>`, com `gitlab_host` o
+/// host da conexão do GitLab
+/// ([`crate::provider::ResolvedConnections::gitlab_host`]; ignorado no
+/// GitHub).
+pub fn change_url(
+    owner: &str,
+    repo: &str,
+    forge: &ForgeConfig,
+    gitlab_host: &str,
+    n: i64,
+) -> String {
     match forge {
         ForgeConfig::Github(_) => format!("https://github.com/{owner}/{repo}/pull/{n}"),
         ForgeConfig::Gitlab(g) => {
@@ -625,40 +626,26 @@ pub fn change_url(owner: &str, repo: &str, forge: &ForgeConfig, n: i64) -> Strin
                 "" => format!("{owner}/{repo}"),
                 p => p.to_string(),
             };
-            format!("https://{}/{path}/-/merge_requests/{n}", g.host)
+            format!("https://{gitlab_host}/{path}/-/merge_requests/{n}")
         }
     }
 }
 
-/// Prefixo do jira-cli nas sessões (`{{jira}}` dos templates, spec §8.2 e
-/// §9.2): `JIRA_API_TOKEN="$(<credential_cmd>)" jira`, com
-/// `JIRA_CONFIG_FILE=<arquivo>` antes quando configurado. Leva o comando de
-/// credencial do cadastro, nunca a senha. A lógica está no descritor do Jira
-/// ([`crate::provider::JIRA`]).
-pub fn jira_cli_prefix(j: &JiraConfig) -> String {
-    provider::JIRA
-        .session_prefix(&Connection::from_jira(j))
-        .unwrap_or_default()
-}
-
-/// Prefixo do glab nas sessões (`{{glab}}`):
-/// `GITLAB_HOST=<host> GITLAB_TOKEN="$(<credential_cmd>)" glab`. A lógica
-/// está no descritor do GitLab ([`crate::provider::GITLAB`]).
-pub fn glab_cli_prefix(g: &GitlabConfig) -> String {
-    provider::GITLAB
-        .session_prefix(&Connection::from_gitlab(g))
-        .unwrap_or_default()
-}
-
 /// Como ler uma issue do projeto, para o gestor (spec §13): `gh issue view
-/// <n> -R owner/repo` no GitHub; no Jira, o [`jira_cli_prefix`] com
-/// `issue view <KEY>-<n> --plain`. `<n>` fica para o agente trocar.
-pub fn issue_view_cmd(owner: &str, repo: &str, tracker: &TrackerConfig) -> String {
+/// <n> -R owner/repo` no GitHub; no Jira, o prefixo do jira-cli da conexão
+/// ([`ResolvedConnections::jira_prefix`]) com `issue view <KEY>-<n>
+/// --plain`. `<n>` fica para o agente trocar.
+pub fn issue_view_cmd(
+    owner: &str,
+    repo: &str,
+    tracker: &TrackerConfig,
+    conns: &ResolvedConnections,
+) -> String {
     match tracker {
         TrackerConfig::Github(_) => format!("gh issue view <n> -R {owner}/{repo}"),
         TrackerConfig::Jira(j) => format!(
             "{} issue view {}-<n> --plain",
-            jira_cli_prefix(j),
+            conns.jira_prefix(),
             j.project_key
         ),
     }
@@ -711,7 +698,6 @@ mod tests {
 
     fn jira() -> TrackerConfig {
         TrackerConfig::Jira(JiraConfig {
-            url: "https://jira.example.com/".into(),
             project_key: "PROJ".into(),
             epic_link_field: "customfield_10601".into(),
             type_map: [("Épico".to_string(), JiraTypeRole::Epic)].into(),
@@ -722,7 +708,6 @@ mod tests {
     #[test]
     fn mudanca_na_forja_pr_ou_mr() {
         let gl = ForgeConfig::Gitlab(GitlabConfig {
-            host: "gitlab.example.com".into(),
             path: "grupo/projeto/app".into(),
             ..Default::default()
         });
@@ -730,11 +715,11 @@ mod tests {
         assert_eq!(change_ref(ForgeKind::Gitlab, 30), "MR !30");
         assert_eq!(ForgeKind::Gitlab.label(), "GitLab");
         assert_eq!(
-            change_url("o", "r", &ForgeConfig::Github(Default::default()), 30),
+            change_url("o", "r", &ForgeConfig::Github(Default::default()), "", 30),
             "https://github.com/o/r/pull/30"
         );
         assert_eq!(
-            change_url("grupo/projeto", "app", &gl, 7),
+            change_url("grupo/projeto", "app", &gl, "gitlab.example.com", 7),
             "https://gitlab.example.com/grupo/projeto/app/-/merge_requests/7"
         );
     }
@@ -746,7 +731,7 @@ mod tests {
         assert_eq!(item_short(&t, 12), "#12");
         assert_eq!(item_key(&t, 12), "12");
         assert_eq!(
-            item_url(&t, 12),
+            item_url(&t, "", 12),
             "https://github.com/deep-ion-ai/ctower-agents/issues/12"
         );
     }
@@ -759,7 +744,7 @@ mod tests {
         assert_eq!(item_short(&t, 5450), "PROJ-5450");
         assert_eq!(item_key(&t, 5450), "PROJ-5450");
         assert_eq!(
-            item_url(&t, 5450),
+            item_url(&t, "https://jira.example.com/", 5450),
             "https://jira.example.com/browse/PROJ-5450"
         );
     }
@@ -821,9 +806,8 @@ mod tests {
         assert_eq!(volta, jira());
         // Campos ausentes ficam vazios.
         let f: ForgeConfig =
-            serde_json::from_value(json!({ "kind": "gitlab", "host": "gitlab.example.com" }))
-                .unwrap();
-        assert_eq!(f.gitlab().unwrap().host, "gitlab.example.com");
+            serde_json::from_value(json!({ "kind": "gitlab", "connection": 8 })).unwrap();
+        assert_eq!(f.gitlab().unwrap().connection, Some(8));
         assert_eq!(f.gitlab().unwrap().path, "");
     }
 
@@ -939,8 +923,8 @@ mod tests {
         assert_eq!(TrackerConfig::from_columns(k, &j).unwrap(), cfg);
 
         let forge = ForgeConfig::Gitlab(GitlabConfig {
-            host: "gitlab.example.com".into(),
             path: "grupo/projeto/app".into(),
+            connection: Some(8),
             ..Default::default()
         });
         assert_eq!(
@@ -989,51 +973,30 @@ mod tests {
         assert_eq!(grande.issue_limit(), Some(MAX_ISSUES_CEILING as usize));
     }
 
+    /// Projeto gravado no hub no formato da #237 (sem os campos antigos,
+    /// com a conexão) carrega; um JSON ainda com eles (cache de um ambiente
+    /// anterior) também, e os campos não voltam ao gravar (#277).
     #[test]
-    fn prefixos_do_jira_e_do_glab_levam_o_comando_nunca_a_senha() {
-        let j = JiraConfig {
-            project_key: "PROJ".into(),
-            credential_cmd: "pass show jira | head -1".into(),
-            ..Default::default()
-        };
-        assert_eq!(
-            jira_cli_prefix(&j),
-            r#"JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#
-        );
-        let com_config = JiraConfig {
-            config_file: "/Users/a/.config/.jira/jira.yml".into(),
-            ..j.clone()
-        };
-        assert_eq!(
-            jira_cli_prefix(&com_config),
-            r#"JIRA_CONFIG_FILE=/Users/a/.config/.jira/jira.yml JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#
-        );
-        let espaco = JiraConfig {
-            config_file: "/tmp/meu jira.yml".into(),
-            credential_cmd: String::new(),
-            ..j.clone()
-        };
-        assert_eq!(
-            jira_cli_prefix(&espaco),
-            "JIRA_CONFIG_FILE='/tmp/meu jira.yml' jira"
-        );
-        let g = GitlabConfig {
-            host: "gitlab.example.com".into(),
-            path: "grupo/projeto/app".into(),
-            credential_cmd: "pass show gitlab | head -1".into(),
-            ..Default::default()
-        };
-        assert_eq!(
-            glab_cli_prefix(&g),
-            r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab"#
-        );
-        assert_eq!(
-            issue_view_cmd("grupo/projeto", "app", &TrackerConfig::Jira(j)),
-            r#"JIRA_API_TOKEN="$(pass show jira | head -1)" jira issue view PROJ-<n> --plain"#
-        );
-        assert_eq!(
-            issue_view_cmd("o", "r", &TrackerConfig::Github(Default::default())),
-            "gh issue view <n> -R o/r"
-        );
+    fn cadastro_com_conexao_carrega_e_campos_antigos_sao_ignorados() {
+        let atual = r#"{"project_key":"ACME","jql":"labels = web","epic_link_field":"",
+            "epic_name_field":"","type_map":{},"connection":3}"#;
+        let t = TrackerConfig::from_columns("jira", atual).unwrap();
+        assert_eq!(t.jira().unwrap().connection, Some(3));
+        let antigo = r#"{"url":"https://jira.example.com","project_key":"ACME",
+            "credential_cmd":"pass show jira","config_file":"/tmp/jira.yml","connection":3}"#;
+        let t = TrackerConfig::from_columns("jira", antigo).unwrap();
+        assert_eq!(t.jira().unwrap().project_key, "ACME");
+        let v: serde_json::Value = serde_json::from_str(&t.config_json()).unwrap();
+        for k in ["url", "credential_cmd", "config_file"] {
+            assert!(v.get(k).is_none(), "{v}");
+        }
+        let f = ForgeConfig::from_columns(
+            "gitlab",
+            r#"{"host":"gitlab.example.com","path":"acme/acme-web","clone_url":"",
+                "credential_cmd":"pass show gl","connection":4}"#,
+        )
+        .unwrap();
+        assert_eq!(f.gitlab().unwrap().connection, Some(4));
+        assert!(!f.config_json().contains("host"), "{}", f.config_json());
     }
 }

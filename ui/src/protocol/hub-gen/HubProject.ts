@@ -4,6 +4,7 @@ import type { AutonomyConfig } from "./AutonomyConfig";
 import type { AutonomyReport } from "./AutonomyReport";
 import type { DocsConfig } from "./DocsConfig";
 import type { ForgeConfig } from "./ForgeConfig";
+import type { ProjectEndpoints } from "./ProjectEndpoints";
 import type { ReleaseConfig } from "./ReleaseConfig";
 import type { SessionTemplates } from "./SessionTemplates";
 import type { TrackerConfig } from "./TrackerConfig";
@@ -74,4 +75,10 @@ approval: ApprovalConfig,
 /**
  * Configuração de release (#204). Ausente num hub anterior: desligada.
  */
-release: ReleaseConfig, };
+release: ReleaseConfig, 
+/**
+ * Endereços e prefixos das conexões do projeto (#277), derivados pelo
+ * hub nas respostas à UI (`Hub::with_endpoints`). Não é cadastro:
+ * `None` no que sai do banco.
+ */
+endpoints?: ProjectEndpoints, };

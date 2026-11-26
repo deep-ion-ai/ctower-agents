@@ -46,6 +46,7 @@ export function renderPrompt(text: string, info: TabInfo, envName: string): stri
     base: project.base_branch,
     tracker: project.tracker,
     forge: project.forge,
+    endpoints: project.endpoints,
   });
 }
 

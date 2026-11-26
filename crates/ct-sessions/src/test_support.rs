@@ -318,6 +318,14 @@ impl TestEnv {
             .unwrap();
     }
 
+    /// As conexões do hub em uso no ambiente (#277), como o pull as deixa
+    /// (`SharedCredentials::set_connections`), sem sobrescrita.
+    pub fn connect(&self, conns: Vec<ct_core::provider::Connection>) {
+        self.cfg
+            .credentials
+            .set_connections(conns, Default::default());
+    }
+
     /// Grava no espelho as issues `(número, épico pai, tem sub-issues)`.
     pub fn mirror_issues(&self, issues: &[(i64, Option<i64>, bool)]) {
         let issues = issues
@@ -465,6 +473,25 @@ fn build(
 pub fn mount_docs_root(root: &Path) {
     std::fs::create_dir_all(root).unwrap();
     std::fs::write(root.join(ct_core::docs::DOCS_ROOT_MARKER), "x").unwrap();
+}
+
+/// Conexão do hub para os testes (#277), com o nome `<tipo>-acme`.
+pub fn connection(
+    id: i64,
+    kind: ct_core::provider::ProviderKind,
+    endpoint: &str,
+    credential: ct_core::provider::CredentialSource,
+) -> ct_core::provider::Connection {
+    ct_core::provider::Connection {
+        id,
+        name: format!("{kind}-acme"),
+        kind,
+        endpoint: endpoint.into(),
+        credential,
+        options: serde_json::json!({}),
+        created_at: 0,
+        updated_at: 0,
+    }
 }
 
 pub fn git_in(dir: &Path, args: &[&str]) {

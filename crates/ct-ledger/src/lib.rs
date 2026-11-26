@@ -43,8 +43,8 @@ pub use github::{
     GH_ISSUE_GONE_REASON,
 };
 pub use hub_config::{
-    materialize_connections, ConfigApplied, ConfigDone, ConfigProject, ConfigRemoved,
-    ConfigResponse, DoneResponse,
+    connection_warnings, ConfigApplied, ConfigDone, ConfigProject, ConfigRemoved, ConfigResponse,
+    DoneResponse,
 };
 pub use pr_review::{
     is_external_association, ChangesRequest, PrFeedback, PrReviews, ReviewTarget, ReviewThread,

@@ -5,7 +5,7 @@
 //
 // O projeto é opcional em tudo: sem ele (tela que não achou o projeto, hub
 // anterior à #347) vale o GitHub, como antes da #352.
-import type { ForgeConfig, TrackerConfig } from "../protocol/gen";
+import type { ForgeConfig, ProjectEndpoints, TrackerConfig } from "../protocol/gen";
 
 // Rótulo de um work item. O #0 é o das sessões do projeto (sem issue).
 export const PROJECT_ITEM = 0;
@@ -15,10 +15,11 @@ export const RELEASE_ITEM = -1;
 /**
  * O que as referências precisam do projeto: `owner`/`repo` da forja (no
  * GitLab, `owner` é o caminho sem o último segmento), rastreador e forja.
- * `Project` (ambiente) e `HubProject` (hub) servem os dois. Com conexão, a
- * URL do Jira e o host do GitLab vêm dela: o ambiente os preenche ao receber
- * a configuração, e o hub entrega a visão efetiva em `hub.projects.list`,
- * `hub.tree.get` e `hub.dashboard.get` (#264).
+ * `Project` (ambiente) e `HubProject` (hub) servem os dois. A URL do Jira e
+ * o host do GitLab são das conexões: o cadastro só as referencia, e quem
+ * responde manda os endereços derivados em `endpoints` (#277; o ambiente em
+ * `projects.list` e `dashboard.get`, o hub em `hub.projects.list`,
+ * `hub.tree.get` e `hub.dashboard.get`).
  */
 export interface ProviderProject {
   gh_owner: string;
@@ -26,6 +27,8 @@ export interface ProviderProject {
   /** Ausente em hub/ambiente anterior à #347: GitHub. */
   tracker?: TrackerConfig;
   forge?: ForgeConfig;
+  /** Endereços e prefixos das conexões (#277); ausente fora das respostas que os derivam. */
+  endpoints?: ProjectEndpoints | null;
 }
 
 type MaybeProject = ProviderProject | null | undefined;
@@ -46,6 +49,12 @@ export const isJiraProject = (p: MaybeProject) => jiraOf(p) !== null;
 export const isGitlabProject = (p: MaybeProject) => gitlabOf(p) !== null;
 
 const jiraKey = (j: Jira, n: number) => `${j.project_key}-${n}`;
+
+/** URL da conexão do Jira do projeto, sem barra final (`endpoints`, #277). */
+const jiraUrl = (p: MaybeProject) => (p?.endpoints?.jira_url ?? "").replace(/\/+$/, "");
+
+/** Host da conexão do GitLab do projeto (`endpoints`, #277). */
+const gitlabHost = (p: MaybeProject) => p?.endpoints?.gitlab_host ?? "";
 
 /** Referência completa: `owner/repo#12` no GitHub, `PROJ-5450` no Jira (`item_ref`). */
 export function itemFullRef(p: MaybeProject, n: number): string {
@@ -69,7 +78,7 @@ export function itemKey(p: MaybeProject, n: number): string {
 /** Link da issue: `https://github.com/owner/repo/issues/12` ou `<jira>/browse/PROJ-5450` (`item_url`). */
 export function itemUrl(p: ProviderProject, n: number): string {
   const j = jiraOf(p);
-  if (j) return `${j.url.replace(/\/+$/, "")}/browse/${jiraKey(j, n)}`;
+  if (j) return `${jiraUrl(p)}/browse/${jiraKey(j, n)}`;
   return `https://github.com/${p.gh_owner}/${p.gh_repo}/issues/${n}`;
 }
 
@@ -121,7 +130,7 @@ function gitlabPath(p: ProviderProject, g: Gitlab): string {
  */
 export function changeUrl(p: ProviderProject, n: number): string {
   const g = gitlabOf(p);
-  if (g) return `https://${g.host}/${gitlabPath(p, g)}/-/merge_requests/${n}`;
+  if (g) return `https://${gitlabHost(p)}/${gitlabPath(p, g)}/-/merge_requests/${n}`;
   return `https://github.com/${p.gh_owner}/${p.gh_repo}/pull/${n}`;
 }
 
@@ -133,7 +142,7 @@ export function changeNewUrl(p: ProviderProject, branch: string, base: string): 
   const g = gitlabOf(p);
   if (g) {
     const q = `merge_request[source_branch]=${encodeURIComponent(branch)}&merge_request[target_branch]=${encodeURIComponent(base)}`;
-    return `https://${g.host}/${gitlabPath(p, g)}/-/merge_requests/new?${q}`;
+    return `https://${gitlabHost(p)}/${gitlabPath(p, g)}/-/merge_requests/new?${q}`;
   }
   return `https://github.com/${p.gh_owner}/${p.gh_repo}/compare/${base}...${encodeURIComponent(branch)}?expand=1`;
 }
@@ -141,13 +150,13 @@ export function changeNewUrl(p: ProviderProject, branch: string, base: string): 
 /** Página do repositório na forja: `https://github.com/owner/repo` ou `https://<host>/<path>`. */
 export function repoUrl(p: ProviderProject): string {
   const g = gitlabOf(p);
-  return g ? `https://${g.host}/${gitlabPath(p, g)}` : `https://github.com/${p.gh_owner}/${p.gh_repo}`;
+  return g ? `https://${gitlabHost(p)}/${gitlabPath(p, g)}` : `https://github.com/${p.gh_owner}/${p.gh_repo}`;
 }
 
 /** Página do projeto no Jira (`<jira>/browse/PROJ`); `null` fora do Jira. */
 export function jiraProjectUrl(p: MaybeProject): string | null {
   const j = jiraOf(p);
-  return j ? `${j.url.replace(/\/+$/, "")}/browse/${j.project_key}` : null;
+  return j ? `${jiraUrl(p)}/browse/${j.project_key}` : null;
 }
 
 /** Work item sem issue: a sessão do projeto (#0) ou a de release (#-1, #204). Roda no clone principal. */

@@ -13,6 +13,7 @@ import {
   itemShort,
   itemTitle,
   itemUrl,
+  jiraProjectUrl,
   numberQuery,
   repoUrl,
   trackerLabel,
@@ -61,7 +62,7 @@ test("Jira + GitLab: chave, /browse/, MR e !iid", () => {
   expect(itemFullRef(p, 5450)).toBe("PROJ-5450");
   expect(itemShort(p, 5450)).toBe("PROJ-5450");
   expect(itemKey(p, 5450)).toBe("PROJ-5450");
-  // A barra final da URL do cadastro some, como no `item_url`.
+  // A URL e o host vêm das conexões (`endpoints`, #277).
   expect(itemUrl(p, 5450)).toBe("https://jira.example.com/browse/PROJ-5450");
   expect(itemRef(5450, p)).toBe("PROJ-5450");
   expect(itemTitle({ gh_number: 5450, title: "portar" }, p)).toBe("PROJ-5450 portar");
@@ -78,8 +79,20 @@ test("Jira + GitLab: chave, /browse/, MR e !iid", () => {
 });
 
 test("GitLab sem caminho no cadastro usa owner/repo", () => {
-  const p = jiraProject({ forge: { kind: "gitlab", host: "gl.x", path: "/", clone_url: "", credential_cmd: "" } });
+  const p = jiraProject({
+    forge: { kind: "gitlab", path: "/", clone_url: "", connection: 8 },
+    endpoints: { jira_url: "https://jira.example.com", gitlab_host: "gl.x", jira_cli: "", glab_cli: "" },
+  });
   expect(changeUrl(p, 2)).toBe("https://gl.x/grupo/projeto/app/-/merge_requests/2");
+});
+
+test("barra final da URL da conexão some, como no `item_url` (#277)", () => {
+  const p = jiraProject({
+    endpoints: { jira_url: "https://jira.example.com/", gitlab_host: "gitlab.example.com", jira_cli: "", glab_cli: "" },
+  });
+  expect(itemUrl(p, 5450)).toBe("https://jira.example.com/browse/PROJ-5450");
+  expect(jiraProjectUrl(p)).toBe("https://jira.example.com/browse/PROJ");
+  expect(jiraProjectUrl(project())).toBeNull();
 });
 
 test("busca por número: #43, 43 e a chave do Jira", () => {

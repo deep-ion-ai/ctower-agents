@@ -107,7 +107,7 @@ export function RepositoryCard({
               </div>
               <div>
                 <dt>GitLab</dt>
-                <dd className="mono">{gitlab ? gitlab.clone_url || `${gitlab.host}/${gitlab.path}` : "—"}</dd>
+                <dd className="mono">{gitlab ? gitlab.clone_url || gitlab.path : "—"}</dd>
               </div>
               <div>
                 <dt>Conexão do GitLab</dt>

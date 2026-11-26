@@ -482,16 +482,21 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
     }
     let hub = st.hub.clone();
     let (o, r) = (owner.clone(), repo.clone());
-    // Visão efetiva (#264): o link de reserva sai com a URL da conexão.
-    let project = tokio::task::spawn_blocking(move || {
+    // O link de reserva sai com a URL da conexão do Jira (#277).
+    let (project, jira_url) = tokio::task::spawn_blocking(move || -> Result<_, String> {
         let h = hub.lock();
-        h.find_project(&o, &r)?
-            .map(|p| h.effective_project(p))
-            .transpose()
+        let Some(p) = h.find_project(&o, &r).map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        let url = h
+            .project_connections(&p)
+            .map_err(|e| e.to_string())?
+            .jira_url();
+        Ok(Some((p, url)))
     })
     .await
     .map_err(|e| (-32603, e.to_string()))?
-    .map_err(|e| (-32000, e.to_string()))?
+    .map_err(|e| (-32000, e))?
     .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
     let markdown = |title: &Value, body: String, url: String| {
         json!(HubWorkItemBody {
@@ -523,7 +528,7 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 .get("html_url")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), number));
+                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), &jira_url, number));
             let body = v
                 .get("body")
                 .and_then(Value::as_str)
@@ -546,7 +551,7 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 .get("url")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), number));
+                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), &jira_url, number));
             Ok(markdown(&v["title"], body, url))
         }
     }
@@ -574,17 +579,11 @@ async fn tracker_add_issue(st: &HubState, p: Value) -> RpcResult {
     };
     let hub = st.hub.clone();
     let (o, r) = (owner.clone(), repo.clone());
-    // Visão efetiva (#264): o link de reserva sai com a URL da conexão.
-    let project = tokio::task::spawn_blocking(move || {
-        let h = hub.lock();
-        h.find_project(&o, &r)?
-            .map(|p| h.effective_project(p))
-            .transpose()
-    })
-    .await
-    .map_err(|e| (-32603, e.to_string()))?
-    .map_err(|e| (-32000, e.to_string()))?
-    .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
+    let project = tokio::task::spawn_blocking(move || hub.lock().find_project(&o, &r))
+        .await
+        .map_err(|e| (-32603, e.to_string()))?
+        .map_err(|e| (-32000, e.to_string()))?
+        .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
     if project.tracker.kind() != ct_core::TrackerKind::Jira {
         return Err((
             -32000,
@@ -1470,10 +1469,11 @@ fn protected_param(p: &Value) -> Result<Option<Vec<String>>, (i64, String)> {
     }
 }
 
-/// `tracker` e `forge` do cadastro (#348), com as normalizações: URL do Jira
-/// sem barra final, chave em maiúsculas, mapa de tipos padrão quando vazio,
-/// e o repositório do GitLab pela URL de clone (`clone_url`, ou `url` do
-/// cadastro) ou por `host` + `path`.
+/// `tracker` e `forge` do cadastro (#348), com as normalizações: chave em
+/// maiúsculas, mapa de tipos padrão quando vazio e o repositório do GitLab
+/// pela URL de clone (`clone_url`, ou `url` do cadastro). Endereço e
+/// credencial do Jira e do GitLab são da conexão (#277): o cadastro só a
+/// referencia.
 fn provider_param(
     p: &Value,
 ) -> Result<(ct_core::TrackerConfig, ct_core::ForgeConfig), (i64, String)> {
@@ -1490,11 +1490,8 @@ fn provider_param(
     };
     let tracker = match tracker {
         TrackerConfig::Jira(mut j) => {
-            j.url = j.url.trim().trim_end_matches('/').to_string();
             j.project_key = j.project_key.trim().to_ascii_uppercase();
             j.jql = j.jql.trim().to_string();
-            j.credential_cmd = j.credential_cmd.trim().to_string();
-            j.config_file = j.config_file.trim().to_string();
             j.epic_link_field = j.epic_link_field.trim().to_string();
             j.epic_name_field = j.epic_name_field.trim().to_string();
             if j.type_map.is_empty() {
@@ -1511,39 +1508,17 @@ fn provider_param(
                 .or_else(|| p.get("url").and_then(Value::as_str).map(str::trim))
                 .filter(|u| !u.is_empty())
                 .map(String::from);
-            match url {
-                Some(url) => {
-                    let r = ct_core::repo_from_url(&url)
-                        .ok_or_else(|| invalid(format!("URL do GitLab não reconhecida: {url}")))?;
-                    let given =
-                        |a: &str, b: &str| a.trim().is_empty() || a.trim().eq_ignore_ascii_case(b);
-                    if !given(&g.host, &r.host) || !given(g.path.trim_matches('/'), &r.path) {
-                        return Err(invalid(format!(
-                            "host e caminho do GitLab ({}/{}) não batem com a URL {url}",
-                            g.host, g.path
-                        )));
-                    }
-                    g.host = r.host;
-                    g.path = r.path;
-                    g.clone_url = url;
-                }
-                None => {
-                    let host = g.host.trim().to_ascii_lowercase();
-                    let path = g.path.trim().trim_matches('/').trim_end_matches(".git");
-                    let r = ct_core::repo_from_url(&format!("https://{host}/{path}")).ok_or_else(
-                        || {
-                            invalid(format!(
-                                "informe a URL de clone do GitLab, ou host e caminho válidos \
-                                 (host {host:?}, caminho {path:?})"
-                            ))
-                        },
-                    )?;
-                    g.clone_url = format!("https://{}/{}.git", r.host, r.path);
-                    g.host = r.host;
-                    g.path = r.path;
-                }
+            let url = url.ok_or_else(|| invalid("informe a URL de clone do GitLab"))?;
+            let r = ct_core::repo_from_url(&url)
+                .ok_or_else(|| invalid(format!("URL do GitLab não reconhecida: {url}")))?;
+            let path = g.path.trim().trim_matches('/');
+            if !path.is_empty() && !path.eq_ignore_ascii_case(&r.path) {
+                return Err(invalid(format!(
+                    "caminho do GitLab ({path}) não bate com a URL {url}"
+                )));
             }
-            g.credential_cmd = g.credential_cmd.trim().to_string();
+            g.path = r.path;
+            g.clone_url = url;
             ForgeConfig::Gitlab(g)
         }
         f => f,
@@ -3451,24 +3426,54 @@ pub(crate) mod tests {
             .contains("PRs abertos"));
     }
 
+    /// Conexões `jira-acme` (`https://jira.example.com`) e `gitlab-acme`
+    /// (`gitlab.example.com`) no hub, com comando de credencial (#277).
+    /// Devolve os `id`.
+    fn conexoes_acme(st: &HubState) -> (i64, i64) {
+        let conn = |name: &str, kind: &str, endpoint: &str, cmd: &str| {
+            let p = json!({ "name": name, "kind": kind, "endpoint": endpoint,
+                            "credential": { "kind": "command", "cmd": cmd } });
+            st.hub
+                .lock()
+                .add_connection(&serde_json::from_value(p).unwrap())
+                .unwrap()
+                .id
+        };
+        (
+            conn(
+                "jira-acme",
+                "jira",
+                "https://jira.example.com",
+                "pass show jira | head -1",
+            ),
+            conn(
+                "gitlab-acme",
+                "gitlab",
+                "gitlab.example.com",
+                "pass show gitlab | head -1",
+            ),
+        )
+    }
+
     /// Cadastro Jira + GitLab (#348): sem a integração com o GitHub (que o
     /// projeto GitHub exige), sem secret do hub, com as recusas de
     /// combinação e de padrão de branch; e o ambiente de sync pelo
-    /// `hub.projects.update`.
+    /// `hub.projects.update`. URL, host e credencial são das conexões
+    /// (#277): o cadastro só as referencia.
     #[tokio::test(flavor = "multi_thread")]
     async fn cadastro_jira_gitlab_sem_github_e_ambiente_de_sync() {
         let st = hub_com_dados();
         assert!(st.github.is_none());
+        let (jira_id, gitlab_id) = conexoes_acme(&st);
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let jira = json!({
-            "kind": "jira", "url": "https://jira.example.com/", "project_key": "proj",
-            "jql": "", "active_sprint_only": true,
-            "credential_cmd": "pass show jira | head -1"
+            "kind": "jira", "project_key": "proj", "jql": "", "active_sprint_only": true,
+            "connection": jira_id
         });
         let gitlab = json!({
             "kind": "gitlab", "clone_url": "git@gitlab.example.com:grupo/projeto/app.git",
-            "credential_cmd": "pass show gitlab | head -1"
+            "connection": gitlab_id
         });
 
         // O projeto GitHub ainda precisa do token do hub.
@@ -3514,13 +3519,37 @@ pub(crate) mod tests {
         let v = ui
             .call(
                 "hub.projects.add",
-                json!({ "tracker": jira, "forge": { "kind": "gitlab", "credential_cmd": "x" } }),
+                json!({ "tracker": jira, "forge": { "kind": "gitlab", "connection": gitlab_id } }),
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("URL de clone"),
+            "{v}"
+        );
+        // Sem conexão do Jira: recusado (#277).
+        let sem_conexao =
+            json!({ "kind": "jira", "project_key": "PROJ", "active_sprint_only": true });
+        let v = ui
+            .call(
+                "hub.projects.add",
+                json!({ "tracker": sem_conexao, "forge": gitlab }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("escolha a conexão do Jira"),
+            "{v}"
+        );
 
-        // Cadastro: normaliza URL e chave, preenche o mapa de tipos, deriva
-        // host e caminho da URL de clone.
+        // Cadastro: normaliza a chave, preenche o mapa de tipos, deriva o
+        // caminho da URL de clone.
         let v = ui
             .call(
                 "hub.projects.add",
@@ -3535,17 +3564,21 @@ pub(crate) mod tests {
             (Some("grupo/projeto"), Some("app")),
             "{v}"
         );
-        assert_eq!(p["tracker"]["url"], "https://jira.example.com");
+        assert_eq!(p["tracker"]["connection"], jira_id);
         assert_eq!(p["tracker"]["project_key"], "PROJ");
         assert_eq!(p["tracker"]["type_map"]["Épico"], "epic");
-        assert_eq!(p["forge"]["host"], "gitlab.example.com");
+        assert_eq!(p["forge"]["connection"], gitlab_id);
         assert_eq!(p["forge"]["path"], "grupo/projeto/app");
         assert_eq!(p["branch_pattern"], "{key}");
         assert_eq!(p["attribution"], false);
         assert_eq!(p["sync_env_id"], Value::Null);
-        // Credenciais nunca viram secret do hub: só o comando, no cadastro.
-        assert_eq!(p["tracker"]["credential_cmd"], "pass show jira | head -1");
-        assert_eq!(p["forge"]["credential_cmd"], "pass show gitlab | head -1");
+        // Endereço e credencial ficam na conexão, não no cadastro.
+        for k in ["url", "credential_cmd", "config_file"] {
+            assert!(p["tracker"].get(k).is_none(), "{k}: {v}");
+        }
+        for k in ["host", "credential_cmd"] {
+            assert!(p["forge"].get(k).is_none(), "{k}: {v}");
+        }
         let v = ui
             .call(
                 "hub.projects.add",
@@ -3613,6 +3646,16 @@ pub(crate) mod tests {
             .find(|p| p["project"]["gh_repo"] == "app")
             .unwrap();
         assert_eq!(jira["tracker_status"], Value::Null);
+        // A UI recebe os endereços e os prefixos das conexões (#277).
+        assert_eq!(
+            jira["project"]["endpoints"],
+            json!({
+                "jira_url": "https://jira.example.com",
+                "gitlab_host": "gitlab.example.com",
+                "jira_cli": r#"JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#,
+                "glab_cli": r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab"#,
+            })
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -5287,15 +5330,15 @@ pub(crate) mod tests {
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let mut web = web_ui(&url, &cookie).await;
+        let (jira, gitlab) = conexoes_acme(&st);
         let v = ui
             .call(
                 "hub.projects.add",
                 json!({
-                    "tracker": { "kind": "jira", "url": "https://jira.x", "project_key": "PROJ",
-                                 "jql": "", "active_sprint_only": true,
-                                 "credential_cmd": "pass show jira" },
-                    "forge": { "kind": "gitlab", "clone_url": "git@git.x:acme/app.git",
-                               "credential_cmd": "pass show gitlab" }
+                    "tracker": { "kind": "jira", "project_key": "PROJ", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
+                    "forge": { "kind": "gitlab", "clone_url": "git@gitlab.example.com:acme/app.git",
+                               "connection": gitlab }
                 }),
             )
             .await;
@@ -5352,37 +5395,16 @@ pub(crate) mod tests {
         let (st, _cookie) = hub_web();
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
-        let conn = |name: &str, kind: &str, endpoint: &str, cmd: &str| {
-            let p = json!({ "name": name, "kind": kind, "endpoint": endpoint,
-                            "credential": { "kind": "command", "cmd": cmd } });
-            st.hub
-                .lock()
-                .add_connection(&serde_json::from_value(p).unwrap())
-                .unwrap()
-                .id
-        };
-        let jira = conn(
-            "jira-acme",
-            "jira",
-            "https://jira.example.com",
-            "pass show jira",
-        );
-        let gitlab = conn(
-            "gitlab-acme",
-            "gitlab",
-            "gitlab.example.com",
-            "pass show gitlab",
-        );
+        let (jira, gitlab) = conexoes_acme(&st);
         let v = ui
             .call(
                 "hub.projects.add",
                 json!({
-                    "tracker": { "kind": "jira", "url": "", "project_key": "ACME", "jql": "",
-                                 "active_sprint_only": true, "credential_cmd": "",
-                                 "connection": jira },
+                    "tracker": { "kind": "jira", "project_key": "ACME", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
                     "forge": { "kind": "gitlab",
                                "clone_url": "https://gitlab.example.com/acme/app.git",
-                               "credential_cmd": "", "connection": gitlab }
+                               "connection": gitlab }
                 }),
             )
             .await;
@@ -5417,15 +5439,15 @@ pub(crate) mod tests {
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let mut web = web_ui(&url, &cookie).await;
+        let (jira, gitlab) = conexoes_acme(&st);
         let v = ui
             .call(
                 "hub.projects.add",
                 json!({
-                    "tracker": { "kind": "jira", "url": "https://jira.example.com",
-                                 "project_key": "ACME", "jql": "", "active_sprint_only": true,
-                                 "credential_cmd": "pass show jira" },
-                    "forge": { "kind": "gitlab", "clone_url": "git@git.example.com:acme/app.git",
-                               "credential_cmd": "pass show gitlab" }
+                    "tracker": { "kind": "jira", "project_key": "ACME", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
+                    "forge": { "kind": "gitlab", "clone_url": "git@gitlab.example.com:acme/app.git",
+                               "connection": gitlab }
                 }),
             )
             .await;

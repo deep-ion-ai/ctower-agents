@@ -38,10 +38,15 @@ test("cadastro sem conexão não vai ao hub: a URL e a credencial vêm da conex�
   expect(providerParams({ ...EMPTY_JIRA, jira_conn: "7" })).toEqual({
     error: "escolha a conexão do GitLab (Hub › Conexões)",
   });
-  expect(providerParams(CONNECTED)).toMatchObject({
-    tracker: { url: "", credential_cmd: "", connection: 7 },
-    forge: { kind: "gitlab", credential_cmd: "", connection: 8 },
+  const params = providerParams(CONNECTED);
+  expect(params).toMatchObject({
+    tracker: { kind: "jira", connection: 7 },
+    forge: { kind: "gitlab", connection: 8 },
   });
+  // O projeto só referencia a conexão (#277): sem URL, host nem comando.
+  const { tracker, forge } = params as { tracker: Record<string, unknown>; forge: Record<string, unknown> };
+  for (const k of ["url", "credential_cmd", "config_file"]) expect(tracker).not.toHaveProperty(k);
+  for (const k of ["host", "credential_cmd"]) expect(forge).not.toHaveProperty(k);
 });
 
 test("prévia do padrão de branch como o daemon gera", () => {

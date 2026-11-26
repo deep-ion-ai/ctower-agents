@@ -46,9 +46,14 @@ test("variáveis dos templates na sessão de issue, do Jira e do gestor", () => 
     "issue #32 32 feat/32-x develop deep-ion-ai/ctower-agents terminal {{nada}}",
   );
   const jira = project({
-    tracker: { kind: "jira", url: "https://jira.x", project_key: "BN", credential_cmd: "", config_file: "" },
+    tracker: { kind: "jira", project_key: "BN", connection: 7 },
+    endpoints: { jira_url: "https://jira.example.com", gitlab_host: "", jira_cli: "JIRA_API_TOKEN=\"$(pass show bn)\" jira", glab_cli: "" },
   } as never);
   expect(renderPrompt("{{key}}", { wi, project: jira }, "WSL")).toBe("BN-32");
+  // URL e prefixo vêm das conexões, como o ambiente os manda (#277).
+  expect(renderPrompt("{{jira_url}} {{jira}}", { wi, project: jira }, "WSL")).toBe(
+    'https://jira.example.com JIRA_API_TOKEN="$(pass show bn)" jira',
+  );
   expect(renderPrompt("{{env}} {{branch}}", { gestor: true, scope: { kind: "health" } }, "Mac mini")).toBe("Mac mini {{branch}}");
   // Sem work item nem gestor: o texto como está.
   expect(renderPrompt("{{number}}", {}, "WSL")).toBe("{{number}}");

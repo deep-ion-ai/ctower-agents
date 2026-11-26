@@ -1,10 +1,9 @@
 //! Comandos de credencial do rastreador e da forja por ambiente (issue
 //! #143): `[credentials."owner/repo"]` no `config.toml` do ambiente.
 //!
-//! O `credential_cmd` do Jira e do GitLab é do cadastro do projeto no hub e
-//! chega igual a todos os ambientes. Caminho de binário, gerenciador de
-//! senhas e sistema operacional mudam de um ambiente para outro, então um
-//! ambiente pode trocar o comando só para si:
+//! Caminho de binário, gerenciador de senhas e sistema operacional mudam de
+//! um ambiente para outro, então um ambiente pode trocar o comando da
+//! credencial só para si:
 //!
 //! ```toml
 //! [credentials."acme/acme-web"]
@@ -12,7 +11,7 @@
 //! forge_cmd = "/usr/bin/pass show acme/gitlab | head -1"
 //! ```
 //!
-//! Campo vazio ou ausente = o comando do projeto. A sobrescrita vale só onde
+//! Campo vazio ou ausente = a fonte da conexão. A sobrescrita vale só onde
 //! o comando roda neste ambiente (sync, leitura de issue, glab, prompt da
 //! sessão): o cadastro do hub não muda e ela nunca sai do ambiente.
 //!
@@ -20,8 +19,13 @@
 //! `[connections."nome"] credential_cmd` ([`ConnectionOverrides`]), que a UI
 //! edita (`env.connections.set`, #276). O `[credentials]` ficou só como
 //! legado: o pull converte o que dá, e o que sobra continua valendo.
+//!
+//! O ambiente lê as conexões do projeto por [`SharedCredentials::resolve`]
+//! (#277): as conexões do último pull com as duas sobrescritas.
 
-use crate::provider::{self, Connection, CredentialSource, ProviderKind};
+use crate::provider::{
+    self, Connection, ConnectionGap, CredentialSource, ProviderKind, ResolvedConnections,
+};
 use crate::{ForgeConfig, GitlabConfig, JiraConfig, TrackerConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -31,9 +35,11 @@ use std::sync::{Arc, RwLock};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CredentialOverride {
-    /// Comando que imprime a senha do rastreador (Jira); vazio = o do projeto.
+    /// Comando que imprime a senha do rastreador (Jira); vazio = a fonte da
+    /// conexão.
     pub tracker_cmd: String,
-    /// Comando que imprime o token da forja (GitLab); vazio = o do projeto.
+    /// Comando que imprime o token da forja (GitLab); vazio = a fonte da
+    /// conexão.
     pub forge_cmd: String,
 }
 
@@ -42,13 +48,6 @@ pub struct CredentialOverride {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CredentialOverrides(pub BTreeMap<String, CredentialOverride>);
-
-/// O que a sobrescrita trocou num projeto.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CredentialApplied {
-    pub tracker: bool,
-    pub forge: bool,
-}
 
 impl CredentialOverrides {
     pub fn is_empty(&self) -> bool {
@@ -62,63 +61,6 @@ impl CredentialOverrides {
             .iter()
             .find(|(k, _)| k.trim().eq_ignore_ascii_case(&key))
             .map(|(_, v)| v)
-    }
-
-    /// Troca, em `tracker` e `forge`, os comandos de credencial pelos deste
-    /// ambiente. Só mexe no Jira e no GitLab (o GitHub usa o `gh` do
-    /// ambiente) e só com o comando preenchido.
-    pub fn apply(
-        &self,
-        owner: &str,
-        repo: &str,
-        tracker: &mut TrackerConfig,
-        forge: &mut ForgeConfig,
-    ) -> CredentialApplied {
-        let mut out = CredentialApplied::default();
-        let Some(o) = self.get(owner, repo) else {
-            return out;
-        };
-        if let (TrackerConfig::Jira(j), cmd) = (tracker, o.tracker_cmd.trim()) {
-            if !cmd.is_empty() {
-                j.credential_cmd = cmd.to_string();
-                out.tracker = true;
-            }
-        }
-        if let (ForgeConfig::Gitlab(g), cmd) = (forge, o.forge_cmd.trim()) {
-            if !cmd.is_empty() {
-                g.credential_cmd = cmd.to_string();
-                out.forge = true;
-            }
-        }
-        out
-    }
-
-    /// Prompt da sessão com os comandos do projeto trocados pelos deste
-    /// ambiente. Os templates levam o comando como `"$(<comando>)"`
-    /// ([`crate::jira_cli_prefix`], [`crate::glab_cli_prefix`]); só essa
-    /// forma é trocada, para não mexer em outro texto do prompt.
-    pub fn rewrite_prompt(
-        &self,
-        owner: &str,
-        repo: &str,
-        tracker: &TrackerConfig,
-        forge: &ForgeConfig,
-        prompt: &str,
-    ) -> String {
-        let (mut t, mut f) = (tracker.clone(), forge.clone());
-        let applied = self.apply(owner, repo, &mut t, &mut f);
-        let mut out = prompt.to_string();
-        if applied.tracker {
-            if let (Some(from), Some(to)) = (tracker.jira(), t.jira()) {
-                out = replace_cmd(&out, &from.credential_cmd, &to.credential_cmd);
-            }
-        }
-        if applied.forge {
-            if let (Some(from), Some(to)) = (forge.gitlab(), f.gitlab()) {
-                out = replace_cmd(&out, &from.credential_cmd, &to.credential_cmd);
-            }
-        }
-        out
     }
 }
 
@@ -203,32 +145,85 @@ impl SharedCredentials {
         provider::github_connection(&conns.hub, connection).map(|c| c.name.clone())
     }
 
-    /// [`CredentialOverrides::apply`] com as sobrescritas de agora.
-    pub fn apply(
+    /// Comando de `[credentials."owner/repo"]` deste ambiente para o lado
+    /// do projeto (o `tracker_cmd` no Jira, o `forge_cmd` no GitLab), se
+    /// houver.
+    fn legacy_cmd(&self, owner: &str, repo: &str, kind: ProviderKind) -> Option<String> {
+        let legacy = self.legacy.read().unwrap_or_else(|e| e.into_inner());
+        let o = legacy.get(owner, repo)?;
+        let cmd = match kind {
+            ProviderKind::Jira => o.tracker_cmd.trim(),
+            ProviderKind::Gitlab => o.forge_cmd.trim(),
+            ProviderKind::Github => "",
+        };
+        (!cmd.is_empty()).then(|| cmd.to_string())
+    }
+
+    /// As conexões do projeto `owner/repo` neste ambiente (#277): as do
+    /// último pull que o rastreador e a forja referenciam, cada uma com a
+    /// fonte efetiva daqui (o `[credentials]` do projeto, depois a
+    /// sobrescrita `[connections."nome"]`, depois a da conexão). Ponto único
+    /// de leitura do endereço, do `config_file` e do prefixo da sessão no
+    /// ambiente ([`provider::resolve_connections`]). Devolve também o que
+    /// faltou.
+    pub fn resolve(
         &self,
         owner: &str,
         repo: &str,
-        tracker: &mut TrackerConfig,
-        forge: &mut ForgeConfig,
-    ) -> CredentialApplied {
-        self.legacy
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .apply(owner, repo, tracker, forge)
+        tracker: &TrackerConfig,
+        forge: &ForgeConfig,
+    ) -> (ResolvedConnections, Vec<ConnectionGap>) {
+        let conns = self.connections.read().unwrap_or_else(|e| e.into_inner());
+        provider::resolve_connections(tracker, forge, &conns.hub, |c| {
+            match self.legacy_cmd(owner, repo, c.kind) {
+                Some(cmd) => CredentialSource::Command { cmd },
+                None => conns.overrides.source(c),
+            }
+        })
     }
 
     /// Fonte do token do Jira do projeto `owner/repo` neste ambiente.
     pub fn jira_source(&self, owner: &str, repo: &str, j: &JiraConfig) -> EnvSource {
-        let legacy = self.snapshot();
-        let cmd = legacy.get(owner, repo).map(|o| o.tracker_cmd.as_str());
-        self.source_of(cmd, ProviderKind::Jira, j.connection, &j.credential_cmd)
+        self.source_of(owner, repo, ProviderKind::Jira, j.connection)
     }
 
     /// Fonte do token do GitLab do projeto `owner/repo` neste ambiente.
     pub fn gitlab_source(&self, owner: &str, repo: &str, g: &GitlabConfig) -> EnvSource {
-        let legacy = self.snapshot();
-        let cmd = legacy.get(owner, repo).map(|o| o.forge_cmd.as_str());
-        self.source_of(cmd, ProviderKind::Gitlab, g.connection, &g.credential_cmd)
+        self.source_of(owner, repo, ProviderKind::Gitlab, g.connection)
+    }
+
+    /// Prompt da sessão com os comandos de credencial da conexão trocados
+    /// pelos deste ambiente. Quem renderiza o template (a UI) pode ter usado
+    /// os prefixos do hub, com a fonte da conexão
+    /// ([`ResolvedConnections::jira_prefix`]); aqui o `$(<comando>)` da
+    /// conexão vira o da fonte efetiva ([`Self::resolve`]). Só essa forma é
+    /// trocada, para não mexer em outro texto do prompt.
+    pub fn rewrite_prompt(
+        &self,
+        owner: &str,
+        repo: &str,
+        tracker: &TrackerConfig,
+        forge: &ForgeConfig,
+        prompt: &str,
+    ) -> String {
+        let (effective, _) = self.resolve(owner, repo, tracker, forge);
+        let (hub, _) = {
+            let conns = self.connections.read().unwrap_or_else(|e| e.into_inner());
+            provider::resolve_connections(tracker, forge, &conns.hub, |c| c.credential.clone())
+        };
+        let mut out = prompt.to_string();
+        for (from, to) in [
+            (&hub.jira, &effective.jira),
+            (&hub.gitlab, &effective.gitlab),
+        ] {
+            let cmd = |c: &Option<Connection>| {
+                c.as_ref().and_then(|c| provider::source_cmd(&c.credential))
+            };
+            if let (Some(from), Some(to)) = (cmd(from), cmd(to)) {
+                out = replace_cmd(&out, &from, &to);
+            }
+        }
+        out
     }
 
     /// Fonte do token do GitHub de um projeto neste ambiente (#275): a da
@@ -249,19 +244,19 @@ impl SharedCredentials {
 
     /// Ordem: o comando de `[credentials."owner/repo"]` (por projeto, o que
     /// sobrou da conversão, #267); a conexão referenciada, com a sobrescrita
-    /// `[connections."nome"]` ([`ConnectionOverrides::source`]); e, sem
-    /// conexão (cadastro antigo) ou com ela ausente do pull, o comando do
-    /// cadastro do projeto.
+    /// `[connections."nome"]` ([`ConnectionOverrides::source`]). Sem conexão
+    /// (cadastro antigo) ou com ela ausente do pull, nenhuma (`None`): o
+    /// resolvedor recusa, e o erro diz o que falta.
     fn source_of(
         &self,
-        legacy_cmd: Option<&str>,
+        owner: &str,
+        repo: &str,
         kind: ProviderKind,
         connection: Option<i64>,
-        credential_cmd: &str,
     ) -> EnvSource {
-        if let Some(cmd) = legacy_cmd.map(str::trim).filter(|c| !c.is_empty()) {
+        if let Some(cmd) = self.legacy_cmd(owner, repo, kind) {
             return EnvSource {
-                source: CredentialSource::Command { cmd: cmd.into() },
+                source: CredentialSource::Command { cmd },
                 from_env: true,
             };
         }
@@ -270,9 +265,7 @@ impl SharedCredentials {
             .and_then(|id| conns.hub.iter().find(|c| c.id == id && c.kind == kind))
         {
             Some(c) => conns.overrides.source(c),
-            None => CredentialSource::Command {
-                cmd: credential_cmd.trim().to_string(),
-            },
+            None => CredentialSource::None,
         };
         EnvSource {
             source,
@@ -325,7 +318,8 @@ impl ConnectionOverrides {
 
     /// Fonte efetiva da conexão neste ambiente: o comando de
     /// `[connections."nome"]`, se houver, senão a fonte da própria conexão.
-    /// Ponto único da materialização e do resolvedor do ambiente (#274).
+    /// Ponto único do resolvedor e do prefixo da sessão no ambiente (#274,
+    /// #277, [`SharedCredentials::resolve`]).
     pub fn source(&self, c: &Connection) -> CredentialSource {
         match self.credential_cmd(&c.name) {
             Some(cmd) => CredentialSource::Command { cmd: cmd.into() },
@@ -424,20 +418,6 @@ mod tests {
     use super::*;
     use crate::{GitlabConfig, JiraConfig};
 
-    fn jira(cmd: &str) -> TrackerConfig {
-        TrackerConfig::Jira(JiraConfig {
-            credential_cmd: cmd.into(),
-            ..JiraConfig::default()
-        })
-    }
-
-    fn gitlab(cmd: &str) -> ForgeConfig {
-        ForgeConfig::Gitlab(GitlabConfig {
-            credential_cmd: cmd.into(),
-            ..GitlabConfig::default()
-        })
-    }
-
     fn overrides(toml_text: &str) -> CredentialOverrides {
         #[derive(Deserialize)]
         struct Cfg {
@@ -446,56 +426,115 @@ mod tests {
         toml::from_str::<Cfg>(toml_text).unwrap().credentials
     }
 
+    fn conexao(id: i64, name: &str, kind: ProviderKind, endpoint: &str, cmd: &str) -> Connection {
+        Connection {
+            id,
+            name: name.into(),
+            kind,
+            endpoint: endpoint.into(),
+            credential: CredentialSource::Command { cmd: cmd.into() },
+            options: serde_json::json!({}),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// Projeto Jira + GitLab com as conexões 7 e 8, e o ambiente com elas.
+    fn projeto() -> (TrackerConfig, ForgeConfig, SharedCredentials) {
+        let shared = SharedCredentials::default();
+        shared.set_connections(
+            vec![
+                conexao(
+                    7,
+                    "jira-acme",
+                    ProviderKind::Jira,
+                    "https://jira.example.com",
+                    "/opt/homebrew/bin/pass show jira | head -1",
+                ),
+                conexao(
+                    8,
+                    "gitlab-acme",
+                    ProviderKind::Gitlab,
+                    "gitlab.example.com",
+                    "/opt/homebrew/bin/pass show gitlab | head -1",
+                ),
+            ],
+            ConnectionOverrides::default(),
+        );
+        (
+            TrackerConfig::Jira(JiraConfig {
+                project_key: "ACME".into(),
+                connection: Some(7),
+                ..JiraConfig::default()
+            }),
+            ForgeConfig::Gitlab(GitlabConfig {
+                path: "acme/acme-web".into(),
+                connection: Some(8),
+                ..GitlabConfig::default()
+            }),
+            shared,
+        )
+    }
+
     #[test]
-    fn le_do_toml_e_troca_so_o_projeto_da_chave() {
+    fn le_do_toml_e_vale_so_para_o_projeto_da_chave() {
         let o = overrides(
             r#"
             [credentials."Acme/acme-web"]
             tracker_cmd = "/usr/bin/pass show acme/jira | head -1"
             "#,
         );
-        let (mut t, mut f) = (jira("pass show jira"), gitlab("pass show gitlab"));
-        let a = o.apply("acme", "ACME-WEB", &mut t, &mut f);
         assert_eq!(
-            a,
-            CredentialApplied {
-                tracker: true,
-                forge: false
-            }
-        );
-        assert_eq!(
-            t.jira().unwrap().credential_cmd,
+            o.get("acme", "ACME-WEB").unwrap().tracker_cmd,
             "/usr/bin/pass show acme/jira | head -1"
         );
-        assert_eq!(f.gitlab().unwrap().credential_cmd, "pass show gitlab");
-
-        let (mut t, mut f) = (jira("pass show jira"), gitlab("x"));
+        assert!(o.get("acme", "outro").is_none());
+        let (t, f, shared) = projeto();
+        shared.replace(o);
+        let (r, gaps) = shared.resolve("acme", "acme-web", &t, &f);
+        assert!(gaps.is_empty(), "{gaps:?}");
         assert_eq!(
-            o.apply("acme", "outro", &mut t, &mut f),
-            CredentialApplied::default()
+            r.jira.unwrap().credential,
+            CredentialSource::Command {
+                cmd: "/usr/bin/pass show acme/jira | head -1".into()
+            }
         );
-        assert_eq!(t.jira().unwrap().credential_cmd, "pass show jira");
+        // O GitLab segue com a fonte da conexão; outro projeto também.
+        assert_eq!(
+            r.gitlab.unwrap().credential,
+            CredentialSource::Command {
+                cmd: "/opt/homebrew/bin/pass show gitlab | head -1".into()
+            }
+        );
+        let (r, _) = shared.resolve("acme", "outro", &t, &f);
+        assert_eq!(
+            r.jira.unwrap().credential,
+            CredentialSource::Command {
+                cmd: "/opt/homebrew/bin/pass show jira | head -1".into()
+            }
+        );
     }
 
     #[test]
-    fn campo_vazio_e_github_ficam_como_estao() {
-        let o = overrides(
+    fn campo_vazio_fica_com_a_fonte_da_conexao() {
+        let (t, f, shared) = projeto();
+        shared.replace(overrides(
             r#"
-            [credentials."acme/web"]
+            [credentials."acme/acme-web"]
             tracker_cmd = "  "
             forge_cmd = "printf tok"
             "#,
-        );
-        let (mut t, mut f) = (jira("a"), ForgeConfig::Github(Default::default()));
+        ));
+        let j = shared.jira_source("acme", "acme-web", t.jira().unwrap());
+        assert!(!j.from_env);
+        let g = shared.gitlab_source("acme", "acme-web", f.gitlab().unwrap());
+        assert!(g.from_env);
         assert_eq!(
-            o.apply("acme", "web", &mut t, &mut f),
-            CredentialApplied::default()
+            g.source,
+            CredentialSource::Command {
+                cmd: "printf tok".into()
+            }
         );
-        assert_eq!(t.jira().unwrap().credential_cmd, "a");
-        let (mut t, mut f) = (TrackerConfig::Github(Default::default()), gitlab("b"));
-        let a = o.apply("acme", "web", &mut t, &mut f);
-        assert!(a.forge && !a.tracker);
-        assert_eq!(f.gitlab().unwrap().credential_cmd, "printf tok");
     }
 
     #[test]
@@ -509,26 +548,47 @@ mod tests {
         assert!(r.is_err());
     }
 
+    /// O prompt renderizado com os prefixos do hub (a fonte da conexão)
+    /// ganha os comandos deste ambiente: o do `[credentials]` e o da
+    /// sobrescrita `[connections]`.
     #[test]
     fn prompt_troca_so_o_comando_dentro_do_cifrao() {
-        let o = overrides(
-            r#"
-            [credentials."acme/web"]
-            tracker_cmd = "/usr/bin/pass show jira | head -1"
-            forge_cmd = "/usr/bin/pass show gitlab | head -1"
-            "#,
-        );
-        let (t, f) = (
-            jira("/opt/homebrew/bin/pass show jira | head -1"),
-            gitlab("/opt/homebrew/bin/pass show gitlab | head -1"),
-        );
+        let (t, f, shared) = projeto();
+        let (hub, _) = {
+            let (conns, _) = shared.connections();
+            provider::resolve_connections(&t, &f, &conns, |c| c.credential.clone())
+        };
         let prompt = format!(
             "Leia com `{} issue view ACME-123`. MR com `{} mr create`. \
              (o comando /opt/homebrew/bin/pass show jira | head -1 citado fica)",
-            crate::jira_cli_prefix(t.jira().unwrap()),
-            crate::glab_cli_prefix(f.gitlab().unwrap()),
+            hub.jira_prefix(),
+            hub.glab_prefix(),
         );
-        let out = o.rewrite_prompt("acme", "web", &t, &f, &prompt);
+        // Sem sobrescrita, o prompt fica igual.
+        assert_eq!(
+            shared.rewrite_prompt("acme", "acme-web", &t, &f, &prompt),
+            prompt
+        );
+        shared.replace(overrides(
+            r#"
+            [credentials."acme/acme-web"]
+            tracker_cmd = "/usr/bin/pass show jira | head -1"
+            "#,
+        ));
+        let (conns, _) = shared.connections();
+        shared.set_connections(
+            conns,
+            ConnectionOverrides(
+                [(
+                    "gitlab-acme".to_string(),
+                    ConnectionOverride {
+                        credential_cmd: "/usr/bin/pass show gitlab | head -1".into(),
+                    },
+                )]
+                .into(),
+            ),
+        );
+        let out = shared.rewrite_prompt("acme", "acme-web", &t, &f, &prompt);
         assert!(
             out.contains(r#"JIRA_API_TOKEN="$(/usr/bin/pass show jira | head -1)" jira"#),
             "{out}"
@@ -537,13 +597,11 @@ mod tests {
             out.contains(r#"GITLAB_TOKEN="$(/usr/bin/pass show gitlab | head -1)" glab"#),
             "{out}"
         );
-        assert!(out.contains("citado"));
         assert!(out.contains("o comando /opt/homebrew/bin/pass show jira | head -1 citado"));
-        // Sem sobrescrita, o prompt fica igual.
-        assert_eq!(
-            CredentialOverrides::default().rewrite_prompt("acme", "web", &t, &f, &prompt),
-            prompt
-        );
+        // O prefixo efetivo do ambiente já sai com os comandos daqui.
+        let (r, _) = shared.resolve("acme", "acme-web", &t, &f);
+        assert!(out.contains(&r.jira_prefix()), "{out}");
+        assert!(out.contains(&r.glab_prefix()), "{out}");
     }
 }
 
@@ -662,7 +720,7 @@ mod conexoes_tests {
     }
 
     /// A fonte efetiva (#274): `[credentials]` do projeto, depois a conexão
-    /// com a sobrescrita `[connections]`, depois o cadastro do projeto.
+    /// com a sobrescrita `[connections]`; sem conexão, nenhuma (#277).
     #[test]
     fn fonte_efetiva_da_conexao_no_ambiente() {
         let secret = CredentialSource::Secret {
@@ -681,7 +739,6 @@ mod conexoes_tests {
         );
         let j = JiraConfig {
             connection: Some(7),
-            credential_cmd: "ctower secret get JIRA_TOKEN_ACME".into(),
             ..JiraConfig::default()
         };
         let g = GitlabConfig {
@@ -700,14 +757,11 @@ mod conexoes_tests {
         // Conexão de outro tipo com o mesmo id não serve.
         let errado = GitlabConfig {
             connection: Some(7),
-            credential_cmd: "pass show gl".into(),
             ..GitlabConfig::default()
         };
         assert_eq!(
             shared.gitlab_source("acme", "acme-web", &errado).source,
-            CredentialSource::Command {
-                cmd: "pass show gl".into()
-            }
+            CredentialSource::None
         );
         // A sobrescrita da conexão vale sobre o secret.
         shared.set_connections(
@@ -744,16 +798,12 @@ mod conexoes_tests {
                 true
             )
         );
-        // Projeto sem conexão: o comando do cadastro.
-        let antigo = JiraConfig {
-            credential_cmd: "pass show antigo".into(),
-            ..JiraConfig::default()
-        };
+        // Projeto sem conexão: nenhuma fonte (#277).
         assert_eq!(
-            shared.jira_source("acme", "outro", &antigo).source,
-            CredentialSource::Command {
-                cmd: "pass show antigo".into()
-            }
+            shared
+                .jira_source("acme", "outro", &JiraConfig::default())
+                .source,
+            CredentialSource::None
         );
     }
 

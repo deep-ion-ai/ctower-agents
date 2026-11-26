@@ -3,10 +3,12 @@ import type { ProviderProject } from "../util/item";
 import { linkedIssue, renderFileMarkdown, renderIssueMarkdown } from "./issue-markdown";
 
 const GH: ProviderProject = { gh_owner: "deep-ion-ai", gh_repo: "ctower-agents", tracker: { kind: "github" } };
+// A URL do Jira vem da conexão (`endpoints`, #277).
 const JIRA = {
   gh_owner: "acme",
   gh_repo: "app",
-  tracker: { kind: "jira", url: "https://jira.example.com", project_key: "PROJ" },
+  tracker: { kind: "jira", project_key: "PROJ", connection: 7 },
+  endpoints: { jira_url: "https://jira.example.com", gitlab_host: "", jira_cli: "", glab_cli: "" },
 } as unknown as ProviderProject;
 
 const dom = (html: string) => {

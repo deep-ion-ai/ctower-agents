@@ -9,7 +9,7 @@
 use super::{row_to_project, Hub, HubAssignment, HubProject, HubSession, PROJECT_COLS};
 use crate::sync::project_key;
 use crate::{LedgerError, Result, SyncChange};
-use ct_core::provider::{self, Connection, ProviderDescriptor};
+use ct_core::provider;
 use ct_core::{now_ms, ForgeConfig, TrackerConfig};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -82,21 +82,14 @@ impl ProjectProvider {
                  github ou jira + gitlab)"
             ));
         }
-        // Os descritores conferem a conexão e o projeto de cada tipo (#234).
-        // Com conexão referenciada (#235), a credencial e a URL vêm dela e
-        // são conferidas em `Hub::check_project_connections`.
+        // Os descritores conferem o projeto de cada tipo (#234). Jira e
+        // GitLab exigem a conexão (#277): a credencial e a URL vêm dela e são
+        // conferidas em `Hub::check_project_connections`.
         if let Some(j) = self.tracker.jira() {
-            if j.connection.is_none() {
-                provider::JIRA.validate_inline(j)?;
-            } else {
-                provider::JIRA.validate_project(j)?;
-            }
+            provider::JIRA.validate_project(j)?;
         }
         if let Some(g) = self.forge.gitlab() {
             provider::GITLAB.validate_project(g)?;
-            if g.connection.is_none() {
-                provider::GITLAB.validate(&Connection::from_gitlab(g))?;
-            }
         }
         // GitHub (#275): uma conexão só para o rastreador e a forja.
         if let (Some(t), Some(f)) = (
@@ -552,23 +545,22 @@ impl Hub {
             }
             Some(ForgeConfig::Gitlab(g)) => {
                 let old = cur.forge.gitlab().expect("mesmo tipo");
-                // Projeto migrado (#237) guarda o caminho sem o host: o host
-                // é o da conexão (visão efetiva, #264).
-                let old_host = match old.host.trim() {
-                    "" => self
-                        .effective_project(cur.clone())?
-                        .forge
-                        .gitlab()
-                        .map(|e| e.host.clone())
-                        .unwrap_or_default(),
-                    h => h.to_string(),
+                // O repositório é o host da conexão e o caminho (#277). Trocar
+                // a conexão por outra do mesmo host vale; o projeto antigo
+                // sem conexão (cadastro que a migração não converteu) ganha
+                // uma.
+                let host = |id: Option<i64>| -> String {
+                    id.and_then(|id| self.connection(id).ok())
+                        .map(|c| c.endpoint.trim().to_string())
+                        .unwrap_or_default()
                 };
-                if !g.host.eq_ignore_ascii_case(&old_host)
-                    || !g.path.eq_ignore_ascii_case(&old.path)
-                {
+                let (old_host, new_host) = (host(old.connection), host(g.connection));
+                let other_host =
+                    old.connection.is_some() && !new_host.eq_ignore_ascii_case(&old_host);
+                if other_host || !g.path.eq_ignore_ascii_case(&old.path) {
                     return refuse(format!(
                         "o repositório do projeto não muda ({}/{} → {}/{}): cadastre outro projeto",
-                        old_host, old.path, g.host, g.path
+                        old_host, old.path, new_host, g.path
                     ));
                 }
                 ForgeConfig::Gitlab(g.clone())
