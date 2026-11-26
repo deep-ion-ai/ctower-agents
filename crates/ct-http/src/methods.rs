@@ -246,11 +246,13 @@ const fn has_scope(scopes: &[Scope], want: Scope) -> bool {
     false
 }
 
-const fn count_in(scope: Scope) -> usize {
+/// Quantos métodos de `methods` valem em `scope` (tamanho do array de
+/// [`names_in`]).
+pub const fn count_in(methods: &[MethodSpec], scope: Scope) -> usize {
     let mut n = 0;
     let mut i = 0;
-    while i < METHODS.len() {
-        if has_scope(METHODS[i].scopes, scope) {
+    while i < methods.len() {
+        if has_scope(methods[i].scopes, scope) {
             n += 1;
         }
         i += 1;
@@ -258,13 +260,16 @@ const fn count_in(scope: Scope) -> usize {
     n
 }
 
-const fn names_in<const N: usize>(scope: Scope) -> [&'static str; N] {
+/// Os nomes de `methods` que valem em `scope`, na ordem do registro (com
+/// `N` = [`count_in`]). Usado por este módulo e pelo registro do hub
+/// (`cthubd::methods`), que tem a sua própria tabela.
+pub const fn names_in<const N: usize>(methods: &[MethodSpec], scope: Scope) -> [&'static str; N] {
     let mut out = [""; N];
     let mut i = 0;
     let mut k = 0;
-    while i < METHODS.len() {
-        if has_scope(METHODS[i].scopes, scope) {
-            out[k] = METHODS[i].name;
+    while i < methods.len() {
+        if has_scope(methods[i].scopes, scope) {
+            out[k] = methods[i].name;
             k += 1;
         }
         i += 1;
@@ -274,10 +279,12 @@ const fn names_in<const N: usize>(scope: Scope) -> [&'static str; N] {
 
 /// Métodos que o canal reverso do hub aceita (`ct_http::sync`), derivados de
 /// [`Scope::Channel`].
-pub const CHANNEL_METHODS: &[&str] = &names_in::<{ count_in(Scope::Channel) }>(Scope::Channel);
+pub const CHANNEL_METHODS: &[&str] =
+    &names_in::<{ count_in(METHODS, Scope::Channel) }>(METHODS, Scope::Channel);
 
 /// Métodos que a UI web chama pelo hub, derivados de [`Scope::Web`].
-pub const WEB_METHODS: &[&str] = &names_in::<{ count_in(Scope::Web) }>(Scope::Web);
+pub const WEB_METHODS: &[&str] =
+    &names_in::<{ count_in(METHODS, Scope::Web) }>(METHODS, Scope::Web);
 
 #[cfg(test)]
 mod tests {
