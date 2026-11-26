@@ -351,7 +351,10 @@ impl Sessions {
         let project = self.ledger().get_project(req.project_id)?;
         self.check_approval(&project, &req)?;
         let report = self.autonomy_align(req.project_id, pr)?;
-        self.start_with_base(req, Some((&report.branch, &report.base)))
+        self.start_with_base(
+            req,
+            crate::launch::StartBase::Autonomy(&report.branch, &report.base),
+        )
     }
 
     /// Sessão de análise de dependências do piloto automático (#215): uma

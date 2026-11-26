@@ -419,10 +419,12 @@ impl Sessions {
             .ledger()
             .list_events_of_kind(s.work_item_id, crate::autonomy::AUTONOMY_SESSION)?
             .is_empty();
-        // A sessão de análise do piloto (#215) recebe o pedido de reanálise.
-        if !autonomous && !self.is_analysis_session(s)? {
+        // A sessão de análise do piloto (#215) recebe o pedido de reanálise;
+        // a da sub-issue da execução de épico (#298), o fechamento do PR.
+        if !autonomous && !self.is_analysis_session(s)? && !self.is_epic_run_session(s)? {
             return Err(SessionsError::Invalid(format!(
-                "sessão {}: texto no session.continue só numa sessão autônoma ou de análise",
+                "sessão {}: texto no session.continue só numa sessão autônoma, de análise ou \
+                 da execução de épico",
                 s.id
             )));
         }

@@ -10,6 +10,7 @@ pub mod config;
 pub mod diff;
 pub mod docs;
 pub mod epic_plan;
+pub mod epic_run;
 pub mod files;
 pub mod github;
 pub mod gitlab;
