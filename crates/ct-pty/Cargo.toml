@@ -9,5 +9,9 @@ libc.workspace = true
 portable-pty.workspace = true
 zeroize.workspace = true
 
+[features]
+# `PtySession::spawn_with_hold` para os testes de outros crates (#313).
+test-support = []
+
 [dev-dependencies]
 tempfile.workspace = true

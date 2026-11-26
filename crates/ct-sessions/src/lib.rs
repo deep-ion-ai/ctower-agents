@@ -156,6 +156,11 @@ struct Inner {
     /// a criação da sessão (#204).
     release_start: Mutex<()>,
     notify: Notifier,
+    /// Prazo da cauda do mascaramento nos PTYs das sessões novas
+    /// ([`Sessions::set_mask_hold`]); `None` = o de produção
+    /// ([`ct_pty::MASK_HOLD`]).
+    #[cfg(any(test, feature = "test-support"))]
+    mask_hold: Mutex<Option<Duration>>,
 }
 
 /// Fachada do ciclo de vida das sessões. Clonar compartilha o estado.
@@ -199,6 +204,8 @@ impl Sessions {
                 ))),
                 release_start: Mutex::new(()),
                 notify,
+                #[cfg(any(test, feature = "test-support"))]
+                mask_hold: Mutex::new(None),
             }),
         }
     }
@@ -328,6 +335,26 @@ impl Sessions {
                 "sessão {session_id} não está rodando neste daemon"
             ))),
         }
+    }
+
+    /// Troca o prazo da cauda do mascaramento das sessões iniciadas daqui
+    /// em diante. Só para testes: um teste que parte um secret em duas
+    /// escritas não pode depender de a segunda chegar dentro do
+    /// [`ct_pty::MASK_HOLD`] (#313).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_mask_hold(&self, hold: Duration) {
+        *self.inner.mask_hold.lock().unwrap() = Some(hold);
+    }
+
+    /// Sobe o PTY de uma sessão, com o prazo da cauda dos testes, se houver
+    /// ([`Sessions::set_mask_hold`]).
+    pub(crate) fn spawn_pty(&self, spec: ct_pty::SpawnSpec) -> std::io::Result<PtySession> {
+        let scrollback = self.inner.cfg.scrollback;
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hold) = *self.inner.mask_hold.lock().unwrap() {
+            return PtySession::spawn_with_hold(spec, scrollback, hold);
+        }
+        PtySession::spawn(spec, scrollback)
     }
 
     /// Push para as UIs conectadas (`{ "event": ..., "data": ... }`).
