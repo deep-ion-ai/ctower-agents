@@ -568,7 +568,16 @@ impl Sessions {
                 .as_bytes(),
         )?;
         if let Some(claude_json) = &cfg.claude_json {
-            self.pre_trust(claude_json, project, wi, &session.id, cwd)?;
+            // A pasta de docs vai no mesmo `--add-dir` abaixo: sem a
+            // confiança, o Claude Code pergunta por ela em toda sessão (#222).
+            self.pre_trust(
+                claude_json,
+                project,
+                wi,
+                &session.id,
+                cwd,
+                docs.project.as_deref(),
+            )?;
         }
 
         let tool_session_id = mode.tool_session_id();
@@ -825,7 +834,8 @@ impl Sessions {
         Ok(())
     }
 
-    /// Pré-aceita a confiança na raiz do repositório e no worktree. Falha
+    /// Pré-aceita a confiança na raiz do repositório, no worktree e, se a
+    /// sessão recebe, na pasta de docs do projeto (`--add-dir`, #222). Falha
     /// vira alerta (a sessão segue; o humano responde ao diálogo).
     fn pre_trust(
         &self,
@@ -834,11 +844,12 @@ impl Sessions {
         wi: &WorkItem,
         session_id: &str,
         cwd: &str,
+        docs: Option<&Path>,
     ) -> Result<()> {
-        let (kind, payload) = match crate::trust::ensure_trusted(
-            claude_json,
-            &[project.repo_path.as_str(), cwd],
-        ) {
+        let docs = docs.map(|d| d.to_string_lossy().into_owned());
+        let mut dirs = vec![project.repo_path.as_str(), cwd];
+        dirs.extend(docs.as_deref());
+        let (kind, payload) = match crate::trust::ensure_trusted(claude_json, &dirs) {
             Ok(changed) if changed.is_empty() => return Ok(()),
             Ok(changed) => ("trust_granted", json!({ "paths": changed })),
             Err(e) => {
@@ -2089,6 +2100,51 @@ mod tests {
             .list_events(s.work_item_id, 100)
             .unwrap();
         assert!(evs.iter().any(|e| e.kind == "trust_granted"));
+    }
+
+    /// #222: a pasta de docs do projeto (o `--add-dir`) também fica
+    /// confiável; sem `docs_root` no ar, o `.claude.json` recebe só as
+    /// pastas de sempre e o evento `trust_granted` não cita a de docs.
+    #[test]
+    fn pre_aceita_confianca_na_pasta_de_docs() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        docs_ligados(&env);
+        let root = env.docs_root_up();
+        let s = env.sessions.start(env.request(2, "Docs")).unwrap();
+        let cj: Value = serde_json::from_str(
+            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let proj = root.join("deep-ion-ai__demo").to_string_lossy().to_string();
+        assert_eq!(cj["projects"][&proj]["hasTrustDialogAccepted"], true);
+        let evs = env
+            .sessions
+            .ledger()
+            .list_events(s.work_item_id, 100)
+            .unwrap();
+        let granted = evs.iter().find(|e| e.kind == "trust_granted").unwrap();
+        assert!(granted.payload.to_string().contains(&proj));
+    }
+
+    #[test]
+    fn sem_docs_nao_pre_aceita_pasta_de_docs() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        docs_ligados(&env);
+        let s = env.sessions.start(env.request(2, "Sem docs")).unwrap();
+        let cj: Value = serde_json::from_str(
+            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let projects = cj["projects"].as_object().unwrap();
+        assert_eq!(
+            projects
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            [env.repo.to_string_lossy().to_string(), s.cwd.clone()]
+                .into_iter()
+                .collect()
+        );
     }
 
     #[test]
