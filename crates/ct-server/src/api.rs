@@ -14,6 +14,8 @@ pub struct EnvInfo {
     /// Versão do protocolo (`major.minor`); a UI recusa major diferente.
     pub protocol: String,
     pub version: String,
+    /// Capacidades do ambiente, para gating por recurso (#227).
+    pub capabilities: Vec<String>,
     /// Commit do build; vazio se compilado fora do git.
     pub commit: String,
     pub hostname: String,

@@ -47,6 +47,7 @@ function state(s: Partial<UpdateState> = {}): UpdateState {
 function info(env: string, p: Partial<EnvInfo> = {}): EnvInfo {
   return {
     protocol: "2.0",
+    capabilities: ["version-handshake"],
     version: "0.1.0",
     commit: OLD,
     hostname: env,

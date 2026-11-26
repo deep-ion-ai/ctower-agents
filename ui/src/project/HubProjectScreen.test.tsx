@@ -18,6 +18,7 @@ const NOW = Date.now();
 function info(env_id: string, p: Partial<EnvInfo> = {}): EnvInfo {
   return {
     protocol: "2.0",
+    capabilities: ["version-handshake"],
     version: "0.1.0",
     hostname: env_id,
     worktrees_root: `/home/${env_id}/worktrees`,
@@ -37,6 +38,7 @@ const LINKED = { ...HUB_CONFIG_UNLINKED, linked: true, config_rev: 7, pulled_at:
 
 const HUB_INFO: HubInfo = {
   protocol: "1.0",
+  capabilities: ["version-handshake"],
   version: "0.3.0",
   commit: "",
   name: "mac-mini",

@@ -917,6 +917,19 @@ Na web, as contas chegam como `conta-N`.
 
 Nada para: sessões, hooks e decisões gravam localmente e esperam no outbox, e o ambiente usa a última configuração em cache. Envio e pull tentam de novo com backoff até 5 min. `env.info` e a UI mostram as pendências, o `config_rev` local e a idade dele. O MCP `ledger_list_decisions` com escopo `epic`/`project` devolve as decisões locais com `partial: true` se o hub não responder.
 
+### Versão: hub e ambientes precisam ser iguais (#227)
+
+Hub e ambientes precisam ter a **mesma versão**. Cada lado manda a sua versão do contrato (`protocol`) e a do build (`version`, a do release) nos cabeçalhos `X-Ctower-Protocol` e `X-Ctower-Version`, ao abrir o `/sync/channel` e em cada `/sync/push` e `/sync/config`.
+
+- **Igual:** aceito.
+- **Diferente, ou ausente** (ambiente anterior ao handshake): recusado com `426 Upgrade Required` e o corpo `{ "error": "version_mismatch", "message", "hub": { protocol, version }, "env": { protocol, version } ou null }`. A mensagem diz as duas versões. O hub grava a versão que o ambiente informou (`env.protocol` e `env.version`, mesmo na recusa) e registra o motivo no log (`ambiente <nome> recusado: …`). Sem canal, sem envio e sem pull, o ambiente segue com o outbox e a configuração em cache, como em "Hub fora do ar".
+- **Sala de controle (Hub › Ambientes):** ambiente de versão diferente (ou sem versão informada) aparece como **desatualizado**, com a versão que ele informou. A ação **atualizar** leva à Manutenção › Ambientes da UI que conhece o ambiente. O hub não atualiza ambiente sozinho: `env.update` fica fora do canal reverso.
+- **No ambiente:** o motivo aparece em "Envio ao hub" e em "Configuração do hub" da tela do ambiente, como `hub recusou a versão (426): versão diferente: hub <versão> (protocolo <p>) × ambiente <versão> (protocolo <p>); …`.
+- **Depois de atualizar:** o ambiente reinicia com a versão nova e o próximo envio, pull ou reconexão do canal passa sem intervenção. Até lá, a recusa só atrasa o envio, com o mesmo backoff de sempre.
+- **Na prática:** atualize o hub e os ambientes na mesma janela. Ambiente de outra versão não sincroniza até ficar igual; o que ele produziu fica no outbox.
+- **Capacidades:** `env.info` e `hub.info` trazem `capabilities` (hoje `["version-handshake"]`), para gating por recurso.
+- **Fora do handshake nesta versão:** `/sync/done` e `/sync/query/decisions` seguem só com a autenticação de sempre.
+
 ### Canal reverso (`/sync/channel`)
 
 Com `hub_url` e `hub.token`, o `ctowerd` abre e mantém um WebSocket com o hub em `ws://<hub>/sync/channel` (o `http://` do `hub_url` vira `ws://`; sem TLS, como o resto do sync). O hub nunca abre conexão com o ambiente, então um ambiente atrás de NAT (WSL, Mac mini em outra rede) continua alcançável. O sync por `/sync/push` e `/sync/config` não muda: um ambiente sem o canal (versão antiga) continua sincronizando, só fica `online: false`.

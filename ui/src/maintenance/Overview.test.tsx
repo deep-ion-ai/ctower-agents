@@ -31,6 +31,7 @@ function update(available: boolean): UpdateStatus {
 function info(env: string, withUpdate: boolean): EnvInfo {
   return {
     protocol: "2.0",
+    capabilities: ["version-handshake"],
     version: "0.1.0",
     commit: "1111111aaaa",
     hostname: env,

@@ -115,9 +115,12 @@ fn serve(hub: Hub) -> String {
 }
 
 fn pull(url: &str, token: &str, env_id: &str) -> Result<Value, u16> {
+    let local = ct_http::sync::VersionInfo::local();
     match ureq::get(&format!("{url}/sync/config"))
         .set("Authorization", &format!("Bearer {}", token.trim()))
         .set("X-Ctower-Env-Id", env_id)
+        .set(ct_http::sync::PROTOCOL_HEADER, &local.protocol)
+        .set(ct_http::sync::VERSION_HEADER, &local.version)
         .call()
     {
         Ok(r) => Ok(r.into_json().unwrap()),
@@ -265,11 +268,14 @@ fn migra_preservando_projetos_atribuicoes_decisoes_e_tokens() {
 
     // O cthubd migrado aceita o token antigo do notebook e o novo do local.
     let url = serve(Hub::open(&db).unwrap());
+    let local = ct_http::sync::VersionInfo::local();
     let r: Value = ureq::post(&format!("{url}/sync/push"))
         .set(
             "Authorization",
             &format!("Bearer {}", NOTEBOOK_TOKEN.trim()),
         )
+        .set(ct_http::sync::PROTOCOL_HEADER, &local.protocol)
+        .set(ct_http::sync::VERSION_HEADER, &local.version)
         .send_json(json!({ "env_id": NOTEBOOK, "entries": [], "pending": 0 }))
         .unwrap()
         .into_json()
