@@ -76,9 +76,12 @@
 //! pertence a um repositório: recebe só as entradas **globais**, nunca as
 //! de algum projeto (`resolve(None)`). O mascaramento segue a mesma regra.
 
+use crate::resolver::{gitlab_key, jira_key, no_lookup, Ask};
 use crate::Sessions;
+use ct_core::provider::CredentialSource;
 use ct_core::ProjectKind;
 use ct_ledger::{Project, Session};
+use ct_proc::{Secret, CREDENTIAL_DEADLINE};
 use ct_pty::{MaskSet, Zeroizing};
 use ct_secrets::{is_reserved_name, EnvCache, EnvSecrets, Kind, MIN_MASK_LEN};
 use serde_json::json;
@@ -225,9 +228,12 @@ impl Sessions {
         session_id: &str,
         release: bool,
     ) -> SessionSecrets {
+        // Tokens das conexões (Jira, GitLab) entram no mascaramento mesmo
+        // sem secrets do hub (#236).
+        let conn = self.connection_mask(project);
         let none = || SessionSecrets {
             env: Vec::new(),
-            mask: SessionMask::default(),
+            mask: conn.clone(),
         };
         let secrets = match self.env_cache().load() {
             Ok(Some(s)) => s,
@@ -247,8 +253,54 @@ impl Sessions {
         };
         self.warn_if_stale(session_id);
         let env = injected(&secrets, project, session_id, release);
-        let mask = mask_of(&secrets, project);
+        let mask = mask_of(&secrets, project).union(&conn);
         SessionSecrets { env, mask }
+    }
+
+    /// Mascaramento dos tokens das conexões do projeto (Jira e GitLab, #236).
+    /// Usa o cache do resolvedor: o comando de credencial só roda sem token
+    /// em cache. Falha ao resolver vira ausência, sem erro para a sessão.
+    pub(crate) fn connection_mask(&self, project: &Project) -> SessionMask {
+        let (eff, _) = self.with_env_credentials(project.clone());
+        let resolver = self.credentials();
+        let mut found: Vec<std::sync::Arc<Secret>> = Vec::new();
+        if let Some(j) = eff.tracker.jira() {
+            let src = CredentialSource::Command {
+                cmd: j.credential_cmd.clone(),
+            };
+            found.extend(
+                resolver
+                    .token(Ask {
+                        key: &jira_key(eff.id),
+                        what: "Jira",
+                        source: &src,
+                        lookup: &no_lookup,
+                        deadline: CREDENTIAL_DEADLINE,
+                    })
+                    .ok(),
+            );
+        }
+        if let Some(g) = eff.forge.gitlab() {
+            let src = CredentialSource::Command {
+                cmd: g.credential_cmd.clone(),
+            };
+            found.extend(
+                resolver
+                    .token(Ask {
+                        key: &gitlab_key(eff.id),
+                        what: "GitLab",
+                        source: &src,
+                        lookup: &no_lookup,
+                        deadline: CREDENTIAL_DEADLINE,
+                    })
+                    .ok(),
+            );
+        }
+        let pairs: Vec<(&str, &str)> = found
+            .iter()
+            .map(|t| ("CONEXAO_TOKEN", t.expose()))
+            .collect();
+        SessionMask::new(&pairs)
     }
 
     /// Guarda (só em memória) o mascaramento de uma sessão.
@@ -387,7 +439,7 @@ impl Sessions {
             let Ok(project) = project else {
                 continue;
             };
-            let fresh = mask_of(&secrets, &project);
+            let fresh = mask_of(&secrets, &project).union(&self.connection_mask(&project));
             let merged = {
                 let mut masks = self.inner.masks.lock().unwrap();
                 let merged = masks.get(&sid).cloned().unwrap_or_default().union(&fresh);
@@ -432,7 +484,7 @@ impl Sessions {
                 return MaskSet::default();
             }
         };
-        let mask = mask_of(&secrets, &project);
+        let mask = mask_of(&secrets, &project).union(&self.connection_mask(&project));
         let transcript = mask.transcript.clone();
         self.set_mask(&s.id, mask);
         transcript
@@ -532,6 +584,18 @@ fn hours(ms: i64) -> String {
 mod tests {
     use super::*;
     use crate::test_support::{FakeClaude, TestEnv, T};
+
+    /// O token de uma conexão que a sessão imprime sai mascarado, no PTY e
+    /// no backup do transcript (#236).
+    #[test]
+    fn token_de_conexao_sai_mascarado_no_pty_e_no_transcript() {
+        let m = SessionMask::new(&[("CONEXAO_TOKEN", "tok-acme-123456")]);
+        let saida = String::from_utf8(m.pty.apply(b"ok tok-acme-123456 fim")).unwrap();
+        assert!(!saida.contains("tok-acme-123456"), "{saida}");
+        assert!(saida.contains("***CONEXAO_TOKEN***"), "{saida}");
+        let json = m.transcript.apply(br#"{"t":"tok-acme-123456"}"#);
+        assert!(!String::from_utf8(json).unwrap().contains("tok-acme-123456"));
+    }
     use crate::{AgentOptions, GestorScope};
     use ct_core::SessionState;
     use std::time::{Duration, Instant};

@@ -41,6 +41,16 @@ pub enum GitlabError {
     Failed(String),
     #[error("resposta inesperada do glab: {0}")]
     Parse(String),
+    /// O comando de credencial falhou antes de chamar o glab (#236).
+    #[error("{0}")]
+    Credential(String),
+}
+
+impl From<ct_proc::CredentialError> for GitlabError {
+    /// Falha do comando de credencial, com a mensagem dele (#236).
+    fn from(c: ct_proc::CredentialError) -> Self {
+        GitlabError::Credential(c.to_string())
+    }
 }
 
 /// O `glab` do ambiente para um host do GitLab. O token vai só no ambiente
@@ -239,7 +249,11 @@ fn parse_json(out: &str) -> Result<Value, GitlabError> {
 /// Classifica a saída de erro do glab (já citável).
 fn classify(msg: &str, status: &str) -> GitlabError {
     let lower = msg.to_lowercase();
-    if lower.contains("401") || lower.contains("unauthorized") {
+    if lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("403")
+        || lower.contains("forbidden")
+    {
         return GitlabError::Unauthorized;
     }
     let msg = if msg.is_empty() {
