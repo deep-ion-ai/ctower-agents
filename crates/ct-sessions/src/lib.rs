@@ -204,24 +204,30 @@ impl Sessions {
         &self.inner.credentials
     }
 
-    pub(crate) fn credentials_handle(&self) -> Arc<resolver::CredentialResolver> {
-        self.inner.credentials.clone()
+    /// Fonte do token do Jira do projeto neste ambiente (#274): a da conexão
+    /// do hub, com a sobrescrita `[connections]`, ou o comando de
+    /// `[credentials]` (#143). `None` = o rastreador não é Jira. Só para
+    /// resolver aqui: o que vai ao hub sai do ledger, sem a sobrescrita.
+    pub fn jira_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
+        let j = project.tracker.jira()?;
+        Some(
+            self.inner
+                .cfg
+                .credentials
+                .jira_source(&project.gh_owner, &project.gh_repo, j),
+        )
     }
 
-    /// Projeto com os comandos de credencial deste ambiente
-    /// (`[credentials]`, #143) no lugar dos do cadastro. Só para rodar o
-    /// comando aqui: o que vai ao hub sai do ledger, sem a sobrescrita.
-    pub fn with_env_credentials(
-        &self,
-        mut project: ct_ledger::Project,
-    ) -> (ct_ledger::Project, ct_core::CredentialApplied) {
-        let applied = self.inner.cfg.credentials.apply(
-            &project.gh_owner,
-            &project.gh_repo,
-            &mut project.tracker,
-            &mut project.forge,
-        );
-        (project, applied)
+    /// Fonte do token do GitLab do projeto neste ambiente, como
+    /// [`Self::jira_source`]. `None` = a forja não é GitLab.
+    pub fn gitlab_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
+        let g = project.forge.gitlab()?;
+        Some(
+            self.inner
+                .cfg
+                .credentials
+                .gitlab_source(&project.gh_owner, &project.gh_repo, g),
+        )
     }
 
     /// Acesso direto ao ledger (consultas do servidor).

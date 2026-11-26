@@ -25,7 +25,7 @@ pub use autonomy::{AlignStrategy, AutonomyConfig, AutonomyReport, AutonomyState}
 pub use clock::{civil_from_days, hlc, now_ms, parse_iso8601, utc_stamp};
 pub use credentials::{
     convert_credentials, ConnectionOverride, ConnectionOverrides, CredentialApplied,
-    CredentialOverride, CredentialOverrides, ProjectConnections, SharedCredentials,
+    CredentialOverride, CredentialOverrides, EnvSource, ProjectConnections, SharedCredentials,
 };
 pub use docs::DocsConfig;
 pub use logs::LogsConfig;

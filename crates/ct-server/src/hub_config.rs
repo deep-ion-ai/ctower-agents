@@ -400,6 +400,16 @@ impl HubSender {
             Ok(_) => {}
             Err(e) => tracing::warn!("conexões: cache não reaplicado: {e}"),
         }
+        // As conexões e a sobrescrita em uso no daemon: delas sai a fonte de
+        // credencial de cada projeto no sync e nas sessões (#274).
+        match ledger.hub_connections() {
+            Ok((conns, _)) => self
+                .sessions
+                .config()
+                .credentials
+                .set_connections(conns, overrides),
+            Err(e) => tracing::warn!("conexões: cache não lido: {e}"),
+        }
         if !applied.is_empty() {
             tracing::info!(
                 "hub: configuração {} (entraram {:?}, mudaram {:?}, saíram {:?})",
@@ -798,6 +808,95 @@ mod tests {
             std::fs::read_to_string(base.join("analises/nota.md")).unwrap(),
             "minha"
         );
+    }
+
+    /// A fonte de credencial do projeto vem da conexão do hub (#274): o
+    /// pull atualiza as conexões em uso no daemon, e o sync e as sessões
+    /// passam a ver o secret da conexão, não o comando materializado.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pull_leva_a_fonte_da_conexao_ao_ambiente() {
+        use ct_core::provider::{CredentialSource, ProviderKind};
+        let hub = new_hub();
+        let secret = CredentialSource::Secret {
+            name: "JIRA_TOKEN_ACME".into(),
+        };
+        let conn = hub
+            .lock()
+            .add_connection(&ct_hub_store::NewConnection {
+                name: "jira-acme".into(),
+                kind: ProviderKind::Jira,
+                endpoint: "https://jira.example.com".into(),
+                credential: secret.clone(),
+                options: serde_json::json!({}),
+            })
+            .unwrap();
+        let arquivo = CredentialSource::File {
+            path: "~/.config/acme/gitlab.token".into(),
+        };
+        let gl = hub
+            .lock()
+            .add_connection(&ct_hub_store::NewConnection {
+                name: "gitlab-acme".into(),
+                kind: ProviderKind::Gitlab,
+                endpoint: "gitlab.example.com".into(),
+                credential: arquivo.clone(),
+                options: serde_json::json!({}),
+            })
+            .unwrap();
+        hub.lock()
+            .add_project_with(
+                &ct_hub_store::NewHubProject {
+                    owner: "acme".into(),
+                    repo: "acme-web".into(),
+                    name: "acme-web".into(),
+                    base_branch: "main".into(),
+                    protected_branches: vec!["main".into()],
+                },
+                &ct_hub_store::ProjectProvider {
+                    tracker: ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
+                        connection: Some(conn.id),
+                        project_key: "ACME".into(),
+                        active_sprint_only: true,
+                        ..Default::default()
+                    }),
+                    forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                        connection: Some(gl.id),
+                        path: "acme/acme-web".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let tok = hub.lock().add_legacy_env_token("a").unwrap();
+        let url = hub_up(&hub).await;
+        let a = env();
+        let env_a = a.env.sessions.ledger().env_id().to_string();
+        let sa = sender(&a, &url, &tok);
+        assert!(sync_now(&sa).await.error.is_none());
+        let repo_a = a.env.tmp.path().join("acme-web").display().to_string();
+        hub.lock()
+            .add_assignment("acme", "acme-web", &env_a, Some(&repo_a))
+            .unwrap();
+        assert!(pull(&sa).await.ok);
+        let p = a
+            .env
+            .sessions
+            .ledger()
+            .list_projects()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.gh_repo == "acme-web")
+            .expect("projeto do hub no cache");
+        // O cadastro antigo leva o comando do prefixo da sessão...
+        assert_eq!(
+            p.tracker.jira().unwrap().credential_cmd,
+            "ctower secret get JIRA_TOKEN_ACME"
+        );
+        // ...e o resolvedor do ambiente, a fonte da conexão.
+        let s = a.env.sessions.jira_source(&p).unwrap();
+        assert_eq!((s.source, s.from_env), (secret, false));
+        assert_eq!(a.env.sessions.gitlab_source(&p).unwrap().source, arquivo);
     }
 
     /// O pull só traz os projetos atribuídos, a atribuição aplicada continua

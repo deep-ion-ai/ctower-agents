@@ -1926,11 +1926,13 @@ mod tests {
             .ledger()
             .get_project(srv.env.project_id)
             .unwrap();
-        let (eff, applied) = srv.env.sessions.with_env_credentials(p);
-        assert!(applied.tracker);
+        let jira = srv.env.sessions.jira_source(&p).unwrap();
+        assert!(jira.from_env);
         assert_eq!(
-            eff.tracker.jira().unwrap().credential_cmd,
-            "/usr/bin/pass show jira | head -1"
+            jira.source,
+            ct_core::provider::CredentialSource::Command {
+                cmd: "/usr/bin/pass show jira | head -1".into()
+            }
         );
         let v = ui
             .call(

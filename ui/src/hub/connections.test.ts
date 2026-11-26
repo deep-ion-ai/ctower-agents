@@ -66,32 +66,42 @@ test("ida e volta do formulário com a credencial de cada forma", () => {
     cred_value: "pass show jira | head -1",
     config_file: "~/.config/.jira/acme.yml",
   });
-  // Secret do Jira (cadastro antigo): o formulário mostra a forma, e a
-  // gravação diz o que falta, sem mandar ao hub.
+  // Secret e arquivo do Jira (#274): ida e volta sem perder a forma.
   const secret = { ...JIRA, credential: { kind: "secret" as const, name: "JIRA_TOKEN" } };
   expect(connectionFormOf(secret)).toMatchObject({ cred: "secret", cred_value: "JIRA_TOKEN" });
-  expect(connectionParams(connectionFormOf(secret), 7)).toEqual({
-    error:
-      "Jira: a credencial precisa ser um comando que imprime o token; secret, arquivo e CLI ainda não chegam ao ambiente",
+  expect(connectionParams(connectionFormOf(secret), 7)).toMatchObject({
+    params: { id: 7, credential: { kind: "secret", name: "JIRA_TOKEN" } },
+  });
+  const arquivo = { ...JIRA, credential: { kind: "file" as const, path: "~/.config/acme/jira.token" } };
+  expect(connectionParams(connectionFormOf(arquivo), 7)).toMatchObject({
+    params: { credential: { kind: "file", path: "~/.config/acme/jira.token" } },
   });
 });
 
-test("Jira e GitLab só aceitam comando de credencial; GitHub aceita as formas", () => {
-  expect(CRED_KINDS.jira).toEqual(["command"]);
-  expect(CRED_KINDS.gitlab).toEqual(["command"]);
+test("Jira e GitLab aceitam comando, secret e arquivo; a CLI é só do GitHub", () => {
+  expect(CRED_KINDS.jira).toEqual(["command", "secret", "file"]);
+  expect(CRED_KINDS.gitlab).toEqual(["command", "secret", "file"]);
   expect(CRED_KINDS.github).toContain("cli");
   expect(
-    connectionParams({ ...EMPTY_CONNECTION_FORM, name: "gitlab-acme", kind: "gitlab", cred: "file", cred_value: "/t" }),
-  ).toMatchObject({ error: expect.stringContaining("GitLab: a credencial precisa ser um comando que imprime o token") });
+    connectionParams({ ...EMPTY_CONNECTION_FORM, name: "gitlab-acme", kind: "gitlab", cred: "file", cred_value: " /t " }),
+  ).toEqual({
+    params: { name: "gitlab-acme", kind: "gitlab", endpoint: "", credential: { kind: "file", path: "/t" }, options: {} },
+  });
+  expect(connectionParams({ ...EMPTY_CONNECTION_FORM, name: "jira-acme", cred: "cli" })).toEqual({
+    error: "Jira: a credencial precisa ser um comando, um secret do hub ou um arquivo; o login da CLI é só do GitHub",
+  });
 });
 
 test("credencial que falta: o erro diz o que informar", () => {
   expect(connectionParams({ ...EMPTY_CONNECTION_FORM, name: "jira-acme" })).toEqual({
     error: "informe o comando que imprime o token",
   });
-  expect(
-    connectionParams({ ...EMPTY_CONNECTION_FORM, cred: "secret", cred_value: "JIRA_TOKEN", name: "jira-acme" }),
-  ).toMatchObject({ error: expect.stringContaining("Jira:") });
+  expect(connectionParams({ ...EMPTY_CONNECTION_FORM, cred: "secret", cred_value: " ", name: "jira-acme" })).toEqual({
+    error: "informe o nome do secret do hub",
+  });
+  expect(connectionParams({ ...EMPTY_CONNECTION_FORM, cred: "file", name: "jira-acme" })).toEqual({
+    error: "informe o caminho do arquivo com o token",
+  });
   expect(
     connectionParams({ ...EMPTY_CONNECTION_FORM, kind: "github", cred: "secret", cred_value: " ", name: "github-acme" }),
   ).toEqual({ error: "informe o nome do secret do hub" });

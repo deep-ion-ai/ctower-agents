@@ -428,8 +428,9 @@ impl Ledger {
         })
     }
 
-    /// Conexões e nomes do cache (vazios se não há).
-    fn hub_connections(&self) -> Result<(Vec<Connection>, Vec<String>)> {
+    /// Conexões e nomes do cache (vazios se não há). O ambiente tira daqui a
+    /// fonte de credencial de cada conexão (#274).
+    pub fn hub_connections(&self) -> Result<(Vec<Connection>, Vec<String>)> {
         let row: Option<(String, Option<String>)> = self
             .conn
             .query_row(
@@ -659,7 +660,10 @@ fn config_project_of(p: &Project, repo_path: String) -> ConfigProject {
 /// (`url`, `host`, `credential_cmd`, `config_file`) dos projetos que referenciam
 /// uma conexão (#237). Assim o ambiente segue lendo o que sempre leu. O
 /// comando de credencial é o deste ambiente, se houver em `[connections]`,
-/// senão o da conexão (quando é um comando). Devolve os avisos.
+/// senão o que imprime o token da fonte da conexão (o comando, o
+/// `ctower secret get` do secret ou a leitura do arquivo, #274): é ele que
+/// vai ao prefixo da sessão. O token do sync vem da fonte em si
+/// (`SharedCredentials::jira_source`), não deste comando. Devolve os avisos.
 pub fn materialize_connections(
     cfg: &mut ConfigResponse,
     overrides: &ct_core::ConnectionOverrides,
@@ -686,10 +690,10 @@ fn materialize_projects(
     overrides: &ct_core::ConnectionOverrides,
 ) -> Vec<String> {
     use ct_core::provider::{self, ConnectionGap};
-    let cmd_of = |c: &Connection| match overrides.credential_cmd(&c.name) {
-        Some(cmd) => cmd.to_string(),
-        None => provider::credential_cmd(c).unwrap_or_default(),
-    };
+    // O comando que o prefixo da sessão expande: o da sobrescrita, o da
+    // conexão, ou o equivalente do secret e do arquivo (#274). Quem resolve
+    // o token no ambiente usa a fonte, não este comando.
+    let cmd_of = |c: &Connection| provider::source_cmd(&overrides.source(c)).unwrap_or_default();
     let mut warnings = Vec::new();
     for key in overrides.0.keys() {
         if !conns.iter().any(|c| &c.name == key) && !names.contains(key) {
@@ -1358,6 +1362,51 @@ mod conexoes_tests {
             }
             _ => panic!("forja"),
         }
+    }
+
+    /// Conexão com secret ou arquivo (#274): o cadastro antigo recebe o
+    /// comando que imprime o token (o do prefixo da sessão), sem aviso de
+    /// conexão sem credencial.
+    #[test]
+    fn secret_e_arquivo_viram_o_comando_do_prefixo() {
+        let mut cfg: ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 7,
+            "changed": true,
+            "projects": [{
+                "owner": "acme", "repo": "acme-web", "name": "Acme Web",
+                "base_branch": "main", "protected_branches": ["main"],
+                "repo_path": "", "rev": 7,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1 },
+                "forge": { "kind": "gitlab", "path": "acme/web", "connection": 2 }
+            }],
+            "connections": [
+                { "id": 1, "name": "jira-acme", "kind": "jira",
+                  "endpoint": "https://jira.example.com",
+                  "credential": { "kind": "secret", "name": "JIRA_TOKEN_ACME" },
+                  "options": {}, "created_at": 0, "updated_at": 0 },
+                { "id": 2, "name": "gitlab-acme", "kind": "gitlab",
+                  "endpoint": "gitlab.example.com",
+                  "credential": { "kind": "file", "path": "~/.acme/gitlab" },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ]
+        }))
+        .unwrap();
+        let avisos = materialize_connections(&mut cfg, &Default::default());
+        assert!(avisos.is_empty(), "{avisos:?}");
+        let p = &cfg.projects.as_ref().unwrap()[0];
+        assert_eq!(
+            p.tracker.jira().unwrap().credential_cmd,
+            "ctower secret get JIRA_TOKEN_ACME"
+        );
+        assert_eq!(
+            p.forge.gitlab().unwrap().credential_cmd,
+            ct_core::provider::file_cmd("~/.acme/gitlab")
+        );
+        assert_eq!(
+            ct_core::jira_cli_prefix(p.tracker.jira().unwrap()),
+            r#"JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira"#
+        );
     }
 
     fn cfg_com_jira(changed: bool) -> ConfigResponse {

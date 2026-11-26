@@ -3,10 +3,14 @@
 //!
 //! - `Command` roda o comando de credencial (primeira linha da saída);
 //! - `Cli` pede o token ao `gh auth token`;
-//! - `File` lê o arquivo (primeira linha não vazia);
+//! - `File` lê o arquivo (primeira linha não vazia, `~` expandido);
 //! - `Secret` pede o valor ao store de secrets do ambiente (quem chama
-//!   passa a busca por nome);
+//!   passa a busca por nome: no Jira e no GitLab, o cache de secrets do
+//!   ambiente no projeto, `Sessions::secret_lookup`, #274);
 //! - `None` não tem token e vira erro.
+//!
+//! A fonte de cada projeto vem de `SharedCredentials::jira_source` e
+//! `gitlab_source`: a conexão do hub com a sobrescrita do ambiente.
 //!
 //! O cache é em memória, por chave (`jira:<projeto>`, `gitlab:<projeto>`),
 //! e guarda a fonte usada: se a fonte mudar (cadastro ou sobrescrita por
@@ -23,6 +27,7 @@
 use ct_core::provider::CredentialSource;
 use ct_proc::{run_credential, CredentialError, Secret};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,8 +37,8 @@ const CLI_TOKEN_CMD: &str = "gh auth token";
 /// Busca de um secret do store do ambiente pelo nome.
 pub(crate) type SecretLookup<'a> = &'a dyn Fn(&str) -> Option<String>;
 
-/// Sem store de secrets na busca (Jira e GitLab usam só o comando de
-/// credencial do cadastro).
+/// Sem store de secrets na busca (testes).
+#[cfg(test)]
 pub(crate) fn no_lookup(_: &str) -> Option<String> {
     None
 }
@@ -174,7 +179,8 @@ fn resolve(ask: &Ask<'_>) -> Result<Secret, CredentialError> {
         CredentialSource::Cli => run_credential(what, CLI_TOKEN_CMD, ask.deadline),
         CredentialSource::File { path } => read_file(what, path),
         CredentialSource::Secret { name } => (ask.lookup)(name.trim())
-            .filter(|v| !v.trim().is_empty())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
             .map(Secret::new)
             .ok_or_else(|| CredentialError::Io {
                 what,
@@ -184,10 +190,27 @@ fn resolve(ask: &Ask<'_>) -> Result<Secret, CredentialError> {
     }
 }
 
-/// Primeira linha não vazia do arquivo. O erro cita o caminho, nunca o
+/// Primeira linha não vazia do arquivo, sem espaços nas pontas, com `~` e
+/// `~/...` expandidos pelo `HOME` (#274): o mesmo token que o prefixo da
+/// sessão lê (`ct_core::provider::file_cmd`). O erro cita o caminho, nunca o
 /// conteúdo.
 fn read_file(what: &'static str, path: &str) -> Result<Secret, CredentialError> {
-    let text = std::fs::read_to_string(path).map_err(|e| CredentialError::Io {
+    read_file_in(what, path, std::env::var_os("HOME").map(PathBuf::from))
+}
+
+/// [`read_file`] com o `HOME` dado.
+fn read_file_in(
+    what: &'static str,
+    path: &str,
+    home: Option<PathBuf>,
+) -> Result<Secret, CredentialError> {
+    let path = path.trim();
+    let full = match (path, path.strip_prefix("~/"), home) {
+        ("~", _, Some(home)) => home,
+        (_, Some(rest), Some(home)) => home.join(rest),
+        _ => PathBuf::from(path),
+    };
+    let text = std::fs::read_to_string(full).map_err(|e| CredentialError::Io {
         what,
         message: format!("não foi possível ler {path:?}: {}", e.kind()),
     })?;
@@ -318,6 +341,43 @@ mod tests {
         let none = CredentialSource::None;
         let e = r.token(ask("x:1", "GitLab", &none)).unwrap_err();
         assert_eq!(e, CredentialError::Missing { what: "GitLab" });
+    }
+
+    /// `~` e `~/...` expandem pelo `HOME` (#274); outro `~` no começo não.
+    /// O secret vem sem espaços nas pontas, como o `$(...)` do prefixo.
+    #[test]
+    fn arquivo_com_til_e_secret_aparado() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join("acme cfg")).unwrap();
+        std::fs::write(
+            home.path().join("acme cfg/it's token"),
+            "\r\n \t tok-acme-til \r\nresto\n",
+        )
+        .unwrap();
+        let h = || Some(home.path().to_path_buf());
+        let t = read_file_in("Jira", " ~/acme cfg/it's token ", h()).unwrap();
+        assert_eq!(t.expose(), "tok-acme-til");
+        assert!(read_file_in("Jira", "~", h()).is_err(), "~ é diretório");
+        let e = read_file_in("Jira", "~fulano/tok", h()).unwrap_err();
+        assert!(e.to_string().contains("~fulano/tok"), "{e}");
+        std::fs::write(home.path().join("branco"), " \n\t\n").unwrap();
+        assert_eq!(
+            read_file_in("Jira", "~/branco", h()).unwrap_err(),
+            CredentialError::Empty { what: "Jira" }
+        );
+
+        let r = CredentialResolver::new();
+        let sec = CredentialSource::Secret {
+            name: "JIRA_TOKEN_ACME".into(),
+        };
+        let lookup = |_: &str| Some("  tok-acme-secret\n".to_string());
+        let mut a = ask("jira:10", "Jira", &sec);
+        a.lookup = &lookup;
+        assert_eq!(r.token(a).unwrap().expose(), "tok-acme-secret");
+        let branco = |_: &str| Some(" \n".to_string());
+        a.lookup = &branco;
+        r.invalidate("jira:10");
+        assert!(r.token(a).is_err());
     }
 
     #[test]
