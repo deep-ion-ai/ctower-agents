@@ -27,6 +27,7 @@ function info(p: Partial<EnvInfo> = {}): EnvInfo {
   return {
     protocol: "2.0",
     version: "0.1.0",
+    capabilities: ["version-handshake"],
     hostname: "wsl",
     worktrees_root: "/home/wsl/worktrees",
     env_id: "daemon-wsl",

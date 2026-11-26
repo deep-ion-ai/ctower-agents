@@ -17,6 +17,103 @@ pub const ENV_ID_HEADER: &str = "x-ctower-env-id";
 /// antigo), o hub não entrega secrets.
 pub const ENV_PUBKEY_HEADER: &str = "x-ctower-env-pubkey";
 
+/// Versão do contrato de sync (`protocol`): sobe quando o que o hub e o
+/// ambiente trocam em `/sync/channel`, `/sync/push` e `/sync/config` muda.
+pub const SYNC_PROTOCOL_VERSION: &str = "1.0";
+
+/// Cabeçalhos com a versão de quem chama (#227): `protocol` e `version` vão
+/// ao abrir `/sync/channel` e em cada `/sync/push` e `/sync/config`. Hub e
+/// ambiente precisam ter a mesma versão: diferente (ou ausente) é recusado.
+pub const PROTOCOL_HEADER: &str = "x-ctower-protocol";
+pub const VERSION_HEADER: &str = "x-ctower-version";
+
+/// Código de erro da recusa por versão diferente (`error` do corpo de
+/// [`VersionRefusal`]). A resposta usa o status `426 Upgrade Required`.
+pub const VERSION_MISMATCH: &str = "version_mismatch";
+
+/// Capacidade `version-handshake` em `capabilities` de `env.info` e `hub.info`
+/// (gating futuro por recurso).
+pub const CAPABILITY_VERSION_HANDSHAKE: &str = "version-handshake";
+
+/// Versão de um lado do sync: o contrato (`protocol`) e o build (`version`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionInfo {
+    pub protocol: String,
+    pub version: String,
+}
+
+impl VersionInfo {
+    /// A versão deste build.
+    pub fn local() -> Self {
+        VersionInfo {
+            protocol: SYNC_PROTOCOL_VERSION.into(),
+            version: ct_core::VERSION.into(),
+        }
+    }
+
+    /// Lê `protocol` e `version` dos cabeçalhos; `None` se faltar um deles.
+    pub fn from_headers(headers: &axum::http::HeaderMap) -> Option<Self> {
+        let get = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        Some(VersionInfo {
+            protocol: get(PROTOCOL_HEADER)?,
+            version: get(VERSION_HEADER)?,
+        })
+    }
+
+    /// Mesma versão do contrato e do build.
+    pub fn same_as(&self, other: &VersionInfo) -> bool {
+        self.protocol == other.protocol && self.version == other.version
+    }
+
+    /// `versão X (protocolo P)`, para as mensagens.
+    pub fn describe(&self) -> String {
+        format!("{} (protocolo {})", self.version, self.protocol)
+    }
+}
+
+/// Corpo da recusa por versão diferente (HTTP 426): diz as duas versões. `env`
+/// é `None` quando o ambiente não mandou a versão (ambiente anterior ao
+/// handshake).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionRefusal {
+    pub error: String,
+    pub message: String,
+    pub hub: VersionInfo,
+    pub env: Option<VersionInfo>,
+}
+
+impl VersionRefusal {
+    /// A recusa de `env` (ou de um ambiente sem versão) frente a `hub`.
+    pub fn new(hub: VersionInfo, env: Option<VersionInfo>) -> Self {
+        let message = match &env {
+            Some(e) => format!(
+                "versão diferente: hub {} × ambiente {}; hub e ambiente precisam ter a mesma \
+                 versão, atualize o que estiver atrás",
+                hub.describe(),
+                e.describe()
+            ),
+            None => format!(
+                "o ambiente não informou a versão: hub {}; hub e ambiente precisam ter a mesma \
+                 versão, atualize o ambiente",
+                hub.describe()
+            ),
+        };
+        VersionRefusal {
+            error: VERSION_MISMATCH.into(),
+            message,
+            hub,
+            env,
+        }
+    }
+}
+
 /// Resposta de `GET /sync/config`: a configuração ([`ConfigResponse`]) e,
 /// quando ela mudou (ou a chave pública do ambiente mudou desde a última
 /// entrega), os secrets e variáveis globais e dos projetos atribuídos.

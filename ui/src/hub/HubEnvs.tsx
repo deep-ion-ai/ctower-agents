@@ -37,6 +37,11 @@ export function HubEnvs({ now }: { now: number }) {
     }
   };
   const nav = useNav();
+  // Hub e ambiente precisam ter a mesma versão (#227): diferente, ou sem
+  // versão informada, é "desatualizado". Sem `hub.info` ainda, não marca.
+  const hubInfo = hub.info;
+  const outdated = (e: HubEnv) =>
+    !!hubInfo && (e.version !== hubInfo.version || e.protocol !== hubInfo.protocol);
   const byEnv = new Map<string, HubAssignment[]>();
   for (const p of hub.projects) {
     for (const a of p.assignments) byEnv.set(a.env_id, [...(byEnv.get(a.env_id) ?? []), a]);
@@ -57,6 +62,7 @@ export function HubEnvs({ now }: { now: number }) {
               <tr>
                 <th>Ambiente</th>
                 <th>Último envio</th>
+                <th>Versão</th>
                 <th>Pendências</th>
                 <th>Limpezas</th>
                 {autonomy && <th>Autônomo</th>}
@@ -89,6 +95,32 @@ export function HubEnvs({ now }: { now: number }) {
                       <span className="mono muted small">{e.env_id}</span>
                     </td>
                     <td>{e.last_seen_at ? ago(e.last_seen_at, now) : "nunca"}</td>
+                    <td>
+                      {e.version ? <span className="mono">{e.version}</span> : <span className="muted">não informada</span>}
+                      {outdated(e) && (
+                        <>
+                          <br />
+                          <span className="state-off strong">desatualizado</span>
+                          {web ? (
+                            <span className="muted small"> · atualize o ambiente</span>
+                          ) : uiEnv ? (
+                            <>
+                              {" "}
+                              <button
+                                type="button"
+                                className="link-btn"
+                                title="Atualização do ambiente nesta UI (o hub não atualiza ambientes sozinho)"
+                                onClick={() => nav.openTab(maintenanceTab("env-updates", uiEnv.id))}
+                              >
+                                atualizar
+                              </button>
+                            </>
+                          ) : (
+                            <span className="muted small"> · atualize o ambiente (Manutenção › Ambientes)</span>
+                          )}
+                        </>
+                      )}
+                    </td>
                     <td>{e.pending}</td>
                     <td>
                       {!e.cleanup ? (

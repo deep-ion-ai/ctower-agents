@@ -68,6 +68,8 @@ pub struct HubInfo {
     /// Versão do protocolo do hub (`major.minor`).
     pub protocol: String,
     pub version: String,
+    /// Capacidades do hub, para gating por recurso (#227).
+    pub capabilities: Vec<String>,
     /// Commit do build; vazio se compilado fora do git.
     pub commit: String,
     pub name: String,
@@ -920,6 +922,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
         "hub.info" => Ok(json!(HubInfo {
             protocol: crate::PROTOCOL_VERSION.into(),
             version: ct_core::VERSION.into(),
+            capabilities: vec![ct_http::sync::CAPABILITY_VERSION_HANDSHAKE.into()],
             commit: ct_core::BUILD_COMMIT.into(),
             name: st.name.to_string(),
             config_rev: h.config_rev().map_err(e)?,
@@ -4545,6 +4548,7 @@ pub(crate) mod tests {
         assert!(v["result"]["envs"].is_array(), "{v}");
         let v = web.call("hub.info", json!({})).await;
         assert_eq!(v["result"]["protocol"], crate::PROTOCOL_VERSION);
+        assert_eq!(v["result"]["capabilities"], json!(["version-handshake"]));
         let v = web.call("hub.projects.list", json!({})).await;
         assert_eq!(v["result"][0]["project"]["gh_repo"], "demo");
         // Ação da fase 1 que escreve: mudar status.
@@ -4685,6 +4689,14 @@ pub(crate) mod tests {
         let h = req.headers_mut();
         h.insert("authorization", format!("Bearer {tok}").parse().unwrap());
         h.insert(ct_http::sync::ENV_ID_HEADER, env_id.parse().unwrap());
+        h.insert(
+            ct_http::sync::PROTOCOL_HEADER,
+            ct_http::sync::SYNC_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        h.insert(
+            ct_http::sync::VERSION_HEADER,
+            ct_core::VERSION.parse().unwrap(),
+        );
         let (ws, _) = connect_async(req).await.unwrap();
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let log = std::sync::Arc::clone(&seen);
@@ -4805,6 +4817,14 @@ pub(crate) mod tests {
         let h = req.headers_mut();
         h.insert("authorization", format!("Bearer {tok}").parse().unwrap());
         h.insert(ct_http::sync::ENV_ID_HEADER, env_id.parse().unwrap());
+        h.insert(
+            ct_http::sync::PROTOCOL_HEADER,
+            ct_http::sync::SYNC_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        h.insert(
+            ct_http::sync::VERSION_HEADER,
+            ct_core::VERSION.parse().unwrap(),
+        );
         let (ws, _) = connect_async(req).await.unwrap();
         let task = tokio::spawn(async move {
             let (mut tx, mut rx) = ws.split();

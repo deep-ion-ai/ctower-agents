@@ -29,6 +29,7 @@ const NOW = Date.now();
 function info(p: Partial<EnvInfo> = {}): EnvInfo {
   return {
     protocol: "2.0",
+    capabilities: ["version-handshake"],
     version: "0.3.0",
     hostname: "notebook",
     worktrees_root: "/home/u/worktrees",

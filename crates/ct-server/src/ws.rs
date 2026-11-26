@@ -384,6 +384,7 @@ impl Conn {
                 Ok(json!(EnvInfo {
                     protocol: PROTOCOL_VERSION.into(),
                     version: ct_core::VERSION.into(),
+                    capabilities: vec![ct_http::sync::CAPABILITY_VERSION_HANDSHAKE.into()],
                     commit: ct_core::BUILD_COMMIT.into(),
                     hostname: hostname(),
                     worktrees_root: sessions.config().worktrees_root.display().to_string(),
@@ -2141,6 +2142,7 @@ mod tests {
         let mut ui = Ui::new(&url).await;
         let v = ui.call("env.info", json!({})).await;
         assert_eq!(v["result"]["protocol"], PROTOCOL_VERSION);
+        assert_eq!(v["result"]["capabilities"], json!(["version-handshake"]));
         assert_eq!(
             v["result"]["worktrees_root"],
             srv.env.cfg.worktrees_root.display().to_string()

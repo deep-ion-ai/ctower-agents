@@ -31,6 +31,7 @@ const NOW = Date.now();
 function info(): EnvInfo {
   return {
     protocol: "2.0",
+    capabilities: ["version-handshake"],
     version: "0.1.0",
     commit: "",
     hostname: "wsl",

@@ -322,6 +322,7 @@ test("com o ambiente falando com o hub: o seletor de status da tela Projeto e as
   const info: EnvInfo = {
     protocol: "2.9",
     version: "0.1.0",
+    capabilities: ["version-handshake"],
     commit: "",
     hostname: "ct",
     worktrees_root: "/w",

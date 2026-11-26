@@ -10,6 +10,10 @@ export type HubInfo = {
  */
 protocol: string, version: string, 
 /**
+ * Capacidades do hub, para gating por recurso (#227).
+ */
+capabilities: Array<string>, 
+/**
  * Commit do build; vazio se compilado fora do git.
  */
 commit: string, name: string, 

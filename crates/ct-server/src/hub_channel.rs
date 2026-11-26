@@ -117,6 +117,16 @@ async fn connect(url: &str, token: &str, env_id: &str) -> Result<Ws, String> {
         ENV_ID_HEADER,
         HeaderValue::from_str(env_id).map_err(|e| e.to_string())?,
     );
+    // Handshake de versão (#227): o hub recusa com 426 se não for a mesma.
+    let local = ct_http::sync::VersionInfo::local();
+    h.insert(
+        ct_http::sync::PROTOCOL_HEADER,
+        HeaderValue::from_str(&local.protocol).map_err(|e| e.to_string())?,
+    );
+    h.insert(
+        ct_http::sync::VERSION_HEADER,
+        HeaderValue::from_str(&local.version).map_err(|e| e.to_string())?,
+    );
     match tokio_tungstenite::connect_async(req).await {
         Ok((ws, _)) => Ok(ws),
         Err(WsError::Http(resp)) => {

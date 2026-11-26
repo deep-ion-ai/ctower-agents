@@ -16,6 +16,10 @@ export type EnvInfo = {
  */
 protocol: string, version: string, 
 /**
+ * Capacidades do ambiente, para gating por recurso (#227).
+ */
+capabilities: Array<string>, 
+/**
  * Commit do build; vazio se compilado fora do git.
  */
 commit: string, hostname: string, 

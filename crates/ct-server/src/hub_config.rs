@@ -254,11 +254,14 @@ impl HubSender {
                 None
             }
         };
+        let local = ct_http::sync::VersionInfo::local();
         let mut req = self
             .agent
             .get(&url)
             .set("Authorization", &format!("Bearer {}", self.target.token))
-            .set(ENV_ID_HEADER, &env_id);
+            .set(ENV_ID_HEADER, &env_id)
+            .set(ct_http::sync::PROTOCOL_HEADER, &local.protocol)
+            .set(ct_http::sync::VERSION_HEADER, &local.version);
         if let Some(k) = &pubkey {
             req = req.set(ENV_PUBKEY_HEADER, k);
         }

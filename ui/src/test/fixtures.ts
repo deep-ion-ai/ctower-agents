@@ -132,6 +132,7 @@ export function envInfo(p: Partial<EnvInfo> = {}): EnvInfo {
   return {
     protocol: "2.8",
     version: "0.14.0",
+    capabilities: ["version-handshake"],
     commit: "",
     hostname: "wsl",
     worktrees_root: "/home/wsl/worktrees",
@@ -245,7 +246,7 @@ export const HUB_DOCS_BACKUP: DocsBackupStatus = {
 };
 
 export function hubInfo(p: Partial<HubInfo> = {}): HubInfo {
-  return { protocol: "1.0", version: "0.3.0", commit: "", name: "mac-mini", config_rev: 7, backup: HUB_BACKUP, docs_dir: null, ...p };
+  return { protocol: "1.0", version: "0.3.0", capabilities: ["version-handshake"], commit: "", name: "mac-mini", config_rev: 7, backup: HUB_BACKUP, docs_dir: null, ...p };
 }
 
 export const NO_PROPOSALS: HubProposals = { proposals: [], truncated: false };
@@ -403,7 +404,7 @@ export function hubProjectView(
 }
 
 export function hubEnv(e: Partial<HubEnv> = {}): HubEnv {
-  return { env_id: "daemon-wsl", name: "wsl-pc", created_at: 0, last_seen_at: NOW - MIN, last_seq: 10, pending: 0, cleanup: null, online: false, autonomous: false, ...e };
+  return { env_id: "daemon-wsl", name: "wsl-pc", created_at: 0, last_seen_at: NOW - MIN, last_seq: 10, pending: 0, cleanup: null, online: false, autonomous: false, protocol: null, version: null, ...e };
 }
 
 export const HUB_DASHBOARD: HubDashboard = {

@@ -905,6 +905,13 @@ CREATE TABLE autopilot_analysis (
   failed_at  INTEGER
 );
 "#,
+    // 44: versão que o ambiente informa no handshake (#227): `protocol` e
+    // `version` do último envio ou abertura do canal. Nulo = o ambiente nunca
+    // informou (anterior ao handshake).
+    r#"
+ALTER TABLE env ADD COLUMN protocol TEXT;
+ALTER TABLE env ADD COLUMN version TEXT;
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1252,6 +1259,15 @@ pub struct HubEnv {
     /// autônomas de um projeto. Ausente num hub anterior: não.
     #[serde(default)]
     pub autonomous: bool,
+    /// Versão do contrato (`protocol`) que o ambiente informou no handshake
+    /// (#227); `None` = nunca informou.
+    #[serde(default)]
+    pub protocol: Option<String>,
+    /// Versão do build que o ambiente informou no handshake (#227); `None` =
+    /// nunca informou. Diferente da do hub: a sala de controle mostra
+    /// "desatualizado".
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// Resumo do último plano de limpeza de um ambiente (issue #287): vai a cada
@@ -2345,6 +2361,25 @@ impl Hub {
         self.gh().pr_checks_by_head(project_id, head, base)
     }
 
+    /// Grava a versão que o ambiente informou no handshake (#227). `None` =
+    /// o ambiente não informou (ambiente anterior ao handshake).
+    pub fn set_env_version(
+        &self,
+        env_id: &str,
+        protocol: Option<&str>,
+        version: Option<&str>,
+    ) -> Result<()> {
+        // A linha pode ainda não existir (primeiro envio, antes do ingest): cria
+        // como os outros caminhos, com o `env_id` de nome até o ingest.
+        self.conn.execute(
+            "INSERT INTO env (env_id, name, created_at, protocol, version) VALUES (?1, ?1, ?2, ?3, ?4)
+             ON CONFLICT (env_id) DO UPDATE SET protocol = excluded.protocol,
+                version = excluded.version",
+            params![env_id, now_ms(), protocol, version],
+        )?;
+        Ok(())
+    }
+
     /// Registra quantas mudanças o ambiente ainda tem no outbox.
     pub fn set_env_pending(&self, env_id: &str, pending: i64) -> Result<()> {
         self.conn.execute(
@@ -2836,7 +2871,8 @@ impl Hub {
     pub fn list_envs(&self) -> Result<Vec<HubEnv>> {
         let mut stmt = self.conn.prepare(
             "SELECT env_id, name, created_at, last_seen_at, last_seq, pending,
-                    cleanup_checked_at, cleanup_items, cleanup_bytes, autonomous FROM env
+                    cleanup_checked_at, cleanup_items, cleanup_bytes, autonomous, protocol,
+                    version FROM env
              WHERE last_seen_at IS NOT NULL ORDER BY name",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -2855,6 +2891,8 @@ impl Hub {
                 }),
                 online: false,
                 autonomous: r.get(9)?,
+                protocol: r.get(10)?,
+                version: r.get(11)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -5336,7 +5374,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 43);
+        assert_eq!(v, 44);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
