@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toApiError } from "./errors";
 import type { DaemonMethods } from "../protocol/gen/methods";
+import type { HubMethods } from "../protocol/hub-gen/methods";
 import type {
   EnvInput,
   EnvStatus,
@@ -23,6 +24,11 @@ import type {
 export type MethodArgs<M extends keyof DaemonMethods> = null extends DaemonMethods[M]["params"]
   ? [params?: DaemonMethods[M]["params"]]
   : [params: DaemonMethods[M]["params"]];
+
+/** Mesma regra de `MethodArgs`, para os métodos do hub (`HubMethods`). */
+export type HubMethodArgs<M extends keyof HubMethods> = null extends HubMethods[M]["params"]
+  ? [params?: HubMethods[M]["params"]]
+  : [params: HubMethods[M]["params"]];
 
 /** Tudo que a UI faz com os daemons passa por aqui (fácil de trocar nos testes). */
 export interface DaemonApi {
@@ -52,7 +58,18 @@ export interface DaemonApi {
   saveHub(hub: HubConnInput | null): Promise<HubConnView | null>;
   /** Estado da conexão com o hub (`null` = não configurada ou ainda conectando). */
   hubStatus(): Promise<EnvStatus | null>;
-  /** Requisição ao `/ws` do hub; rejeita com a mensagem de erro. */
+  /**
+   * Requisição tipada ao `/ws` do hub: `method` é um método do registro do hub
+   * (`HubMethods`, gerado de `crates/cthubd/src/methods.rs`). Rejeita com a mensagem de erro.
+   */
+  hubCall<M extends keyof HubMethods>(
+    method: M,
+    ...args: HubMethodArgs<M>
+  ): Promise<HubMethods[M]["result"]>;
+  /**
+   * Requisição sem tipo ao `/ws` do hub (método fora do registro, ou com o tipo
+   * dado por quem chama); rejeita com a mensagem de erro.
+   */
   hubCall<T = unknown>(method: string, params?: object): Promise<T>;
   onHubStatus(cb: (s: EnvStatus) => void): Unsubscribe;
   onHubPush(cb: (e: PushEvent) => void): Unsubscribe;

@@ -24,6 +24,7 @@ pub mod cli;
 pub mod config;
 pub mod docs_backup;
 pub mod github;
+pub mod methods;
 pub mod migrate;
 pub mod push;
 pub mod release;
