@@ -47,7 +47,7 @@ Use o Jira como modelo: `JiraDescriptor` em `provider.rs`.
    - o formulário e os rótulos da UI (`CRED_KINDS` e `CRED_TEXT`);
    - a regeneração dos tipos TypeScript (passo 7).
 
-5. **Resolução no ambiente.** Quem usa o token chama `CredentialResolver::token` ou `with_refresh`, com um `Ask`: a chave do cache (`jira:<projeto>`, `gitlab:<projeto>`), o nome para as mensagens, a fonte, a busca de secret e o prazo do comando. Hoje Jira e GitLab passam `no_lookup` como busca de secret, então `secret` não resolve neles no ambiente (veja abaixo). Um tipo novo precisa de um ponto de chamada próprio.
+5. **Resolução no ambiente.** Quem usa o token chama `CredentialResolver::token` ou `with_refresh`, com um `Ask`: a chave do cache (`jira:<projeto>`, `gitlab:<projeto>`), o nome para as mensagens, a fonte, a busca de secret e o prazo do comando. Hoje Jira e GitLab passam `no_lookup` como busca de secret, então `secret` não resolve neles no ambiente (veja abaixo). Um tipo novo precisa de um ponto de chamada próprio. O mascaramento das sessões (`connection_mask`, em `crates/ct-sessions/src/secrets.rs`) só lê o cache com `CredentialResolver::cached` e nunca resolve: abrir uma sessão não roda comando de credencial. Cada token resolvido de novo atualiza o mascaramento das sessões vivas (`Sessions::refresh_masks`). Um tipo novo cujo token deva ser mascarado entra em `connection_mask`.
 
 6. **Projeto e materialização.** Para um tipo que o projeto referencia, o cadastro do projeto ganha o campo `connection` (como `JiraConfig.connection`). O hub confere a referência em `check_project_connections`, e `materialize_connections` precisa de um ramo que preencha os campos do projeto a partir da conexão. Sem esse ramo, o ambiente não usa a conexão.
 
