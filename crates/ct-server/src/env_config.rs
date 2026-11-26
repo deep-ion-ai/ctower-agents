@@ -314,9 +314,9 @@ pub fn read_connection_overrides(path: &Path) -> ct_core::ConnectionOverrides {
 /// Primeiro pull com conexões (#237): o `[credentials."owner/repo"]` do
 /// arquivo vai para `[connections."nome"]`, pela conexão de cada projeto.
 /// O que não converte (projeto sem conexão aqui, ou comando que brigaria
-/// com outro) fica em `[credentials]`. Sem `[credentials]`, o arquivo não
-/// muda. Devolve as conexões em uso, o que ficou em `[credentials]` e os
-/// avisos.
+/// com outro) fica em `[credentials]`. Sem `[credentials]`, ou sem nada que
+/// converta, o arquivo não muda; senão as tabelas são editadas no lugar.
+/// Devolve as conexões em uso, o que ficou em `[credentials]` e os avisos.
 pub fn convert_credentials_file(
     path: &Path,
     projects: &[ct_core::ProjectConnections],
@@ -346,27 +346,76 @@ pub fn convert_credentials_file(
     if creds.credentials.is_empty() {
         return Ok((existing, Default::default(), Vec::new()));
     }
-    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|_| invalid())?;
     let (conns, left, warnings) =
         ct_core::convert_credentials(&creds.credentials, projects, &existing);
-    doc.remove("credentials");
-    if !left.is_empty() {
-        doc["credentials"] = toml_edit::table();
-        for (key, o) in &left.0 {
-            if !o.tracker_cmd.is_empty() {
-                doc["credentials"][key]["tracker_cmd"] = toml_edit::value(o.tracker_cmd.clone());
-            }
-            if !o.forge_cmd.is_empty() {
-                doc["credentials"][key]["forge_cmd"] = toml_edit::value(o.forge_cmd.clone());
+    // Sem mudança (o que sobra não converte, #269), o arquivo fica intacto.
+    if conns == existing && left == creds.credentials {
+        return Ok((conns, left, warnings));
+    }
+    // As tabelas são editadas no lugar, não recriadas: ficam na mesma
+    // posição e com os comentários do usuário.
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|_| invalid())?;
+    if left.is_empty() {
+        doc.remove("credentials");
+    } else if let Some(t) = doc
+        .get_mut("credentials")
+        .and_then(|i| i.as_table_like_mut())
+    {
+        let keys: Vec<String> = t.iter().map(|(k, _)| k.to_string()).collect();
+        for key in keys {
+            let Some(o) = left.0.get(&key) else {
+                t.remove(&key);
+                continue;
+            };
+            if let Some(e) = t.get_mut(&key).and_then(|i| i.as_table_like_mut()) {
+                set_cmd(e, "tracker_cmd", &o.tracker_cmd);
+                set_cmd(e, "forge_cmd", &o.forge_cmd);
             }
         }
     }
-    doc["connections"] = toml_edit::table();
-    for (name, o) in &conns.0 {
-        doc["connections"][name]["credential_cmd"] = toml_edit::value(o.credential_cmd.clone());
+    if conns != existing {
+        if !doc.contains_key("connections") {
+            let mut t = toml_edit::Table::new();
+            t.set_implicit(true);
+            doc.insert("connections", toml_edit::Item::Table(t));
+        }
+        let t = doc["connections"].as_table_like_mut().ok_or_else(invalid)?;
+        for (name, o) in &conns.0 {
+            if existing.0.get(name) == Some(o) {
+                continue;
+            }
+            match t.get_mut(name).and_then(|i| i.as_table_like_mut()) {
+                Some(e) => set_cmd(e, "credential_cmd", &o.credential_cmd),
+                None => {
+                    let mut e = toml_edit::Table::new();
+                    e["credential_cmd"] = toml_edit::value(o.credential_cmd.clone());
+                    t.insert(name, toml_edit::Item::Table(e));
+                }
+            }
+        }
     }
     write_atomic(path, &doc.to_string())?;
     Ok((conns, left, warnings))
+}
+
+/// Grava `cmd` em `field` (vazio remove). Valor igual não é tocado; valor
+/// trocado mantém o comentário da linha.
+fn set_cmd(t: &mut dyn toml_edit::TableLike, field: &str, cmd: &str) {
+    if cmd.is_empty() {
+        t.remove(field);
+        return;
+    }
+    match t.get_mut(field).and_then(|i| i.as_value_mut()) {
+        Some(v) if v.as_str() == Some(cmd) => {}
+        Some(v) => {
+            let decor = v.decor().clone();
+            *v = cmd.into();
+            *v.decor_mut() = decor;
+        }
+        None => {
+            t.insert(field, toml_edit::value(cmd));
+        }
+    }
 }
 
 /// Temporário + rename, com a permissão do arquivo atual. O temporário leva
@@ -533,6 +582,125 @@ mod conexoes_tests {
         assert_eq!(de_novo, conns);
         assert!(avisos.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+
+    /// Identidade do arquivo: a gravação é temporário + rename, então
+    /// qualquer escrita troca o inode.
+    fn inode(path: &Path) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).unwrap().ino()
+    }
+
+    fn projetos() -> [ct_core::ProjectConnections; 2] {
+        [
+            ct_core::ProjectConnections {
+                owner: "acme".into(),
+                repo: "acme-web".into(),
+                tracker: Some("jira-acme".into()),
+                forge: None,
+            },
+            // Sem conexão neste ambiente: o comando fica em `[credentials]`.
+            ct_core::ProjectConnections {
+                owner: "acme".into(),
+                repo: "acme-api".into(),
+                tracker: None,
+                forge: None,
+            },
+        ]
+    }
+
+    /// #269: o que sobra em `[credentials]` não faz o pull regravar o
+    /// arquivo; e a conversão que grava mantém o lugar e os comentários das
+    /// tabelas.
+    #[test]
+    fn sobra_em_credentials_nao_regrava_e_comentarios_ficam() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        let original = "# topo\nport = 7878\n\n\
+                        # minhas conexões\n\
+                        [connections.\"gitlab-acme\"] # do GitLab\n\
+                        credential_cmd = \"pass show gl\" # token\n\n\
+                        [credentials.\"acme/acme-api\"]\n\
+                        tracker_cmd = \"pass show api\"\n\n\
+                        # a converter\n\
+                        [credentials.\"acme/acme-web\"]\n\
+                        tracker_cmd = \"pass show web\"\n\n\
+                        # fim\n";
+        std::fs::write(&path, original).unwrap();
+
+        let (conns, sobra, avisos) = convert_credentials_file(&path, &projetos()).unwrap();
+        assert_eq!(conns.credential_cmd("jira-acme"), Some("pass show web"));
+        assert_eq!(conns.credential_cmd("gitlab-acme"), Some("pass show gl"));
+        assert_eq!(
+            sobra.get("acme", "acme-api").unwrap().tracker_cmd,
+            "pass show api"
+        );
+        assert!(sobra.get("acme", "acme-web").is_none());
+        assert_eq!(avisos.len(), 1, "{avisos:?}");
+        let text = std::fs::read_to_string(&path).unwrap();
+        for trecho in [
+            "# topo\nport = 7878\n",
+            "# minhas conexões\n[connections.\"gitlab-acme\"] # do GitLab\n\
+             credential_cmd = \"pass show gl\" # token\n",
+            "[credentials.\"acme/acme-api\"]\ntracker_cmd = \"pass show api\"\n",
+            "# fim\n",
+        ] {
+            assert!(text.contains(trecho), "{trecho:?} em:\n{text}");
+        }
+        assert!(!text.contains("acme/acme-web"), "{text}");
+        assert!(!text.contains("pass show web\" "), "{text}");
+        // A conexão nova entra junto das outras, antes do `[credentials]`.
+        let nova = text.find("[connections.jira-acme]").expect(&text);
+        assert!(nova < text.find("[credentials").unwrap(), "{text}");
+        assert!(
+            text.find("[connections.\"gitlab-acme\"]").unwrap() < nova,
+            "{text}"
+        );
+        assert_eq!(read_connection_overrides(&path), conns);
+
+        // Pulls seguintes, sem mudança efetiva: o arquivo não é tocado.
+        let antes = inode(&path);
+        for _ in 0..2 {
+            let (de_novo, sobra_de_novo, _) = convert_credentials_file(&path, &projetos()).unwrap();
+            assert_eq!((de_novo, sobra_de_novo), (conns.clone(), sobra.clone()));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+            assert_eq!(inode(&path), antes);
+        }
+    }
+
+    /// Comando trocado no lugar (o projeto ganhou conexão da forja): a linha
+    /// fica onde estava e o comentário dela também.
+    #[test]
+    fn comando_que_fica_e_editado_no_lugar() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[credentials.\"acme/acme-web\"] # web\n\
+             tracker_cmd = \"pass show web\" # jira\n\
+             forge_cmd = \"pass show gl\"\n",
+        )
+        .unwrap();
+        let p = [ct_core::ProjectConnections {
+            owner: "acme".into(),
+            repo: "acme-web".into(),
+            tracker: None,
+            forge: Some("gitlab-acme".into()),
+        }];
+        let (conns, sobra, _) = convert_credentials_file(&path, &p).unwrap();
+        assert_eq!(conns.credential_cmd("gitlab-acme"), Some("pass show gl"));
+        assert_eq!(sobra.get("acme", "acme-web").unwrap().forge_cmd, "");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with(
+                "[credentials.\"acme/acme-web\"] # web\ntracker_cmd = \"pass show web\" # jira\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("forge_cmd"), "{text}");
+        let antes = inode(&path);
+        convert_credentials_file(&path, &p).unwrap();
+        assert_eq!(inode(&path), antes);
     }
 }
 
