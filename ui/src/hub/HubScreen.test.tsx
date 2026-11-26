@@ -96,7 +96,6 @@ function setup(
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
     .onHub("hub.proposals.list", () => opts.proposals?.() ?? NO_PROPOSALS)
     .onHub("hub.health.get", opts.health ?? NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.backup.get", {
       remote: { kind: "none", encrypt: true, bucket: "", prefix: "", region: "us-east-1", endpoint: "", drive_folder_id: "" },
       status: HUB_BACKUP,
@@ -150,7 +149,7 @@ test("hub fora: aviso e as sessões seguem nos ambientes", async () => {
   expect(api.calls.filter((c) => c.env === "hub")).toHaveLength(0);
 });
 
-test("informações, avisos de hub.status e token do GitHub do hub", async () => {
+test("informações, avisos de hub.status e o token do GitHub do hub em Conexões", async () => {
   const { api, user } = setup({
     status: hubStatus({
       warnings: [
@@ -182,11 +181,11 @@ test("informações, avisos de hub.status e token do GitHub do hub", async () =>
   expect(screen.getByRole("tab", { name: "Manutenção · Backup e snapshots" })).toHaveAttribute("aria-selected", "true");
   expect(await screen.findByRole("heading", { name: "Backup do hub" })).toBeInTheDocument();
   await user.click(screen.getByRole("tab", { name: "Hub · Visão geral" }));
-  // O token do GitHub é o do hub, não o de um ambiente.
-  await user.click(sideRow("Token do GitHub"));
-  expect(await screen.findByText("@hub-bot")).toBeInTheDocument();
-  expect(api.hubCallsTo("github.status")).toHaveLength(1);
-  expect(api.calls.filter((c) => c.method === "github.status" && c.env !== "hub")).toHaveLength(0);
+  // O token do GitHub do hub vem da conexão `github` (#263): sem seção própria nem RPC `github.*`.
+  expect(screen.queryByRole("button", { name: /Token do GitHub/ })).not.toBeInTheDocument();
+  await user.click(sideRow("Conexões"));
+  expect(await screen.findByText(/O token do GitHub do hub/)).toHaveTextContent("edite a credencial dela aqui");
+  expect(api.calls.filter((c) => c.method.startsWith("github."))).toHaveLength(0);
 });
 
 test("atribuições com estado; a mensagem só aparece no estado de erro", async () => {
@@ -569,7 +568,7 @@ test("contadores do painel lateral batem com avisos, propostas, sinais e quarent
   // Projetos e atribuições saiu do Hub (#18): o Cadastro fica só com Ambientes.
   expect(screen.queryByRole("button", { name: "Projetos e atribuições" })).not.toBeInTheDocument();
   expect(sideRow("Ambientes")).toHaveAccessibleDescription("3 ambientes");
-  expect(sideRow("Token do GitHub")).toHaveAccessibleDescription("");
+  expect(sideRow("Conexões")).toHaveAccessibleDescription("");
   // Os mesmos números nos títulos da Visão geral.
   expect(section(/^Avisos · 3/)).toBeInTheDocument();
   expect(section(/^Propostas do gestor · 2/)).toBeInTheDocument();

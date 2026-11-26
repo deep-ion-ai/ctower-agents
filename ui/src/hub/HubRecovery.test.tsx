@@ -69,7 +69,6 @@ function setup(rec: ReturnType<typeof hubRecovery>) {
     .onHub("hub.projects.list", [hubProjectView(hubProject())])
     .onHub("hub.envs.list", [hubEnv()])
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.secrets.list", LIST)
     .onHub("hub.recovery.status", () => rec.status())
     .onHub("hub.recovery.generate", () => rec.generate())

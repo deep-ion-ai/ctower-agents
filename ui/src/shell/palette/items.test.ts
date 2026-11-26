@@ -34,7 +34,6 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Hub › Ambientes",
     "Hub › Secrets e variáveis",
     "Hub › Chave de recuperação",
-    "Hub › Token do GitHub",
     "Hub › Sessões web",
     "Hub › Dispositivos",
     "Hub › Painel do piloto",

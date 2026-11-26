@@ -15,7 +15,9 @@ test("grupos e seções: todas aparecem uma vez, na ordem do painel", () => {
   // Backup e snapshots ficam em Manutenção (#338): o Hub não tem mais o grupo.
   expect(HUB_GROUPS.map((g) => g.label)).toEqual(["Operação", "Cadastro", "Segurança", "Acesso", "Piloto automático"]);
   expect(new Set(HUB_SECTIONS).size).toBe(HUB_SECTIONS.length);
-  expect(HUB_SECTIONS).toHaveLength(13);
+  expect(HUB_SECTIONS).toHaveLength(12);
+  // O token do GitHub do hub vem da conexão `github`, em Conexões (#263).
+  expect(HUB_GROUPS.find((g) => g.label === "Segurança")?.sections).toEqual(["secrets", "recovery"]);
   // O painel (#185) fica ao lado do Orçamento, no grupo do piloto automático.
   expect(HUB_GROUPS.find((g) => g.label === "Piloto automático")?.sections).toEqual(["autopilot-panel", "autopilot"]);
   expect(HUB_SECTIONS).not.toContain("backup");
@@ -28,7 +30,7 @@ test("aba por seção: a Visão geral é a aba da tela", () => {
   expect(hubTab("overview")).toEqual({ id: "hub", screen: { name: "hub" } });
   expect(hubTab("secrets")).toEqual({ id: "hub:secrets", screen: { name: "hub", section: "secrets" } });
   expect(hubTitle(undefined)).toBe("Hub · Visão geral");
-  expect(hubTitle("github")).toBe("Hub · Token do GitHub");
+  expect(hubTitle("connections")).toBe("Hub · Conexões");
 });
 
 test("hubTab(\"projects\") (#18): o projeto nas Configurações ou o índice de Projetos, sem id próprio", () => {
