@@ -6,7 +6,8 @@
 //! `cthubd update` (cthubd).
 
 use crate::{
-    git, log_file, tail, workspace_version, write_state, Build, Phase, Source, UpdateState,
+    download, git, log_file, tail, workspace_version, write_state, Build, Phase, Source,
+    UpdateState,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -532,13 +533,30 @@ impl Runner {
         let tmp = self.dir().join("release");
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::create_dir_all(&tmp);
-        let ok = self
-            .sh(Command::new("gh")
+        // Sem token em release pública (#232): só o repositório que o GitHub
+        // mostra como privado passa pelo `gh` autenticado.
+        let downloaded = if download::needs_token(download::API, &repo) {
+            self.sh(Command::new("gh")
                 .args(["release", "download", &tag, "--repo", &repo, "--dir"])
                 .arg(&tmp)
                 .args(["--pattern", &format!("{name}.tar.gz")])
                 .args(["--pattern", &format!("{name}.tar.gz.sha256")]))
-            .is_ok()
+                .is_ok()
+        } else {
+            [format!("{name}.tar.gz"), format!("{name}.tar.gz.sha256")]
+                .iter()
+                .all(|f| {
+                    let url = format!("{}/{repo}/releases/download/{tag}/{f}", download::WEB);
+                    match download::get_to_file(&url, &tmp.join(f), None) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            self.note(&e);
+                            false
+                        }
+                    }
+                })
+        };
+        let ok = downloaded
             && self
                 .sh(Command::new("sh").current_dir(&tmp).args([
                     "-c",
