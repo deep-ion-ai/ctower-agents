@@ -2,6 +2,7 @@
 // formulário, prévia do padrão de branch e o que a prontidão do ambiente de
 // sync pede para configurar. Funções puras, testadas em tracker.test.ts.
 import type {
+  GithubConfig,
   GitlabConfig,
   HubProject,
   HubProjectView,
@@ -128,6 +129,29 @@ export function jiraOf(p: Pick<HubProject, "tracker">): JiraConfig | null {
 
 export function gitlabOf(p: Pick<HubProject, "forge">): GitlabConfig | null {
   return p.forge?.kind === "gitlab" ? (p.forge as GitlabConfig & { kind: "gitlab" }) : null;
+}
+
+/** Nome da conexão GitHub padrão (`ct_core::provider::DEFAULT_GITHUB_CONNECTION`, #275). */
+export const DEFAULT_GITHUB_CONNECTION = "github";
+
+/** O projeto usa o GitHub (rastreador ou forja)? */
+export const isGithub = (p: Provider) => p.tracker?.kind === "github" || p.forge?.kind === "github";
+
+/**
+ * Conexão GitHub do projeto (#275): a do rastreador ou, sem ela, a da forja
+ * (`ct_core::github_connection`). `null` = nenhuma: vale a conexão `github`
+ * padrão.
+ */
+export function githubConnOf(p: Provider): number | null {
+  const of = (c: Provider["tracker"] | Provider["forge"] | undefined) =>
+    c?.kind === "github" ? (c as GithubConfig & { kind: "github" }).connection : undefined;
+  return of(p.tracker) ?? of(p.forge) ?? null;
+}
+
+/** `tracker` e `forge` do projeto GitHub (#275): a conexão escolhida nos dois; vazio = a padrão. */
+export function githubParams(conn: string): { tracker: object; forge: object } {
+  const connection = connectionId(conn);
+  return { tracker: { kind: "github", connection }, forge: { kind: "github", connection } };
 }
 
 /**

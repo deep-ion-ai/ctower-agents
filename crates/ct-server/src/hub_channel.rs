@@ -435,7 +435,7 @@ mod tests {
                         repo_path,
                         rev: 1,
                         tracker: ct_core::TrackerConfig::Jira(jira),
-                        forge: ct_core::ForgeConfig::Github,
+                        forge: ct_core::ForgeConfig::Github(Default::default()),
                         branch_pattern: None,
                         attribution: true,
                         sync: true,

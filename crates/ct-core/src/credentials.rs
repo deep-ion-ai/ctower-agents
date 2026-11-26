@@ -458,13 +458,13 @@ mod tests {
             forge_cmd = "printf tok"
             "#,
         );
-        let (mut t, mut f) = (jira("a"), ForgeConfig::Github);
+        let (mut t, mut f) = (jira("a"), ForgeConfig::Github(Default::default()));
         assert_eq!(
             o.apply("acme", "web", &mut t, &mut f),
             CredentialApplied::default()
         );
         assert_eq!(t.jira().unwrap().credential_cmd, "a");
-        let (mut t, mut f) = (TrackerConfig::Github, gitlab("b"));
+        let (mut t, mut f) = (TrackerConfig::Github(Default::default()), gitlab("b"));
         let a = o.apply("acme", "web", &mut t, &mut f);
         assert!(a.forge && !a.tracker);
         assert_eq!(f.gitlab().unwrap().credential_cmd, "printf tok");

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTower } from "../state/tower";
 import type { ProjectAdded } from "../protocol/hub-gen";
-import { hostsOf, hubSupportsJira, kindOf, providerParams } from "../hub/tracker";
+import { connectionId, githubParams, hostsOf, hubSupportsJira, kindOf, providerParams } from "../hub/tracker";
 import type { ProjectRef } from "../hub/sections";
 import { EMPTY_PROJECT_FORM, GeneralForm, branches, type ProjectForm, type SettingsRun } from "./settings";
 
@@ -41,8 +41,12 @@ export function NewProjectDialog({
   const save = async () => {
     let added: ProjectRef | undefined;
     const ok = await settings.run(async () => {
-      // Jira + GitLab: sem URL do GitHub; o repositório vem da URL do GitLab.
-      let source: Record<string, unknown> = { url: form.url.trim() };
+      // GitHub: a URL e a conexão (#275; vazio = a padrão). Jira + GitLab:
+      // sem URL do GitHub; o repositório vem da URL do GitLab.
+      let source: Record<string, unknown> = {
+        url: form.url.trim(),
+        ...(connectionId(form.github_conn) === null ? {} : githubParams(form.github_conn)),
+      };
       if (kindOf(form.code, form.issues) === "jira") {
         const pv = providerParams(form.jira);
         if ("error" in pv) throw new Error(pv.error);

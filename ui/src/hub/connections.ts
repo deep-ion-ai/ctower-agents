@@ -5,7 +5,7 @@
 // caminho do arquivo, e é isso que a tela mostra e edita.
 import type { Connection, CredentialSource, ProviderKind, Readiness } from "../protocol/gen";
 import type { HubProject } from "../protocol/hub-gen";
-import { gitlabOf, jiraOf } from "./tracker";
+import { DEFAULT_GITHUB_CONNECTION, githubConnOf, gitlabOf, isGithub, jiraOf } from "./tracker";
 
 export const KIND_LABEL: Record<ProviderKind, string> = {
   github: "GitHub",
@@ -165,13 +165,24 @@ export function connectionLabel(c: Connection): string {
 }
 
 /**
- * Projetos (`owner/repo`, em ordem) que usam a conexão `id`, como
+ * Projetos (`owner/repo`, em ordem) que usam a conexão, como
  * `tracker.connection` ou `forge.connection`: o espelho na UI do que o hub
- * confere em `connection_users`.
+ * confere em `connection_users`. A conexão GitHub padrão (`github`) também é
+ * usada pelos projetos GitHub sem conexão (#275).
  */
-export function connectionUsers(id: number, projects: readonly { project: Pick<HubProject, "gh_owner" | "gh_repo" | "tracker" | "forge"> }[]): string[] {
+export function connectionUsers(
+  c: Pick<Connection, "id" | "name" | "kind">,
+  projects: readonly { project: Pick<HubProject, "gh_owner" | "gh_repo" | "tracker" | "forge"> }[],
+): string[] {
+  const isDefault = c.kind === "github" && c.name === DEFAULT_GITHUB_CONNECTION;
+  const uses = (p: Pick<HubProject, "tracker" | "forge">) => {
+    if (jiraOf(p)?.connection === c.id || gitlabOf(p)?.connection === c.id) return true;
+    if (!isGithub(p)) return false;
+    const gh = githubConnOf(p);
+    return gh === c.id || (gh === null && isDefault);
+  };
   return projects
-    .filter(({ project: p }) => jiraOf(p)?.connection === id || gitlabOf(p)?.connection === id)
+    .filter(({ project: p }) => uses(p))
     .map(({ project: p }) => `${p.gh_owner}/${p.gh_repo}`)
     .sort();
 }

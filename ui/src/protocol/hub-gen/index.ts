@@ -43,6 +43,7 @@ export type { EnvOnline } from "./EnvOnline";
 export type { EnvPush } from "./EnvPush";
 export type { ForgeConfig } from "./ForgeConfig";
 export type { ForgeKind } from "./ForgeKind";
+export type { GithubConfig } from "./GithubConfig";
 export type { GitlabConfig } from "./GitlabConfig";
 export type { GitlabReadiness } from "./GitlabReadiness";
 export type { HealthCounts } from "./HealthCounts";

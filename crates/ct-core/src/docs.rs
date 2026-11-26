@@ -264,7 +264,8 @@ mod tests {
 
     #[test]
     fn readme_do_epico() {
-        let t = TrackerRef::new("o", "r", &TrackerConfig::Github);
+        let github = TrackerConfig::default();
+        let t = TrackerRef::new("o", "r", &github);
         let r = epic_readme(
             &t,
             &EpicDocs {

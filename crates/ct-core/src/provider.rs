@@ -1174,7 +1174,7 @@ mod tests {
             connection: Some(8),
             ..Default::default()
         });
-        let mut forge = ForgeConfig::Github;
+        let mut forge = ForgeConfig::Github(Default::default());
         let gaps = resolve_connections(&mut tracker, &mut forge, &conns, |_| "x".into());
         assert_eq!(
             gaps,

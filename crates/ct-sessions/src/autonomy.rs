@@ -152,7 +152,7 @@ pub fn agent_instruction(project: &Project, branch: &str, base: &str) -> String 
     let forge = project.forge.kind();
     let label = ct_core::change_label(forge);
     let create = match &project.forge {
-        ct_core::ForgeConfig::Github => format!("gh pr create --base {branch}"),
+        ct_core::ForgeConfig::Github(_) => format!("gh pr create --base {branch}"),
         ct_core::ForgeConfig::Gitlab(g) => {
             let path = g.path.trim_matches('/');
             let path = if path.is_empty() {
@@ -399,7 +399,7 @@ impl Sessions {
     fn report_ok(&self, m: &Mode, pr: Option<&dyn PrOpener>) -> AutonomyReport {
         // O PR rascunho é aberto pela API do GitHub: num projeto de outra
         // forja, o MR fica para a pessoa.
-        let github = matches!(m.project.forge, ct_core::ForgeConfig::Github);
+        let github = matches!(m.project.forge, ct_core::ForgeConfig::Github(_));
         let label = ct_core::change_label(m.project.forge.kind());
         let (url, message, pending) = match pr.filter(|_| github) {
             None => {

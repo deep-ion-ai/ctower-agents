@@ -1,4 +1,5 @@
 import {
+  DEFAULT_GITHUB_CONNECTION,
   DEFAULT_MAX_ISSUES,
   JIRA_BRANCH_PATTERN,
   MAX_ISSUES_CEILING,
@@ -21,7 +22,8 @@ interface FieldsProps {
 
 /**
  * Seletor da conexão do projeto (#238): a URL e a credencial vêm dela. Sem
- * conexão do tipo, aponta a tela de Conexões.
+ * conexão do tipo, aponta a tela de Conexões. No GitHub (#275), a escolha é
+ * opcional: vazio = a conexão `github` padrão.
  */
 function ConnectionSelect({
   id,
@@ -31,11 +33,12 @@ function ConnectionSelect({
   onChange,
 }: {
   id: string;
-  kind: "jira" | "gitlab";
+  kind: "jira" | "gitlab" | "github";
   value: string;
   connections: Connection[] | null | undefined;
   onChange: (v: string) => void;
 }) {
+  const optional = kind === "github";
   const label = `Conexão do ${KIND_LABEL[kind]}`;
   if (connections === null || connections === undefined) {
     return (
@@ -52,7 +55,9 @@ function ConnectionSelect({
     <div className="field hub-wide">
       <label htmlFor={id}>{label}</label>
       <select id={id} value={value} aria-describedby={`${id}-hint`} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{options.length ? "Escolha uma conexão" : "Nenhuma conexão do tipo"}</option>
+        <option value="">
+          {optional ? `Padrão (conexão ${DEFAULT_GITHUB_CONNECTION})` : options.length ? "Escolha uma conexão" : "Nenhuma conexão do tipo"}
+        </option>
         {options.map((c) => (
           <option key={c.id} value={String(c.id)}>
             {connectionLabel(c)}
@@ -61,9 +66,11 @@ function ConnectionSelect({
         {missing && <option value={value}>Conexão {value} (não existe mais no hub)</option>}
       </select>
       <span id={`${id}-hint`} className="hint muted">
-        {options.length
-          ? "A URL e a credencial vêm da conexão. Crie ou edite conexões em Hub › Conexões."
-          : `Cadastre uma conexão do ${KIND_LABEL[kind]} em Hub › Conexões antes de salvar o projeto.`}
+        {optional
+          ? `O token do GitHub vem da conexão; sem escolha, da conexão ${DEFAULT_GITHUB_CONNECTION}. Crie ou edite conexões em Hub › Conexões.`
+          : options.length
+            ? "A URL e a credencial vêm da conexão. Crie ou edite conexões em Hub › Conexões."
+            : `Cadastre uma conexão do ${KIND_LABEL[kind]} em Hub › Conexões antes de salvar o projeto.`}
       </span>
     </div>
   );
@@ -97,6 +104,19 @@ function JiraText({
         </span>
       )}
     </div>
+  );
+}
+
+/** Conexão do GitHub do projeto (#275), para o rastreador e a forja. */
+export function GithubFields(p: FieldsProps) {
+  return (
+    <ConnectionSelect
+      id={`${p.prefix}-github_conn`}
+      kind="github"
+      value={p.form.github_conn}
+      connections={p.connections}
+      onChange={(github_conn) => p.onChange({ ...p.form, github_conn })}
+    />
   );
 }
 

@@ -135,8 +135,30 @@ test("connectionUsers lista os projetos que usam a conexão no rastreador ou na 
     hubProjectView(jiraHubProject({ id: 8, gh_owner: "acme", gh_repo: "acme-web" })),
     hubProjectView(hubProject()),
   ];
-  expect(connectionUsers(7, projects)).toEqual(["acme/acme-web", "grupo/projeto/app"]);
-  expect(connectionUsers(8, projects)).toEqual(["acme/acme-web", "grupo/projeto/app"]);
-  expect(connectionUsers(9, projects)).toEqual([]);
+  const gl = { ...JIRA, id: 8, name: "gitlab-acme", kind: "gitlab" as const };
+  expect(connectionUsers(JIRA, projects)).toEqual(["acme/acme-web", "grupo/projeto/app"]);
+  expect(connectionUsers(gl, projects)).toEqual(["acme/acme-web", "grupo/projeto/app"]);
+  expect(connectionUsers({ ...JIRA, id: 9 }, projects)).toEqual([]);
   expect(renameLockedText("jira-acme", ["acme/acme-web"])).toContain('[connections."jira-acme"]');
+});
+
+test("connectionUsers do GitHub: a referenciada e, para quem não tem, a padrão (#275)", () => {
+  const padrao = { ...JIRA, id: 1, name: "github", kind: "github" as const };
+  const acme = { ...JIRA, id: 2, name: "github-acme", kind: "github" as const };
+  const projects = [
+    hubProjectView(hubProject({ gh_owner: "acme", gh_repo: "acme-web" })),
+    hubProjectView(
+      hubProject({
+        id: 2,
+        gh_owner: "acme",
+        gh_repo: "acme-api",
+        tracker: { kind: "github", connection: 2 },
+        forge: { kind: "github", connection: 2 },
+      }),
+    ),
+    hubProjectView(jiraHubProject()),
+  ];
+  expect(connectionUsers(padrao, projects)).toEqual(["acme/acme-web"]);
+  expect(connectionUsers(acme, projects)).toEqual(["acme/acme-api"]);
+  expect(connectionUsers({ ...acme, name: "github-outra", id: 3 }, projects)).toEqual([]);
 });

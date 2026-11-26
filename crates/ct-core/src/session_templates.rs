@@ -255,7 +255,7 @@ impl AnalysisVars<'_> {
 /// forma) e a chave `ACME-123` no Jira.
 fn closes_line(t: &TrackerRef, n: i64) -> String {
     match t.tracker {
-        TrackerConfig::Github => format!("Closes {}", item_short(t, n)),
+        TrackerConfig::Github(_) => format!("Closes {}", item_short(t, n)),
         TrackerConfig::Jira(_) => item_short(t, n),
     }
 }

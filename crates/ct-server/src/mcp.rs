@@ -1477,7 +1477,7 @@ mod tests {
                 project_key: "PROJ".into(),
                 ..Default::default()
             }),
-            ct_core::ForgeConfig::Github,
+            ct_core::ForgeConfig::Github(Default::default()),
             false,
             1,
             rules,

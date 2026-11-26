@@ -19,16 +19,18 @@ use serde_json::{json, Value};
 const CONNECTION_COLS: &str =
     "id, name, kind, endpoint, credential, options, created_at, updated_at";
 
-/// Projeto GitHub (não o gestor) sem conexão no rastreador ou na forja:
-/// usa a conexão GitHub padrão (#275).
-const GITHUB_WITHOUT_CONNECTION: &str = "(kind <> 'gestor' AND (
-      (tracker_kind = 'github' AND json_extract(tracker_config, '$.connection') IS NULL)
-      OR (forge_kind = 'github' AND json_extract(forge_config, '$.connection') IS NULL)))";
+/// Projeto GitHub (não o gestor) sem conexão no rastreador nem na forja:
+/// usa a conexão GitHub padrão (#275, `ct_core::github_connection`).
+const GITHUB_WITHOUT_CONNECTION: &str = "(kind <> 'gestor'
+      AND (tracker_kind = 'github' OR forge_kind = 'github')
+      AND json_extract(tracker_config, '$.connection') IS NULL
+      AND json_extract(forge_config, '$.connection') IS NULL)";
 
 /// [`GITHUB_WITHOUT_CONNECTION`] com a tabela `project` como `p`.
-const GITHUB_WITHOUT_CONNECTION_P: &str = "(p.kind <> 'gestor' AND (
-      (p.tracker_kind = 'github' AND json_extract(p.tracker_config, '$.connection') IS NULL)
-      OR (p.forge_kind = 'github' AND json_extract(p.forge_config, '$.connection') IS NULL)))";
+const GITHUB_WITHOUT_CONNECTION_P: &str = "(p.kind <> 'gestor'
+      AND (p.tracker_kind = 'github' OR p.forge_kind = 'github')
+      AND json_extract(p.tracker_config, '$.connection') IS NULL
+      AND json_extract(p.forge_config, '$.connection') IS NULL)";
 
 /// Parâmetros de `hub.connections.add`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -377,14 +379,21 @@ impl Hub {
     }
 
     /// Os projetos referenciam conexão do tipo do papel: o Jira pela
-    /// `tracker.connection` e o GitLab pela `forge.connection`. Conexão
-    /// inexistente, de outro tipo ou que o descritor recusa: erro.
+    /// `tracker.connection`, o GitLab pela `forge.connection` e o GitHub
+    /// pelas duas (#275). Conexão inexistente, de outro tipo ou que o
+    /// descritor recusa: erro.
     pub(crate) fn check_project_connections(&self, p: &ProjectProvider) -> Result<()> {
         if let Some(id) = p.tracker.jira().and_then(|j| j.connection) {
             self.check_ref(id, ProviderKind::Jira, Role::Tracker)?;
         }
+        if let Some(id) = p.tracker.github().and_then(|g| g.connection) {
+            self.check_ref(id, ProviderKind::Github, Role::Tracker)?;
+        }
         if let Some(id) = p.forge.gitlab().and_then(|g| g.connection) {
             self.check_ref(id, ProviderKind::Gitlab, Role::Forge)?;
+        }
+        if let Some(id) = p.forge.github().and_then(|g| g.connection) {
+            self.check_ref(id, ProviderKind::Github, Role::Forge)?;
         }
         Ok(())
     }
@@ -972,5 +981,83 @@ mod tests {
         hub.add_assignment("acme", "acme-web", "env-a", None)
             .unwrap();
         assert_eq!(nomes(&hub), vec!["github"]);
+    }
+
+    /// #275: o projeto GitHub referencia a conexão no rastreador e na
+    /// forja. O hub confere o tipo e recusa duas conexões diferentes; com
+    /// a referência, o projeto deixa de usar a padrão.
+    #[test]
+    fn projeto_github_referencia_a_conexao() {
+        use ct_core::GithubConfig;
+        let hub = Hub::open_in_memory().unwrap();
+        let padrao = hub.add_connection(&github("github")).unwrap();
+        let acme = hub.add_connection(&github("github-acme")).unwrap();
+        let outra = hub.add_connection(&github("github-outra")).unwrap();
+        let j = hub
+            .add_connection(&jira("jira-acme", "https://jira.example.com"))
+            .unwrap();
+        let gh = |id: Option<i64>| GithubConfig { connection: id };
+        let novo = NewHubProject {
+            owner: "acme".into(),
+            repo: "acme-web".into(),
+            name: "Acme Web".into(),
+            base_branch: "main".into(),
+            protected_branches: vec!["main".into()],
+        };
+        let com = |t: Option<i64>, f: Option<i64>| ProjectProvider {
+            tracker: TrackerConfig::Github(gh(t)),
+            forge: ForgeConfig::Github(gh(f)),
+            ..Default::default()
+        };
+        // Conexão de outro tipo, inexistente ou diferente nos dois lados.
+        for (t, f) in [
+            (Some(j.id), Some(j.id)),
+            (Some(99), Some(99)),
+            (Some(acme.id), Some(outra.id)),
+        ] {
+            let err = hub.add_project_with(&novo, &com(t, f)).unwrap_err();
+            assert!(matches!(err, LedgerError::Conflict(_)), "{err}");
+        }
+        hub.add_project_with(&novo, &com(Some(acme.id), Some(acme.id)))
+            .unwrap();
+        let p = hub.find_project("acme", "acme-web").unwrap().unwrap();
+        assert_eq!(
+            ct_core::github_connection(&p.tracker, &p.forge),
+            Some(acme.id)
+        );
+        assert_eq!(
+            hub.connection_users(acme.id).unwrap(),
+            vec!["acme/acme-web"]
+        );
+        assert!(hub.connection_users(padrao.id).unwrap().is_empty());
+
+        hub.ingest("env-a", "a", &[]).unwrap();
+        hub.add_assignment("acme", "acme-web", "env-a", None)
+            .unwrap();
+        let cfg = hub.env_config("env-a", None, None).unwrap();
+        let nomes: Vec<String> = cfg
+            .connections
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(nomes, vec!["github-acme"]);
+
+        // Sem a referência, volta a padrão.
+        hub.update_project(
+            "acme",
+            "acme-web",
+            &HubProjectPatch {
+                tracker: Some(TrackerConfig::Github(gh(None))),
+                forge: Some(ForgeConfig::Github(gh(None))),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(hub.connection_users(acme.id).unwrap().is_empty());
+        assert_eq!(
+            hub.connection_users(padrao.id).unwrap(),
+            vec!["acme/acme-web"]
+        );
     }
 }

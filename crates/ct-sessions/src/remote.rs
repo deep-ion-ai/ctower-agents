@@ -112,7 +112,7 @@ pub fn session_name(project: &Project, wi: &WorkItem, title: Option<&str>) -> St
     } else {
         let item = match project.tracker {
             ct_core::TrackerConfig::Jira(_) => project.item_ref(wi.gh_number),
-            ct_core::TrackerConfig::Github => format!("{}#{}", project.gh_repo, wi.gh_number),
+            ct_core::TrackerConfig::Github(_) => format!("{}#{}", project.gh_repo, wi.gh_number),
         };
         match title.map(str::trim).filter(|t| !t.is_empty()) {
             Some(t) => format!("{item} {t}"),

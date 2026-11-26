@@ -390,11 +390,11 @@ mod tests {
     fn cadastro_recusa_combinacao_e_padrao_invalidos() {
         let hub = Hub::open_in_memory().unwrap();
         let github_gitlab = ProjectProvider {
-            tracker: TrackerConfig::Github,
+            tracker: TrackerConfig::Github(Default::default()),
             ..jira()
         };
         let jira_github = ProjectProvider {
-            forge: ForgeConfig::Github,
+            forge: ForgeConfig::Github(Default::default()),
             ..jira()
         };
         for pv in [github_gitlab, jira_github] {
@@ -581,7 +581,7 @@ mod tests {
                 OWNER,
                 REPO,
                 &HubProjectPatch {
-                    tracker: Some(TrackerConfig::Github),
+                    tracker: Some(TrackerConfig::Github(Default::default())),
                     ..Default::default()
                 },
             )
@@ -893,7 +893,7 @@ mod tests {
         assert_eq!(sync, None);
         // Recadastro como GitHub não herda o Jira.
         let p = hub.add_project(&novo()).unwrap().project;
-        assert_eq!(p.tracker, TrackerConfig::Github);
+        assert_eq!(p.tracker, TrackerConfig::Github(Default::default()));
     }
 
     fn sinais(hub: &Hub, now: i64) -> Vec<crate::HealthSignal> {

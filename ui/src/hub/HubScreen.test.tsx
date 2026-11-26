@@ -257,6 +257,37 @@ test("editar manda só o que mudou", async () => {
   });
 });
 
+test("conexão do GitHub do projeto (#275): a padrão sem escolha; escolher manda rastreador e forja", async () => {
+  const conn = (id: number, name: string) => ({
+    id,
+    name,
+    kind: "github",
+    endpoint: "",
+    credential: { kind: "cli" },
+    options: {},
+    created_at: 1,
+    updated_at: 1,
+  });
+  const { api, user } = setup({ at: settingsOf("general") });
+  api.onHub("hub.connections.list", [conn(1, "github"), conn(2, "github-acme")]);
+  api.onHub("hub.projects.update", CT);
+  const ct = await screen.findByRole("group", { name: "Geral" });
+  expect(await within(ct).findByText("padrão (conexão github)")).toBeInTheDocument();
+  await user.click(within(ct).getByRole("button", { name: "Editar ctower-agents" }));
+  const form = screen.getByRole("form", { name: "Editar ctower-agents" });
+  const sel = await within(form).findByLabelText("Conexão do GitHub");
+  await within(sel).findByRole("option", { name: /github-acme/ });
+  await user.selectOptions(sel, "2");
+  await user.click(within(form).getByRole("button", { name: "Salvar projeto" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.projects.update")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    tracker: { kind: "github", connection: 2 },
+    forge: { kind: "github", connection: 2 },
+  });
+});
+
 test("editar os docs do projeto manda o objeto inteiro, com as pastas uma por linha (#444)", async () => {
   const docs = { enabled: false, project_dirs: ["analises"], epic_dirs: [] };
   const { api, user } = setup({ at: settingsOf("general"), projects: [hubProjectView(hubProject({ docs }))] });

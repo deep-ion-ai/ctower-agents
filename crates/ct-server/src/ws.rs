@@ -2806,7 +2806,7 @@ mod tests {
                             type_map: ct_core::default_type_map(),
                             ..Default::default()
                         }),
-                        forge: ct_core::ForgeConfig::Github,
+                        forge: ct_core::ForgeConfig::Github(Default::default()),
                         branch_pattern: None,
                         attribution: true,
                         sync: false,

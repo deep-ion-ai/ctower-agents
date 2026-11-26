@@ -46,6 +46,7 @@ export type { Event } from "./Event";
 export type { ForgeConfig } from "./ForgeConfig";
 export type { ForgeKind } from "./ForgeKind";
 export type { GestorScope } from "./GestorScope";
+export type { GithubConfig } from "./GithubConfig";
 export type { GitlabConfig } from "./GitlabConfig";
 export type { GitlabReadiness } from "./GitlabReadiness";
 export type { HubConfigStatus } from "./HubConfigStatus";

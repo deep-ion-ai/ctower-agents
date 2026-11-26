@@ -11,7 +11,7 @@ Estado: o descritor por tipo, a conexão no hub, a migração dos cadastros anti
 | Tipos e descritores | `crates/ct-core/src/provider.rs` | `ProviderKind`, `Connection`, `CredentialSource`, `Capabilities`, `Readiness`, o trait `ProviderDescriptor`, os descritores `GITHUB`, `GITLAB`, `JIRA`, o registro `PROVIDERS`, `descriptor(kind)`, `Role` e `check_role` |
 | Cadastro da conexão no hub | `crates/ct-hub-store/src/connection.rs` | `add`, `update`, `delete` (recusa conexão em uso), `test` (sem rede), `check_project_connections`, `env_connections` (o que vai no `GET /sync/config`) |
 | RPC | `crates/cthubd/src/ws.rs` (`connections_call`) e `crates/cthubd/src/methods.rs` | `hub.connections.list|add|update|delete|test` |
-| Referência no projeto | `crates/ct-core/src/tracker.rs` | `JiraConfig.connection` e `GitlabConfig.connection` (`Option<i64>`), `jira_cli_prefix` e `glab_cli_prefix` |
+| Referência no projeto | `crates/ct-core/src/tracker.rs` | `JiraConfig.connection`, `GitlabConfig.connection` e `GithubConfig.connection` (`Option<i64>`; o GitHub usa a mesma no rastreador e na forja, `github_connection`), `jira_cli_prefix` e `glab_cli_prefix` |
 | Migração dos cadastros antigos | `crates/ct-hub-store/src/legacy_connections.rs` | cria as conexões a partir de `url`/`host` e `credential_cmd`, idempotente, com cópia do `hub.db` antes |
 | Materialização no ambiente | `crates/ct-ledger/src/hub_config.rs` (`materialize_connections`) e `crates/ct-server/src/hub_config.rs` (`apply_connections`) | no pull, preenche `url`, `host`, `credential_cmd` e `config_file` do projeto a partir da conexão |
 | `[connections]` do `config.toml` | `crates/ct-server/src/env_config.rs` e `crates/ct-core/src/credentials.rs` | a sobrescrita do comando por conexão (`ConnectionOverrides::source`); `convert_credentials_file` converte `[credentials]` |
@@ -68,7 +68,7 @@ Use o Jira como modelo: `JiraDescriptor` em `provider.rs`.
 - **Prefixo pelo descritor.** Os templates não chamam o `session_prefix` da conexão. Ele só chega ao prompt pela ponte `Connection::from_jira` e `Connection::from_gitlab`, usada por `jira_cli_prefix` e `glab_cli_prefix`, que leem o `credential_cmd` que a materialização preencheu com o `source_cmd` da conexão.
 - **Sobrescrita por conexão editável.** O ambiente lê `[connections."nome"] credential_cmd`, mas não há tela nem RPC para editá-la. A tela de credenciais do ambiente ainda grava `[credentials."owner/repo"]`, que o pull converte.
 - **Comportamento por tipo.** Sync, leitura de issue e branches ainda usam `match` por tipo. O descritor cobre configuração e credencial, não o comportamento.
-- **GitHub.** O token do `ct-gh` vem da conexão `github` (#275): a padrão, de nome `github`, vale para todo projeto GitHub; sem ela, o `gh auth token`. A conexão própria por projeto ainda não existe. No ambiente, o token gravado pela tela `GithubSettings` (`~/.config/ctower/github.token`, `github.set_token`) vale no lugar da conexão até a #276.
+- **GitHub.** O token do `ct-gh` vem da conexão GitHub do projeto ou, sem ela, da padrão, de nome `github` (#275); sem nenhuma, o `gh auth token`. No ambiente, o token gravado pela tela `GithubSettings` (`~/.config/ctower/github.token`, `github.set_token`) vale no lugar da conexão até a #276.
 - **Campos antigos.** `url`, `host`, `credential_cmd` e `config_file` seguem nos structs `JiraConfig` e `GitlabConfig`, como ponte.
 
 Nenhum exemplo deste guia usa dado real: os nomes são fictícios (`jira-empresa`, `jira.example.com`).
