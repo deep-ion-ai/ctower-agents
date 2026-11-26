@@ -20,6 +20,7 @@ fn run(status: EpicRunStatus) -> EpicRun {
         max_parallel: 2,
         code_review: false,
         started_by: "fulano".into(),
+        plan_session: None,
         paused_reason: None,
         resume_at: None,
         created_at: 0,
