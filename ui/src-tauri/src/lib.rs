@@ -169,6 +169,15 @@ async fn env_credentials_set(
 }
 
 #[tauri::command]
+async fn env_connections_set(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "env.connections.set", params).await
+}
+
+#[tauri::command]
 async fn shell_open(
     st: State<'_, AppState>,
     env: String,
@@ -512,6 +521,7 @@ pub fn run() {
             env_rollback,
             env_config_set,
             env_credentials_set,
+            env_connections_set,
             shell_open,
             shell_close,
             session_input,

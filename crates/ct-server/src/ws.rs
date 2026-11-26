@@ -511,6 +511,55 @@ impl Conn {
                 .await?;
                 Ok(json!(rows))
             }
+            // Sobrescrita de credencial por conexão (#276): vale no próximo
+            // uso, sem restart (o `SharedCredentials`, o cache do resolvedor
+            // e o comando materializado dos projetos).
+            "env.connections.get" | "env.connections.set" => {
+                let Some(c) = self.st.env_config.clone() else {
+                    return Err(invalid("edição do config.toml desativada neste ambiente"));
+                };
+                if method == "env.connections.set" {
+                    let name = str_param(p, "name")?.to_string();
+                    let cmd = p
+                        .get("credential_cmd")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let known = blocking(&sessions, |s| {
+                        let (conns, names) = s.ledger().hub_connections()?;
+                        let mut known = names;
+                        known.extend(conns.into_iter().map(|c| c.name));
+                        Ok(known)
+                    })
+                    .await?;
+                    let c = Arc::clone(&c);
+                    let n = name.clone();
+                    let overrides =
+                        tokio::task::spawn_blocking(move || c.set_connection(&n, &cmd, &known))
+                            .await
+                            .map_err(|e| (-32603, e.to_string()))??;
+                    blocking(&sessions, move |s| {
+                        for w in s.ledger().refresh_connection_overrides(&overrides)? {
+                            tracing::warn!("conexões: {w}");
+                        }
+                        s.invalidate_connection(&name)?;
+                        Ok(())
+                    })
+                    .await?;
+                }
+                let linked = self.linked();
+                let rows = blocking(&sessions, move |s| {
+                    let (_, overrides) = s.config().credentials.connections();
+                    let l = s.ledger();
+                    let (conns, names) = l.hub_connections()?;
+                    let projects = assigned_projects(&l, linked)?;
+                    Ok(crate::env_config::connection_rows(
+                        &conns, &names, &overrides, &projects,
+                    ))
+                })
+                .await?;
+                Ok(json!(rows))
+            }
             "env.check_update" => match &self.st.updates {
                 Some(u) => Ok(json!(u.check().await)),
                 None => Err(invalid("atualização desativada neste ambiente")),
@@ -1940,6 +1989,121 @@ mod tests {
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+    }
+
+    /// #276: `env.connections.get|set` lista as conexões do hub com a
+    /// sobrescrita deste ambiente e grava no config.toml; a mudança vale no
+    /// próximo uso, sem restart: a fonte do resolvedor e o comando
+    /// materializado do projeto (o do prompt da sessão).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sobrescrita_da_conexao_editavel_pelo_ws() {
+        let mut srv = Srv::linked(FakeClaude::exit(0));
+        let cfg: ct_ledger::ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 2,
+            "config_epoch": 1,
+            "changed": true,
+            "projects": [{
+                "owner": "deep-ion-ai", "repo": "demo", "name": "demo",
+                "base_branch": "develop", "protected_branches": [],
+                "repo_path": srv.env.repo.display().to_string(), "rev": 2,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1,
+                             "url": "https://jira.example.com",
+                             "credential_cmd": "pass show hub/jira" }
+            }],
+            "removed": [],
+            "connections": [{
+                "id": 1, "name": "jira-acme", "kind": "jira",
+                "endpoint": "https://jira.example.com",
+                "credential": { "kind": "command", "cmd": "pass show hub/jira" },
+                "options": {}, "created_at": 0, "updated_at": 0
+            }],
+            "connection_names": ["jira-acme"]
+        }))
+        .unwrap();
+        {
+            let l = srv.env.sessions.ledger();
+            l.apply_hub_config(&cfg, |p| p.repo_path.clone()).unwrap();
+            let (conns, _) = l.hub_connections().unwrap();
+            srv.env
+                .cfg
+                .credentials
+                .set_connections(conns, Default::default());
+        }
+        let path = srv.env.tmp.path().join("config.toml");
+        srv.state.env_config = Some(Arc::new(
+            crate::env_config::EnvConfig::new(path.clone(), 180, None)
+                .with_credentials(srv.env.cfg.credentials.clone()),
+        ));
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui.call("env.connections.get", json!({})).await;
+        let rows = v["result"].as_array().unwrap_or_else(|| panic!("{v}"));
+        assert_eq!(rows.len(), 1, "{v}");
+        assert_eq!(rows[0]["name"], "jira-acme");
+        assert_eq!(rows[0]["kind"], "jira");
+        assert_eq!(
+            rows[0]["hub_source"],
+            json!({ "kind": "command", "detail": null })
+        );
+        assert_eq!(rows[0]["credential_cmd"], "");
+        assert_eq!(rows[0]["projects"], json!(["demo"]));
+
+        let v = ui
+            .call(
+                "env.connections.set",
+                json!({ "name": "jira-acme", "credential_cmd": "pass show acme/jira" }),
+            )
+            .await;
+        assert_eq!(
+            v["result"][0]["credential_cmd"], "pass show acme/jira",
+            "{v}"
+        );
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("credential_cmd = \"pass show acme/jira\""));
+        let p = srv
+            .env
+            .sessions
+            .ledger()
+            .get_project(srv.env.project_id)
+            .unwrap();
+        assert_eq!(
+            srv.env.sessions.jira_source(&p).unwrap().source,
+            ct_core::provider::CredentialSource::Command {
+                cmd: "pass show acme/jira".into()
+            }
+        );
+        assert_eq!(
+            p.tracker.jira().unwrap().credential_cmd,
+            "pass show acme/jira",
+            "comando materializado do projeto"
+        );
+
+        // Vazio volta à fonte do hub.
+        let v = ui
+            .call("env.connections.set", json!({ "name": "jira-acme" }))
+            .await;
+        assert_eq!(v["result"][0]["credential_cmd"], "", "{v}");
+        let p = srv
+            .env
+            .sessions
+            .ledger()
+            .get_project(srv.env.project_id)
+            .unwrap();
+        assert_eq!(
+            p.tracker.jira().unwrap().credential_cmd,
+            "pass show hub/jira"
+        );
+
+        for params in [
+            json!({ "name": "jira-outra", "credential_cmd": "pass show x" }),
+            json!({ "name": "jira-acme", "credential_cmd": "a\nb" }),
+            json!({ "credential_cmd": "pass show x" }),
+        ] {
+            let v = ui.call("env.connections.set", params).await;
+            assert_eq!(v["error"]["code"], -32602, "{v}");
+        }
     }
 
     /// `POST /hooks/permission` como o `ctower hook`, sem esperar a resposta.

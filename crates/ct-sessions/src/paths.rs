@@ -50,6 +50,13 @@ impl Dirs {
         self.config.join("github.token")
     }
 
+    /// Para onde a migração do [`Self::github_token_file`] leva o token
+    /// (#276): a sobrescrita `[connections."nome"]` criada por ela lê este
+    /// arquivo.
+    pub fn github_env_token_file(&self) -> PathBuf {
+        self.config.join("github-env.token")
+    }
+
     /// Token de agente do hub (`/agent/v1`, spec do gestor §6.1), lido a
     /// cada chamada repassada pelas ferramentas `portfolio_*`.
     pub fn hub_agent_token_file(&self) -> PathBuf {

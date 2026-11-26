@@ -265,6 +265,9 @@ mod tests {
             // Comandos de credencial do ambiente (#143): só no desktop.
             "env.credentials.get",
             "env.credentials.set",
+            // Sobrescrita por conexão (#276): só no desktop.
+            "env.connections.get",
+            "env.connections.set",
             "cleanup.status",
             "cleanup.plan",
             "cleanup.run",

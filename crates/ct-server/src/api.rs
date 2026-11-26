@@ -139,6 +139,7 @@ mod export {
         crate::update::UpdateStatus::export_all_to(&dir).unwrap();
         crate::env_config::ConfigItem::export_all_to(&dir).unwrap();
         crate::env_config::EnvCredential::export_all_to(&dir).unwrap();
+        crate::env_config::EnvConnection::export_all_to(&dir).unwrap();
         crate::permissions::PermissionRequest::export_all_to(&dir).unwrap();
         crate::hub_sync::HubSyncResult::export_all_to(&dir).unwrap();
         crate::cleanup::CleanupStatus::export_all_to(&dir).unwrap();

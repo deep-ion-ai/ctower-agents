@@ -343,6 +343,16 @@ pub fn next_delay(interval: Duration, failures: u32) -> Duration {
         .min(cap)
 }
 
+/// Erro da conexão GitHub cuja fonte é um arquivo que não existe neste
+/// ambiente, sem sobrescrita (#276).
+pub fn missing_file_message(connection: &str, path: &str) -> String {
+    format!(
+        "a conexão {connection} lê o token do arquivo {path:?}, que não existe neste ambiente; \
+         configure a sobrescrita da conexão {connection} neste ambiente em Configurações › \
+         Ambiente › Credenciais das conexões (por exemplo, gh auth token)"
+    )
+}
+
 /// Token do GitHub de um projeto pelo resolvedor do ambiente (#275): a
 /// chave `github:<projeto>`, a fonte de [`Sessions::github_source`] e os
 /// secrets do projeto no cache do ambiente. Cada token novo atualiza o
@@ -360,6 +370,24 @@ impl TokenProvider for EnvToken {
             .sessions
             .github_source(&self.project)
             .map_or(CredentialSource::None, |s| s.source);
+        // A conexão do hub com `file` aponta para um caminho da máquina do
+        // hub (a migração grava assim o `github.token` dele, #237). Aqui ele
+        // pode não existir: o erro diz o que fazer, em vez de cair calado no
+        // `gh` deste ambiente (outra conta, outras permissões).
+        if let CredentialSource::File { path } = &source {
+            if !ct_core::provider::local_file(path).exists() {
+                let name = self
+                    .sessions
+                    .config()
+                    .credentials
+                    .github_connection_name(ct_core::github_connection(
+                        &self.project.tracker,
+                        &self.project.forge,
+                    ))
+                    .unwrap_or_else(|| ct_core::provider::DEFAULT_GITHUB_CONNECTION.into());
+                return Err(GhError::Token(missing_file_message(&name, path)));
+            }
+        }
         let lookup = self.sessions.secret_lookup(&self.project);
         self.sessions
             .credentials()
@@ -526,6 +554,71 @@ mod tests {
         assert!(!r3.ok, "{r3:?}");
         std::fs::remove_file(&file).unwrap();
         assert!(sync.sync_project(p.id).unwrap().ok);
+    }
+
+    /// #276: a conexão `github` do hub com `file` num caminho que não existe
+    /// neste ambiente (o `github.token` do hub, pela migração) falha com um
+    /// erro que diz o que fazer, sem cair no `gh` do ambiente. A sobrescrita
+    /// da conexão vale no ciclo seguinte, e `invalidate_connection` tira o
+    /// token do cache.
+    #[test]
+    fn arquivo_do_hub_ausente_pede_a_sobrescrita_da_conexao() {
+        use ct_core::provider::{Connection, ProviderKind};
+        use ct_gh::fake::fake_gh_calls;
+        let env = TestEnv::new(FakeClaude::exit(0));
+        let gh = FakeGitHub::start("ghp_ficticio_acme_123456");
+        let bin = fake_gh(env.tmp.path(), "ghp_ficticio_do_gh");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("deep-ion-ai", "demo");
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        let ausente = env.tmp.path().join("ausente").join("github.token");
+        let creds = &env.cfg.credentials;
+        creds.set_connections(
+            vec![Connection {
+                id: 1,
+                name: "github".into(),
+                kind: ProviderKind::Github,
+                endpoint: String::new(),
+                credential: CredentialSource::File {
+                    path: ausente.display().to_string(),
+                },
+                options: json!({}),
+                created_at: 0,
+                updated_at: 0,
+            }],
+            Default::default(),
+        );
+        let sync = GithubSync::new(env.sessions.clone(), client);
+        let r1 = sync.sync_project(env.project_id).unwrap();
+        let err = r1.error.unwrap_or_default();
+        assert!(!r1.ok);
+        assert!(err.contains("não existe neste ambiente"), "{err}");
+        assert!(err.contains("sobrescrita da conexão github"), "{err}");
+        assert_eq!(fake_gh_calls(env.tmp.path()), 0, "sem cair no gh");
+
+        // A sobrescrita da conexão (a tela do ambiente) vale no ciclo
+        // seguinte, sem reiniciar.
+        creds.set_overrides(
+            toml::from_str(
+                "[github]\ncredential_cmd = \"printf 'ghp_ficticio_acme_123456\\\\n'\"\n",
+            )
+            .unwrap(),
+        );
+        let r2 = sync.sync_project(env.project_id).unwrap();
+        assert!(r2.ok, "{r2:?}");
+        let p = env.sessions.ledger().get_project(env.project_id).unwrap();
+        let src = env.sessions.github_source(&p).unwrap().source;
+        let key = github_key(env.project_id);
+        assert!(env.sessions.credentials().cached(&key, &src).is_some());
+        env.sessions.invalidate_connection("github").unwrap();
+        assert!(env.sessions.credentials().cached(&key, &src).is_none());
     }
 
     #[test]

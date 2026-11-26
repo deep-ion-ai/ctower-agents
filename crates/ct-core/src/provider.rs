@@ -257,6 +257,18 @@ pub fn file_cmd(path: &str) -> String {
     format!("{AWK} < {}", file_word(path))
 }
 
+/// Caminho da fonte `File` nesta máquina: `~` e `~/...` expandidos pelo
+/// `HOME`, como o resolvedor lê. Sem `HOME`, o caminho como veio.
+pub fn local_file(path: &str) -> std::path::PathBuf {
+    let path = path.trim();
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    match (path, path.strip_prefix("~/"), home) {
+        ("~", _, Some(home)) => home,
+        (_, Some(rest), Some(home)) => home.join(rest),
+        _ => std::path::PathBuf::from(path),
+    }
+}
+
 /// Caminho como palavra do shell, com `~` trocado por `"$HOME"` só nas
 /// formas `~` e `~/...` (as que o resolvedor expande). Outro `~` no começo
 /// (`~fulano/...`) vai entre aspas: o resolvedor não o expande, e o shell

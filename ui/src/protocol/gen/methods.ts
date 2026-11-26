@@ -14,6 +14,7 @@ import type { DiffSummary } from "./DiffSummary";
 import type { DocsDir } from "./DocsDir";
 import type { DocsFiles } from "./DocsFiles";
 import type { EnvAccount } from "./EnvAccount";
+import type { EnvConnection } from "./EnvConnection";
 import type { EnvCredential } from "./EnvCredential";
 import type { EnvInfo } from "./EnvInfo";
 import type { Event } from "./Event";
@@ -51,6 +52,8 @@ export const METHOD_SCOPES = {
     "env.config.set",
     "env.credentials.get",
     "env.credentials.set",
+    "env.connections.get",
+    "env.connections.set",
     "env.statusline.install",
     "account.get",
     "projects.list",
@@ -193,6 +196,8 @@ export interface DaemonMethods {
   "env.config.set": { params: { key: string; value: unknown }; result: ConfigItem };
   "env.credentials.get": { params: null; result: EnvCredential[] };
   "env.credentials.set": { params: { owner: string; repo: string; tracker_cmd?: string | null; forge_cmd?: string | null }; result: EnvCredential[] };
+  "env.connections.get": { params: null; result: EnvConnection[] };
+  "env.connections.set": { params: { name: string; credential_cmd?: string | null }; result: EnvConnection[] };
   "env.statusline.install": { params: null; result: StatuslineInstall };
   "account.get": { params: null; result: EnvAccount };
   "projects.list": { params: { unassigned?: boolean | null } | null; result: Project[] };
