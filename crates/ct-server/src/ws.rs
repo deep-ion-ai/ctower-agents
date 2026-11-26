@@ -351,6 +351,11 @@ impl Conn {
     }
 
     async fn call(&mut self, method: &str, p: &Value) -> RpcResult {
+        // Só despacha o que está no registro `ct_http::methods` com escopo
+        // da UI (#228): fora dele, nem chega ao `match`.
+        if !ct_http::methods::allowed_in(method, ct_http::methods::Scope::Ui) {
+            return Err((-32601, format!("método desconhecido: {method}")));
+        }
         let sessions = self.st.sessions.clone();
         match method {
             "env.info" => {
@@ -2137,6 +2142,50 @@ mod tests {
             assert!(err.to_string().contains("401"), "{t}: {err}");
         }
         assert!(connect(&url, UI).await.is_ok());
+    }
+
+    /// Os braços do `match` de `Conn::call` são o registro de
+    /// `ct_http::methods` (#228): método sem braço ou braço sem registro
+    /// quebra este teste.
+    #[test]
+    fn bracos_do_despacho_sao_o_registro() {
+        use std::collections::BTreeSet;
+        let src = include_str!("ws.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        let start = code.find("async fn call(&mut self").unwrap();
+        let end = start + code[start..].find("fn attach(").unwrap();
+        let mut arms = BTreeSet::new();
+        for line in code[start..end].lines() {
+            let t = line.trim_start();
+            if !t.starts_with('"') || !t.contains("=>") {
+                continue;
+            }
+            let head = t.split("=>").next().unwrap();
+            for lit in head.split('"').skip(1).step_by(2) {
+                arms.insert(lit.to_string());
+            }
+        }
+        assert!(arms.len() > 60, "{arms:?}");
+        let registry: BTreeSet<String> = ct_http::methods::METHODS
+            .iter()
+            .map(|m| m.name.to_string())
+            .collect();
+        assert_eq!(arms, registry, "braços do despacho x ct_http::methods");
+    }
+
+    /// Método fora do registro não é despachado: a resposta é a de método
+    /// desconhecido, antes de qualquer efeito (#228).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metodo_fora_do_registro_nao_e_despachado() {
+        let srv = Srv::new(FakeClaude::exit(0));
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui.call("env.inventado", json!({})).await;
+        assert_eq!(v["error"]["code"], -32601, "{v}");
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("desconhecido"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

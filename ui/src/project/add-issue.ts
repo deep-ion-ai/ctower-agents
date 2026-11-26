@@ -58,7 +58,7 @@ export function addIssue(
 ): Promise<TrackerIssueAdded> {
   return "owner" in addr
     ? api.hubCall<TrackerIssueAdded>("hub.tracker.add_issue", { owner: addr.owner, repo: addr.repo, key })
-    : api.call<TrackerIssueAdded>(addr.env, "tracker.add_issue", { project_id: addr.projectId, key });
+    : api.call(addr.env, "tracker.add_issue", { project_id: addr.projectId, key });
 }
 
 /** Mensagem de erro sem o prefixo `Error: ` do `String(e)`. */
