@@ -324,6 +324,12 @@ pub const METHODS: &[MethodSpec] = &[
     MethodSpec { name: "hub.epic_run.cancel", params: "{ run_id: number }", result: "EpicRun", scopes: UI_WEB },
     MethodSpec { name: "hub.epic_run.set_parallel", params: "{ run_id: number; max_parallel: number }", result: "EpicRun", scopes: UI_WEB },
     MethodSpec { name: "hub.epic_run.decide", params: "{ decision_id: number; answer: string; blocker?: number | null }", result: "EpicDecision", scopes: UI_WEB },
+    MethodSpec {
+        name: "hub.epic_run.set_node",
+        params: "{ run_id: number; number: number; model?: string | null; effort?: string | null }",
+        result: "EpicPlan",
+        scopes: UI_WEB,
+    },
     MethodSpec { name: "hub.epic_run.handback", params: "{ run_id: number; number: number }", result: "EpicNode", scopes: UI_WEB },
     MethodSpec { name: "hub.autopilot.policy.get", params: "{ account: string }", result: "AutopilotPolicyView", scopes: UI },
     MethodSpec {
