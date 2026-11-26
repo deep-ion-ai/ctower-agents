@@ -85,6 +85,10 @@
 //!   com `blocked_by` e os números; bloqueante fora do espelho mantém o
 //!   bloqueio e vira aviso (`dependency_unknown`); as issues de um ciclo
 //!   ficam fora com `dependency_cycle` (e o evento).
+//! - **Execução de épico (#303):** sub-issue de um épico com execução ativa
+//!   ([`ItemSnap::epic_run`]) fica fora com `epic_run`: quem a dirige é o
+//!   motor do épico. Com a execução concluída ou cancelada, volta às regras
+//!   normais.
 
 use super::deps;
 use ct_core::plan::budget::{BlockReason, BudgetDecision};
@@ -343,6 +347,8 @@ pub struct ItemSnap {
     /// Impressão digital (`ct_hub_store::issue_fingerprint`): muda com o
     /// título, o corpo, os rótulos ou a prioridade (#215).
     pub fingerprint: String,
+    /// Sub-issue presa a uma execução de épico ativa (#303).
+    pub epic_run: bool,
 }
 
 /// Janela esgotada da visão do plano (a de reset mais tarde, se as duas).
@@ -507,7 +513,8 @@ pub struct QueueItem {
     pub title: Option<String>,
     pub priority: Option<Priority>,
     pub model: Option<String>,
-    /// `None` = elegível. Senão: `epic`, `status`, `not_in_mirror`,
+    /// `None` = elegível. Senão: `epic`, `epic_run` (sub-issue de épico em
+    /// execução, #303), `status`, `not_in_mirror`,
     /// `not_approved`, `no_priority`, `no_model`, `live_session` e, com as
     /// dependências (#215), `dependency_cycle`, `blocked_by` (bloqueante
     /// ainda não pronto) ou `analysis_pending` (nova ou alterada, esperando
@@ -613,6 +620,8 @@ pub fn budget_reason(reasons: &[BlockReason]) -> String {
 fn skip_of(item: &ItemSnap, label: Option<&str>, live: bool) -> Option<&'static str> {
     if item.kind != WorkItemKind::Issue {
         Some("epic")
+    } else if item.epic_run {
+        Some("epic_run")
     } else if item.status != WorkItemStatus::Backlog {
         Some("status")
     } else if item.title.is_none() {
@@ -1723,6 +1732,7 @@ mod tests {
             model: model.map(String::from),
             approved,
             fingerprint: format!("fp-{n}"),
+            epic_run: false,
         }
     }
 
@@ -1802,6 +1812,23 @@ mod tests {
         assert_eq!(q[0].skip, None);
         assert_eq!(q[1].skip.as_deref(), Some("no_model"));
         assert_eq!(o.projects[0].next, Some(123));
+    }
+
+    /// #303: a sub-issue aprovada e com prioridade de um épico em execução
+    /// fica fora da fila; com a execução encerrada, volta.
+    #[test]
+    fn sub_issue_de_epico_em_execucao_fica_fora() {
+        let mut s = snap(SAB);
+        s.projects[0].items[0].epic_run = true;
+        let o = decide(&s);
+        assert!(starts(&o).is_empty());
+        let q = &o.projects[0].queue[0];
+        assert_eq!((q.number, q.skip.as_deref()), (123, Some("epic_run")));
+        s.projects[0].items[0].epic_run = false;
+        assert_eq!(
+            starts(&decide(&s)),
+            vec![("acme-web".into(), 123, "opus".into())]
+        );
     }
 
     #[test]

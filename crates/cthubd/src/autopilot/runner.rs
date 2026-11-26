@@ -309,6 +309,8 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
             priority: None,
         };
         let meta = hub.autopilot_issue_meta(p.id)?;
+        // Sub-issues de épico em execução (#303): o motor do épico as dirige.
+        let epic_run = hub.epic_run_numbers(p.id)?;
         let mut items = Vec::new();
         for r in hub.ranking(&filter, RANKING_MAX)?.items {
             let model = hub
@@ -330,6 +332,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
                 model,
                 approved: hub.is_approved(&p.gh_owner, &p.gh_repo, r.number)?,
                 fingerprint,
+                epic_run: epic_run.contains(&r.number),
             });
         }
         // Dependências (#215): as arestas e a situação de cada bloqueante

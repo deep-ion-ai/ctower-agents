@@ -534,6 +534,26 @@ impl Hub {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Sub-issues presas a uma execução ativa do projeto (#303): os nós da
+    /// execução, as do plano mais recente e as filhas do épico no espelho.
+    /// O piloto automático não as inicia.
+    pub fn epic_run_numbers(&self, project_id: i64) -> Result<BTreeSet<i64>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT n.number FROM epic_node n JOIN epic_run r ON r.id = n.run_id
+             WHERE r.project_id = ?1 AND r.{ACTIVE}
+             UNION
+             SELECT pn.number FROM epic_plan_node pn JOIN epic_run r ON r.id = pn.run_id
+             WHERE r.project_id = ?1 AND r.{ACTIVE}
+               AND pn.version = (SELECT max(version) FROM epic_plan WHERE run_id = r.id)
+             UNION
+             SELECT i.gh_number FROM issue_cache i JOIN epic_run r
+               ON r.project_id = i.project_id AND i.parent_number = r.epic
+             WHERE r.project_id = ?1 AND r.{ACTIVE}"
+        ))?;
+        let rows = stmt.query_map([project_id], |r| r.get::<_, i64>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// As execuções do épico, da mais nova para a mais antiga.
     pub fn epic_runs(&self, project_id: i64, epic: i64) -> Result<Vec<EpicRun>> {
         let mut stmt = self.conn.prepare(&format!(
@@ -1873,6 +1893,43 @@ mod tests {
         );
         assert_eq!(hub.epic_decisions(run_id, true).unwrap().len(), 1);
         assert_eq!(hub.epic_plan(run_id, 1).unwrap().unwrap().edges.len(), 1);
+    }
+
+    #[test]
+    fn sub_issues_presas_a_execucao_ativa() {
+        use crate::{GithubSnapshot, IssueRow};
+        let (hub, pid) = hub();
+        let issue = |n: i64, parent: Option<i64>| IssueRow {
+            gh_number: n,
+            title: format!("ACME-{n}"),
+            state: "open".into(),
+            url: String::new(),
+            updated_at: 1,
+            parent_number: parent,
+            ..Default::default()
+        };
+        hub.apply_github(
+            &GithubSnapshot {
+                project_id: pid,
+                issues: vec![issue(10, None), issue(13, Some(10)), issue(20, None)],
+                ..Default::default()
+            },
+            "env-a",
+        )
+        .unwrap();
+        // Planejando: só as filhas do espelho.
+        let run = hub.create_epic_run(&new_run(pid, 10, "env-a"), 1).unwrap();
+        assert_eq!(hub.epic_run_numbers(pid).unwrap(), [13].into());
+        // Rascunho e depois nós.
+        hub.save_epic_plan_draft(run.id, &draft(vec![node(11, "opus", &[])]), 2)
+            .unwrap();
+        assert_eq!(hub.epic_run_numbers(pid).unwrap(), [11, 13].into());
+        hub.approve_epic_plan(run.id, &approval(1), 3).unwrap();
+        assert_eq!(hub.epic_run_numbers(pid).unwrap(), [11, 13].into());
+        // Cancelada: voltam a ser elegíveis.
+        hub.set_epic_run_status(run.id, EpicRunStatus::Cancelado, None, None, 4)
+            .unwrap();
+        assert!(hub.epic_run_numbers(pid).unwrap().is_empty());
     }
 
     #[test]
