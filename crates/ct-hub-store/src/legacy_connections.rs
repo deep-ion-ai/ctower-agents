@@ -435,6 +435,97 @@ mod tests {
             .unwrap()
     }
 
+    /// Projeto migrado (#264): o cadastro fica sem URL, host e credencial,
+    /// mas o hub lê a conexão. O `issue_view` do gestor leva o prefixo com
+    /// a credencial, e os links de issue e de MR saem com o host da conexão.
+    #[test]
+    fn projeto_migrado_le_a_conexao_no_hub() {
+        let hub = Hub::open_in_memory().unwrap();
+        cadastra(&hub, "acme-web", JIRA_URL, "jira-acme.yml");
+        let dir = tempfile::tempdir().unwrap();
+        hub.migrate_legacy_connections(dir.path(), MIL).unwrap();
+        assert_eq!(vinculo(&hub, "acme-web").1, None);
+        assert_eq!(vinculo(&hub, "acme-web").2, None);
+
+        let view = format!(
+            "JIRA_CONFIG_FILE=jira-acme.yml JIRA_API_TOKEN=\"$({JIRA_CMD})\" jira \
+             issue view ACME-<n> --plain"
+        );
+        let overview = hub
+            .agent_overview(&crate::HealthThresholds::default(), 0, MIL)
+            .unwrap();
+        assert_eq!(overview.projects[0].issue_view, view);
+        let project = hub
+            .agent_project("acme", "acme-web", true, 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(project.issue_view, view);
+
+        // As três leituras que a UI usa entregam a visão efetiva.
+        let links = |p: &crate::HubProject| {
+            (
+                ct_core::item_url(&p.tracker_ref(), 12),
+                ct_core::change_url(&p.gh_owner, &p.gh_repo, &p.forge, 3),
+            )
+        };
+        let esperado = (
+            "https://jira.example.com/browse/ACME-12".to_string(),
+            "https://gitlab.example.com/acme/web/-/merge_requests/3".to_string(),
+        );
+        assert_eq!(links(&hub.project_views().unwrap()[0].project), esperado);
+        assert_eq!(
+            links(&hub.dashboard().unwrap().projects[0].project),
+            esperado
+        );
+        let tree = hub.tree("acme", "acme-web").unwrap().unwrap();
+        assert_eq!(links(&tree.project), esperado);
+        let forge = tree.project.forge.gitlab().unwrap();
+        assert_eq!(forge.credential_cmd, GITLAB_CMD);
+
+        // Só em memória: o cadastro continua sem os campos antigos.
+        assert_eq!(vinculo(&hub, "acme-web").1, None);
+        assert_eq!(vinculo(&hub, "acme-web").2, None);
+    }
+
+    /// Editar a forja de um projeto migrado (#264): a UI manda o host tirado
+    /// da URL de clone, e o cadastro guardado não tem host. O repositório é
+    /// o mesmo (o host da conexão), então a edição passa.
+    #[test]
+    fn projeto_migrado_aceita_edicao_da_forja() {
+        let hub = Hub::open_in_memory().unwrap();
+        cadastra(&hub, "acme-web", JIRA_URL, "");
+        let dir = tempfile::tempdir().unwrap();
+        hub.migrate_legacy_connections(dir.path(), MIL).unwrap();
+        let conn = hub
+            .find_project("acme", "acme-web")
+            .unwrap()
+            .unwrap()
+            .forge
+            .gitlab()
+            .unwrap()
+            .connection;
+        let forge = |host: &str| {
+            ForgeConfig::Gitlab(GitlabConfig {
+                host: host.into(),
+                path: "acme/web".into(),
+                clone_url: format!("https://{host}/acme/web.git"),
+                credential_cmd: String::new(),
+                connection: conn,
+            })
+        };
+        let patch = |host: &str| crate::HubProjectPatch {
+            forge: Some(forge(host)),
+            ..Default::default()
+        };
+        hub.update_project("acme", "acme-web", &patch("gitlab.example.com"))
+            .unwrap();
+        // Outro host continua sendo outro repositório.
+        let err = hub
+            .update_project("acme", "acme-web", &patch("gitlab2.example.com"))
+            .unwrap_err();
+        assert!(err.to_string().contains("não muda"), "{err}");
+    }
+
     #[test]
     fn dois_projetos_na_mesma_instancia_viram_uma_conexao() {
         let hub = Hub::open_in_memory().unwrap();

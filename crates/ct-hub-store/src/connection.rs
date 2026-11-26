@@ -7,7 +7,7 @@
 //! sobe o `config_rev`, para os ambientes receberem o cadastro novo em
 //! `GET /sync/config`.
 
-use super::{Hub, ProjectProvider};
+use super::{Hub, HubProject, ProjectProvider};
 use crate::{json_col, LedgerError, Result};
 use ct_core::now_ms;
 use ct_core::provider::{self, Connection, CredentialSource, ProviderKind, Readiness, Role};
@@ -107,6 +107,18 @@ fn row_to_connection(r: &Row) -> rusqlite::Result<Connection> {
         created_at: r.get(6)?,
         updated_at: r.get(7)?,
     })
+}
+
+/// Preenche, em memória, o rastreador e a forja do projeto a partir das
+/// conexões que ele referencia: URL, `config_file` e comando de credencial
+/// do Jira; host e comando de credencial do GitLab
+/// ([`provider::resolve_connections`]). O comando é o da conexão
+/// ([`provider::credential_cmd`]): o hub não conhece as sobrescritas dos
+/// ambientes. Conexão ausente deixa o lado como está.
+fn resolve_project(p: &mut HubProject, conns: &[Connection]) {
+    provider::resolve_connections(&mut p.tracker, &mut p.forge, conns, |c| {
+        provider::credential_cmd(c).unwrap_or_default()
+    });
 }
 
 impl Hub {
@@ -287,6 +299,30 @@ impl Hub {
         ))?;
         let rows = stmt.query_map([env_id], row_to_connection)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Visão efetiva do projeto no hub (#264): o cadastro com o que as
+    /// conexões referenciadas fornecem (ver [`resolve_project`]). Só em
+    /// memória, para o que o hub lê ou entrega (gestor, links, telas); quem
+    /// grava o cadastro usa a linha como está.
+    pub fn effective_project(&self, p: HubProject) -> Result<HubProject> {
+        Ok(self.effective_projects(vec![p])?.remove(0))
+    }
+
+    /// [`Hub::effective_project`] de vários projetos, lendo as conexões uma
+    /// vez só.
+    pub fn effective_projects(&self, mut ps: Vec<HubProject>) -> Result<Vec<HubProject>> {
+        let linked = |p: &HubProject| {
+            p.tracker.jira().is_some_and(|j| j.connection.is_some())
+                || p.forge.gitlab().is_some_and(|g| g.connection.is_some())
+        };
+        if ps.iter().any(linked) {
+            let conns = self.list_connections()?;
+            for p in &mut ps {
+                resolve_project(p, &conns);
+            }
+        }
+        Ok(ps)
     }
 
     /// Os projetos referenciam conexão do tipo do papel: o Jira pela

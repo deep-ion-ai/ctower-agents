@@ -152,7 +152,8 @@ impl Hub {
     pub fn project_views(&self) -> Result<Vec<HubProjectView>> {
         let names = self.env_names()?;
         let mut out = Vec::new();
-        for project in self.list_projects()? {
+        // Visão efetiva (#264): host e URL das conexões, para os links da UI.
+        for project in self.effective_projects(self.list_projects()?)? {
             let locations = self
                 .project_locations(project.id)?
                 .into_iter()
@@ -277,6 +278,7 @@ impl Hub {
             .into_iter()
             .find(|p| p.id == pid)
             .expect("projeto existe");
+        let project = self.effective_project(project)?;
         let issues = self.list_issues(pid)?;
         let mut work_items: HashMap<i64, HubWorkItem> = self
             .list_work_items(pid)?
@@ -424,7 +426,7 @@ impl Hub {
 
     pub fn dashboard(&self) -> Result<HubDashboard> {
         let mut projects = Vec::new();
-        for project in self.list_projects()? {
+        for project in self.effective_projects(self.list_projects()?)? {
             let titles: HashMap<i64, String> = self
                 .list_issues(project.id)?
                 .into_iter()

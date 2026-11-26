@@ -483,11 +483,17 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
     }
     let hub = st.hub.clone();
     let (o, r) = (owner.clone(), repo.clone());
-    let project = tokio::task::spawn_blocking(move || hub.lock().find_project(&o, &r))
-        .await
-        .map_err(|e| (-32603, e.to_string()))?
-        .map_err(|e| (-32000, e.to_string()))?
-        .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
+    // Visão efetiva (#264): o link de reserva sai com a URL da conexão.
+    let project = tokio::task::spawn_blocking(move || {
+        let h = hub.lock();
+        h.find_project(&o, &r)?
+            .map(|p| h.effective_project(p))
+            .transpose()
+    })
+    .await
+    .map_err(|e| (-32603, e.to_string()))?
+    .map_err(|e| (-32000, e.to_string()))?
+    .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
     let markdown = |title: &Value, body: String, url: String| {
         json!(HubWorkItemBody {
             title: title.as_str().unwrap_or("").to_string(),
@@ -568,11 +574,17 @@ async fn tracker_add_issue(st: &HubState, p: Value) -> RpcResult {
     };
     let hub = st.hub.clone();
     let (o, r) = (owner.clone(), repo.clone());
-    let project = tokio::task::spawn_blocking(move || hub.lock().find_project(&o, &r))
-        .await
-        .map_err(|e| (-32603, e.to_string()))?
-        .map_err(|e| (-32000, e.to_string()))?
-        .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
+    // Visão efetiva (#264): o link de reserva sai com a URL da conexão.
+    let project = tokio::task::spawn_blocking(move || {
+        let h = hub.lock();
+        h.find_project(&o, &r)?
+            .map(|p| h.effective_project(p))
+            .transpose()
+    })
+    .await
+    .map_err(|e| (-32603, e.to_string()))?
+    .map_err(|e| (-32000, e.to_string()))?
+    .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
     if project.tracker.kind() != ct_core::TrackerKind::Jira {
         return Err((
             -32000,
@@ -4913,6 +4925,12 @@ pub(crate) mod tests {
                     // "Ver issue" de projeto Jira (#434): 7 com descrição em
                     // wiki markup, 8 sem descrição, o resto com a senha recusada.
                     let n = v["params"]["number"].as_i64().unwrap_or(0);
+                    if n == 10 {
+                        // Sem `url`: o hub monta o link de reserva (#264).
+                        let r = json!({ "id": v["id"], "result": { "title": "Sem link" } });
+                        let _ = tx.send(WsMsg::Text(r.to_string().into())).await;
+                        continue;
+                    }
                     let d = match n {
                         7 => json!("h2. Contexto\n*a* <script>x</script>"),
                         8 => Value::Null,
@@ -5302,6 +5320,69 @@ pub(crate) mod tests {
         let v = ui.call("hub.workitem.body", p(9)).await;
         assert_eq!(
             v["error"]["message"], "Jira, PROJ-9: o Jira recusou a senha (401)",
+            "{v}"
+        );
+    }
+
+    /// Projeto Jira com conexão (#264): o cadastro não tem URL, e o link de
+    /// reserva do "Ver issue" sai com a URL da conexão.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workitem_body_do_jira_com_conexao_usa_a_url_dela() {
+        let (st, _cookie) = hub_web();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let conn = |name: &str, kind: &str, endpoint: &str, cmd: &str| {
+            let p = json!({ "name": name, "kind": kind, "endpoint": endpoint,
+                            "credential": { "kind": "command", "cmd": cmd } });
+            st.hub
+                .lock()
+                .add_connection(&serde_json::from_value(p).unwrap())
+                .unwrap()
+                .id
+        };
+        let jira = conn(
+            "jira-acme",
+            "jira",
+            "https://jira.example.com",
+            "pass show jira",
+        );
+        let gitlab = conn(
+            "gitlab-acme",
+            "gitlab",
+            "gitlab.example.com",
+            "pass show gitlab",
+        );
+        let v = ui
+            .call(
+                "hub.projects.add",
+                json!({
+                    "tracker": { "kind": "jira", "url": "", "project_key": "ACME", "jql": "",
+                                 "active_sprint_only": true, "credential_cmd": "",
+                                 "connection": jira },
+                    "forge": { "kind": "gitlab",
+                               "clone_url": "https://gitlab.example.com/acme/app.git",
+                               "credential_cmd": "", "connection": gitlab }
+                }),
+            )
+            .await;
+        assert!(v["result"].is_object(), "{v}");
+        st.hub.lock().ingest("env-x", "x", &[]).unwrap();
+        let v = ui
+            .call(
+                "hub.assignments.add",
+                json!({ "owner": "acme", "repo": "app", "env": "env-x" }),
+            )
+            .await;
+        assert_eq!(v["result"]["sync_env"], true, "{v}");
+        let _env = fake_env(&st, &url, "env-x").await;
+        let v = ui
+            .call(
+                "hub.workitem.body",
+                json!({ "owner": "acme", "repo": "app", "number": 10 }),
+            )
+            .await;
+        assert_eq!(
+            v["result"]["url"], "https://jira.example.com/browse/ACME-10",
             "{v}"
         );
     }
