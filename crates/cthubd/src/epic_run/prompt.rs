@@ -106,6 +106,83 @@ ou pede outro plano.",
     )
 }
 
+/// O que o prompt da sessão de integração mostra (#302).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationVars {
+    pub owner: String,
+    pub repo: String,
+    pub epic_ref: String,
+    pub epic_title: String,
+    pub wip: String,
+    pub base: String,
+    /// Referências das sub-issues mescladas (`owner/repo#n` ou a chave).
+    pub merged: Vec<String>,
+    /// Liga a linha que fecha cada item: `Closes #n` no GitHub, a chave no
+    /// Jira.
+    pub closes: Vec<String>,
+    /// O plano aprovado pediu o `/code-review`.
+    pub code_review: bool,
+}
+
+/// A linha que fecha o item `n` no merge: `Closes #n` (o GitHub só fecha
+/// com Closes, Fixes ou Resolves) ou a chave do Jira.
+pub fn closes_line(item_ref: &str, n: i64) -> String {
+    if item_ref.contains('#') {
+        format!("Closes #{n}")
+    } else {
+        item_ref.to_string()
+    }
+}
+
+/// O corpo do PR do épico: um resumo e uma linha que fecha cada sub-issue e
+/// o épico.
+pub fn integration_pr_body(v: &IntegrationVars) -> String {
+    format!(
+        "Integração do épico {epic} ({title}): {n} sub-issue(s) mescladas na {wip}.\n\n{closes}\n",
+        epic = v.epic_ref,
+        title = v.epic_title,
+        n = v.merged.len(),
+        wip = v.wip,
+        closes = v.closes.join("\n"),
+    )
+}
+
+/// O prompt da sessão de integração.
+pub fn integration_prompt(v: &IntegrationVars) -> String {
+    let review = if v.code_review {
+        "3. Rode o /code-review sobre o conjunto da {wip} e corrija o que for real (commit e push \
+na {wip})."
+            .replace("{wip}", &v.wip)
+    } else {
+        "3. Não rode o /code-review: o plano aprovado não pediu.".to_string()
+    };
+    format!(
+        "Sessão de integração do Control Tower para o épico {epic} ({title}) do repositório \
+{owner}/{repo}. Todas as sub-issues ({merged}) já estão mescladas na {wip}, que é a branch \
+desta sessão.
+
+1. Valide a {wip}: build e testes do projeto, como o CI roda.
+2. Revise o conjunto das mudanças do épico (coerência entre as sub-issues, documentação). \
+Corrija o que precisar com commits na {wip} e push.
+{review}
+4. Abra o PR da {wip} para {base} com exatamente este corpo (grave num arquivo e use \
+`gh pr create --base {base} --head {wip} --body-file <arquivo>`):
+
+{body}
+As linhas Closes fecham as sub-issues e o épico no merge: não troque por outra palavra. Não \
+mescle o PR: o merge do épico é do desenvolvedor. Depois de abrir, o hub acompanha o CI e \
+devolve as falhas para você corrigir.",
+        epic = v.epic_ref,
+        title = v.epic_title,
+        owner = v.owner,
+        repo = v.repo,
+        merged = v.merged.join(", "),
+        wip = v.wip,
+        base = v.base,
+        body = integration_pr_body(v),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +224,49 @@ mod tests {
         }
         let vazio = plan_prompt(&vars(vec![], vec![]));
         assert!(vazio.contains("(nenhuma no espelho)") && vazio.contains("(nenhuma)"));
+    }
+
+    fn integ(code_review: bool) -> IntegrationVars {
+        IntegrationVars {
+            owner: "acme".into(),
+            repo: "acme-web".into(),
+            epic_ref: "acme/acme-web#10".into(),
+            epic_title: "Login novo".into(),
+            wip: "wip/10-login-novo".into(),
+            base: "develop".into(),
+            merged: vec!["acme/acme-web#11".into(), "acme/acme-web#12".into()],
+            closes: vec![
+                closes_line("acme/acme-web#11", 11),
+                closes_line("acme/acme-web#12", 12),
+                closes_line("acme/acme-web#10", 10),
+            ],
+            code_review,
+        }
+    }
+
+    #[test]
+    fn corpo_do_pr_fecha_as_sub_issues_e_o_epico() {
+        let b = integration_pr_body(&integ(false));
+        for l in ["Closes #11", "Closes #12", "Closes #10"] {
+            assert!(b.lines().any(|x| x == l), "{l}\n{b}");
+        }
+        assert!(!b.contains("Fecha"));
+        assert_eq!(closes_line("ACME-11", 11), "ACME-11");
+    }
+
+    #[test]
+    fn code_review_so_quando_o_plano_pede() {
+        let on = integration_prompt(&integ(true));
+        assert!(on.contains("Rode o /code-review"), "{on}");
+        let off = integration_prompt(&integ(false));
+        assert!(off.contains("Não rode o /code-review"), "{off}");
+        assert!(!off.contains("Rode o /code-review"));
+        for s in [
+            "--base develop --head wip/10-login-novo",
+            "Closes #10",
+            "Não mescle",
+        ] {
+            assert!(off.contains(s), "{s}");
+        }
     }
 }

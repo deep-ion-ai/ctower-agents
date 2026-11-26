@@ -64,6 +64,9 @@ pub struct EpicRun {
     pub plan_model: Option<String>,
     #[serde(default)]
     pub plan_effort: Option<String>,
+    /// Sessão de integração em andamento (#302); `None` = nenhuma.
+    #[serde(default)]
+    pub integration_session: Option<String>,
     /// Motivo da pausa ou do estacionamento.
     pub paused_reason: Option<String>,
     /// Estacionada: quando o motor retoma (ms).
@@ -329,7 +332,8 @@ fn json_vec<T: serde::de::DeserializeOwned>(r: &Row, i: usize) -> rusqlite::Resu
 const RUN_COLS: &str = "r.id, r.project_id, p.gh_owner, p.gh_repo, r.epic, r.env_id, r.status, \
                         r.plan_version, r.max_parallel, r.code_review, r.started_by, \
                         r.plan_session, r.paused_reason, r.resume_at, r.created_at, \
-                        r.updated_at, r.ended_at, r.plan_model, r.plan_effort";
+                        r.updated_at, r.ended_at, r.plan_model, r.plan_effort, \
+                        r.integration_session";
 const RUN_FROM: &str = "epic_run r JOIN project p ON p.id = r.project_id";
 const NODE_COLS: &str = "run_id, number, state, prev_state, session_id, worktree, pr, attempts, \
                          assumed_since, reason, rebase_head, rebase_at, updated_at";
@@ -358,6 +362,7 @@ fn row_to_run(r: &Row) -> rusqlite::Result<EpicRun> {
         ended_at: r.get(16)?,
         plan_model: r.get(17)?,
         plan_effort: r.get(18)?,
+        integration_session: r.get(19)?,
     })
 }
 
@@ -666,6 +671,21 @@ impl Hub {
         self.require_epic_run(id)?;
         self.conn.execute(
             "UPDATE epic_run SET plan_session = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, session, now],
+        )?;
+        self.require_epic_run(id)
+    }
+
+    /// Grava (ou limpa) a sessão de integração em andamento (#302).
+    pub fn set_epic_run_integration_session(
+        &self,
+        id: i64,
+        session: Option<&str>,
+        now: i64,
+    ) -> Result<EpicRun> {
+        self.require_epic_run(id)?;
+        self.conn.execute(
+            "UPDATE epic_run SET integration_session = ?2, updated_at = ?3 WHERE id = ?1",
             params![id, session, now],
         )?;
         self.require_epic_run(id)
@@ -1554,6 +1574,10 @@ mod tests {
             .set_epic_run_plan_session(r.id, Some("s-plano"), 5)
             .unwrap();
         assert_eq!(r.plan_session.as_deref(), Some("s-plano"));
+        let r = hub
+            .set_epic_run_integration_session(r.id, Some("s-int"), 6)
+            .unwrap();
+        assert_eq!(r.integration_session.as_deref(), Some("s-int"));
         // Outra para o mesmo épico: recusada.
         assert!(matches!(
             hub.create_epic_run(&new_run(pid, 10, "env-b"), 6),

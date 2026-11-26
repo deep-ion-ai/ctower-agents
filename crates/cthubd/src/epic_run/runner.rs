@@ -304,6 +304,35 @@ pub(crate) fn snapshot(
         .into_iter()
         .map(|d| (d.number, d.origin))
         .collect();
+    // Integração (#302): a sessão e o PR do épico (`wip` → base).
+    let mut integration = plan::IntegrationSnap::default();
+    if let Some(id) = &run.integration_session {
+        if let Some(i) = h.epic_session_info(id)? {
+            integration.session = Some(SessionSnap {
+                state: i.state,
+                idle_since: (i.state == ct_core::SessionState::Idle).then_some(i.idle_since),
+                human_input_at: None,
+            });
+        }
+    }
+    if let Some(w) = h.find_work_item(&run.owner, &run.repo, run.epic)? {
+        let prs: Vec<_> = h
+            .prs_for_work_item(w.id)?
+            .into_iter()
+            .filter(|pr| pr.head == wip && pr.base == p.base_branch)
+            .collect();
+        integration.merged = prs.iter().any(|pr| pr.state == PrState::Merged);
+        if let Some(pr) = prs.into_iter().find(|pr| pr.state == PrState::Open) {
+            integration.open = Some(Closing {
+                work_item_id: w.id,
+                integration: p.base_branch.clone(),
+                checks: h.pr_checks(p.id, pr.number)?,
+                feedback: h.pr_feedback(p.id, pr.number)?,
+                state: closes.get(&w.id).cloned().unwrap_or_default(),
+                pr,
+            });
+        }
+    }
     let mut handback_at = BTreeMap::new();
     for n in &nodes {
         if let Some(at) = h.epic_node_event_at(run.id, n.number, "handback")? {
@@ -311,6 +340,7 @@ pub(crate) fn snapshot(
         }
     }
     Ok(Some(Snapshot {
+        integration,
         handback_at,
         now,
         run: run.clone(),
@@ -358,6 +388,35 @@ fn node_prompt(ctx: &RunCtx, n: i64, title: &str, wip: &str) -> String {
         owner = p.gh_owner,
         repo = p.gh_repo,
     )
+}
+
+/// O prompt da sessão de integração (#302): as sub-issues mescladas e o
+/// corpo do PR com um `Closes` por item.
+fn integration_prompt(h: &Hub, ctx: &RunCtx, wip: &str) -> ct_ledger::Result<String> {
+    let run = &ctx.run;
+    let p = &ctx.project;
+    let merged: Vec<i64> = h
+        .epic_nodes(run.id)?
+        .into_iter()
+        .filter(|n| n.state == EpicNodeState::Mesclada)
+        .map(|n| n.number)
+        .collect();
+    let mut closes: Vec<String> = merged
+        .iter()
+        .map(|n| prompt::closes_line(&p.item_ref(*n), *n))
+        .collect();
+    closes.push(prompt::closes_line(&p.item_ref(run.epic), run.epic));
+    Ok(prompt::integration_prompt(&prompt::IntegrationVars {
+        owner: run.owner.clone(),
+        repo: run.repo.clone(),
+        epic_ref: p.item_ref(run.epic),
+        epic_title: ctx.epic_title.clone(),
+        wip: wip.to_string(),
+        base: p.base_branch.clone(),
+        merged: merged.iter().map(|n| p.item_ref(*n)).collect(),
+        closes,
+        code_review: run.code_review,
+    }))
 }
 
 /// Um ciclo de uma execução.
@@ -822,6 +881,101 @@ async fn tick_run(
                     .map_err(ledger_err)?;
                 rec(ev(run, now, kind, Some(number), msg), &mut out)?;
             }
+            Action::StartIntegration { message } => {
+                if !run_ok {
+                    continue;
+                }
+                let prompt = integration_prompt(&hub.lock(), ctx, &wip).map_err(ledger_err)?;
+                let params = json!({
+                    "owner": run.owner,
+                    "repo": run.repo,
+                    "gh_number": run.epic,
+                    "kind": "epic",
+                    "title": ctx.epic_title,
+                    "prompt": prompt,
+                    "model": run.plan_model.as_deref().unwrap_or(prompt::PLAN_MODEL_DEFAULT),
+                    "effort": run.plan_effort.as_deref().unwrap_or(prompt::PLAN_EFFORT_DEFAULT),
+                    "epic_run": { "base": wip },
+                });
+                match port.call(env.clone(), "session.start", params).await {
+                    Ok(v) => {
+                        let id = v.get("id").and_then(Value::as_str).map(String::from);
+                        hub.lock()
+                            .set_epic_run_integration_session(run.id, id.as_deref(), now)
+                            .map_err(ledger_err)?;
+                        rec(ev(run, now, "integration_started", None, message), &mut out)?;
+                    }
+                    Err((c, _)) if transient(c) => {}
+                    Err((_, m)) => rec(
+                        ev(
+                            run,
+                            now,
+                            "start_failed",
+                            None,
+                            format!("o início da sessão de integração falhou: {m}"),
+                        ),
+                        &mut out,
+                    )?,
+                }
+            }
+            Action::ClearIntegration { message } => {
+                hub.lock()
+                    .set_epic_run_integration_session(run.id, None, now)
+                    .map_err(ledger_err)?;
+                rec(ev(run, now, "integration_failed", None, message), &mut out)?;
+            }
+            Action::EndIntegration {
+                session_id,
+                message,
+            } => {
+                if let Err((c, _)) = port
+                    .call(
+                        env.clone(),
+                        "session.kill",
+                        json!({ "session_id": session_id }),
+                    )
+                    .await
+                {
+                    if transient(c) {
+                        continue;
+                    }
+                }
+                hub.lock()
+                    .set_epic_run_integration_session(run.id, None, now)
+                    .map_err(ledger_err)?;
+                rec(ev(run, now, "integration_ended", None, message), &mut out)?;
+            }
+            Action::IntegrationSend {
+                session_id,
+                close,
+                text,
+                message,
+            } => match port
+                .call(
+                    env.clone(),
+                    "session.continue",
+                    json!({ "session_id": session_id, "text": text }),
+                )
+                .await
+            {
+                Ok(_) => {
+                    hub.lock()
+                        .save_autopilot_close(&close, now)
+                        .map_err(ledger_err)?;
+                    rec(ev(run, now, "feedback_sent", None, message), &mut out)?;
+                }
+                Err((c, _)) if transient(c) => {}
+                Err((_, m)) => rec(
+                    ev(
+                        run,
+                        now,
+                        "continue_failed",
+                        None,
+                        format!("o envio à sessão de integração falhou: {m}"),
+                    ),
+                    &mut out,
+                )?,
+            },
             Action::Ask {
                 number,
                 origin,
