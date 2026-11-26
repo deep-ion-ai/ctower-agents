@@ -74,6 +74,19 @@ test("contadores refletem o useTower em tempo real", async () => {
   expect(within(nav).getAllByText("1", { selector: ".ab-badge" })).toHaveLength(2);
 });
 
+test("projects_changed do ambiente relê o dashboard dele (#281)", async () => {
+  // O pull que traz um projeto novo (ou aplica uma atribuição) avisa
+  // `projects_changed`: sem reler, o projeto ficava fora do dashboard do
+  // ambiente e "Sincronizar este projeto" dizia que o ambiente de sync não
+  // estava conectado com ele, até chegar outro evento.
+  const { api } = setup();
+  await waitFor(() => expect(api.callsTo("dashboard.get").length).toBeGreaterThan(0));
+  await new Promise((r) => setTimeout(r, 400));
+  const antes = api.callsTo("dashboard.get").length;
+  act(() => api.push("wsl", "projects_changed", { added: ["acme/acme-web"] }));
+  await waitFor(() => expect(api.callsTo("dashboard.get").length).toBeGreaterThan(antes));
+});
+
 test("abas ficam abertas ao trocar de tela; fechar ativa a vizinha", async () => {
   const { user, nav } = setup(live());
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));

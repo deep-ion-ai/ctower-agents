@@ -59,6 +59,9 @@ const REFRESH_ON = new Set([
   "permission_request",
   "permission_resolved",
   "sync_status",
+  // O pull trouxe, mudou ou tirou projetos, ou aplicou uma atribuição: sem
+  // reler, o projeto novo fica fora do dashboard do ambiente (#281).
+  "projects_changed",
 ]);
 
 export const REFRESH_DEBOUNCE_MS = 300;
