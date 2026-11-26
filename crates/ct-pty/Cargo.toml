@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+libc.workspace = true
 portable-pty.workspace = true
 zeroize.workspace = true
 

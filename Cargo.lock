@@ -655,6 +655,7 @@ dependencies = [
 name = "ct-pty"
 version = "1.10.0"
 dependencies = [
+ "libc",
  "portable-pty",
  "tempfile",
  "zeroize",
