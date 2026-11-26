@@ -5,8 +5,8 @@
 //! - [`JiraCli`]: as chamadas (`version`, `me`, `serverinfo`, `issue list`,
 //!   `issue view`), com a senha só no ambiente do processo filho
 //!   (`JIRA_API_TOKEN`);
-//! - [`run_credential`]: o comando de credencial do projeto (`pass show ... |
-//!   head -1`), cuja primeira linha vira um [`Secret`];
+//! - [`run_credential`]: o comando de credencial (`pass show ... | head -1`,
+//!   reexportado do `ct-proc`), cuja primeira linha vira um [`Secret`];
 //! - [`issue_row`]: o JSON da API v2 (`issue view --raw`) → linha do espelho,
 //!   com as sprints ([`parse_sprints`]) e os metadados ([`issue_meta`]);
 //! - [`description_markdown`]: a descrição da issue (wiki markup ou ADF) →

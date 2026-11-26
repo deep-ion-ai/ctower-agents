@@ -149,7 +149,6 @@ export type { SprintState } from "./SprintState";
 export type { StatuslineHealth } from "./StatuslineHealth";
 export type { SyncState } from "./SyncState";
 export type { TimeBand } from "./TimeBand";
-export type { TokenStatus } from "./TokenStatus";
 export type { Tool } from "./Tool";
 export type { TrackerConfig } from "./TrackerConfig";
 export type { TrackerIssueAdded } from "./TrackerIssueAdded";

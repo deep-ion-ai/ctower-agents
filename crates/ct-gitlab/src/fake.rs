@@ -17,7 +17,7 @@
 //!   (segundos antes de responder, para o prazo).
 //!
 //! Os comandos que falam com o GitLab só respondem com `GITLAB_TOKEN` igual
-//! ao esperado e `GITLAB_HOST` igual ao host do cadastro; senão, dão o 401
+//! ao esperado e `GITLAB_HOST` igual ao host da conexão; senão, dão o 401
 //! do glab.
 
 use crate::encode;

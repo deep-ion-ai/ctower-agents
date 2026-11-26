@@ -240,7 +240,7 @@ describe("projeto Jira + GitLab", () => {
     expect(within(modal).getByText("PROJ-5460")).toBeInTheDocument();
     expect(within(modal).getByRole("button", { name: /Voltar para PROJ-5400/ })).toBeInTheDocument();
     // Prompt do template de issue do Jira (#351), com o jira-cli e o glab
-    // pelo comando de credencial do cadastro.
+    // pelo comando de credencial da conexão.
     const prompt = within(modal).getByLabelText(/Prompt inicial · template de issue do Jira/) as HTMLTextAreaElement;
     expect(prompt.value).toContain("Trabalhe na issue PROJ-5460 do Jira (https://jira.example.com/browse/PROJ-5460): Ajustar o build.");
     expect(prompt.value).toContain('`JIRA_API_TOKEN="$(pass show jira | head -1)" jira issue view PROJ-5460 --comments 20 --plain`');

@@ -54,8 +54,8 @@ export const DEFAULT_RELEASE_TEMPLATE = [
 // Projetos Jira + GitLab (spec do Jira e GitLab §9, #351), escolhidos pelo
 // rastreador do projeto. Além das variáveis de sempre: {{key}} (PROJ-5450),
 // {{title}}, {{base}}, {{jira_url}}, {{jira_project}}, {{jira}} e {{glab}}
-// (o jira-cli e o glab com o comando de credencial do projeto, nunca a
-// senha) e {{forge_path}}. Só o mecânico de todo projeto Jira + GitLab: as
+// (o jira-cli e o glab com o comando de credencial da conexão do projeto,
+// nunca a senha) e {{forge_path}}. Só o mecânico de todo projeto Jira + GitLab: as
 // convenções de cada projeto e épico (formato do commit e do título do MR,
 // restrições) vêm das regras do agente, no system prompt.
 export const DEFAULT_JIRA_ISSUE_TEMPLATE = [

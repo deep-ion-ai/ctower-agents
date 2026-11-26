@@ -5705,7 +5705,7 @@ mod tests {
             .unwrap();
         assert_eq!(ap.items[0].item_ref, "PROJ-5450");
         // O gestor lê a issue do Jira pelo jira-cli, com o comando de
-        // credencial do cadastro (#351).
+        // credencial da conexão (#351, #277).
         assert_eq!(ap.tracker, ct_core::TrackerKind::Jira);
         assert!(
             ap.issue_view.ends_with("jira issue view PROJ-<n> --plain"),

@@ -1,6 +1,6 @@
 //! Processos externos dos provedores sem rede própria (spec do Jira e
 //! GitLab §6.1, §7.2, §8.1): o jira-cli (`ct-jira`), o glab (`ct-gitlab`) e o
-//! comando de credencial do projeto. Fica num crate à parte para os dois
+//! comando de credencial das conexões. Fica num crate à parte para os dois
 //! clientes não dependerem um do outro.
 //!
 //! - [`process::run`]: processo com prazo, `stdin` nulo, sessão nova (sem

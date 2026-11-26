@@ -969,7 +969,7 @@ function TemplateEditor({ k }: { k: TemplateKey }) {
           <>
             Variáveis: <span className="mono">{"{{kind}} {{key}} {{number}} {{title}} {{branch}} {{base}} {{protected}}"}</span>,{" "}
             <span className="mono">{"{{jira_url}} {{jira_project}} {{forge_path}}"}</span> e{" "}
-            <span className="mono">{"{{jira}} {{glab}}"}</span> (o jira-cli e o glab com o comando de credencial do projeto,
+            <span className="mono">{"{{jira}} {{glab}}"}</span> (o jira-cli e o glab com o comando de credencial da conexão do projeto,
             nunca a senha). Usado nos projetos Jira + GitLab; as convenções de cada projeto vão nas regras do agente.
           </>
         ) : (

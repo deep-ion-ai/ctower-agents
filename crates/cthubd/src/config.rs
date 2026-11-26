@@ -138,7 +138,8 @@ pub struct HubConfig {
     pub gh_sync_interval_secs: u64,
     /// Raiz da API do GitHub.
     pub gh_api_url: String,
-    /// `gh` de onde vem o token na falta de `github.token` (`gh auth token`).
+    /// `gh` da fonte `cli` das conexões GitHub e da falta de conexão
+    /// `github` no hub (`gh auth token`, #275).
     pub gh_bin: String,
     /// Snapshots do `hub.db`; vazio = `<data>/backups`. Ponha em outro disco.
     pub backup_dir: String,

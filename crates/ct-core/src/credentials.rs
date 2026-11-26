@@ -1,27 +1,31 @@
-//! Comandos de credencial do rastreador e da forja por ambiente (issue
-//! #143): `[credentials."owner/repo"]` no `config.toml` do ambiente.
+//! Credencial das conexões neste ambiente: as conexões do hub que o pull
+//! traz e as sobrescritas do `config.toml`.
 //!
 //! Caminho de binário, gerenciador de senhas e sistema operacional mudam de
-//! um ambiente para outro, então um ambiente pode trocar o comando da
-//! credencial só para si:
+//! um ambiente para outro, então um ambiente pode trocar a fonte da
+//! credencial de uma conexão por um comando só seu, pelo nome dela no hub
+//! (#237, [`ConnectionOverrides`]), que a UI edita (`env.connections.set`,
+//! #276):
 //!
 //! ```toml
-//! [credentials."acme/acme-web"]
-//! tracker_cmd = "/usr/bin/pass show acme/jira | head -1"
-//! forge_cmd = "/usr/bin/pass show acme/gitlab | head -1"
+//! [connections."jira-acme"]
+//! credential_cmd = "/usr/bin/pass show acme/jira | head -1"
 //! ```
 //!
-//! Campo vazio ou ausente = a fonte da conexão. A sobrescrita vale só onde
-//! o comando roda neste ambiente (sync, leitura de issue, glab, prompt da
-//! sessão): o cadastro do hub não muda e ela nunca sai do ambiente.
+//! Vazio ou ausente = a fonte da conexão. A sobrescrita vale só onde o
+//! token é usado neste ambiente (sync, leitura de issue, glab, `ct-gh`,
+//! prompt da sessão): o cadastro do hub não muda e ela nunca sai do
+//! ambiente.
 //!
-//! Com as conexões (#237), a forma atual é por conexão,
-//! `[connections."nome"] credential_cmd` ([`ConnectionOverrides`]), que a UI
-//! edita (`env.connections.set`, #276). O `[credentials]` ficou só como
-//! legado: o pull converte o que dá, e o que sobra continua valendo.
+//! Legado (#143): `[credentials."owner/repo"]` (`tracker_cmd`,
+//! `forge_cmd`, só Jira e GitLab) trocava o comando por projeto. Ele não tem
+//! mais tela: o pull o converte em `[connections]` ([`convert_credentials`])
+//! e o que não converte continua valendo, na frente da sobrescrita da
+//! conexão.
 //!
 //! O ambiente lê as conexões do projeto por [`SharedCredentials::resolve`]
-//! (#277): as conexões do último pull com as duas sobrescritas.
+//! (#277) e a fonte do token por [`SharedCredentials::source`]: as conexões
+//! do último pull com as duas sobrescritas.
 
 use crate::provider::{
     self, Connection, ConnectionGap, CredentialSource, ProviderKind, ResolvedConnections,

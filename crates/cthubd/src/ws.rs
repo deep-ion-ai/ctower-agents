@@ -2216,7 +2216,6 @@ mod export {
         ct_hub_store::HubRulesHistory::export_all_to(&dir).unwrap();
         ct_hub_store::HubRulesProposal::export_all_to(&dir).unwrap();
         ct_hub_store::HubRulesProposals::export_all_to(&dir).unwrap();
-        ct_gh::TokenStatus::export_all_to(&dir).unwrap();
         crate::update::HubUpdateStatus::export_all_to(&dir).unwrap();
         // Rastreador e forja (#347): os tipos soltos, além dos de `HubProject`.
         ct_core::TrackerKind::export_all_to(&dir).unwrap();
