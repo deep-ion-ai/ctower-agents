@@ -315,17 +315,20 @@ pub fn read_connection_overrides(path: &Path) -> ct_core::ConnectionOverrides {
 /// arquivo vai para `[connections."nome"]`, pela conexão de cada projeto.
 /// O que não converte (projeto sem conexão aqui, ou comando que brigaria
 /// com outro) fica em `[credentials]`. Sem `[credentials]`, o arquivo não
-/// muda. Devolve as conexões em uso e os avisos.
+/// muda. Devolve as conexões em uso, o que ficou em `[credentials]` e os
+/// avisos.
 pub fn convert_credentials_file(
     path: &Path,
     projects: &[ct_core::ProjectConnections],
-) -> io::Result<(ct_core::ConnectionOverrides, Vec<String>)> {
+) -> io::Result<(
+    ct_core::ConnectionOverrides,
+    ct_core::CredentialOverrides,
+    Vec<String>,
+)> {
     let _guard = config_write();
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Ok((Default::default(), Vec::new()))
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Default::default()),
         Err(e) => return Err(e),
     };
     let invalid = || io::Error::new(io::ErrorKind::InvalidData, "config.toml não lê");
@@ -341,7 +344,7 @@ pub fn convert_credentials_file(
         })?
         .connections;
     if creds.credentials.is_empty() {
-        return Ok((existing, Vec::new()));
+        return Ok((existing, Default::default(), Vec::new()));
     }
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|_| invalid())?;
     let (conns, left, warnings) =
@@ -363,7 +366,7 @@ pub fn convert_credentials_file(
         doc["connections"][name]["credential_cmd"] = toml_edit::value(o.credential_cmd.clone());
     }
     write_atomic(path, &doc.to_string())?;
-    Ok((conns, warnings))
+    Ok((conns, left, warnings))
 }
 
 /// Temporário + rename, com a permissão do arquivo atual. O temporário leva
@@ -516,7 +519,8 @@ mod conexoes_tests {
             tracker: Some("jira-acme".into()),
             forge: None,
         }];
-        let (conns, avisos) = convert_credentials_file(&path, &projetos).unwrap();
+        let (conns, sobra, avisos) = convert_credentials_file(&path, &projetos).unwrap();
+        assert!(sobra.is_empty(), "{sobra:?}");
         assert!(avisos.is_empty(), "{avisos:?}");
         assert_eq!(conns.credential_cmd("jira-acme"), Some("pass show a/jira"));
         let text = std::fs::read_to_string(&path).unwrap();
@@ -525,7 +529,7 @@ mod conexoes_tests {
         assert!(text.contains("port = 7878"), "{text}");
         assert_eq!(read_connection_overrides(&path), conns);
 
-        let (de_novo, avisos) = convert_credentials_file(&path, &projetos).unwrap();
+        let (de_novo, _, avisos) = convert_credentials_file(&path, &projetos).unwrap();
         assert_eq!(de_novo, conns);
         assert!(avisos.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
