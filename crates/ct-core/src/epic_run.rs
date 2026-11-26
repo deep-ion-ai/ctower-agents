@@ -81,9 +81,14 @@ impl EpicNodeState {
                 to,
                 EmExecucao | Mesclada | Assumida | Estacionada | Bloqueada
             ),
-            Estacionada => matches!(to, EmExecucao | EmPr | Assumida | Bloqueada),
+            // O PR mesclado na `wip` é fato: marca o nó de qualquer estado
+            // com sessão ou bloqueado.
+            Estacionada => matches!(to, EmExecucao | EmPr | Assumida | Bloqueada | Mesclada),
             Assumida => matches!(to, Pronta | EmExecucao | EmPr | Mesclada | Bloqueada),
-            Bloqueada => matches!(to, Pendente | Pronta | EmExecucao | EmPr | Assumida),
+            Bloqueada => matches!(
+                to,
+                Pendente | Pronta | EmExecucao | EmPr | Assumida | Mesclada
+            ),
             Mesclada => false,
         }
     }
@@ -126,6 +131,43 @@ pub fn normalize_area(area: &str) -> Result<String, String> {
         return Err(format!("área com mais de {EPIC_AREA_MAX_CHARS} caracteres"));
     }
     Ok(a)
+}
+
+/// O trecho literal de uma área normalizada: até o primeiro caractere de
+/// glob (`*`, `?`, `[`, `{`). Inteira se não tiver glob.
+fn literal_prefix(area: &str) -> (&str, bool) {
+    match area.find(['*', '?', '[', '{']) {
+        Some(i) => (&area[..i], true),
+        None => (area, false),
+    }
+}
+
+/// `a` contém `b` como caminho: igual, ou `a` é diretório de `b`.
+fn path_contains(a: &str, b: &str) -> bool {
+    let a = a.trim_end_matches('/');
+    let b = b.trim_end_matches('/');
+    a.is_empty() || a == b || b.strip_prefix(a).is_some_and(|r| r.starts_with('/'))
+}
+
+/// Duas áreas normalizadas podem tocar o mesmo arquivo. Sem glob, por
+/// caminho (igual ou uma dentro da outra). Com glob, pelo trecho literal
+/// antes do glob, que pode terminar no meio de um nome: conservador, na
+/// dúvida conta como sobreposta.
+pub fn area_overlaps(a: &str, b: &str) -> bool {
+    let (pa, ga) = literal_prefix(a);
+    let (pb, gb) = literal_prefix(b);
+    match (ga, gb) {
+        (false, false) => path_contains(a, b) || path_contains(b, a),
+        (true, false) => b.starts_with(pa) || path_contains(b, pa),
+        (false, true) => a.starts_with(pb) || path_contains(a, pb),
+        (true, true) => pa.starts_with(pb) || pb.starts_with(pa),
+    }
+}
+
+/// Algum par das duas listas se sobrepõe ([`area_overlaps`]). Lista vazia
+/// (sub-issue sem áreas no plano) não se sobrepõe a nada.
+pub fn areas_overlap(a: &[String], b: &[String]) -> bool {
+    a.iter().any(|x| b.iter().any(|y| area_overlaps(x, y)))
 }
 
 /// Normaliza as áreas de um nó (sem repetidas, na ordem dada).
@@ -181,6 +223,10 @@ mod tests {
         for s in EpicNodeState::ALL {
             assert!(!Mesclada.can_transition(*s));
         }
+        for s in [EmExecucao, EmPr, Assumida, Estacionada, Bloqueada] {
+            assert!(s.can_transition(Mesclada), "{s} -> mesclada");
+        }
+        assert!(!Pendente.can_transition(Mesclada) && !Pronta.can_transition(Mesclada));
         assert!(EmPr.is_live() && !Pronta.is_live() && !Mesclada.is_live());
     }
 
@@ -193,6 +239,29 @@ mod tests {
         for o in EpicDecisionOrigin::ALL {
             assert!(o.options().contains(&"replanejar"));
         }
+    }
+
+    #[test]
+    fn sobreposicao_de_areas() {
+        let o = area_overlaps;
+        assert!(o("crates/a", "crates/a"));
+        assert!(o("crates/a/", "crates/a/src/lib.rs"));
+        assert!(o("crates/a/src/lib.rs", "crates/a"));
+        assert!(!o("crates/a", "crates/ab"));
+        assert!(!o("crates/a/", "crates/b/"));
+        assert!(o("crates/a/**", "crates/a/src/x.rs"));
+        assert!(!o("crates/a/**", "crates/b/x.rs"));
+        assert!(o("ui/src/*.ts", "ui/src/main.ts"));
+        assert!(o("ui/src/*.ts", "ui/src/*.tsx"));
+        assert!(!o("ui/src/*.ts", "crates/**"));
+        // Prefixo no meio do nome: conservador.
+        assert!(o("crates/a*", "crates/ab/x"));
+        assert!(o("**/*.rs", "crates/a"));
+        assert!(!areas_overlap(&[], &["crates/a".into()]));
+        assert!(areas_overlap(
+            &["docs/".into(), "crates/a/".into()],
+            &["crates/a/src".into()]
+        ));
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub mod channel;
 pub mod cli;
 pub mod config;
 pub mod docs_backup;
+pub mod epic_run;
 pub mod github;
 pub mod methods;
 pub mod migrate;
