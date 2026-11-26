@@ -24,7 +24,6 @@ export type HubSection =
   | "connections"
   | "secrets"
   | "recovery"
-  | "github"
   /** Sessões web (#200, #201): listar e revogar. */
   | "web-sessions"
   /** Dispositivos da Web Push (#203): inscrever, eventos, testar e remover. */
@@ -44,7 +43,6 @@ export const HUB_SECTION_LABEL: Record<HubSection, string> = {
   envs: "Ambientes",
   secrets: "Secrets e variáveis",
   recovery: "Chave de recuperação",
-  github: "Token do GitHub",
   "web-sessions": "Sessões web",
   devices: "Dispositivos",
   "autopilot-panel": "Painel do piloto",
@@ -58,11 +56,10 @@ const KEYWORDS: Record<HubSection, string> = {
   health: "sinais riscos parado bloqueado",
   quarantine: "push não cadastrado descartar",
   projects: "cadastro atribuições repositórios projetos índice",
-  connections: "conexões github gitlab jira token credencial teste conta",
+  connections: "conexões github gitlab jira token credencial teste conta gh login",
   envs: "ambientes envio pendências limpezas",
   secrets: "variáveis env tokens chaves",
   recovery: "chave recuperação secrets verificar",
-  github: "token gh login",
   "web-sessions": "navegador celular pwa cookie revogar sair acesso",
   devices: "notificações push celular pwa avisos alertas",
   "autopilot-panel": "piloto automático autônomo fila pausar retomar sessões estacionadas resumo manhã",
@@ -80,7 +77,8 @@ export const HUB_GROUPS: HubGroup[] = [
   // Projetos e atribuições saiu daqui na #18: cada projeto se configura na
   // aba Configurações dele, e o cadastro e a ordem ficam no índice de Projetos.
   { label: "Cadastro", sections: ["connections", "envs"] },
-  { label: "Segurança", sections: ["secrets", "recovery", "github"] },
+  // O token do GitHub do hub saiu da Segurança (#263): vem da conexão `github`, em Conexões (#275).
+  { label: "Segurança", sections: ["secrets", "recovery"] },
   // Revogar só reduz acesso: fica no desktop e na web (spec §3.1).
   { label: "Acesso", sections: ["web-sessions", "devices"] },
   // Piloto automático (épico #178): o painel (#185, também na web) e a

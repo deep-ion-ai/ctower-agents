@@ -23,6 +23,13 @@ describe("registro de métodos do hub (gerado de crates/cthubd/src/methods.rs)",
       expect(web.has(m), m).toBe(false);
     }
   });
+
+  it("o hub não tem o RPC do token do GitHub (#237, #263): o token vem da conexão `github`", () => {
+    const ui = new Set<string>(HUB_METHOD_SCOPES.ui);
+    for (const m of ["github.status", "github.set_token", "github.clear_token"]) {
+      expect(ui.has(m), m).toBe(false);
+    }
+  });
 });
 
 /**

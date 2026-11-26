@@ -121,6 +121,10 @@ export function HubConnections() {
         atribuídos a eles.
       </p>
       <p className="muted hint">
+        O token do GitHub do hub (sincronização, validação dos repositórios e release) vem da conexão GitHub do projeto
+        ou, sem ela, da conexão <span className="mono">github</span>: para trocá-lo, edite a credencial dela aqui.
+      </p>
+      <p className="muted hint">
         Quem sou eu (a conta na rede) não entra no teste: o teste confere só o cadastro, sem rede. A conferência na
         rede é do ambiente, que tem a credencial.
       </p>

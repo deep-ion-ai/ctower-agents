@@ -98,7 +98,6 @@ function setup(opts: { projects?: HubProjectView[]; at?: Screen; protocol?: stri
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
     .onHub("hub.proposals.list", NO_PROPOSALS)
     .onHub("hub.health.get", NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 0, recovery_configured: true }, items: [], delivery: [] })
     .onHub("hub.connections.list", CONNECTIONS);
   const at = opts.at ?? (projects.length === 0 ? { name: "project" } : settingsAt("general"));

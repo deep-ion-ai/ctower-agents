@@ -27,7 +27,6 @@ function setup(initial = view(), status = hubStatus()) {
     .onHub("hub.projects.list", [hubProjectView(hubProject())])
     .onHub("hub.envs.list", [hubEnv()])
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 1, recovery_configured: false }, items: [], delivery: [], rotate_pending: null })
     .onHub("hub.recovery.status", recoveryStatus({ configured: false, public_key: null, last_verified_at: null, next_verify_at: null }))
     .onHub("hub.backup.get", () => current)

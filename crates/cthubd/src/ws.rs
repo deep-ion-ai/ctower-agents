@@ -18,7 +18,6 @@
 //! `hub.push.vapid_key|subscribe|list|update|remove|test` (Web Push, #203) e
 //! `hub.env.call { env, method, params }` (método do ambiente pelo canal
 //! reverso, #343) e
-//! `github.status|set_token|clear_token` (token do GitHub do hub) e
 //! `hub.update.get|check|start|rollback` (atualizar o hub, #421) e
 //! `hub.logs.tail|follow|unfollow` (log do hub, #65). Push:
 //! `hub_sync_status`, `hub.proposals.changed`, `hub.rules.changed`,
@@ -2527,9 +2526,12 @@ pub(crate) mod tests {
             let v = ui.call(m, json!({})).await;
             assert_eq!(v["error"]["code"], -32601, "{m}");
         }
-        // O RPC do token do GitHub saiu (#237): a conexão `github` cuida disso.
-        let v = ui.call("github.status", json!({})).await;
-        assert_eq!(v["error"]["code"], -32601);
+        // O RPC do token do GitHub saiu (#237): a conexão `github` cuida disso,
+        // editada em Hub › Conexões (#263).
+        for m in ["github.status", "github.set_token", "github.clear_token"] {
+            let v = ui.call(m, json!({ "token": "tok" })).await;
+            assert_eq!(v["error"]["code"], -32601, "{m}");
+        }
     }
 
     /// Método fora do registro (`crate::methods`) não é despachado: a recusa
