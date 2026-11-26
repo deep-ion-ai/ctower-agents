@@ -99,7 +99,7 @@ export function SyncEnvCard({
           )}
         </p>
       )}
-      {pr.sync_env_id && <TrackerReadiness project={pr} status={p.tracker_status} now={now} />}
+      {pr.sync_env_id && <TrackerReadiness status={p.tracker_status} now={now} />}
     </section>
   );
 }

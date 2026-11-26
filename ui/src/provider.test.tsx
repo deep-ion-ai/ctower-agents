@@ -267,7 +267,7 @@ describe("projeto Jira + GitLab", () => {
     const modal = screen.getByRole("dialog");
     const note = await within(modal).findByRole("status", { name: "Prontidão do Jira e do GitLab" });
     expect(note).toHaveTextContent("O Jira ou o GitLab não estão prontos em");
-    expect(note).toHaveTextContent('comando de credencial do Jira ok: falta (rode "pass show jira | head -1" num terminal do ambiente');
+    expect(note).toHaveTextContent('comando de credencial do Jira ok: falta (rode "o comando de credencial da conexão do Jira" num terminal do ambiente');
     expect(note).toHaveTextContent("jira me ok: falta");
     expect(note).toHaveTextContent("glab instalado: falta");
     expect(note).toHaveTextContent("pass: gpg-agent sem a chave");

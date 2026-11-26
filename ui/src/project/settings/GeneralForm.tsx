@@ -1,4 +1,5 @@
 import { useTower } from "../../state/tower";
+import { useHubConnections } from "../../hub/useConnections";
 import { JIRA_PROTOCOL, hubSupportsJira, kindOf, type CodeHostForm, type IssueHostForm } from "../../hub/tracker";
 import type { JiraFieldInfo } from "../../protocol/hub-gen";
 import type { ProjectForm } from "./form";
@@ -28,6 +29,8 @@ export function GeneralForm({
   const protocol = hub.info?.protocol ?? null;
   const jiraOk = hubSupportsJira(protocol);
   const kind = kindOf(f.code, f.issues);
+  // As conexões do cadastro (#238): o projeto escolhe a dele, sem URL nem credencial.
+  const { connections } = useHubConnections();
   return (
     <>
       <div className="field">
@@ -80,8 +83,10 @@ export function GeneralForm({
           />
         </div>
       )}
-      {f.code === "gitlab" && <GitlabFields form={f} onChange={onChange} prefix={prefix} />}
-      {f.issues === "jira" && <JiraFields form={f} onChange={onChange} prefix={prefix} catalog={jiraCatalog} />}
+      {f.code === "gitlab" && <GitlabFields form={f} onChange={onChange} prefix={prefix} connections={connections} />}
+      {f.issues === "jira" && (
+        <JiraFields form={f} onChange={onChange} prefix={prefix} catalog={jiraCatalog} connections={connections} />
+      )}
       <div className="field">
         <label htmlFor={`${prefix}-name`}>Nome{withUrl ? " (opcional)" : ""}</label>
         <input id={`${prefix}-name`} type="text" value={f.name} onChange={(e) => onChange({ ...f, name: e.target.value })} />

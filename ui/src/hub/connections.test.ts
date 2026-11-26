@@ -1,0 +1,101 @@
+import type { Connection } from "../protocol/gen";
+import {
+  EMPTY_CONNECTION_FORM,
+  connectionFormOf,
+  connectionLabel,
+  connectionParams,
+  connectionsOfKind,
+  credentialText,
+  readinessText,
+} from "./connections";
+
+const JIRA: Connection = {
+  id: 7,
+  name: "jira-acme",
+  kind: "jira",
+  endpoint: "https://jira.example.com",
+  credential: { kind: "command", cmd: "pass show jira | head -1" },
+  options: { config_file: "~/.config/.jira/acme.yml" },
+  created_at: 1,
+  updated_at: 1,
+};
+
+test("cadastro novo: tipo, endereço e credencial; o arquivo do jira-cli só no Jira", () => {
+  const f = {
+    ...EMPTY_CONNECTION_FORM,
+    name: " jira-acme ",
+    endpoint: "https://jira.example.com",
+    cred_value: "pass show jira | head -1",
+    config_file: " ~/.config/.jira/acme.yml ",
+  };
+  expect(connectionParams(f)).toEqual({
+    params: {
+      name: "jira-acme",
+      endpoint: "https://jira.example.com",
+      credential: { kind: "command", cmd: "pass show jira | head -1" },
+      options: { config_file: "~/.config/.jira/acme.yml" },
+      kind: "jira",
+    },
+  });
+  const gh = connectionParams({ ...EMPTY_CONNECTION_FORM, kind: "github", name: "github-acme", cred: "cli", config_file: "x" });
+  expect(gh).toEqual({
+    params: { name: "github-acme", endpoint: "", credential: { kind: "cli" }, options: {}, kind: "github" },
+  });
+});
+
+test("edição: com id e sem o tipo, que não muda", () => {
+  const p = connectionParams(connectionFormOf(JIRA), 7);
+  expect(p).toEqual({
+    params: {
+      id: 7,
+      name: "jira-acme",
+      endpoint: "https://jira.example.com",
+      credential: { kind: "command", cmd: "pass show jira | head -1" },
+      options: { config_file: "~/.config/.jira/acme.yml" },
+    },
+  });
+});
+
+test("ida e volta do formulário com a credencial de cada forma", () => {
+  expect(connectionFormOf(JIRA)).toMatchObject({
+    cred: "command",
+    cred_value: "pass show jira | head -1",
+    config_file: "~/.config/.jira/acme.yml",
+  });
+  const secret = { ...JIRA, credential: { kind: "secret" as const, name: "JIRA_TOKEN" } };
+  expect(connectionFormOf(secret)).toMatchObject({ cred: "secret", cred_value: "JIRA_TOKEN" });
+  expect(connectionParams(connectionFormOf(secret), 7)).toMatchObject({
+    params: { credential: { kind: "secret", name: "JIRA_TOKEN" } },
+  });
+});
+
+test("credencial que falta: o erro diz o que informar", () => {
+  expect(connectionParams({ ...EMPTY_CONNECTION_FORM, name: "jira-acme" })).toEqual({
+    error: "informe o comando que imprime o token",
+  });
+  expect(connectionParams({ ...EMPTY_CONNECTION_FORM, cred: "secret", cred_value: " ", name: "jira-acme" })).toEqual({
+    error: "informe o nome do secret do hub",
+  });
+  expect(connectionParams({ ...EMPTY_CONNECTION_FORM, cred_value: "x" })).toEqual({
+    error: "informe o nome da conexão (ex.: jira-empresa)",
+  });
+});
+
+test("textos: a credencial sem valor de secret, a prontidão e o rótulo", () => {
+  expect(credentialText(JIRA.credential)).toBe("comando: pass show jira | head -1");
+  expect(credentialText({ kind: "none" })).toBe("sem autenticação");
+  expect(readinessText({ state: "ready" })).toEqual({ ok: true, text: "pronta" });
+  expect(readinessText({ state: "needs_setup", reason: "informe o comando de credencial" })).toEqual({
+    ok: false,
+    text: "informe o comando de credencial",
+  });
+  expect(connectionLabel(JIRA)).toBe("jira-acme (https://jira.example.com)");
+  expect(connectionLabel({ ...JIRA, endpoint: "" })).toBe("jira-acme");
+});
+
+test("conexões de um tipo, por nome", () => {
+  const gl = { ...JIRA, id: 8, name: "gitlab-acme", kind: "gitlab" as const };
+  const jiraB = { ...JIRA, id: 9, name: "jira-beta" };
+  expect(connectionsOfKind([JIRA, gl, jiraB], "jira").map((c) => c.name)).toEqual(["jira-acme", "jira-beta"]);
+  expect(connectionsOfKind([JIRA, gl], "github")).toEqual([]);
+});
