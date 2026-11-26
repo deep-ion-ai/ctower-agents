@@ -887,17 +887,12 @@ impl Conn {
                     _ => None,
                 };
                 let method = method.to_string();
-                // O token nunca volta na resposta: só conta e origem.
-                tokio::task::spawn_blocking(move || {
-                    let c = gh.client();
-                    match method.as_str() {
-                        "github.set_token" => {
-                            c.set_token(&token.unwrap_or_default())?;
-                        }
-                        "github.clear_token" => c.clear_token()?,
-                        _ => {}
-                    }
-                    Ok::<_, ct_gh::GhError>(c.status())
+                // O token nunca volta na resposta: só conta e origem. O
+                // token do ambiente fica até a #276 (#275).
+                tokio::task::spawn_blocking(move || match method.as_str() {
+                    "github.set_token" => gh.set_env_token(&token.unwrap_or_default()),
+                    "github.clear_token" => gh.clear_env_token(),
+                    _ => Ok(gh.token_status()),
                 })
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
@@ -923,8 +918,12 @@ impl Conn {
                 })
                 .await?;
                 tokio::task::spawn_blocking(move || {
-                    gh.client()
-                        .comment_pr(&project.gh_owner, &project.gh_repo, pr, &body)
+                    gh.client_for(&project).comment_pr(
+                        &project.gh_owner,
+                        &project.gh_repo,
+                        pr,
+                        &body,
+                    )
                 })
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
@@ -3145,7 +3144,7 @@ mod tests {
         let v = ui.call("github.set_token", json!({ "token": "tok" })).await;
         assert_eq!(v["result"]["source"], "token", "{v}");
         assert!(!v.to_string().contains("\"tok\""), "{v}");
-        let file = srv.env.tmp.path().join("github.token");
+        let file = srv.env.sessions.config().dirs.github_token_file();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "tok");
         let v = ui.call("github.clear_token", json!({})).await;
         assert_eq!(v["result"]["source"], "gh", "{v}");

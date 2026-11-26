@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ct-core.workspace = true
 libc.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

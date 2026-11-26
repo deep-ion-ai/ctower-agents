@@ -1,12 +1,22 @@
-//! Sync com o GitHub de todos os projetos GitHub do `hub.db`, com o token do
-//! próprio hub (`github.token` ou `gh auth token`). Busca sem o lock do
-//! `hub.db` e aplica numa transação; os gatilhos de PR viram eventos do hub
-//! com `uid` determinístico, deduplicados com os que os ambientes enviam.
+//! Sync com o GitHub de todos os projetos GitHub do `hub.db`. Busca sem o
+//! lock do `hub.db` e aplica numa transação; os gatilhos de PR viram eventos
+//! do hub com `uid` determinístico, deduplicados com os que os ambientes
+//! enviam.
+//!
+//! O token de cada projeto vem da conexão `github` dele (#275): a
+//! referenciada ou a padrão ([`provider::github_connection`]), resolvida
+//! pelo resolvedor de credencial do hub ([`CredentialResolver`]), com cache
+//! por projeto e descarte no `401`. A fonte `secret` lê o store de secrets do
+//! hub no escopo do projeto (o do projeto sobrepõe o global, #279). Sem
+//! conexão GitHub no hub, vale o `gh auth token`.
 
 use ct_core::now_ms;
+use ct_core::provider::{self, CredentialSource};
 use ct_gh::sync::{fetch, SyncInput};
-use ct_gh::GhClient;
-use ct_hub_store::SharedHub;
+use ct_gh::{GhClient, GhError, TokenProvider};
+use ct_hub_store::{HubProject, SharedHub};
+use ct_proc::resolver::{Ask, CredentialResolver};
+use ct_proc::CREDENTIAL_DEADLINE;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -31,9 +41,17 @@ pub struct ProjectSync {
     pub skipped: bool,
 }
 
+/// Busca de um secret do hub: o escopo (`owner/repo`; `None` = só os
+/// globais) e o nome.
+pub type HubSecretLookup = Arc<dyn Fn(Option<&str>, &str) -> Option<String> + Send + Sync>;
+
 pub struct HubGithub {
     hub: SharedHub,
     client: GhClient,
+    /// Tokens das conexões GitHub dos projetos, em cache (#275).
+    resolver: Arc<CredentialResolver>,
+    /// Store de secrets do hub, para a fonte `secret`; `None` = sem store.
+    secrets: Option<HubSecretLookup>,
     /// Identidade do hub nos eventos gerados aqui.
     hub_id: String,
     events: broadcast::Sender<Value>,
@@ -51,22 +69,81 @@ impl HubGithub {
         HubGithub {
             hub,
             client,
+            resolver: Arc::new(CredentialResolver::new()),
+            secrets: None,
             hub_id: hub_id.to_string(),
             events,
             running: Mutex::new(()),
         }
     }
 
-    /// Cliente do GitHub (token, status da conta).
+    /// Com o store de secrets do hub, para a fonte `secret` das conexões.
+    pub fn with_secrets(mut self, secrets: Arc<crate::secrets::HubSecrets>) -> Self {
+        self.secrets = Some(Arc::new(move |scope, name| {
+            secrets
+                .resolve(scope)
+                .get(name)
+                .map(|e| e.value.expose().to_string())
+        }));
+        self
+    }
+
+    /// Com outra busca de secrets (testes).
+    pub fn with_secret_lookup(mut self, lookup: HubSecretLookup) -> Self {
+        self.secrets = Some(lookup);
+        self
+    }
+
+    /// Cliente base do GitHub (a API e o `gh` configurados). O token de um
+    /// projeto sai de [`Self::client_for`].
     pub fn client(&self) -> &GhClient {
         &self.client
     }
 
-    /// Valida com o token do hub que `owner/repo` existe e é acessível.
+    /// Cliente com o token do projeto (#275): a conexão `github` dele, com
+    /// os secrets do projeto.
+    pub fn client_for(&self, project: &HubProject) -> GhClient {
+        self.client_with(
+            format!("github:{}", project.id),
+            None,
+            Some(format!("{}/{}", project.gh_owner, project.gh_repo)),
+        )
+    }
+
+    /// Cliente de um projeto ainda sem cadastro (a validação do
+    /// `hub.projects.add`): a conexão `connection` (ou a padrão), com os
+    /// secrets globais.
+    pub fn client_for_new(&self, connection: Option<i64>) -> GhClient {
+        let key = match connection {
+            Some(id) => format!("github:novo:{id}"),
+            None => "github:novo".to_string(),
+        };
+        self.client_with(key, connection, None)
+    }
+
+    fn client_with(&self, key: String, connection: Option<i64>, scope: Option<String>) -> GhClient {
+        let cfg = self.client.config();
+        self.client.with_provider(Arc::new(HubToken {
+            hub: self.hub.clone(),
+            resolver: Arc::clone(&self.resolver),
+            secrets: self.secrets.clone(),
+            key,
+            connection,
+            scope,
+            cli: cfg.cli_cmd(),
+            deadline: cfg.token_timeout.max(CREDENTIAL_DEADLINE),
+        }))
+    }
+
+    /// Valida com o token do GitHub que `owner/repo` existe e é acessível.
     /// Devolve `owner` e `repo` com a caixa do GitHub. Síncrono.
-    pub fn validate_repo(&self, owner: &str, repo: &str) -> Result<(String, String), String> {
-        let v = self
-            .client
+    pub fn validate_repo(
+        &self,
+        client: &GhClient,
+        owner: &str,
+        repo: &str,
+    ) -> Result<(String, String), String> {
+        let v = client
             .get_json(&format!("/repos/{owner}/{repo}"))
             .map_err(|e| format!("não foi possível validar {owner}/{repo} no GitHub: {e}"))?
             .ok_or_else(|| {
@@ -84,8 +161,14 @@ impl HubGithub {
     }
 
     /// Valida que a branch existe em `owner/repo`. Síncrono.
-    pub fn validate_branch(&self, owner: &str, repo: &str, branch: &str) -> Result<(), String> {
-        self.client
+    pub fn validate_branch(
+        &self,
+        client: &GhClient,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<(), String> {
+        client
             .get_json(&format!(
                 "/repos/{owner}/{repo}/branches/{}",
                 encode_branch(branch)
@@ -149,7 +232,7 @@ impl HubGithub {
             skipped: true,
             ..ProjectSync::default()
         };
-        let (rev, input) = {
+        let (rev, input, project) = {
             let h = self.hub.lock();
             let Some(rev) = h.live_project_rev(project_id)? else {
                 return Ok(skipped);
@@ -157,12 +240,20 @@ impl HubGithub {
             (
                 rev,
                 ct_hub_store::sync_input_from_hub(&h, project_id, now_ms())?,
+                h.list_projects()?
+                    .into_iter()
+                    .find(|p| p.id == project_id)
+                    .ok_or_else(|| {
+                        ct_ledger::LedgerError::NotFound("project", project_id.to_string())
+                    })?,
             )
         };
+        // O token sai da conexão do projeto, sem o lock do `hub.db`.
+        let client = self.client_for(&project);
         // O login do token é o "eu" do projeto (#149); sem ele, fica o
         // último conhecido.
-        let fetched = fetch(&self.client, &input).map(|mut s| {
-            s.me = self.client.login().ok();
+        let fetched = fetch(&client, &input).map(|mut s| {
+            s.me = client.login().ok();
             s
         });
         let h = self.hub.lock();
@@ -200,7 +291,7 @@ impl HubGithub {
         };
         drop(h);
         if result.ok {
-            self.sync_reviews(project_id, rev, &input)?;
+            self.sync_reviews(&client, project_id, rev, &input)?;
         }
         Ok(result)
     }
@@ -210,13 +301,19 @@ impl HubGithub {
     /// leitura, sem o lock do `hub.db` durante a rede, e aplicado só se o
     /// projeto não mudou de `rev`. A falha no GitHub não derruba o sync:
     /// fica no log, e o que faltou é lido no próximo ciclo.
-    fn sync_reviews(&self, project_id: i64, rev: i64, input: &SyncInput) -> ct_ledger::Result<()> {
+    fn sync_reviews(
+        &self,
+        client: &GhClient,
+        project_id: i64,
+        rev: i64,
+        input: &SyncInput,
+    ) -> ct_ledger::Result<()> {
         let targets = self.hub.lock().pr_review_targets(project_id)?;
         if targets.is_empty() {
             return Ok(());
         }
         let (o, r) = (&input.project.gh_owner, &input.project.gh_repo);
-        let (got, err) = ct_gh::reviews::fetch_reviews(&self.client, o, r, &targets);
+        let (got, err) = ct_gh::reviews::fetch_reviews(client, o, r, &targets);
         if let Some(e) = err {
             tracing::warn!("github: projeto {project_id}: reviews dos PRs não lidas: {e}");
         }
@@ -225,6 +322,61 @@ impl HubGithub {
             h.apply_pr_reviews(project_id, &got)?;
         }
         Ok(())
+    }
+}
+
+/// Token do GitHub pelo resolvedor do hub (#275): a fonte da conexão é lida
+/// do `hub.db` a cada pedido (lock curto), e o resolvedor só roda a fonte de
+/// novo quando ela muda ou depois de um `401`.
+struct HubToken {
+    hub: SharedHub,
+    resolver: Arc<CredentialResolver>,
+    secrets: Option<HubSecretLookup>,
+    key: String,
+    connection: Option<i64>,
+    /// Escopo dos secrets (`owner/repo`); `None` = só os globais.
+    scope: Option<String>,
+    cli: String,
+    deadline: Duration,
+}
+
+impl HubToken {
+    /// Fonte da conexão GitHub (a referenciada ou a padrão); sem conexão,
+    /// o `gh auth token`.
+    fn source(&self) -> Result<CredentialSource, GhError> {
+        let conns = self
+            .hub
+            .lock()
+            .list_connections()
+            .map_err(|e| GhError::Token(format!("conexões do hub ilegíveis: {e}")))?;
+        Ok(provider::github_connection(&conns, self.connection)
+            .map_or(CredentialSource::Cli, |c| c.credential.clone()))
+    }
+}
+
+impl TokenProvider for HubToken {
+    fn token(&self) -> Result<String, GhError> {
+        let source = self.source()?;
+        let lookup = |name: &str| {
+            self.secrets
+                .as_ref()
+                .and_then(|f| f(self.scope.as_deref(), name))
+        };
+        self.resolver
+            .token(Ask {
+                key: &self.key,
+                what: "GitHub",
+                source: &source,
+                lookup: &lookup,
+                deadline: self.deadline,
+                cli: Some(&self.cli),
+            })
+            .map(|t| t.expose().to_string())
+            .map_err(|e| GhError::Token(e.to_string()))
+    }
+
+    fn invalidate(&self) {
+        self.resolver.invalidate(&self.key);
     }
 }
 
@@ -528,6 +680,88 @@ mod tests {
         assert!(ct_core::is_assignee(&i.assignees, "fulano"));
     }
 
+    /// #275: o token do sync do hub vem da conexão `github` padrão; trocar
+    /// a credencial dela vale no próximo ciclo, sem reiniciar o hub. A
+    /// fonte `secret` lê o store do hub no escopo do projeto.
+    #[test]
+    fn trocar_a_credencial_da_conexao_github_vale_no_sync_do_hub() {
+        use ct_hub_store::{ConnectionPatch, NewConnection};
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("ghp_ficticio_novo");
+        // O `gh` do hub dá outro token: sem a conexão, o sync falharia.
+        let bin = fake_gh(tmp.path(), "ghp_ficticio_do_gh");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("acme", "acme-web");
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        let hub = hub_com(o, r);
+        let velho = tmp.path().join("gh-velho.token");
+        std::fs::write(&velho, "ghp_ficticio_velho\n").unwrap();
+        let conn = hub
+            .lock()
+            .add_connection(&NewConnection {
+                name: "github".into(),
+                kind: ct_core::provider::ProviderKind::Github,
+                endpoint: String::new(),
+                credential: CredentialSource::File {
+                    path: velho.display().to_string(),
+                },
+                options: json!({}),
+            })
+            .unwrap();
+        let escopos = Arc::new(Mutex::new(Vec::new()));
+        let vistos = Arc::clone(&escopos);
+        let lookup: HubSecretLookup = Arc::new(move |scope: Option<&str>, name: &str| {
+            vistos.lock().unwrap().push(scope.map(str::to_string));
+            (name == "GH_TOKEN_ACME").then(|| "ghp_ficticio_novo".to_string())
+        });
+        let (events, _) = broadcast::channel(16);
+        let sync = HubGithub::new(hub.clone(), client, "hub-id", events).with_secret_lookup(lookup);
+        let r1 = sync.sync_all().unwrap();
+        assert!(!r1[0].ok, "{r1:?}");
+        assert!(r1[0].error.as_deref().unwrap().contains("401"), "{r1:?}");
+        assert_eq!(ct_gh::fake::fake_gh_calls(tmp.path()), 0);
+
+        hub.lock()
+            .update_connection(
+                conn.id,
+                &ConnectionPatch {
+                    credential: Some(CredentialSource::Secret {
+                        name: "GH_TOKEN_ACME".into(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let r2 = sync.sync_all().unwrap();
+        assert!(r2[0].ok, "{r2:?}");
+        assert_eq!(
+            escopos.lock().unwrap().as_slice(),
+            [Some("acme/acme-web".to_string())]
+        );
+        assert_eq!(ct_gh::fake::fake_gh_calls(tmp.path()), 0);
+
+        // Com a fonte `cli`, o `gh auth token` do `gh` do hub.
+        hub.lock()
+            .update_connection(
+                conn.id,
+                &ConnectionPatch {
+                    credential: Some(CredentialSource::Cli),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let r3 = sync.sync_all().unwrap();
+        assert!(!r3[0].ok, "o gh dá um token que o GitHub recusa: {r3:?}");
+        assert!(ct_gh::fake::fake_gh_calls(tmp.path()) >= 1);
+    }
+
     /// #89: o hub busca pelo mesmo `fetch`. O épico 1 do espelho do hub é
     /// apagado com a filha 2: a rodada não falha, os dois saem do espelho do
     /// hub e o work item da filha conclui com o motivo.
@@ -714,20 +948,22 @@ mod tests {
             "hub-id",
             events,
         );
+        // Sem conexão GitHub no hub: o `gh auth token` do `gh` configurado.
+        let c = g.client_for_new(None);
         assert_eq!(
-            g.validate_repo("deep-ion-ai", "demo").unwrap(),
+            g.validate_repo(&c, "deep-ion-ai", "demo").unwrap(),
             ("Deep-Ion-AI".to_string(), "Demo".to_string())
         );
-        let e = g.validate_repo("x", "y").unwrap_err();
+        let e = g.validate_repo(&c, "x", "y").unwrap_err();
         assert!(e.contains("x/y") && e.contains("token"), "{e}");
-        g.validate_branch("Deep-Ion-AI", "Demo", "feat/a b")
+        g.validate_branch(&c, "Deep-Ion-AI", "Demo", "feat/a b")
             .unwrap();
         let e = g
-            .validate_branch("Deep-Ion-AI", "Demo", "develop")
+            .validate_branch(&c, "Deep-Ion-AI", "Demo", "develop")
             .unwrap_err();
         assert!(e.contains("develop"), "{e}");
         gh.fail_next("/repos/o/r", 500, &[]);
-        let e = g.validate_repo("o", "r").unwrap_err();
+        let e = g.validate_repo(&c, "o", "r").unwrap_err();
         assert!(e.contains("não foi possível validar"), "{e}");
     }
 

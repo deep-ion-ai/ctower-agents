@@ -133,7 +133,8 @@ impl PrOpener for crate::GithubSync {
         head: &str,
         base: &str,
     ) -> std::result::Result<Option<DraftPr>, String> {
-        self.client().ensure_draft_pr(project, head, base)
+        self.client_for(project)
+            .ensure_draft_pr(project, head, base)
     }
 }
 

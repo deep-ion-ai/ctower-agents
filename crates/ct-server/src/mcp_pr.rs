@@ -298,7 +298,7 @@ pub(crate) fn pr_check_log(
     }
     let gh = github.ok_or("integração com o GitHub desativada neste ambiente")?;
     let tail = gh
-        .client()
+        .client_for(&p)
         .job_log_tail(&p.gh_owner, &p.gh_repo, job_id, max_bytes)
         .map_err(|e| format!("falha ao ler o log do job {job_id}: {e}"))?;
     let Some(tail) = tail else {

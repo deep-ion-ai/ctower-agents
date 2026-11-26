@@ -770,7 +770,7 @@ function useEnvItems(env: string | undefined): Item[] {
       category: "GitHub",
       name: "Token do ambiente",
       description:
-        "Usado pelo daemon para sincronizar e clonar. Fica em ~/.config/ctower/github.token na distro; sem ele, o daemon usa gh auth token.",
+        "Usado pelo daemon para sincronizar e clonar. Fica em ~/.config/ctower/github.token na distro; sem ele, o daemon usa a conexão github do hub.",
       desc: ENV_TOKEN_HINT,
       keys: ["github.token"],
       keywords: "gh auth token pat personal access login conta",

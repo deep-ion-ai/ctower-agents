@@ -503,16 +503,30 @@ impl HubSender {
                 return 0;
             }
         };
-        let (gh_bin, token) = match &self.config.github {
-            Some(g) => (
-                g.client().config().gh_bin.clone(),
-                g.client().configured_token(),
-            ),
-            None => ("gh".to_string(), None),
+        let gh_bin = match &self.config.github {
+            Some(g) => g.client().config().gh_bin.clone(),
+            None => "gh".to_string(),
         };
         let mut reports = 0;
         for p in pending {
             let Some(rev) = p.config_rev else { continue };
+            // O `gh repo clone` leva o token da conexão `github` do projeto
+            // (#275); sem ele, o `gh` usa o próprio login.
+            let token = match (&self.config.github, &p.forge) {
+                (Some(g), ct_core::ForgeConfig::Github) if !Path::new(&p.repo_path).exists() => g
+                    .client_for(&p)
+                    .token()
+                    .map_err(|e| {
+                        tracing::warn!(
+                            "hub: token do GitHub de {}/{} indisponível para o clone ({e}); \
+                                 o gh usa o próprio login",
+                            p.gh_owner,
+                            p.gh_repo
+                        )
+                    })
+                    .ok(),
+                _ => None,
+            };
             // `_projeto/` nasce ao aplicar a atribuição (#440). Sem
             // `docs_root`, com docs desligados ou inacessível, nada (aviso).
             self.sessions.ensure_project_docs(&p);
@@ -693,8 +707,7 @@ mod tests {
         }
         let client = ct_gh::GhClient::new(
             ct_gh::GhConfig::new("http://127.0.0.1:1", bin.to_str().unwrap())
-                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT)
-                .with_token_file(srv.env.tmp.path().join("github.token")),
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
         );
         let github = Arc::new(GithubSync::new(srv.env.sessions.clone(), client));
         Arc::new(

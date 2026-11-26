@@ -141,8 +141,8 @@ struct Inner {
     session_tokens: Mutex<HashMap<String, String>>,
     /// Shells livres vivos (#428), só em memória.
     shells: Mutex<HashMap<String, shell::LiveShell>>,
-    /// Token de cada conexão (Jira, GitLab), em cache: o comando de
-    /// credencial não roda a cada ciclo (#236).
+    /// Token de cada conexão (Jira, GitLab, GitHub), em cache: o comando de
+    /// credencial não roda a cada ciclo (#236, #275).
     credentials: Arc<resolver::CredentialResolver>,
     /// Serializa a conferência "uma sessão de release viva por projeto" com
     /// a criação da sessão (#204).
@@ -228,6 +228,33 @@ impl Sessions {
                 .credentials
                 .gitlab_source(&project.gh_owner, &project.gh_repo, g),
         )
+    }
+
+    /// Fonte do token do GitHub do projeto neste ambiente (#275): a de
+    /// [`Self::github_env_source`]. `None` = o projeto não usa o GitHub.
+    pub fn github_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
+        let github = project.tracker.kind() == ct_core::TrackerKind::Github
+            || project.forge.kind() == ct_core::ForgeKind::Github;
+        github.then(|| self.github_env_source(None))
+    }
+
+    /// Fonte do token do GitHub neste ambiente para a conexão `connection`
+    /// (ou a `github` padrão, `None`): o token do ambiente
+    /// (`github.token`, da tela de configurações do ambiente, até a #276),
+    /// se houver, senão a conexão com a sobrescrita `[connections]`
+    /// ([`ct_core::SharedCredentials::github_source`]).
+    pub fn github_env_source(&self, connection: Option<i64>) -> ct_core::EnvSource {
+        let file = self.inner.cfg.dirs.github_token_file();
+        let has_token = std::fs::read_to_string(&file).is_ok_and(|t| !t.trim().is_empty());
+        if has_token {
+            return ct_core::EnvSource {
+                source: ct_core::provider::CredentialSource::File {
+                    path: file.to_string_lossy().into_owned(),
+                },
+                from_env: true,
+            };
+        }
+        self.inner.cfg.credentials.github_source(connection)
     }
 
     /// Acesso direto ao ledger (consultas do servidor).

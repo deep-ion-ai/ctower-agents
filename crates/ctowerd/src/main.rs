@@ -135,12 +135,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         s.backup_running().map(|n| n as u64)
     });
 
+    // O token de cada projeto vem da conexão `github` dele, pelo resolvedor
+    // do ambiente (#275).
     let github = Arc::new(GithubSync::new(
         sessions.clone(),
-        GhClient::new(
-            GhConfig::new(&cfg.gh_api_url, &cfg.gh_bin)
-                .with_token_file(dirs.config.join("github.token")),
-        ),
+        GhClient::new(GhConfig::new(&cfg.gh_api_url, &cfg.gh_bin)),
     ));
 
     // Projetos Jira + GitLab (#349, #350): o jira-cli e o glab do ambiente,

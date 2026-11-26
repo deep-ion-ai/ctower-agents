@@ -3,9 +3,10 @@ import type { TokenStatus } from "../protocol/gen";
 import { useTower } from "../state/tower";
 
 const SOURCE: Record<string, string> = {
-  token: "token configurado no Control Tower",
-  gh: "login do gh na distro (gh auth token)",
-  none: "nenhum: configure um token ou rode gh auth login na distro",
+  token: "token configurado no Control Tower (vale no lugar da conexão github)",
+  gh: "conexão github do hub, com o login do gh na distro (gh auth token)",
+  conexao: "conexão github do hub (comando, secret ou arquivo)",
+  none: "nenhum: configure um token, a conexão github do hub ou rode gh auth login na distro",
 };
 
 /** Chamada a quem guarda o token (`github.status|set_token|clear_token`). */
@@ -16,8 +17,8 @@ export const ENV_TOKEN_HINT = (
   <>
     O token precisa ler issues e pull requests dos repositórios (e o conteúdo, para clonar repositórios privados). Ele é
     validado no GitHub e gravado na distro em <span className="mono">~/.config/ctower/github.token</span> com permissão
-    0600; o app não guarda nem mostra o token. Sem token configurado, o daemon usa o login do{" "}
-    <span className="mono">gh</span>.
+    0600; o app não guarda nem mostra o token. Sem token configurado, o daemon usa a conexão{" "}
+    <span className="mono">github</span> do hub (Hub › Conexões).
   </>
 );
 

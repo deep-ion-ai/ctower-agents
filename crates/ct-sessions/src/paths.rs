@@ -43,6 +43,13 @@ impl Dirs {
         self.config.join("hub.token")
     }
 
+    /// Token do GitHub deste ambiente (0600), gravado pela tela de
+    /// configurações do ambiente (`github.set_token`) até a #276. Existindo,
+    /// vale no lugar da conexão `github` neste ambiente (#275).
+    pub fn github_token_file(&self) -> PathBuf {
+        self.config.join("github.token")
+    }
+
     /// Token de agente do hub (`/agent/v1`, spec do gestor §6.1), lido a
     /// cada chamada repassada pelas ferramentas `portfolio_*`.
     pub fn hub_agent_token_file(&self) -> PathBuf {

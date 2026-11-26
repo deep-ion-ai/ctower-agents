@@ -940,14 +940,17 @@ pub async fn serve(dirs: Dirs) -> Result<(), Box<dyn std::error::Error>> {
     backup::spawn_docs_periodic(Arc::clone(&backups));
     state.backups = backups;
 
-    let gh = Arc::new(HubGithub::new(
-        hub,
-        GhClient::new(
-            GhConfig::new(&cfg.gh_api_url, &cfg.gh_bin).with_token_file(dirs.github_token_file()),
-        ),
-        &hub_id,
-        state.events.clone(),
-    ));
+    // O token de cada projeto vem da conexão `github` dele, pelo resolvedor
+    // do hub (#275); a fonte `secret` lê o store de secrets do hub.
+    let gh = Arc::new(
+        HubGithub::new(
+            hub,
+            GhClient::new(GhConfig::new(&cfg.gh_api_url, &cfg.gh_bin)),
+            &hub_id,
+            state.events.clone(),
+        )
+        .with_secrets(Arc::clone(&secrets)),
+    );
     if cfg.gh_sync_interval_secs > 0 {
         github::spawn_periodic(
             Arc::clone(&gh),

@@ -730,6 +730,7 @@ impl JiraGitlabSync {
                 source: &source,
                 lookup: &lookup,
                 deadline: self.cfg.credential_deadline,
+                cli: None,
             })
             .map_err(|e| e.to_string())
     }
@@ -766,6 +767,7 @@ impl JiraGitlabSync {
                 source: &source,
                 lookup: &lookup,
                 deadline: self.cfg.credential_deadline,
+                cli: None,
             },
             |e: &JiraError| matches!(e, JiraError::Unauthorized),
             op,

@@ -162,6 +162,23 @@ pub fn descriptor(kind: ProviderKind) -> &'static dyn ProviderDescriptor {
         .expect("todo ProviderKind tem descritor no registro")
 }
 
+/// Nome da conexão GitHub padrão (#275): a que a migração cria (#237) e
+/// que vale para o projeto GitHub sem conexão.
+pub const DEFAULT_GITHUB_CONNECTION: &str = "github";
+
+/// Conexão GitHub de um projeto (#275): a referenciada (`id`) ou, sem
+/// referência, a padrão ([`DEFAULT_GITHUB_CONNECTION`]). Conexão de outro
+/// tipo não serve. `None` = nenhuma: quem usa cai no `gh auth token`.
+pub fn github_connection(conns: &[Connection], id: Option<i64>) -> Option<&Connection> {
+    let github = conns.iter().filter(|c| c.kind == ProviderKind::Github);
+    match id {
+        Some(id) => github.into_iter().find(|c| c.id == id),
+        None => github
+            .into_iter()
+            .find(|c| c.name == DEFAULT_GITHUB_CONNECTION),
+    }
+}
+
 /// Papel de uma conexão num projeto: o rastreador (issues) ou a forja
 /// (repositório, PRs e MRs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -619,7 +636,7 @@ fn options_str<'a>(c: &'a Connection, key: &str) -> &'a str {
 
 /// Palavra do shell com aspas simples só quando precisa (caminho com espaço
 /// ou caractere especial).
-pub(crate) fn shell_word(s: &str) -> String {
+pub fn shell_word(s: &str) -> String {
     let safe = !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"/._-~+=:,@%".contains(&b));
