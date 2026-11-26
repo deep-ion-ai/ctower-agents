@@ -9,7 +9,8 @@
 //!   arquivo, `[]`);
 //! - `branches/<branch codificada>.json`: a branch do `glab api
 //!   projects/<p>/repository/branches/<b>` (sem o arquivo, 404). O `DELETE`
-//!   apaga o arquivo e registra o caminho em `deletes`;
+//!   apaga o arquivo e registra o caminho em `deletes`, menos com
+//!   `branches/<branch codificada>.protected` (branch protegida: 403);
 //! - `mr/<iid>.json`: o `glab api projects/<p>/merge_requests/<iid>`;
 //! - falhas por arquivo: `fail-401` (o GitLab recusa o token),
 //!   `echo-token` (o erro ecoa o token, para conferir a redação) e `sleep`
@@ -71,6 +72,17 @@ impl FakeGlab {
                 .join("branches")
                 .join(format!("{}.json", encode(branch))),
             json!({ "name": branch, "commit": { "id": sha } }).to_string(),
+        )
+        .unwrap();
+    }
+
+    /// A branch passa a ser protegida: o `DELETE` dela dá o 403 do GitLab.
+    pub fn protect_branch(&self, branch: &str) {
+        std::fs::write(
+            self.dir
+                .join("branches")
+                .join(format!("{}.protected", encode(branch))),
+            "",
         )
         .unwrap();
     }
@@ -188,6 +200,9 @@ case "$1" in
         f="$d/branches/${{ep##*/}}.json"
         if [ ! -f "$f" ]; then echo 'glab: 404 Branch Not Found (HTTP 404)' >&2; exit 1; fi
         if [ "$method" = DELETE ]; then
+          if [ -f "$d/branches/${{ep##*/}}.protected" ]; then
+            echo 'glab: 403 Forbidden (HTTP 403)' >&2; exit 1
+          fi
           rm -f "$f"; printf '%s\n' "$ep" >> "$d/deletes"; exit 0
         fi
         cat "$f"; exit 0 ;;

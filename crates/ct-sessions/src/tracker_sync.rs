@@ -422,11 +422,15 @@ pub fn normalize_issue_key(
     Ok((key, number))
 }
 
-/// Falha do `issue view` na adição pelo ID: o 404 vira "não existe".
+/// Falha do `issue view` na adição pelo ID: o 404 vira "não existe" e o
+/// 403, "sem acesso".
 fn view_error(key: &str, e: &JiraError) -> String {
     match e {
-        JiraError::Failed(m) if m.contains("404") => {
+        JiraError::Failed(m) if ct_proc::process::has_token(m, "404") => {
             format!("{key} não existe no Jira (ou a credencial não tem acesso a ela)")
+        }
+        JiraError::Forbidden(_) => {
+            format!("a credencial do Jira não tem acesso a {key} (403)")
         }
         e => format!("Jira, {key}: {e}"),
     }
@@ -709,7 +713,8 @@ impl JiraGitlabSync {
     }
 
     /// Roda `op` com o jira-cli e o token do projeto. Recusa de autenticação
-    /// (401/403) descarta o token do cache e tenta uma vez com um token novo.
+    /// (401) descarta o token do cache e tenta uma vez com um token novo; o
+    /// 403 (acesso negado ao item) não mexe no cache (#265).
     fn jira_call<T>(
         &self,
         project: &Project,
@@ -840,8 +845,9 @@ impl JiraGitlabSync {
                 })
             }
         };
-        // Recusa de autenticação no ciclo (401/403): o token em cache sai, e
-        // o próximo ciclo resolve de novo. Outras falhas mantêm o cache.
+        // Recusa de autenticação no ciclo (401): o token em cache sai, e o
+        // próximo ciclo resolve de novo. Outras falhas, o 403 inclusive,
+        // mantêm o cache (#265).
         if let Err(e) = &fetched {
             if e.contains("recusou") {
                 self.sessions
@@ -1425,7 +1431,9 @@ struct Read {
 /// `issue view --raw` de cada chave, `VIEW_WORKERS` por vez. A falha de uma
 /// chave fica no `failed` e a leitura segue; senha recusada, jira-cli
 /// sumido, configuração ausente ou `MAX_FAILS_IN_A_ROW` falhas seguidas
-/// (`in_a_row`, que atravessa os lotes) param o lote e derrubam o ciclo.
+/// (`in_a_row`, que atravessa os lotes) param o lote e derrubam o ciclo. O
+/// 403 (a senha vale, mas não vê a issue) é só falha da chave e nem conta
+/// nas seguidas: o Jira respondeu (#265).
 fn view_all(cli: &JiraCli, token: &Secret, keys: &[String], in_a_row: &AtomicUsize) -> Read {
     let next = AtomicUsize::new(0);
     let read = Mutex::new(Read::default());
@@ -1445,6 +1453,7 @@ fn view_all(cli: &JiraCli, token: &Secret, keys: &[String], in_a_row: &AtomicUsi
                         in_a_row.store(0, Ordering::Relaxed);
                         r.ok.push(v);
                     }
+                    Err(e @ JiraError::Forbidden(_)) => r.failed.push((key.clone(), e)),
                     Err(e) => {
                         let n = in_a_row.fetch_add(1, Ordering::Relaxed) + 1;
                         let fatal = match &e {
@@ -2311,6 +2320,66 @@ mod tests {
                 .as_deref(),
             Some("")
         );
+    }
+
+    /// Critérios da #265: 403 numa issue (um nível de segurança que a senha
+    /// não vê) é falha dela, sem derrubar o ciclo nem trocar o token em
+    /// cache; 401 tira o token do cache, a chamada avulsa tenta uma vez com
+    /// o token novo e, no ciclo, o próximo roda o comando de novo.
+    #[test]
+    fn acesso_negado_numa_issue_nao_derruba_o_ciclo_nem_o_cache() {
+        let mut runs = std::path::PathBuf::new();
+        let j = setup_with(false, |jc, _| {
+            runs = std::path::Path::new(&jc.config_file).with_file_name("credencial-rodou");
+            jc.credential_cmd = format!("echo x >> '{}'; printf '{SENHA}\\n'", runs.display());
+        });
+        let ran = || {
+            std::fs::read_to_string(&runs)
+                .map(|s| s.lines().count())
+                .unwrap_or(0)
+        };
+        let pid = j.env.project_id;
+        j.fake.set_issues(&arvore());
+        j.fake.fail_view_403("PROJ-4", true);
+        let r = j.sync.sync_all().unwrap();
+        assert!(r[0].ok, "{r:?}");
+        let w = r[0].error.clone().unwrap();
+        assert!(
+            w.starts_with("1 issue(s) não lidas") && w.contains("PROJ-4") && w.contains("403"),
+            "{w}"
+        );
+        assert!(!w.contains("recusou"), "{w}");
+        assert_eq!(numbers(&j.env), vec![1, 2, 3]);
+        assert!(j.sync.readiness()[0].jira.credential_ok);
+        assert_eq!(ran(), 1);
+        // O próximo ciclo lê a issue de novo, com o mesmo token.
+        let r = j.sync.sync_all().unwrap();
+        assert!(r[0].ok && r[0].error.as_deref().unwrap_or("").contains("PROJ-4"));
+        assert_eq!(ran(), 1);
+        // Na chamada avulsa, o 403 também não refaz o token.
+        j.fake.clear_calls();
+        let e = j.sync.issue_description(pid, 4).unwrap_err().to_string();
+        assert!(e.contains("PROJ-4") && e.contains("403"), "{e}");
+        assert_eq!(j.fake.viewed(), vec!["PROJ-4"]);
+        assert_eq!(ran(), 1);
+
+        // 401 na chamada avulsa: o token sai do cache e ela tenta uma vez só.
+        j.fake.fail_view_403("PROJ-4", false);
+        j.fake.fail_view_401("PROJ-4", true);
+        j.fake.clear_calls();
+        let e = j.sync.issue_description(pid, 4).unwrap_err().to_string();
+        assert!(e.contains("recusou a senha (401)"), "{e}");
+        assert_eq!(j.fake.viewed(), vec!["PROJ-4", "PROJ-4"]);
+        assert_eq!(ran(), 2);
+        // 401 no ciclo: o ciclo cai e o próximo resolve o token de novo.
+        let r = j.sync.sync_all().unwrap();
+        assert_eq!(r[0].error.as_deref(), Some("o Jira recusou a senha (401)"));
+        assert_eq!(ran(), 2);
+        j.fake.fail_view_401("PROJ-4", false);
+        let r = j.sync.sync_all().unwrap();
+        assert!(r[0].ok && r[0].error.is_none(), "{r:?}");
+        assert_eq!(ran(), 3);
+        assert_eq!(numbers(&j.env), vec![1, 2, 3, 4]);
     }
 
     #[test]

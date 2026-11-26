@@ -1141,6 +1141,37 @@ mod tests {
         );
     }
 
+    /// Branch protegida no GitLab: o `DELETE` dá 403, que é falha do passo
+    /// e não "recusou o token"; o token em cache fica e a chamada não é
+    /// repetida (#265).
+    #[test]
+    fn branch_protegida_no_gitlab_nao_e_token_recusado() {
+        let g = setup_gitlab();
+        let e = &g.e;
+        let (wi, tip) = e.branch(9, "PROJ-9");
+        e.pr(90, wi, "PROJ-9", PrState::Merged, Some(&tip));
+        g.glab.set_branch("PROJ-9", &tip);
+        g.glab.protect_branch("PROJ-9");
+        git_in(&e.origin, &["branch", "-D", "PROJ-9"]);
+        let r = e.run(&g.cleaner(), false);
+        let s = &r.items[0].steps[1];
+        assert_eq!(
+            (s.kind, s.result),
+            (StepKind::BranchRemota, StepResult::Falhou),
+            "{r:?}"
+        );
+        let why = s.reason.as_deref().unwrap();
+        assert!(why.contains("403") && !why.contains("recusou"), "{why}");
+        assert!(g.glab.deletes().is_empty());
+        let deletes = g
+            .glab
+            .calls()
+            .iter()
+            .filter(|c| c.contains("\t-X\tDELETE"))
+            .count();
+        assert_eq!(deletes, 1, "o 403 não refaz o token nem repete a chamada");
+    }
+
     /// A branch em uso no clone principal fica, com o motivo.
     #[test]
     fn branch_em_uso_no_clone_principal_fica() {

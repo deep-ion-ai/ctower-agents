@@ -1,6 +1,6 @@
 //! Chamadas ao jira-cli (spec §6.1, §6.2), verificadas com o jira-cli 1.7.0.
 
-use crate::process::{cite as clean, describe_status, run, RunError};
+use crate::process::{cite as clean, describe_status, has_token, run, RunError};
 use crate::Secret;
 use ct_core::JiraFieldInfo;
 use serde_json::Value;
@@ -32,6 +32,10 @@ pub enum JiraError {
     ConfigMissing(String),
     #[error("o Jira recusou a senha (401)")]
     Unauthorized,
+    /// 403: a senha vale, mas não dá acesso a isto (uma issue com nível de
+    /// segurança, por exemplo). É falha do item, não da credencial (#265).
+    #[error("o Jira negou o acesso (403): {0}")]
+    Forbidden(String),
     #[error("jira-cli não respondeu em {0} s")]
     Timeout(u64),
     #[error("Jira fora do ar: {0}")]
@@ -54,12 +58,15 @@ impl From<ct_proc::CredentialError> for JiraError {
 
 impl JiraError {
     /// Falha que pode passar sozinha (prazo, Jira fora do ar, erro do
-    /// servidor, resposta truncada); jira-cli ausente, configuração ausente
-    /// e senha recusada não passam tentando de novo.
+    /// servidor, resposta truncada); jira-cli ausente, configuração ausente,
+    /// senha recusada e acesso negado não passam tentando de novo.
     pub fn is_transient(&self) -> bool {
         !matches!(
             self,
-            JiraError::NotFound(_) | JiraError::ConfigMissing(_) | JiraError::Unauthorized
+            JiraError::NotFound(_)
+                | JiraError::ConfigMissing(_)
+                | JiraError::Unauthorized
+                | JiraError::Forbidden(_)
         )
     }
 }
@@ -352,18 +359,25 @@ fn parse_array(out: &str) -> Result<Vec<Value>, JiraError> {
     }
 }
 
-/// Classifica a saída de erro do jira-cli (já limpa).
+/// Classifica a saída de erro do jira-cli (já limpa). Os códigos HTTP só
+/// contam como palavra solta (`'401 Unauthorized'`), nunca dentro de outra
+/// (`ACME-401`); 401 é a senha recusada e 403, o acesso negado ao item
+/// (#265).
 fn classify(msg: &str, status: &str, config: &str) -> JiraError {
     let lower = msg.to_lowercase();
     if lower.contains("missing configuration file") {
         return JiraError::ConfigMissing(config.to_string());
     }
-    if lower.contains("401")
-        || lower.contains("unauthorized")
-        || lower.contains("403")
-        || lower.contains("forbidden")
-    {
+    if has_token(msg, "401") || has_token(msg, "unauthorized") {
         return JiraError::Unauthorized;
+    }
+    let msg_or_status = if msg.is_empty() {
+        status.to_string()
+    } else {
+        msg.to_string()
+    };
+    if has_token(msg, "403") || has_token(msg, "forbidden") {
+        return JiraError::Forbidden(msg_or_status);
     }
     let down = [
         "dial tcp",
@@ -371,18 +385,14 @@ fn classify(msg: &str, status: &str, config: &str) -> JiraError {
         "no such host",
         "timeout",
         "i/o timeout",
-        "502 ",
-        "503 ",
-        "504 ",
         "tls:",
         "x509",
     ];
-    let msg = if msg.is_empty() {
-        status.to_string()
-    } else {
-        msg.to_string()
-    };
-    if down.iter().any(|d| lower.contains(d)) || msg.contains("EOF") {
+    let msg = msg_or_status;
+    if down.iter().any(|d| lower.contains(d))
+        || ["502", "503", "504"].iter().any(|c| has_token(&msg, c))
+        || msg.contains("EOF")
+    {
         JiraError::Unavailable(msg)
     } else {
         JiraError::Failed(msg)
@@ -660,6 +670,46 @@ issue:
         assert_eq!(classify(&m, "", ""), JiraError::Unauthorized);
         let m = "Error: Get \"http://x/rest/api/2/search\": dial tcp: connection refused";
         assert!(matches!(classify(m, "", ""), JiraError::Unavailable(_)));
+        assert!(matches!(
+            classify(
+                "jira: Received unexpected response '502 Bad Gateway'.",
+                "",
+                ""
+            ),
+            JiraError::Unavailable(_)
+        ));
+    }
+
+    /// 403 é o acesso negado ao item, não a senha recusada; e o código só
+    /// conta como palavra solta (#265).
+    #[test]
+    fn acesso_negado_nao_e_senha_recusada() {
+        let m = "jira: Received unexpected response '403 Forbidden'.";
+        assert_eq!(classify(m, "", ""), JiraError::Forbidden(m.into()));
+        let e = classify(m, "", "");
+        assert!(!e.is_transient());
+        assert!(!e.to_string().contains("recusou"), "{e}");
+        // O código dentro de outra palavra não dispara nada.
+        for m in [
+            "issue ACME-403 sem o campo \"status\"",
+            "Get \"https://jira.example.com/rest/api/2/issue/ACME-401\": EOF",
+            "falhou em issues/403 (saída 1)",
+            "4031 issues",
+        ] {
+            let e = classify(m, "", "");
+            assert!(
+                !matches!(e, JiraError::Unauthorized | JiraError::Forbidden(_)),
+                "{m}: {e:?}"
+            );
+        }
+        assert!(matches!(
+            classify(
+                "Get \"https://jira.example.com/rest/api/2/issue/ACME-503\": x",
+                "",
+                ""
+            ),
+            JiraError::Failed(_)
+        ));
         assert_eq!(clean(&"x".repeat(400), None).chars().count(), 301);
     }
 
