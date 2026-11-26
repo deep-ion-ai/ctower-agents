@@ -437,7 +437,6 @@ describe("projeto Jira + GitLab", () => {
     };
     const api = envApi()
       .on("env.info", { ...ENV_INFO, commit: "", env_id: "id-wsl", env_name: "wsl", hub_sync: null, hub_config: HUB_CONFIG_UNLINKED, update: null })
-      .on("github.status", { source: "gh", login: "x", error: null })
       .on("cleanup.status", st);
     render(<App api={api} initial={{ name: "maintenance", section: "cleanup" }} />);
     const pend = await screen.findByRole("list", { name: /Limpezas pendentes em/ });

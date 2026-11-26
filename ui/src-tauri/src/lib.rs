@@ -106,24 +106,6 @@ async fn daemon_call(
 // Métodos sensíveis (`gate::SENSITIVE_ENV`): cada um tem um comando próprio,
 // com o nome do método fixo aqui. O `daemon_call` os recusa.
 #[tauri::command]
-async fn github_set_token(
-    st: State<'_, AppState>,
-    env: String,
-    params: Value,
-) -> Result<Value, BridgeError> {
-    st.bridge.call(&env, "github.set_token", params).await
-}
-
-#[tauri::command]
-async fn github_clear_token(
-    st: State<'_, AppState>,
-    env: String,
-    params: Value,
-) -> Result<Value, BridgeError> {
-    st.bridge.call(&env, "github.clear_token", params).await
-}
-
-#[tauri::command]
 async fn github_pr_comment(
     st: State<'_, AppState>,
     env: String,
@@ -157,15 +139,6 @@ async fn env_config_set(
     params: Value,
 ) -> Result<Value, BridgeError> {
     st.bridge.call(&env, "env.config.set", params).await
-}
-
-#[tauri::command]
-async fn env_credentials_set(
-    st: State<'_, AppState>,
-    env: String,
-    params: Value,
-) -> Result<Value, BridgeError> {
-    st.bridge.call(&env, "env.credentials.set", params).await
 }
 
 #[tauri::command]
@@ -514,13 +487,10 @@ pub fn run() {
             envs_save,
             env_statuses,
             daemon_call,
-            github_set_token,
-            github_clear_token,
             github_pr_comment,
             env_update,
             env_rollback,
             env_config_set,
-            env_credentials_set,
             env_connections_set,
             shell_open,
             shell_close,

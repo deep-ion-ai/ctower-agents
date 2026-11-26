@@ -262,9 +262,6 @@ mod tests {
             "env.check_update",
             "env.config.get",
             "env.config.set",
-            // Comandos de credencial do ambiente (#143): só no desktop.
-            "env.credentials.get",
-            "env.credentials.set",
             // Sobrescrita por conexão (#276): só no desktop.
             "env.connections.get",
             "env.connections.set",

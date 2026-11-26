@@ -245,35 +245,20 @@ impl Sessions {
         )
     }
 
-    /// Fonte do token do GitHub do projeto neste ambiente (#275): a de
-    /// [`Self::github_env_source`] com a conexão GitHub do projeto
-    /// ([`ct_core::github_connection`]). `None` = o projeto não usa o
-    /// GitHub.
+    /// Fonte do token do GitHub do projeto neste ambiente (#275): a da
+    /// conexão GitHub do projeto ([`ct_core::github_connection`]) ou da
+    /// `github` padrão, com a sobrescrita `[connections]`
+    /// ([`ct_core::SharedCredentials::github_source`]). `None` = o projeto
+    /// não usa o GitHub.
     pub fn github_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
         let github = project.tracker.kind() == ct_core::TrackerKind::Github
             || project.forge.kind() == ct_core::ForgeKind::Github;
         github.then(|| {
-            self.github_env_source(ct_core::github_connection(&project.tracker, &project.forge))
+            self.inner
+                .cfg
+                .credentials
+                .github_source(ct_core::github_connection(&project.tracker, &project.forge))
         })
-    }
-
-    /// Fonte do token do GitHub neste ambiente para a conexão `connection`
-    /// (ou a `github` padrão, `None`): o token do ambiente
-    /// (`github.token`, da tela de configurações do ambiente, até a #276),
-    /// se houver, senão a conexão com a sobrescrita `[connections]`
-    /// ([`ct_core::SharedCredentials::github_source`]).
-    pub fn github_env_source(&self, connection: Option<i64>) -> ct_core::EnvSource {
-        let file = self.inner.cfg.dirs.github_token_file();
-        let has_token = std::fs::read_to_string(&file).is_ok_and(|t| !t.trim().is_empty());
-        if has_token {
-            return ct_core::EnvSource {
-                source: ct_core::provider::CredentialSource::File {
-                    path: file.to_string_lossy().into_owned(),
-                },
-                from_env: true,
-            };
-        }
-        self.inner.cfg.credentials.github_source(connection)
     }
 
     /// Tira do cache do resolvedor os tokens dos projetos que usam a conexão

@@ -25,13 +25,10 @@ pub const METHOD_NOT_FOUND: i64 = -32601;
 /// o método com o nome fixo. Testes em `tests` conferem a tabela com o
 /// registro e com `lib.rs`.
 pub const SENSITIVE_ENV: &[(&str, &str)] = &[
-    ("github.set_token", "github_set_token"),
-    ("github.clear_token", "github_clear_token"),
     ("github.pr.comment", "github_pr_comment"),
     ("env.update", "env_update"),
     ("env.rollback", "env_rollback"),
     ("env.config.set", "env_config_set"),
-    ("env.credentials.set", "env_credentials_set"),
     ("env.connections.set", "env_connections_set"),
     ("shell.open", "shell_open"),
     ("shell.close", "shell_close"),

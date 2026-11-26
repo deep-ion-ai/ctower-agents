@@ -108,7 +108,6 @@ function setup(st: CleanupStatus | null, initial: Screen = { name: "maintenance"
       hub_config: HUB_CONFIG_UNLINKED,
       update: null,
     })
-    .on("github.status", { source: "gh", login: "x", error: null })
     .on("cleanup.status", () => {
       if (!current) throw new Error("método desconhecido: cleanup.status");
       return current;

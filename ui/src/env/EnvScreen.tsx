@@ -152,7 +152,7 @@ function EnvDetail({ env, section }: { env: string; section: EnvSection }) {
         <>
           <EnvSettingsItems
             env={env}
-            sections={["github", "local-projects", "env-notifications"]}
+            sections={["github", "env-connections", "local-projects", "env-notifications"]}
             // Os clones vão em Projetos atribuídos e a limpeza na seção Limpeza.
             skip={["projects", "cleanup-maintenance"]}
           />

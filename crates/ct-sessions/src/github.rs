@@ -6,12 +6,12 @@
 //! o mesmo cache, o mesmo descarte no `401` e o mesmo mascaramento das
 //! sessões que o Jira e o GitLab.
 
-use crate::resolver::{github_key, Ask, GITHUB_KEY_PREFIX};
+use crate::resolver::{github_key, Ask};
 use crate::{Result, Sessions, SessionsError};
 use ct_core::now_ms;
 use ct_core::provider::CredentialSource;
 use ct_gh::sync::{fetch, SyncInput};
-use ct_gh::{GhClient, GhError, TokenProvider, TokenStatus};
+use ct_gh::{GhClient, GhError, TokenProvider};
 use ct_ledger::{PrRow, Project};
 use ct_proc::CREDENTIAL_DEADLINE;
 use serde::Serialize;
@@ -74,89 +74,6 @@ impl GithubSync {
     /// comando de credencial, o maior.
     fn deadline(&self) -> Duration {
         self.client.config().token_timeout.max(CREDENTIAL_DEADLINE)
-    }
-
-    /// Situação do token do GitHub do ambiente (`github.status`), sem o
-    /// valor: a origem e a conta. Vale a fonte sem projeto: o token do
-    /// ambiente ou a conexão `github` padrão, com os secrets globais.
-    pub fn token_status(&self) -> TokenStatus {
-        let env = self.sessions.github_env_source(None);
-        let source = match (&env.source, env.from_env) {
-            (_, true) => "token",
-            (CredentialSource::Cli, false) => "gh",
-            (_, false) => "conexao",
-        };
-        let cache = self.sessions.env_cache();
-        let lookup = |name: &str| {
-            let secrets = cache.load().ok().flatten()?;
-            let v = secrets
-                .resolve(None)
-                .get(name)
-                .map(|e| e.value.expose().to_string());
-            v
-        };
-        let cli = self.client.config().cli_cmd();
-        let token = self
-            .sessions
-            .credentials()
-            .token(Ask {
-                key: &format!("{GITHUB_KEY_PREFIX}ambiente"),
-                what: "GitHub",
-                source: &env.source,
-                lookup: &lookup,
-                deadline: self.deadline(),
-                cli: Some(&cli),
-            })
-            .map_err(|e| GhError::Token(e.to_string()));
-        match token.and_then(|t| self.client.login_of(t.expose())) {
-            Ok(login) => TokenStatus {
-                source: source.into(),
-                login: Some(login),
-                error: None,
-            },
-            Err(e) => TokenStatus {
-                source: if matches!(e, GhError::Token(_)) {
-                    "none".into()
-                } else {
-                    source.into()
-                },
-                login: None,
-                error: Some(e.to_string()),
-            },
-        }
-    }
-
-    /// Valida `token` no GitHub e, se valer, grava como token do ambiente
-    /// (`github.token`, 0600), que passa a valer no lugar da conexão neste
-    /// ambiente. Caminho da tela de configurações do ambiente até a #276.
-    pub fn set_env_token(&self, token: &str) -> std::result::Result<TokenStatus, GhError> {
-        let token = token.trim();
-        if token.is_empty() || token.contains(char::is_whitespace) {
-            return Err(GhError::Token("token vazio ou com espaços".into()));
-        }
-        self.client.login_of(token)?;
-        let file = self.sessions.config().dirs.github_token_file();
-        ct_core::files::write_private_atomic(&file, token.as_bytes())
-            .map_err(|e| GhError::Token(e.to_string()))?;
-        // Mesmo arquivo, outro token: a fonte não muda, o cache sai.
-        self.sessions
-            .credentials()
-            .invalidate_prefix(GITHUB_KEY_PREFIX);
-        Ok(self.token_status())
-    }
-
-    /// Apaga o token do ambiente: volta a valer a conexão `github`.
-    pub fn clear_env_token(&self) -> std::result::Result<TokenStatus, GhError> {
-        let file = self.sessions.config().dirs.github_token_file();
-        match std::fs::remove_file(&file) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(GhError::Token(e.to_string())),
-        }
-        self.sessions
-            .credentials()
-            .invalidate_prefix(GITHUB_KEY_PREFIX);
-        Ok(self.token_status())
     }
 
     /// Head do PR (#286): o do espelho, gravado pelo sync com ETag. O PR
@@ -460,8 +377,7 @@ mod tests {
     /// #275: o sync do ambiente usa o token da conexão `github` padrão (a
     /// do pull); trocar a credencial dela vale no ciclo seguinte, sem o
     /// `gh` do ambiente, e o token resolvido entra no mascaramento das
-    /// sessões do projeto. O token do ambiente (`github.token`, até a #276)
-    /// vale no lugar da conexão.
+    /// sessões do projeto.
     #[test]
     fn trocar_a_credencial_da_conexao_github_vale_no_sync_do_ambiente() {
         use ct_core::provider::{Connection, ProviderKind};
@@ -547,12 +463,10 @@ mod tests {
             }
         );
 
-        // O token do ambiente vale no lugar da conexão até a #276.
+        // O `github.token` do ambiente não vale mais por cima da conexão
+        // (#276): a migração o leva para a sobrescrita.
         let file = env.sessions.config().dirs.github_token_file();
         std::fs::write(&file, "ghp_ficticio_velho_123456\n").unwrap();
-        let r3 = sync.sync_project(p.id).unwrap();
-        assert!(!r3.ok, "{r3:?}");
-        std::fs::remove_file(&file).unwrap();
         assert!(sync.sync_project(p.id).unwrap().ok);
     }
 

@@ -524,7 +524,7 @@ impl GhClient {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TokenStatus {
-    /// `token` (configurado no ambiente, até a #276), `gh` (conexão com
+    /// `token` (o `github.token` do hub), `gh` (conexão com
     /// `gh auth token`), `conexao` (outra fonte da conexão `github`) ou
     /// `none`.
     pub source: String,
