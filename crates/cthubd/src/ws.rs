@@ -514,7 +514,8 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 "/repos/{}/{}/issues/{number}",
                 project.gh_owner, project.gh_repo
             );
-            let v = tokio::task::spawn_blocking(move || gh.client().get_json(&path))
+            let client = gh.client_for(&project);
+            let v = tokio::task::spawn_blocking(move || client.get_json(&path))
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
                 .map_err(|e| (-32000, format!("GitHub: {e}")))?
@@ -1741,8 +1742,12 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             (owner, repo)
         } else {
             let gh = github()?;
-            let (owner, repo) = gh.validate_repo(&owner, &repo).map_err(|m| (-32000, m))?;
-            gh.validate_branch(&owner, &repo, &base_branch)
+            // O token da conexão GitHub do projeto novo (#275).
+            let client = gh.client_for_new(None);
+            let (owner, repo) = gh
+                .validate_repo(&client, &owner, &repo)
+                .map_err(|m| (-32000, m))?;
+            gh.validate_branch(&client, &owner, &repo, &base_branch)
                 .map_err(|m| (-32000, m))?;
             (owner, repo)
         };
@@ -1808,8 +1813,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         .as_deref()
         .filter(|b| *b != cur.base_branch && cur.forge.gitlab().is_none())
     {
-        github()?
-            .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+        let gh = github()?;
+        gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
     // A base própria do modo autônomo (#181) precisa existir no GitHub.
@@ -1820,8 +1825,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         .map(|a| a.base_branch.trim())
         .filter(|b| !b.is_empty() && *b != cur.base_branch && cur.forge.gitlab().is_none())
     {
-        github()?
-            .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+        let gh = github()?;
+        gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
     // As branches da release ligada (#204) precisam existir no GitHub. O
@@ -1833,8 +1838,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
     {
         let r = r.normalized();
         for b in [&r.source, &r.target] {
-            github()?
-                .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+            let gh = github()?;
+            gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
                 .map_err(|m| (-32000, m))?;
         }
     }

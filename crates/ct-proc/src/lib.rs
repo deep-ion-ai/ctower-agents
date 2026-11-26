@@ -7,10 +7,13 @@
 //!   TTY) e grupo próprio, morto inteiro no estouro;
 //! - [`run_credential`]: o comando de credencial (`pass show ... | head -1`),
 //!   cuja primeira linha vira um [`Secret`];
-//! - [`Secret`]: senha ou token que nunca aparece em log nem em erro.
+//! - [`Secret`]: senha ou token que nunca aparece em log nem em erro;
+//! - [`resolver`]: o token de uma conexão pela fonte dela, com cache
+//!   (ambiente e hub, #236, #275).
 
 mod credential;
 pub mod process;
+pub mod resolver;
 mod secret;
 
 pub use credential::{run_credential, CredentialError, CREDENTIAL_DEADLINE};

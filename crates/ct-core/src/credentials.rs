@@ -16,7 +16,7 @@
 //! o comando roda neste ambiente (sync, leitura de issue, glab, prompt da
 //! sessão): o cadastro do hub não muda e ela nunca sai do ambiente.
 
-use crate::provider::{Connection, CredentialSource, ProviderKind};
+use crate::provider::{self, Connection, CredentialSource, ProviderKind};
 use crate::{ForgeConfig, GitlabConfig, JiraConfig, TrackerConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -201,6 +201,22 @@ impl SharedCredentials {
         let legacy = self.snapshot();
         let cmd = legacy.get(owner, repo).map(|o| o.forge_cmd.as_str());
         self.source_of(cmd, ProviderKind::Gitlab, g.connection, &g.credential_cmd)
+    }
+
+    /// Fonte do token do GitHub de um projeto neste ambiente (#275): a da
+    /// conexão `connection` ou, sem ela, a da conexão `github` padrão
+    /// ([`provider::github_connection`]), com a sobrescrita
+    /// `[connections."nome"]`. Sem conexão no pull, o `gh auth token`
+    /// (`Cli`), como antes das conexões. O `[credentials]` não tem lado
+    /// GitHub.
+    pub fn github_source(&self, connection: Option<i64>) -> EnvSource {
+        let conns = self.connections.read().unwrap_or_else(|e| e.into_inner());
+        let source = provider::github_connection(&conns.hub, connection)
+            .map_or(CredentialSource::Cli, |c| conns.overrides.source(c));
+        EnvSource {
+            source,
+            from_env: false,
+        }
     }
 
     /// Ordem: o comando de `[credentials."owner/repo"]` (por projeto, o que
@@ -711,5 +727,46 @@ mod conexoes_tests {
                 cmd: "pass show antigo".into()
             }
         );
+    }
+
+    /// GitHub (#275): a conexão referenciada, senão a `github` padrão, com a
+    /// sobrescrita `[connections]`; sem nenhuma, o `gh auth token`.
+    #[test]
+    fn fonte_do_github_no_ambiente() {
+        let shared = SharedCredentials::default();
+        let src = |c: Option<i64>| shared.github_source(c).source;
+        assert_eq!(src(None), CredentialSource::Cli);
+        let arquivo = CredentialSource::File {
+            path: "~/.config/acme/gh.token".into(),
+        };
+        let secret = CredentialSource::Secret {
+            name: "GH_TOKEN_ACME".into(),
+        };
+        shared.set_connections(
+            vec![
+                conexao(1, "github", ProviderKind::Github, arquivo.clone()),
+                conexao(2, "github-acme", ProviderKind::Github, secret.clone()),
+                conexao(3, "jira-acme", ProviderKind::Jira, CredentialSource::None),
+            ],
+            ConnectionOverrides(
+                [(
+                    "github-acme".to_string(),
+                    ConnectionOverride {
+                        credential_cmd: "pass show acme/gh".into(),
+                    },
+                )]
+                .into(),
+            ),
+        );
+        assert_eq!(src(None), arquivo, "a padrão");
+        assert_eq!(
+            src(Some(2)),
+            CredentialSource::Command {
+                cmd: "pass show acme/gh".into()
+            }
+        );
+        assert_eq!(src(Some(3)), CredentialSource::Cli, "Jira não serve");
+        assert_eq!(src(Some(9)), CredentialSource::Cli);
+        assert!(!shared.github_source(None).from_env);
     }
 }

@@ -19,6 +19,17 @@ use serde_json::{json, Value};
 const CONNECTION_COLS: &str =
     "id, name, kind, endpoint, credential, options, created_at, updated_at";
 
+/// Projeto GitHub (não o gestor) sem conexão no rastreador ou na forja:
+/// usa a conexão GitHub padrão (#275).
+const GITHUB_WITHOUT_CONNECTION: &str = "(kind <> 'gestor' AND (
+      (tracker_kind = 'github' AND json_extract(tracker_config, '$.connection') IS NULL)
+      OR (forge_kind = 'github' AND json_extract(forge_config, '$.connection') IS NULL)))";
+
+/// [`GITHUB_WITHOUT_CONNECTION`] com a tabela `project` como `p`.
+const GITHUB_WITHOUT_CONNECTION_P: &str = "(p.kind <> 'gestor' AND (
+      (p.tracker_kind = 'github' AND json_extract(p.tracker_config, '$.connection') IS NULL)
+      OR (p.forge_kind = 'github' AND json_extract(p.forge_config, '$.connection') IS NULL)))";
+
 /// Parâmetros de `hub.connections.add`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewConnection {
@@ -273,17 +284,34 @@ impl Hub {
     }
 
     /// Projetos vivos (`owner/repo`) que referenciam a conexão, como
-    /// `tracker.connection` ou `forge.connection`.
+    /// `tracker.connection` ou `forge.connection`. A conexão GitHub padrão
+    /// ([`provider::DEFAULT_GITHUB_CONNECTION`]) também é usada pelos
+    /// projetos GitHub sem conexão (#275).
     pub fn connection_users(&self, id: i64) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
+        let default = self.is_default_github(id)?;
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT key FROM project
              WHERE deleted_at IS NULL
                AND (json_extract(tracker_config, '$.connection') = ?1
-                    OR json_extract(forge_config, '$.connection') = ?1)
-             ORDER BY key",
-        )?;
-        let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
+                    OR json_extract(forge_config, '$.connection') = ?1
+                    OR (?2 AND {GITHUB_WITHOUT_CONNECTION}))
+             ORDER BY key"
+        ))?;
+        let rows = stmt.query_map(params![id, default], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A conexão `id` é a GitHub padrão (#275)?
+    fn is_default_github(&self, id: i64) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM connection WHERE id = ?1 AND name = ?2 AND kind = 'github'",
+                params![id, provider::DEFAULT_GITHUB_CONNECTION],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 
     /// Nomes de todas as conexões do hub, em ordem (#270): o pull os leva
@@ -299,7 +327,8 @@ impl Hub {
     }
 
     /// Conexões que os projetos atribuídos ao ambiente referenciam: o que
-    /// `GET /sync/config` leva junto dos projetos.
+    /// `GET /sync/config` leva junto dos projetos. A GitHub padrão vai
+    /// quando algum projeto GitHub atribuído não tem conexão (#275).
     pub(crate) fn env_connections(&self, env_id: &str) -> Result<Vec<Connection>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {CONNECTION_COLS} FROM connection WHERE id IN (
@@ -310,9 +339,16 @@ impl Hub {
                SELECT json_extract(p.forge_config, '$.connection')
                FROM assignment a JOIN project p ON p.id = a.project_id
                WHERE a.env_id = ?1 AND a.removed_at IS NULL AND p.deleted_at IS NULL
-             ) ORDER BY name"
+             ) OR (name = ?2 AND kind = 'github' AND EXISTS (
+               SELECT 1 FROM assignment a JOIN project p ON p.id = a.project_id
+               WHERE a.env_id = ?1 AND a.removed_at IS NULL AND p.deleted_at IS NULL
+                 AND {GITHUB_WITHOUT_CONNECTION_P}
+             )) ORDER BY name"
         ))?;
-        let rows = stmt.query_map([env_id], row_to_connection)?;
+        let rows = stmt.query_map(
+            params![env_id, provider::DEFAULT_GITHUB_CONNECTION],
+            row_to_connection,
+        )?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -884,5 +920,57 @@ mod tests {
 
         hub.delete_connection(c.id).unwrap();
         assert!(hub.config_rev().unwrap() > rev_ren);
+    }
+
+    /// A conexão `github` padrão (#275) é a dos projetos GitHub sem
+    /// conexão: conta como em uso por eles (editar sobe o `config_rev`,
+    /// apagar e renomear são recusados) e vai no pull dos ambientes deles.
+    #[test]
+    fn github_padrao_vale_para_projeto_github_sem_conexao() {
+        let hub = Hub::open_in_memory().unwrap();
+        let padrao = hub.add_connection(&github("github")).unwrap();
+        let outra = hub.add_connection(&github("github-acme")).unwrap();
+        hub.add_project(&NewHubProject {
+            owner: "acme".into(),
+            repo: "acme-web".into(),
+            name: "Acme Web".into(),
+            base_branch: "main".into(),
+            protected_branches: vec!["main".into()],
+        })
+        .unwrap();
+        assert_eq!(
+            hub.connection_users(padrao.id).unwrap(),
+            vec!["acme/acme-web"]
+        );
+        assert!(hub.connection_users(outra.id).unwrap().is_empty());
+
+        let rev = hub.config_rev().unwrap();
+        hub.update_connection(
+            padrao.id,
+            &ConnectionPatch {
+                credential: Some(CredentialSource::File {
+                    path: "~/.config/acme/gh.token".into(),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(hub.config_rev().unwrap() > rev, "em uso: sobe a config");
+        let err = hub.delete_connection(padrao.id).unwrap_err();
+        assert!(err.to_string().contains("acme/acme-web"), "{err}");
+
+        hub.ingest("env-a", "a", &[]).unwrap();
+        let nomes = |hub: &Hub| -> Vec<String> {
+            let cfg = hub.env_config("env-a", None, None).unwrap();
+            cfg.connections
+                .unwrap()
+                .into_iter()
+                .map(|c| c.name)
+                .collect()
+        };
+        assert!(nomes(&hub).is_empty(), "sem atribuição");
+        hub.add_assignment("acme", "acme-web", "env-a", None)
+            .unwrap();
+        assert_eq!(nomes(&hub), vec!["github"]);
     }
 }

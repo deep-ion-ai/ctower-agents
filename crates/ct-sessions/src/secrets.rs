@@ -78,7 +78,7 @@
 //! pertence a um repositório: recebe só as entradas **globais**, nunca as
 //! de algum projeto (`resolve(None)`). O mascaramento segue a mesma regra.
 
-use crate::resolver::{gitlab_key, jira_key};
+use crate::resolver::{github_key, gitlab_key, jira_key};
 use crate::Sessions;
 use ct_core::ProjectKind;
 use ct_ledger::{Project, Session};
@@ -258,7 +258,8 @@ impl Sessions {
         SessionSecrets { env, mask }
     }
 
-    /// Mascaramento dos tokens das conexões do projeto (Jira e GitLab, #236).
+    /// Mascaramento dos tokens das conexões do projeto (Jira e GitLab, #236;
+    /// GitHub, #275).
     /// Só com os tokens que já estão no cache do resolvedor (#266): abrir
     /// uma sessão nunca roda comando de credencial, que pode esperar o
     /// pinentry ou o prazo inteiro. Quem resolve é o sync; o token novo
@@ -275,6 +276,9 @@ impl Sessions {
         }
         if let Some(s) = self.gitlab_source(project) {
             found.extend(resolver.cached(&gitlab_key(project.id), &s.source));
+        }
+        if let Some(s) = self.github_source(project) {
+            found.extend(resolver.cached(&github_key(project.id), &s.source));
         }
         let pairs: Vec<(&str, &str)> = found
             .iter()
@@ -860,6 +864,7 @@ mod tests {
                 source: &source,
                 lookup: &crate::resolver::no_lookup,
                 deadline: Duration::from_secs(5),
+                cli: None,
             })
             .unwrap();
     }
@@ -1035,6 +1040,7 @@ mod tests {
                     source: &source,
                     lookup: &lookup,
                     deadline: Duration::from_secs(5),
+                    cli: None,
                 })
                 .unwrap();
         }

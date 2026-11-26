@@ -5,6 +5,8 @@
  */
 export type TokenStatus = { 
 /**
- * `token` (configurado no Control Tower), `gh` (`gh auth token`) ou `none`.
+ * `token` (configurado no ambiente, até a #276), `gh` (conexão com
+ * `gh auth token`), `conexao` (outra fonte da conexão `github`) ou
+ * `none`.
  */
 source: string, login: string | null, error: string | null, };

@@ -105,6 +105,7 @@ impl GitlabRemote {
                     source: &source,
                     lookup: &lookup,
                     deadline: self.credential_deadline,
+                    cli: None,
                 },
                 |e: &GitlabError| matches!(e, GitlabError::Unauthorized),
                 |t| op(&cli, &gl, t),
