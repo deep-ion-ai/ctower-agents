@@ -160,6 +160,11 @@ pub trait ProviderDescriptor: Sync {
     fn session_env(&self, _c: &Connection) -> Vec<String> {
         Vec::new()
     }
+    /// Forma canônica do endpoint, aplicada pelo hub antes de validar e
+    /// gravar a conexão. Padrão: sem espaços nas pontas.
+    fn normalize_endpoint(&self, endpoint: &str) -> String {
+        endpoint.trim().to_string()
+    }
     /// Confere a conexão sem rede: tipo, endpoint, credencial e opções.
     fn validate(&self, c: &Connection) -> std::result::Result<(), String>;
     /// Prefixo das instruções da sessão (`JIRA_API_TOKEN="$(...)" jira`):
@@ -743,11 +748,30 @@ impl ProviderDescriptor for GitlabDescriptor {
         vec![format!("GITLAB_HOST={}", shell_word(host))]
     }
 
+    /// O endpoint do GitLab é o host (`gitlab.example.com`): quem cola a
+    /// URL (`https://gitlab.example.com/`) tem o esquema e as barras do fim
+    /// tirados. Os links da UI e do repositório montam `https://<host>/...`.
+    fn normalize_endpoint(&self, endpoint: &str) -> String {
+        let e = endpoint.trim();
+        let lower = e.to_ascii_lowercase();
+        let e = ["https://", "http://"]
+            .iter()
+            .find(|s| lower.starts_with(*s))
+            .map_or(e, |s| &e[s.len()..]);
+        e.trim_end_matches('/').to_string()
+    }
+
     fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
         check_kind(self.kind(), c)?;
         check_options(c)?;
         if c.endpoint.is_empty() {
             return Err("informe o host do GitLab".into());
+        }
+        if c.endpoint.contains("://") || c.endpoint.ends_with('/') || c.endpoint.contains(' ') {
+            return Err(format!(
+                "host do GitLab inválido: {:?} (só o host, ex.: gitlab.example.com)",
+                c.endpoint
+            ));
         }
         check_token_source(self, c)
     }
@@ -1615,6 +1639,40 @@ mod tests {
             .validate(&sem_endpoint)
             .unwrap_err()
             .contains("informe o host do GitLab"));
+    }
+
+    #[test]
+    fn gitlab_normaliza_a_url_colada_no_host() {
+        for (dado, esperado) in [
+            ("gitlab.example.com", "gitlab.example.com"),
+            ("  gitlab.example.com  ", "gitlab.example.com"),
+            ("https://gitlab.example.com/", "gitlab.example.com"),
+            ("HTTPS://gitlab.example.com", "gitlab.example.com"),
+            ("http://gitlab.example.com//", "gitlab.example.com"),
+            ("gitlab.example.com:8443/", "gitlab.example.com:8443"),
+        ] {
+            assert_eq!(GITLAB.normalize_endpoint(dado), esperado, "{dado}");
+        }
+        // Os outros tipos só tiram os espaços: a URL do Jira leva o esquema.
+        assert_eq!(
+            JIRA.normalize_endpoint(" https://jira.example.com/ "),
+            "https://jira.example.com/"
+        );
+        // Sem normalizar (cadastro direto), o validate recusa a URL.
+        let cmd = CredentialSource::Command {
+            cmd: "pass show gitlab | head -1".into(),
+        };
+        let url = conn(
+            ProviderKind::Gitlab,
+            "https://gitlab.example.com/",
+            cmd.clone(),
+        );
+        assert!(GITLAB
+            .validate(&url)
+            .unwrap_err()
+            .contains("host do GitLab inválido"));
+        let host = conn(ProviderKind::Gitlab, "gitlab.example.com", cmd);
+        assert!(GITLAB.validate(&host).is_ok());
     }
 
     #[test]

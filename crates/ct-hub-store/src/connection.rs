@@ -152,7 +152,7 @@ impl Hub {
             id: 0,
             name: new.name.trim().to_string(),
             kind: new.kind,
-            endpoint: new.endpoint.trim().to_string(),
+            endpoint: provider::descriptor(new.kind).normalize_endpoint(&new.endpoint),
             credential: new.credential.clone(),
             options: new.options.clone(),
             created_at: now,
@@ -195,7 +195,7 @@ impl Hub {
             endpoint: patch
                 .endpoint
                 .as_deref()
-                .map(|e| e.trim().to_string())
+                .map(|e| provider::descriptor(cur.kind).normalize_endpoint(e))
                 .unwrap_or_else(|| cur.endpoint.clone()),
             credential: patch
                 .credential
@@ -496,6 +496,32 @@ mod tests {
             &provider,
         )
         .map(|_| ())
+    }
+
+    #[test]
+    fn host_do_gitlab_colado_como_url_e_gravado_como_host() {
+        let hub = Hub::open_in_memory().unwrap();
+        let c = hub
+            .add_connection(&NewConnection {
+                endpoint: "https://gitlab.example.com/".into(),
+                ..gitlab("gitlab-acme")
+            })
+            .unwrap();
+        assert_eq!(c.endpoint, "gitlab.example.com");
+        let ed = hub
+            .update_connection(
+                c.id,
+                &ConnectionPatch {
+                    endpoint: Some(" http://gitlab2.example.com// ".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(ed.endpoint, "gitlab2.example.com");
+        assert_eq!(
+            hub.connection(c.id).unwrap().endpoint,
+            "gitlab2.example.com"
+        );
     }
 
     #[test]
