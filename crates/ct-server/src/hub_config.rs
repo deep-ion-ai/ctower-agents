@@ -54,6 +54,9 @@ pub struct ConfigOptions {
     /// `config.toml` do ambiente: o `[credentials]` vira `[connections]` no
     /// primeiro pull com conexões (#237). `None` = sem conversão.
     pub config_file: Option<PathBuf>,
+    /// `[credentials]` em uso no daemon: depois da conversão, fica só o que
+    /// sobrou no arquivo (#267). `None` = nada em memória a acompanhar.
+    pub credentials: Option<ct_core::SharedCredentials>,
 }
 
 impl Default for ConfigOptions {
@@ -63,6 +66,7 @@ impl Default for ConfigOptions {
             pull_every: PULL_EVERY,
             github: None,
             config_file: None,
+            credentials: None,
         }
     }
 }
@@ -73,9 +77,14 @@ impl Default for ConfigOptions {
 /// ambiente. Devolve as sobrescritas (o pull as reaplica ao cache em todo
 /// pull, inclusive o sem mudança). Falha de leitura ou conversão só registra
 /// aviso: o pull segue.
+///
+/// Depois da conversão, `credentials` (as sobrescritas por projeto em uso no
+/// daemon) passa a ser o que sobrou em `[credentials]` (#267): o que foi
+/// para `[connections]` não volta por cima do comando materializado.
 fn apply_connections(
     cfg: &mut ConfigResponse,
     config_file: Option<&Path>,
+    credentials: Option<&ct_core::SharedCredentials>,
 ) -> ct_core::ConnectionOverrides {
     use ct_core::provider::Connection;
     let overrides = match (config_file, &cfg.connections) {
@@ -107,9 +116,14 @@ fn apply_connections(
                 })
                 .collect();
             match crate::env_config::convert_credentials_file(path, &links) {
-                Ok((o, warnings)) => {
+                Ok((o, left, warnings)) => {
                     for w in warnings {
                         tracing::warn!("conexões: {w}");
+                    }
+                    if let Some(c) = credentials {
+                        if c.snapshot() != left {
+                            c.replace(left);
+                        }
                     }
                     o
                 }
@@ -365,7 +379,11 @@ impl HubSender {
             None => None,
         };
         let mut cfg = reply.config;
-        let overrides = apply_connections(&mut cfg, self.config.config_file.as_deref());
+        let overrides = apply_connections(
+            &mut cfg,
+            self.config.config_file.as_deref(),
+            self.config.credentials.as_ref(),
+        );
         let root = self.config.repos_root.clone();
         let ledger = self.sessions.ledger();
         let applied = ledger
@@ -683,6 +701,7 @@ mod tests {
                 pull_every: Duration::from_secs(60),
                 github: Some(github),
                 config_file: None,
+                credentials: None,
             }),
         )
     }
@@ -1183,5 +1202,85 @@ mod tests {
             ..p
         };
         assert!(!resolve_repo_path(Path::new("/src"), &home).starts_with('~'));
+    }
+}
+
+#[cfg(test)]
+mod credenciais_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn cfg_com_jira() -> ConfigResponse {
+        serde_json::from_value(json!({
+            "config_rev": 7,
+            "changed": true,
+            "projects": [{
+                "owner": "acme", "repo": "acme-web", "name": "Acme Web",
+                "base_branch": "main", "protected_branches": ["main"],
+                "repo_path": "", "rev": 7,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1 }
+            }],
+            "connections": [
+                { "id": 1, "name": "jira-acme", "kind": "jira",
+                  "endpoint": "https://jira.example.com",
+                  "credential": { "kind": "command", "cmd": "pass show hub" },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn jira_cmd(cfg: &ConfigResponse) -> String {
+        cfg.projects.as_ref().unwrap()[0]
+            .tracker
+            .jira()
+            .unwrap()
+            .credential_cmd
+            .clone()
+    }
+
+    /// #267: o `[credentials]` convertido sai também da memória. Antes, o
+    /// `SharedCredentials` carregado no início do `ctowerd` continuava
+    /// trocando o comando materializado da conexão pelo antigo, por projeto.
+    #[test]
+    fn conversao_troca_as_credenciais_em_memoria() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[credentials.\"acme/acme-web\"]\ntracker_cmd = \"pass show a\"\n",
+        )
+        .unwrap();
+        // Como o `ctowerd` carrega no início.
+        let inicial: ct_core::CredentialOverrides =
+            toml::from_str::<toml::Table>(&std::fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .remove("credentials")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let shared = ct_core::SharedCredentials::new(inicial);
+
+        let mut cfg = cfg_com_jira();
+        apply_connections(&mut cfg, Some(&path), Some(&shared));
+        assert_eq!(jira_cmd(&cfg), "pass show a");
+        assert!(shared.snapshot().is_empty(), "{:?}", shared.snapshot());
+
+        // O usuário edita a conexão; o pull seguinte materializa o novo.
+        std::fs::write(
+            &path,
+            "[connections.jira-acme]\ncredential_cmd = \"pass show b\"\n",
+        )
+        .unwrap();
+        let mut cfg = cfg_com_jira();
+        apply_connections(&mut cfg, Some(&path), Some(&shared));
+        assert_eq!(jira_cmd(&cfg), "pass show b");
+
+        // O uso aplica as credenciais do ambiente por cima.
+        let p = &mut cfg.projects.as_mut().unwrap()[0];
+        let applied = shared.apply("acme", "acme-web", &mut p.tracker, &mut p.forge);
+        assert!(!applied.tracker, "credencial antiga aplicada por cima");
+        assert_eq!(jira_cmd(&cfg), "pass show b");
     }
 }
