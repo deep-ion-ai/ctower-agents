@@ -261,6 +261,38 @@ impl Sessions {
         self.inner.cfg.credentials.github_source(connection)
     }
 
+    /// Tira do cache do resolvedor os tokens dos projetos que usam a conexão
+    /// `name` (#276): a sobrescrita editada pela UI vale no próximo uso,
+    /// mesmo quando o comando não muda (o token por trás dele mudou).
+    pub fn invalidate_connection(&self, name: &str) -> Result<()> {
+        use ct_core::provider::{self, ProviderKind};
+        let (conns, _) = self.inner.cfg.credentials.connections();
+        let Some(c) = conns.iter().find(|c| c.name == name) else {
+            return Ok(());
+        };
+        let projects = self.ledger().list_projects()?;
+        for p in projects {
+            let key = match c.kind {
+                ProviderKind::Jira => (p.tracker.jira().and_then(|j| j.connection) == Some(c.id))
+                    .then(|| resolver::jira_key(p.id)),
+                ProviderKind::Gitlab => (p.forge.gitlab().and_then(|g| g.connection) == Some(c.id))
+                    .then(|| resolver::gitlab_key(p.id)),
+                ProviderKind::Github => self
+                    .github_source(&p)
+                    .and(provider::github_connection(
+                        &conns,
+                        ct_core::github_connection(&p.tracker, &p.forge),
+                    ))
+                    .filter(|g| g.id == c.id)
+                    .map(|_| resolver::github_key(p.id)),
+            };
+            if let Some(k) = key {
+                self.credentials().invalidate(&k);
+            }
+        }
+        Ok(())
+    }
+
     /// Acesso direto ao ledger (consultas do servidor).
     pub fn ledger(&self) -> MutexGuard<'_, Ledger> {
         self.inner.ledger.lock().unwrap_or_else(|e| e.into_inner())

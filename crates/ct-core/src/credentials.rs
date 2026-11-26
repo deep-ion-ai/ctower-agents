@@ -175,6 +175,29 @@ impl SharedCredentials {
             EnvConnections { hub, overrides };
     }
 
+    /// Conexões do hub e sobrescritas `[connections]` em uso agora.
+    pub fn connections(&self) -> (Vec<Connection>, ConnectionOverrides) {
+        let c = self.connections.read().unwrap_or_else(|e| e.into_inner());
+        (c.hub.clone(), c.overrides.clone())
+    }
+
+    /// Troca só as sobrescritas `[connections]`, mantendo as conexões do
+    /// hub: a edição pela UI (`env.connections.set`, #276) vale no próximo
+    /// uso, sem esperar o pull.
+    pub fn set_overrides(&self, overrides: ConnectionOverrides) {
+        self.connections
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .overrides = overrides;
+    }
+
+    /// Nome da conexão GitHub que vale para `connection` (a referenciada ou
+    /// a `github` padrão), se ela veio no pull. Para as mensagens de erro.
+    pub fn github_connection_name(&self, connection: Option<i64>) -> Option<String> {
+        let conns = self.connections.read().unwrap_or_else(|e| e.into_inner());
+        provider::github_connection(&conns.hub, connection).map(|c| c.name.clone())
+    }
+
     /// [`CredentialOverrides::apply`] com as sobrescritas de agora.
     pub fn apply(
         &self,
@@ -768,5 +791,33 @@ mod conexoes_tests {
         assert_eq!(src(Some(3)), CredentialSource::Cli, "Jira não serve");
         assert_eq!(src(Some(9)), CredentialSource::Cli);
         assert!(!shared.github_source(None).from_env);
+        assert_eq!(
+            shared.github_connection_name(None).as_deref(),
+            Some("github")
+        );
+        assert_eq!(
+            shared.github_connection_name(Some(2)).as_deref(),
+            Some("github-acme")
+        );
+        assert_eq!(shared.github_connection_name(Some(3)), None);
+
+        // Só a sobrescrita muda (edição pela UI, #276); as conexões ficam.
+        shared.set_overrides(ConnectionOverrides(
+            [(
+                "github".to_string(),
+                ConnectionOverride {
+                    credential_cmd: "gh auth token".into(),
+                },
+            )]
+            .into(),
+        ));
+        assert_eq!(
+            src(None),
+            CredentialSource::Command {
+                cmd: "gh auth token".into()
+            }
+        );
+        assert_eq!(src(Some(2)), secret, "sem a sobrescrita antiga");
+        assert_eq!(shared.connections().0.len(), 3);
     }
 }

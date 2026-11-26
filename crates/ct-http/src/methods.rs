@@ -56,6 +56,13 @@ pub const METHODS: &[MethodSpec] = &[
         result: "EnvCredential[]",
         scopes: UI,
     },
+    MethodSpec { name: "env.connections.get", params: "null", result: "EnvConnection[]", scopes: UI },
+    MethodSpec {
+        name: "env.connections.set",
+        params: "{ name: string; credential_cmd?: string | null }",
+        result: "EnvConnection[]",
+        scopes: UI,
+    },
     MethodSpec { name: "env.statusline.install", params: "null", result: "StatuslineInstall", scopes: UI },
     MethodSpec { name: "account.get", params: "null", result: "EnvAccount", scopes: UI },
     MethodSpec { name: "projects.list", params: "{ unassigned?: boolean | null } | null", result: "Project[]", scopes: UI_WEB_CHANNEL },

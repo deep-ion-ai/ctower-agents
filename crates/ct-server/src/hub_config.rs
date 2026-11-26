@@ -146,6 +146,71 @@ fn apply_connections(
     overrides
 }
 
+/// Migração do `github.token` do ambiente (#276), no boot e a cada pull: as
+/// conexões GitHub que os projetos atribuídos usam (a referenciada ou a
+/// `github` padrão, das conexões do último pull) ganham a sobrescrita que lê
+/// o token ([`crate::env_config::migrate_github_token`]). Devolve as
+/// sobrescritas novas; `None` = nada mudou (ou falhou, com aviso no log).
+pub fn migrate_github_token(
+    ledger: &ct_ledger::Ledger,
+    config_file: &Path,
+    dirs: &ct_sessions::Dirs,
+) -> Option<ct_core::ConnectionOverrides> {
+    let token = dirs.github_token_file();
+    if !token.exists() {
+        return None;
+    }
+    let names = match github_connection_names(ledger) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!("conexões: migração do github.token sem os projetos: {e}");
+            return None;
+        }
+    };
+    match crate::env_config::migrate_github_token(
+        config_file,
+        &token,
+        &dirs.github_env_token_file(),
+        &names,
+    ) {
+        Ok(Some(o)) => {
+            tracing::info!(
+                "conexões: github.token do ambiente migrado para a sobrescrita de {}",
+                names.join(", ")
+            );
+            Some(o)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!("conexões: migração do github.token falhou: {e}");
+            None
+        }
+    }
+}
+
+/// Nomes das conexões GitHub em uso pelos projetos atribuídos, sem repetir.
+fn github_connection_names(ledger: &ct_ledger::Ledger) -> ct_ledger::Result<Vec<String>> {
+    let (conns, _) = ledger.hub_connections()?;
+    let mut names: Vec<String> = ledger
+        .list_projects()?
+        .iter()
+        .filter(|p| {
+            p.tracker.kind() == ct_core::TrackerKind::Github
+                || p.forge.kind() == ct_core::ForgeKind::Github
+        })
+        .filter_map(|p| {
+            ct_core::provider::github_connection(
+                &conns,
+                ct_core::github_connection(&p.tracker, &p.forge),
+            )
+        })
+        .map(|c| c.name.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
 /// Estado do pull para `env.info` (`hub_config`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -389,6 +454,13 @@ impl HubSender {
         let applied = ledger
             .apply_hub_config(&cfg, |p| resolve_repo_path(&root, p))
             .map_err(|e| e.to_string())?;
+        // O `github.token` do ambiente vira sobrescrita da conexão GitHub
+        // (#276), com os projetos e as conexões já gravados.
+        let overrides = match self.config.config_file.as_deref() {
+            Some(path) => migrate_github_token(&ledger, path, &self.sessions.config().dirs)
+                .unwrap_or(overrides),
+            None => overrides,
+        };
         // Em todo pull: a sobrescrita editada no config.toml vale sem mudança
         // no hub. Com mudança, os avisos já saíram acima.
         match ledger.refresh_connection_overrides(&overrides) {
@@ -1395,5 +1467,50 @@ mod credenciais_tests {
         let applied = shared.apply("acme", "acme-web", &mut p.tracker, &mut p.forge);
         assert!(!applied.tracker, "credencial antiga aplicada por cima");
         assert_eq!(jira_cmd(&cfg), "pass show b");
+    }
+
+    /// #276: o `github.token` do ambiente vira a sobrescrita da conexão
+    /// GitHub que os projetos atribuídos usam (a padrão, aqui), e não a de
+    /// uma conexão GitHub sem projeto neste ambiente.
+    #[test]
+    fn github_token_migra_para_a_conexao_dos_projetos() {
+        let d = tempfile::tempdir().unwrap();
+        let dirs = ct_sessions::Dirs {
+            config: d.path().join("config"),
+            data: d.path().join("data"),
+        };
+        std::fs::create_dir_all(&dirs.config).unwrap();
+        let path = dirs.config.join("config.toml");
+        let l = Ledger::open_in_memory().unwrap();
+        let cfg: ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 3,
+            "changed": true,
+            "projects": [{
+                "owner": "acme", "repo": "acme-web", "name": "acme-web",
+                "base_branch": "main", "protected_branches": [],
+                "repo_path": "/x", "rev": 3
+            }],
+            "connections": [
+                { "id": 1, "name": "github", "kind": "github", "endpoint": "",
+                  "credential": { "kind": "file", "path": "~/.config/cthub/github.token" },
+                  "options": {}, "created_at": 0, "updated_at": 0 },
+                { "id": 2, "name": "github-acme", "kind": "github", "endpoint": "",
+                  "credential": { "kind": "cli" },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ],
+            "connection_names": ["github", "github-acme"]
+        }))
+        .unwrap();
+        l.apply_hub_config(&cfg, |p| p.repo_path.clone()).unwrap();
+        assert_eq!(migrate_github_token(&l, &path, &dirs), None, "sem token");
+
+        std::fs::write(dirs.github_token_file(), "ghp_ficticio_123\n").unwrap();
+        let o = migrate_github_token(&l, &path, &dirs).unwrap();
+        assert!(o.credential_cmd("github").is_some(), "{o:?}");
+        assert_eq!(o.credential_cmd("github-acme"), None);
+        assert!(!dirs.github_token_file().exists());
+        assert!(dirs.github_env_token_file().exists());
+        assert_eq!(crate::env_config::read_connection_overrides(&path), o);
+        assert_eq!(migrate_github_token(&l, &path, &dirs), None);
     }
 }

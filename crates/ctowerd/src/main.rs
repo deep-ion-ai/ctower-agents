@@ -87,8 +87,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let credentials = ct_core::SharedCredentials::new(cfg.credentials.clone());
     // Conexões do último pull e `[connections]` (#274): a fonte de
     // credencial de cada projeto vale desde o boot; o pull as atualiza.
+    // O `github.token` do ambiente vira sobrescrita da conexão GitHub
+    // (#276) já no boot, com o que o último pull deixou no ledger.
+    let overrides = ct_server::hub_config::migrate_github_token(
+        &ledger,
+        &dirs.config.join("config.toml"),
+        &dirs,
+    )
+    .unwrap_or_else(|| cfg.connections.clone());
     match ledger.hub_connections() {
-        Ok((conns, _)) => credentials.set_connections(conns, cfg.connections.clone()),
+        Ok((conns, _)) => credentials.set_connections(conns, overrides),
         Err(e) => tracing::warn!("conexões: cache não lido no boot: {e}"),
     }
     let (events, _) = broadcast::channel(1024);

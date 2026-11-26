@@ -9,6 +9,11 @@
 //! `env.credentials.get|set` (#143) editam, do mesmo jeito, os comandos de
 //! credencial do Jira e do GitLab deste ambiente (`[credentials."owner/repo"]`),
 //! que valem no próximo uso pelo [`ct_core::SharedCredentials`].
+//!
+//! `env.connections.get|set` (#276) leem e editam a sobrescrita por conexão
+//! (`[connections."nome"] credential_cmd`), também no lugar e com a mesma
+//! trava de escrita. A migração do `github.token` do ambiente
+//! ([`migrate_github_token`]) cria essa sobrescrita para a conexão GitHub.
 
 use crate::update::Updates;
 use serde::Serialize;
@@ -62,6 +67,124 @@ pub struct EnvCredential {
     pub readiness: Option<ct_core::TrackerReadiness>,
     /// Último sync neste ambiente (erro e falhas seguidas).
     pub sync: Option<ct_ledger::SyncState>,
+}
+
+/// Uma linha de `env.connections.get` (#276): uma conexão do hub que o
+/// ambiente conhece, a fonte dela no hub (sem valor) e a sobrescrita deste
+/// ambiente. Também lista a sobrescrita cujo nome não existe no hub (órfã),
+/// para poder apagá-la.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct EnvConnection {
+    pub name: String,
+    /// Tipo; `None` = a conexão não veio no pull (nenhum projeto deste
+    /// ambiente a usa) ou a sobrescrita é órfã.
+    pub kind: Option<ct_core::provider::ProviderKind>,
+    /// URL, host ou API da conexão; vazio quando não veio no pull.
+    pub endpoint: String,
+    /// Fonte da credencial no hub; `None` quando a conexão não veio no pull.
+    pub hub_source: Option<HubSource>,
+    /// Comando deste ambiente (`[connections."nome"] credential_cmd`); vazio
+    /// = vale a fonte do hub.
+    pub credential_cmd: String,
+    /// O nome existe no hub. `false` = sobrescrita órfã, que não vale.
+    pub in_hub: bool,
+    /// Projetos deste ambiente que usam a conexão (nome do projeto).
+    pub projects: Vec<String>,
+    /// A fonte do hub é um arquivo que não existe nesta máquina e não há
+    /// sobrescrita: o uso da conexão aqui falha.
+    pub file_missing: bool,
+}
+
+/// Fonte de credencial de uma conexão no hub, sem o que poderia ser o
+/// token: o tipo e, no secret e no arquivo, o nome e o caminho. O comando do
+/// hub não vem (pode levar o token escrito).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HubSource {
+    #[cfg_attr(
+        feature = "ts",
+        ts(type = "\"secret\" | \"command\" | \"cli\" | \"file\" | \"none\"")
+    )]
+    pub kind: String,
+    /// Nome do secret ou caminho do arquivo; `None` nas outras fontes.
+    pub detail: Option<String>,
+}
+
+impl HubSource {
+    pub fn of(source: &ct_core::provider::CredentialSource) -> Self {
+        use ct_core::provider::CredentialSource as S;
+        let (kind, detail) = match source {
+            S::Secret { name } => ("secret", Some(name.clone())),
+            S::Command { .. } => ("command", None),
+            S::Cli => ("cli", None),
+            S::File { path } => ("file", Some(path.clone())),
+            S::None => ("none", None),
+        };
+        HubSource {
+            kind: kind.into(),
+            detail,
+        }
+    }
+}
+
+/// As linhas de `env.connections.get`: as conexões do pull (`conns`), os
+/// nomes de todas as do hub (`names`) e as sobrescritas, com os projetos
+/// atribuídos que usam cada conexão. Em ordem de nome.
+pub fn connection_rows(
+    conns: &[ct_core::provider::Connection],
+    names: &[String],
+    overrides: &ct_core::ConnectionOverrides,
+    projects: &[ct_ledger::Project],
+) -> Vec<EnvConnection> {
+    use ct_core::provider::{self, CredentialSource, ProviderKind};
+    let uses = |p: &ct_ledger::Project, c: &provider::Connection| match c.kind {
+        ProviderKind::Jira => p.tracker.jira().and_then(|j| j.connection) == Some(c.id),
+        ProviderKind::Gitlab => p.forge.gitlab().and_then(|g| g.connection) == Some(c.id),
+        ProviderKind::Github => {
+            let github = p.tracker.kind() == ct_core::TrackerKind::Github
+                || p.forge.kind() == ct_core::ForgeKind::Github;
+            github
+                && provider::github_connection(
+                    conns,
+                    ct_core::github_connection(&p.tracker, &p.forge),
+                )
+                .is_some_and(|g| g.id == c.id)
+        }
+    };
+    let mut all: std::collections::BTreeSet<&str> = names.iter().map(String::as_str).collect();
+    all.extend(conns.iter().map(|c| c.name.as_str()));
+    all.extend(overrides.0.keys().map(String::as_str));
+    all.into_iter()
+        .map(|name| {
+            let conn = conns.iter().find(|c| c.name == name);
+            let credential_cmd = overrides.credential_cmd(name).unwrap_or("").to_string();
+            let file_missing = conn.is_some_and(|c| match &c.credential {
+                CredentialSource::File { path } => {
+                    credential_cmd.is_empty() && !provider::local_file(path).exists()
+                }
+                _ => false,
+            });
+            EnvConnection {
+                name: name.to_string(),
+                kind: conn.map(|c| c.kind),
+                endpoint: conn.map(|c| c.endpoint.clone()).unwrap_or_default(),
+                hub_source: conn.map(|c| HubSource::of(&c.credential)),
+                in_hub: conn.is_some() || names.iter().any(|n| n == name),
+                projects: conn
+                    .map(|c| {
+                        projects
+                            .iter()
+                            .filter(|p| uses(p, c))
+                            .map(|p| p.name.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                file_missing,
+                credential_cmd,
+            }
+        })
+        .collect()
 }
 
 pub struct EnvConfig {
@@ -182,6 +305,79 @@ impl EnvConfig {
         Ok(parsed)
     }
 
+    /// Grava o comando deste ambiente para a conexão `name` em
+    /// `[connections."name"] credential_cmd` e aplica no
+    /// [`ct_core::SharedCredentials`] (#276). Vazio remove a entrada (volta a
+    /// fonte do hub). `known` são os nomes das conexões do hub: comando para
+    /// um nome fora dele é recusado, mas a sobrescrita órfã pode ser apagada.
+    /// A tabela é editada no lugar e o arquivo só é regravado com mudança.
+    pub fn set_connection(
+        &self,
+        name: &str,
+        cmd: &str,
+        known: &[String],
+    ) -> Result<ct_core::ConnectionOverrides, (i64, String)> {
+        let invalid = |m: String| (-32602, m);
+        let io = |e: io::Error| (-32000, format!("{}: {e}", self.path.display()));
+        let shared = self.credentials.as_ref().ok_or_else(|| {
+            (
+                -32000,
+                "edição das conexões desligada neste ambiente".into(),
+            )
+        })?;
+        let (name, cmd) = (name.trim(), cmd.trim());
+        if name.is_empty() {
+            return Err(invalid("name é obrigatório".into()));
+        }
+        if cmd.contains(['\n', '\r']) {
+            return Err(invalid("o comando deve ter uma linha só".into()));
+        }
+        if cmd.len() > MAX_CREDENTIAL_CMD {
+            return Err(invalid(format!(
+                "comando acima de {MAX_CREDENTIAL_CMD} caracteres"
+            )));
+        }
+        let _guard = config_write();
+        let text = self.read_text().map_err(io)?;
+        // `[connections]` tem de ler: senão a edição apagaria o que o
+        // usuário escreveu à mão.
+        let current = toml::from_str::<ConnectionsOnly>(&text)
+            .map_err(|_| {
+                (
+                    -32000,
+                    "[connections] do config.toml não lê; corrija o arquivo à mão".to_string(),
+                )
+            })?
+            .connections;
+        let exists = current.0.contains_key(name);
+        if !known.iter().any(|k| k == name) && !(cmd.is_empty() && exists) {
+            return Err(invalid(format!("conexão {name:?} não existe no hub")));
+        }
+        let mut doc: toml_edit::DocumentMut = text
+            .parse()
+            .map_err(|_| (-32000, "config.toml não lê".to_string()))?;
+        let before = doc.to_string();
+        if cmd.is_empty() {
+            if let Some(t) = doc
+                .get_mut("connections")
+                .and_then(|i| i.as_table_like_mut())
+            {
+                t.remove(name);
+            }
+        } else {
+            set_connection_cmd(&mut doc, name, cmd).map_err(io)?;
+        }
+        let after = doc.to_string();
+        let parsed = toml::from_str::<ConnectionsOnly>(&after)
+            .map(|c| c.connections)
+            .map_err(|e| (-32000, format!("[connections] inválido: {e}")))?;
+        if after != before {
+            write_atomic(&self.path, &after).map_err(io)?;
+        }
+        shared.set_overrides(parsed.clone());
+        Ok(parsed)
+    }
+
     /// Intervalo do sync com o GitHub em segundos (`0` = desligado); o laço
     /// do `ctowerd` acorda quando muda.
     pub fn gh_sync(&self) -> watch::Receiver<u64> {
@@ -270,11 +466,16 @@ impl EnvConfig {
     }
 
     fn read(&self) -> io::Result<toml_edit::DocumentMut> {
+        self.read_text()?
+            .parse()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    /// O texto do `config.toml`; sem arquivo, vazio.
+    fn read_text(&self) -> io::Result<String> {
         match std::fs::read_to_string(&self.path) {
-            Ok(s) => s
-                .parse()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Default::default()),
+            Ok(s) => Ok(s),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
             Err(e) => Err(e),
         }
     }
@@ -396,6 +597,113 @@ pub fn convert_credentials_file(
     }
     write_atomic(path, &doc.to_string())?;
     Ok((conns, left, warnings))
+}
+
+/// Grava `cmd` em `[connections."name"] credential_cmd`, editando a entrada
+/// que já existe no lugar (com os comentários) ou criando a tabela.
+fn set_connection_cmd(doc: &mut toml_edit::DocumentMut, name: &str, cmd: &str) -> io::Result<()> {
+    if !doc.contains_key("connections") {
+        let mut t = toml_edit::Table::new();
+        t.set_implicit(true);
+        doc.insert("connections", toml_edit::Item::Table(t));
+    }
+    let t = doc["connections"].as_table_like_mut().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "[connections] do config.toml não é uma tabela",
+        )
+    })?;
+    match t.get_mut(name).and_then(|i| i.as_table_like_mut()) {
+        Some(e) => set_cmd(e, "credential_cmd", cmd),
+        None => {
+            let mut e = toml_edit::Table::new();
+            e["credential_cmd"] = toml_edit::value(cmd);
+            t.insert(name, toml_edit::Item::Table(e));
+        }
+    }
+    Ok(())
+}
+
+/// Migração do token do GitHub do ambiente (#276). O `github.token`
+/// (`token_file`), gravado pela tela antiga do ambiente, valia no lugar da
+/// conexão GitHub. Agora o token vem da conexão, com a sobrescrita
+/// `[connections."nome"]`: cada conexão GitHub em uso aqui (`names`) sem
+/// sobrescrita ganha uma que lê o arquivo, com o mesmo comando que
+/// [`ct_core::provider::source_cmd`] gera para a fonte `File`.
+///
+/// O arquivo vai para `dest`, e a sobrescrita lê `dest`: sem o
+/// `github.token`, a migração não roda de novo, e apagar a sobrescrita pela
+/// UI não a faz voltar no pull seguinte. Sem conexão GitHub em uso, ou sem
+/// token, nada muda (o arquivo espera um projeto GitHub). Devolve as
+/// sobrescritas depois da migração; `None` = nada mudou.
+pub fn migrate_github_token(
+    config: &Path,
+    token_file: &Path,
+    dest: &Path,
+    names: &[String],
+) -> io::Result<Option<ct_core::ConnectionOverrides>> {
+    if names.is_empty() {
+        return Ok(None);
+    }
+    match std::fs::read_to_string(token_file) {
+        Ok(t) if !t.trim().is_empty() => {}
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let _guard = config_write();
+    let text = match std::fs::read_to_string(config) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "config.toml não lê");
+    let existing = toml::from_str::<ConnectionsOnly>(&text)
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "[connections] do config.toml não lê; a migração do github.token fica para depois",
+            )
+        })?
+        .connections;
+    let cmd = ct_core::provider::source_cmd(&ct_core::provider::CredentialSource::File {
+        path: home_relative(dest),
+    })
+    .ok_or_else(invalid)?;
+    let missing: Vec<&String> = names
+        .iter()
+        .filter(|n| existing.credential_cmd(n).is_none())
+        .collect();
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|_| invalid())?;
+    for name in &missing {
+        set_connection_cmd(&mut doc, name, &cmd)?;
+    }
+    let after = doc.to_string();
+    let parsed = toml::from_str::<ConnectionsOnly>(&after)
+        .map_err(|_| invalid())?
+        .connections;
+    std::fs::rename(token_file, dest)?;
+    if !missing.is_empty() {
+        if let Err(e) = write_atomic(config, &after) {
+            // Sem a sobrescrita, o token volta para onde estava.
+            let _ = std::fs::rename(dest, token_file);
+            return Err(e);
+        }
+    }
+    Ok(Some(parsed))
+}
+
+/// `path` com o `HOME` trocado por `~` (o comando vale mesmo que o `HOME`
+/// mude); fora do `HOME`, como está.
+fn home_relative(path: &Path) -> String {
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if let Ok(rest) = path.strip_prefix(&home) {
+            if !rest.as_os_str().is_empty() {
+                return format!("~/{}", rest.display());
+            }
+        }
+    }
+    path.display().to_string()
 }
 
 /// Grava `cmd` em `field` (vazio remove). Valor igual não é tocado; valor
@@ -725,5 +1033,294 @@ mod conexoes_ilegiveis_tests {
         }];
         assert!(convert_credentials_file(&path, &projetos).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+}
+
+#[cfg(test)]
+mod sobrescrita_tests {
+    use super::*;
+    use ct_core::provider::{CredentialSource, ProviderKind};
+
+    fn nomes(n: &[&str]) -> Vec<String> {
+        n.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn inode(p: &Path) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(p).unwrap().ino()
+    }
+
+    /// #276: `env.connections.set` grava no lugar, com os comentários, vale
+    /// na hora no `SharedCredentials` e só regrava com mudança.
+    #[test]
+    fn sobrescrita_grava_no_lugar_e_aplica() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# meu comentário\nport = 7878\n\n\
+             [connections.\"gitlab-acme\"] # do GitLab\n\
+             credential_cmd = \"pass show gl\" # token\n",
+        )
+        .unwrap();
+        let shared = ct_core::SharedCredentials::default();
+        let c = EnvConfig::new(path.clone(), 180, None).with_credentials(shared.clone());
+        let known = nomes(&["jira-acme", "gitlab-acme"]);
+
+        let got = c
+            .set_connection("jira-acme", " pass show acme/jira ", &known)
+            .unwrap();
+        assert_eq!(got.credential_cmd("jira-acme"), Some("pass show acme/jira"));
+        assert_eq!(got.credential_cmd("gitlab-acme"), Some("pass show gl"));
+        assert_eq!(shared.connections().1, got);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with(
+                "# meu comentário\nport = 7878\n\n[connections.\"gitlab-acme\"] # do GitLab\n\
+                 credential_cmd = \"pass show gl\" # token\n"
+            ),
+            "{text}"
+        );
+        assert_eq!(read_connection_overrides(&path), got);
+
+        // Troca no lugar: o comentário da linha fica.
+        c.set_connection("gitlab-acme", "pass show acme/gl", &known)
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("credential_cmd = \"pass show acme/gl\" # token\n"),
+            "{text}"
+        );
+
+        // O mesmo valor não regrava o arquivo.
+        let antes = inode(&path);
+        c.set_connection("jira-acme", "pass show acme/jira", &known)
+            .unwrap();
+        assert_eq!(inode(&path), antes);
+
+        // Vazio remove: volta a fonte do hub.
+        let got = c.set_connection("jira-acme", "  ", &known).unwrap();
+        assert_eq!(got.credential_cmd("jira-acme"), None);
+        assert_eq!(shared.connections().1, got);
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("jira-acme"));
+    }
+
+    #[test]
+    fn sobrescrita_recusa_nome_fora_do_hub_mas_apaga_a_orfa() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[connections.\"jira-antigo\"]\ncredential_cmd = \"pass show x\"\n",
+        )
+        .unwrap();
+        let shared = ct_core::SharedCredentials::default();
+        let c = EnvConfig::new(path.clone(), 180, None).with_credentials(shared.clone());
+        let known = nomes(&["jira-acme"]);
+        for (n, cmd) in [
+            ("jira-outro", "pass show y"),
+            ("jira-outro", ""),
+            ("", "pass show y"),
+            ("jira-acme", "a\nb"),
+            ("jira-antigo", "pass show z"),
+        ] {
+            assert_eq!(
+                c.set_connection(n, cmd, &known).unwrap_err().0,
+                -32602,
+                "{n}={cmd}"
+            );
+        }
+        let got = c.set_connection("jira-antigo", "", &known).unwrap();
+        assert!(got.0.is_empty(), "{got:?}");
+
+        // `[connections]` que não lê: nada é regravado.
+        let ruim = "[connections.\"jira-acme\"]\ncredencial = \"x\"\n";
+        std::fs::write(&path, ruim).unwrap();
+        assert_eq!(
+            c.set_connection("jira-acme", "pass show acme/jira", &known)
+                .unwrap_err()
+                .0,
+            -32000
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ruim);
+
+        let off = EnvConfig::new(path, 180, None);
+        assert_eq!(
+            off.set_connection("jira-acme", "x", &known).unwrap_err().0,
+            -32000
+        );
+    }
+
+    fn ledger_com_conexoes(arquivo: &str) -> ct_ledger::Ledger {
+        let l = ct_ledger::Ledger::open_in_memory().unwrap();
+        let cfg: ct_ledger::ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 7,
+            "changed": true,
+            "projects": [
+                { "owner": "acme", "repo": "acme-web", "name": "acme-web",
+                  "base_branch": "main", "protected_branches": [],
+                  "repo_path": "/x", "rev": 7,
+                  "tracker": { "kind": "jira", "project_key": "ACME",
+                               "jql": "labels = acme-web", "connection": 1 } },
+                { "owner": "acme", "repo": "acme-api", "name": "acme-api",
+                  "base_branch": "main", "protected_branches": [],
+                  "repo_path": "/y", "rev": 7 }
+            ],
+            "connections": [
+                { "id": 1, "name": "jira-acme", "kind": "jira",
+                  "endpoint": "https://jira.example.com",
+                  "credential": { "kind": "command", "cmd": "printf 'tok-ficticio'" },
+                  "options": {}, "created_at": 0, "updated_at": 0 },
+                { "id": 2, "name": "github", "kind": "github", "endpoint": "",
+                  "credential": { "kind": "file", "path": arquivo },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ],
+            "connection_names": ["github", "jira-acme", "jira-livre"]
+        }))
+        .unwrap();
+        l.apply_hub_config(&cfg, |p| p.repo_path.clone()).unwrap();
+        l
+    }
+
+    /// `env.connections.get`: as conexões do pull, os nomes do hub e a
+    /// sobrescrita órfã; a fonte sem o comando do hub; quem usa cada uma; e
+    /// o arquivo do hub que não existe aqui.
+    #[test]
+    fn linhas_das_conexoes_sem_token_e_com_o_arquivo_ausente() {
+        let d = tempfile::tempdir().unwrap();
+        let ausente = d.path().join("ausente.token").display().to_string();
+        let l = ledger_com_conexoes(&ausente);
+        let (conns, names) = l.hub_connections().unwrap();
+        let projetos = l.list_projects().unwrap();
+        let overrides: ct_core::ConnectionOverrides = toml::from_str(
+            "[\"jira-acme\"]\ncredential_cmd = \"pass show acme/jira\"\n\
+             [\"jira-antigo\"]\ncredential_cmd = \"pass show x\"\n",
+        )
+        .unwrap();
+        let rows = connection_rows(&conns, &names, &overrides, &projetos);
+        let nomes: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(nomes, ["github", "jira-acme", "jira-antigo", "jira-livre"]);
+
+        let gh = &rows[0];
+        assert_eq!(gh.kind, Some(ProviderKind::Github));
+        assert_eq!(
+            gh.hub_source,
+            Some(HubSource {
+                kind: "file".into(),
+                detail: Some(ausente.clone())
+            })
+        );
+        // O acme-web tem o Jira e o repositório no GitHub (a forja padrão).
+        assert_eq!(gh.projects, ["acme-api", "acme-web"]);
+        assert!(gh.file_missing && gh.in_hub);
+
+        let jira = &rows[1];
+        assert_eq!(jira.endpoint, "https://jira.example.com");
+        assert_eq!(jira.credential_cmd, "pass show acme/jira");
+        assert_eq!(jira.projects, ["acme-web"]);
+        assert_eq!(jira.hub_source.as_ref().unwrap().kind, "command");
+        assert_eq!(jira.hub_source.as_ref().unwrap().detail, None);
+        let json = serde_json::to_string(&rows).unwrap();
+        assert!(!json.contains("tok-ficticio"), "{json}");
+
+        let orfa = &rows[2];
+        assert!(!orfa.in_hub && orfa.kind.is_none());
+        assert_eq!(orfa.credential_cmd, "pass show x");
+        let livre = &rows[3];
+        assert!(livre.in_hub && livre.hub_source.is_none() && livre.projects.is_empty());
+
+        // Com a sobrescrita, o arquivo ausente não importa.
+        let com: ct_core::ConnectionOverrides =
+            toml::from_str("[github]\ncredential_cmd = \"gh auth token\"\n").unwrap();
+        assert!(!connection_rows(&conns, &names, &com, &projetos)[0].file_missing);
+        // Arquivo que existe também não.
+        std::fs::write(&ausente, "x").unwrap();
+        assert!(!connection_rows(&conns, &names, &overrides, &projetos)[0].file_missing);
+    }
+
+    /// Migração do `github.token` do ambiente (#276): cada conexão GitHub
+    /// sem sobrescrita ganha uma que lê o arquivo (o comando da fonte
+    /// `File`); o arquivo muda de nome e a migração não roda de novo.
+    #[test]
+    fn github_token_vira_sobrescrita_uma_vez() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        let token = d.path().join("github.token");
+        let dest = d.path().join("github-env.token");
+        std::fs::write(
+            &path,
+            "# topo\n[connections.\"github-acme\"]\ncredential_cmd = \"pass show acme/gh\"\n",
+        )
+        .unwrap();
+        let names = nomes(&["github", "github-acme"]);
+
+        // Sem token, ou sem conexão GitHub em uso: nada muda.
+        assert_eq!(
+            migrate_github_token(&path, &token, &dest, &names).unwrap(),
+            None
+        );
+        std::fs::write(&token, "ghp_ficticio_123\n").unwrap();
+        assert_eq!(
+            migrate_github_token(&path, &token, &dest, &[]).unwrap(),
+            None
+        );
+        assert!(token.exists());
+
+        let got = migrate_github_token(&path, &token, &dest, &names)
+            .unwrap()
+            .unwrap();
+        let esperado = ct_core::provider::source_cmd(&CredentialSource::File {
+            path: home_relative(&dest),
+        })
+        .unwrap();
+        assert_eq!(got.credential_cmd("github"), Some(esperado.as_str()));
+        // A sobrescrita que já havia fica.
+        assert_eq!(got.credential_cmd("github-acme"), Some("pass show acme/gh"));
+        assert!(!token.exists());
+        assert_eq!(
+            std::fs::read_to_string(&dest).unwrap(),
+            "ghp_ficticio_123\n"
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# topo\n"), "{text}");
+        assert!(!text.contains("ghp_ficticio"), "{text}");
+        assert_eq!(read_connection_overrides(&path), got);
+
+        // O comando lê o token do arquivo novo.
+        let out = std::process::Command::new("sh")
+            .args(["-c", &esperado])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ghp_ficticio_123\n");
+
+        // Apagar a sobrescrita não a traz de volta.
+        let c = EnvConfig::new(path.clone(), 180, None)
+            .with_credentials(ct_core::SharedCredentials::default());
+        c.set_connection("github", "", &names).unwrap();
+        assert_eq!(
+            migrate_github_token(&path, &token, &dest, &names).unwrap(),
+            None
+        );
+        assert_eq!(
+            read_connection_overrides(&path).credential_cmd("github"),
+            None
+        );
+    }
+
+    /// `[connections]` que não lê: a migração espera e o token fica.
+    #[test]
+    fn migracao_do_github_token_espera_config_ilegivel() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        let token = d.path().join("github.token");
+        let dest = d.path().join("github-env.token");
+        let ruim = "[connections.github]\ncredencial = \"x\"\n";
+        std::fs::write(&path, ruim).unwrap();
+        std::fs::write(&token, "ghp_ficticio_123\n").unwrap();
+        assert!(migrate_github_token(&path, &token, &dest, &nomes(&["github"])).is_err());
+        assert!(token.exists() && !dest.exists());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ruim);
     }
 }

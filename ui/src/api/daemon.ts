@@ -138,6 +138,7 @@ export const SENSITIVE_COMMANDS: ReadonlyMap<string, string> = new Map([
   ["env.rollback", "env_rollback"],
   ["env.config.set", "env_config_set"],
   ["env.credentials.set", "env_credentials_set"],
+  ["env.connections.set", "env_connections_set"],
   ["shell.open", "shell_open"],
   ["shell.close", "shell_close"],
   ["session.input", "session_input"],
