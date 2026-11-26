@@ -28,6 +28,7 @@ test("cadastro novo: tipo, endereço e credencial; o arquivo do jira-cli só no 
     ...EMPTY_CONNECTION_FORM,
     name: " jira-acme ",
     endpoint: "https://jira.example.com",
+    cred: "command" as const,
     cred_value: "pass show jira | head -1",
     options: { config_file: " ~/.config/.jira/acme.yml " },
   };
@@ -84,12 +85,16 @@ test("Jira e GitLab aceitam comando, secret e arquivo; a CLI é só do GitHub", 
     params: { name: "gitlab-acme", kind: "gitlab", endpoint: "", credential: { kind: "file", path: "/t" }, options: {} },
   });
   expect(connectionParams({ ...EMPTY_CONNECTION_FORM, name: "jira-acme", cred: "cli" })).toEqual({
-    error: "Jira: a credencial precisa ser um comando, um secret do hub ou um arquivo; o login da CLI é só do GitHub",
+    error: "Jira: a credencial precisa ser um secret do hub, um comando ou um arquivo; o login da CLI é só do GitHub",
   });
 });
 
 test("credencial que falta: o erro diz o que informar", () => {
+  // O formulário novo começa no secret do hub, a fonte padrão (#281).
   expect(connectionParams({ ...EMPTY_CONNECTION_FORM, name: "jira-acme" })).toEqual({
+    error: "informe o nome do secret do hub",
+  });
+  expect(connectionParams({ ...EMPTY_CONNECTION_FORM, cred: "command", name: "jira-acme" })).toEqual({
     error: "informe o comando que imprime o token",
   });
   expect(connectionParams({ ...EMPTY_CONNECTION_FORM, cred: "secret", cred_value: " ", name: "jira-acme" })).toEqual({

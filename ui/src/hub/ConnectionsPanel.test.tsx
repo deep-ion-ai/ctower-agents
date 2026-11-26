@@ -65,7 +65,7 @@ test("conexão do Jira com secret do hub (#274): a forma aparece no formulário 
   await user.click(screen.getByRole("button", { name: "Nova conexão" }));
   const form = screen.getByRole("form", { name: "Nova conexão" });
   const cred = within(form).getByLabelText("Credencial");
-  expect(within(cred).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["command", "secret", "file"]);
+  expect(within(cred).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["secret", "command", "file"]);
   await user.selectOptions(cred, "secret");
   await user.type(within(form).getByLabelText("Nome"), "jira-beta");
   await user.type(within(form).getByLabelText("URL"), "https://jira.example.com");
@@ -86,13 +86,15 @@ test("cria uma conexão do Jira pelo formulário e manda o cadastro ao hub", asy
   const form = screen.getByRole("form", { name: "Nova conexão" });
   await user.type(within(form).getByLabelText("Nome"), "jira-beta");
   await user.type(within(form).getByLabelText("URL"), "https://jira.example.com");
-  await user.type(within(form).getByLabelText("Comando que imprime o token"), "pass show jira | head -1");
+  // A credencial começa no secret do hub, a fonte padrão (#281).
+  expect(within(form).getByLabelText("Credencial")).toHaveValue("secret");
+  await user.type(within(form).getByLabelText("Nome do secret do hub"), "JIRA_TOKEN_BETA");
   await user.click(within(form).getByRole("button", { name: "Salvar conexão" }));
   expect(await screen.findByText("Conexão jira-beta salva.")).toBeInTheDocument();
   expect(api.hubCallsTo("hub.connections.add")[0].params).toEqual({
     name: "jira-beta",
     endpoint: "https://jira.example.com",
-    credential: { kind: "command", cmd: "pass show jira | head -1" },
+    credential: { kind: "secret", name: "JIRA_TOKEN_BETA" },
     options: {},
     kind: "jira",
   });
@@ -120,6 +122,19 @@ test("conexão em uso mostra os projetos e não deixa renomear (#271)", async ()
   expect(name).toHaveAccessibleDescription(/Em uso por grupo\/projeto\/app/);
   expect(name).toHaveAccessibleDescription(/\[connections\."jira-acme"\]/);
   expect(api.hubCallsTo("hub.connections.update")).toHaveLength(0);
+  // Excluir também fica desabilitado, com o motivo (#281).
+  const del = within(list).getByRole("button", { name: "Excluir" });
+  expect(del).toBeDisabled();
+  expect(del).toHaveAccessibleDescription(/Em uso por grupo\/projeto\/app: troque a conexão/);
+});
+
+test("conexão sem projeto pode ser excluída, com confirmação (#281)", async () => {
+  const { user } = setup([JIRA], []);
+  const list = await screen.findByRole("list", { name: "Conexões cadastradas" });
+  const del = await within(list).findByRole("button", { name: "Excluir" });
+  expect(del).toBeEnabled();
+  await user.click(del);
+  expect(within(list).getByRole("button", { name: "Confirmar exclusão de jira-acme" })).toBeEnabled();
 });
 
 test("a recusa do hub ao renomear aparece junto do formulário (#271)", async () => {

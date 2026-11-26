@@ -12,6 +12,7 @@ import {
   connectionUsers,
   credentialText,
   readinessText,
+  deleteLockedText,
   renameLockedText,
   type ConnectionForm,
   type ConnectionTest,
@@ -191,9 +192,21 @@ export function HubConnections() {
                       Confirmar exclusão de {c.name}
                     </button>
                   ) : (
-                    <button type="button" className="btn" disabled={busy} onClick={() => setConfirm(c.id)}>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy || users.length > 0}
+                      title={users.length > 0 ? deleteLockedText(users) : undefined}
+                      aria-describedby={users.length > 0 ? `conn-del-${c.id}` : undefined}
+                      onClick={() => setConfirm(c.id)}
+                    >
                       Excluir
                     </button>
+                  )}
+                  {users.length > 0 && (
+                    <span id={`conn-del-${c.id}`} className="sr-only">
+                      {deleteLockedText(users)}
+                    </span>
                   )}
                 </div>
                 {r && (

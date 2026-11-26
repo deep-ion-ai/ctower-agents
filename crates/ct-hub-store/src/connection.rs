@@ -601,7 +601,7 @@ mod tests {
             assert!(matches!(err, LedgerError::Invalid(_)), "{cred:?}: {err}");
             assert!(
                 err.to_string()
-                    .contains("comando de credencial, secret ou arquivo"),
+                    .contains("secret, comando de credencial ou arquivo"),
                 "{err}"
             );
 

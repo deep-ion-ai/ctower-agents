@@ -687,10 +687,10 @@ impl ProviderDescriptor for GithubDescriptor {
     /// Todas: o `cli` é o `gh auth token`.
     fn credential_kinds(&self) -> &'static [CredentialKind] {
         &[
+            CredentialKind::Secret,
             CredentialKind::Cli,
             CredentialKind::File,
             CredentialKind::Command,
-            CredentialKind::Secret,
             CredentialKind::None,
         ]
     }
@@ -1007,9 +1007,11 @@ fn check_options(c: &Connection) -> std::result::Result<(), String> {
 /// Fontes de um token que o ambiente lê sozinho: comando de credencial,
 /// secret do hub ou arquivo (#279). O `Cli` é o token da CLI do próprio
 /// tipo e só existe no GitHub (`gh auth token`).
+/// Formas de credencial do Jira e do GitLab, na ordem do formulário: o
+/// secret do hub é a fonte padrão (decisão do épico #224).
 const TOKEN_SOURCES: &[CredentialKind] = &[
-    CredentialKind::Command,
     CredentialKind::Secret,
+    CredentialKind::Command,
     CredentialKind::File,
 ];
 
@@ -1153,7 +1155,7 @@ mod tests {
     #[test]
     fn descritor_leva_credencial_conexao_padrao_e_cli() {
         use CredentialKind as K;
-        assert_eq!(JIRA.credential_kinds(), &[K::Command, K::Secret, K::File]);
+        assert_eq!(JIRA.credential_kinds(), &[K::Secret, K::Command, K::File]);
         assert_eq!(GITLAB.credential_kinds(), JIRA.credential_kinds());
         assert_eq!(GITHUB.credential_kinds().len(), CredentialKind::ALL.len());
         assert_eq!(GITHUB.fallback_credential(), CredentialSource::Cli);
@@ -1186,7 +1188,7 @@ mod tests {
                 "capabilities": { "tracker": true, "forge": true },
                 "default_endpoint": "https://api.github.com",
                 "token_env": "GH_TOKEN",
-                "credential_kinds": ["cli", "file", "command", "secret", "none"],
+                "credential_kinds": ["secret", "cli", "file", "command", "none"],
                 "default_connection": "github",
             })
         );
@@ -1207,7 +1209,7 @@ mod tests {
         );
         assert_eq!(
             GITLAB.validate(&cli).unwrap_err(),
-            "credencial do GitLab precisa de comando de credencial, secret ou arquivo"
+            "credencial do GitLab precisa de secret, comando de credencial ou arquivo"
         );
     }
 
@@ -1417,7 +1419,7 @@ mod tests {
         assert!(JIRA
             .validate(&base)
             .unwrap_err()
-            .contains("precisa de comando"));
+            .contains("precisa de secret"));
         let secret = Connection {
             credential: CredentialSource::Secret {
                 name: "jira-acme".into(),
@@ -1456,7 +1458,7 @@ mod tests {
         assert!(JIRA
             .validate(&cli)
             .unwrap_err()
-            .contains("comando de credencial, secret ou arquivo"));
+            .contains("secret, comando de credencial ou arquivo"));
         let gl = |credential| conn(ProviderKind::Gitlab, "gitlab.example.com", credential);
         assert!(GITLAB
             .validate(&gl(CredentialSource::Secret {

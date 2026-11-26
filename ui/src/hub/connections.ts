@@ -34,7 +34,8 @@ export const EMPTY_CONNECTION_FORM: ConnectionForm = {
   name: "",
   kind: "jira",
   endpoint: "",
-  cred: "command",
+  // O secret do hub é a fonte padrão (épico #224).
+  cred: "secret",
   cred_value: "",
   options: {},
 };
@@ -150,6 +151,14 @@ export function connectionUsers(
     .filter(({ project: p }) => usesConnection(c, p))
     .map(({ project: p }) => `${p.gh_owner}/${p.gh_repo}`)
     .sort();
+}
+
+/**
+ * Por que "Excluir" fica desabilitado numa conexão em uso (#281): o hub
+ * recusa apagar conexão que algum projeto referencia.
+ */
+export function deleteLockedText(users: readonly string[]): string {
+  return `Em uso por ${users.join(", ")}: troque a conexão desses projetos antes de excluir.`;
 }
 
 /**

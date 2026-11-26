@@ -13,8 +13,8 @@ import {
 test("o registro segue o descritor do Rust: ordem, rótulos e formas de credencial", () => {
   expect(PROVIDERS.map((p) => p.kind)).toEqual(PROVIDER_INFOS.map((i) => i.kind));
   expect(PROVIDERS.map((p) => p.label)).toEqual(["Jira", "GitLab", "GitHub"]);
-  expect(providerOf("jira").credential_kinds).toEqual(["command", "secret", "file"]);
-  expect(providerOf("gitlab").credential_kinds).toEqual(["command", "secret", "file"]);
+  expect(providerOf("jira").credential_kinds).toEqual(["secret", "command", "file"]);
+  expect(providerOf("gitlab").credential_kinds).toEqual(["secret", "command", "file"]);
   expect(acceptsCredential("github", "cli")).toBe(true);
   expect(acceptsCredential("jira", "cli")).toBe(false);
   expect(providerOf("github").default_connection).toBe("github");
@@ -35,7 +35,7 @@ test("textos do formulário por tipo, sem comparar tipos nas telas", () => {
 
 test("forma recusada: as aceitas e quem tem o login da CLI", () => {
   expect(refusedCredentialText("jira")).toBe(
-    "Jira: a credencial precisa ser um comando, um secret do hub ou um arquivo; o login da CLI é só do GitHub",
+    "Jira: a credencial precisa ser um secret do hub, um comando ou um arquivo; o login da CLI é só do GitHub",
   );
 });
 

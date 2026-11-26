@@ -12,8 +12,8 @@ export const PROVIDER_INFOS: ProviderInfo[] = [
     "default_endpoint": null,
     "token_env": "JIRA_API_TOKEN",
     "credential_kinds": [
-      "command",
       "secret",
+      "command",
       "file"
     ],
     "default_connection": null
@@ -28,8 +28,8 @@ export const PROVIDER_INFOS: ProviderInfo[] = [
     "default_endpoint": null,
     "token_env": "GITLAB_TOKEN",
     "credential_kinds": [
-      "command",
       "secret",
+      "command",
       "file"
     ],
     "default_connection": null
@@ -44,10 +44,10 @@ export const PROVIDER_INFOS: ProviderInfo[] = [
     "default_endpoint": "https://api.github.com",
     "token_env": "GH_TOKEN",
     "credential_kinds": [
+      "secret",
       "cli",
       "file",
       "command",
-      "secret",
       "none"
     ],
     "default_connection": "github"
