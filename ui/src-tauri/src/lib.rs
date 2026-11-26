@@ -12,7 +12,7 @@ pub mod updater;
 pub mod window;
 pub mod wsl;
 
-use bridge::{Bridge, EnvStatus, Resolver, Sink, TermSink};
+use bridge::{Bridge, BridgeError, EnvStatus, Resolver, Sink, TermSink};
 use envs::{EnvEntry, EnvInput, EnvKind, EnvView, NotifyPrefs, Store, UiConfig};
 use hub::{HubEntry, HubInput, HubSink, HubView, HUB_ID};
 use serde_json::Value;
@@ -97,7 +97,7 @@ async fn daemon_call(
     env: String,
     method: String,
     params: Value,
-) -> Result<Value, String> {
+) -> Result<Value, BridgeError> {
     st.bridge.call(&env, &method, params).await
 }
 
@@ -133,7 +133,11 @@ fn hub_status(st: State<'_, AppState>) -> Option<EnvStatus> {
 }
 
 #[tauri::command]
-async fn hub_call(st: State<'_, AppState>, method: String, params: Value) -> Result<Value, String> {
+async fn hub_call(
+    st: State<'_, AppState>,
+    method: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
     st.hub_bridge.call(HUB_ID, &method, params).await
 }
 
