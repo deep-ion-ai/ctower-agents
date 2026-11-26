@@ -15,6 +15,12 @@ use serde::Serialize;
 /// Evento que marca o work item da sub-issue iniciada pela execução de
 /// épico (payload: `base`).
 pub const EPIC_RUN_SESSION: &str = "epic_run_session";
+/// Entrada humana (teclado da UI) numa sessão da execução de épico (#301):
+/// o hub marca a sub-issue como assumida. O texto do motor
+/// (`session.continue`) não gera o evento.
+pub const HUMAN_INPUT: &str = "human_input";
+/// Intervalo mínimo entre dois `human_input` da mesma sessão.
+pub const HUMAN_INPUT_DEBOUNCE_MS: i64 = 60_000;
 
 /// Resultado de `worktree.remove`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -40,6 +46,44 @@ impl Sessions {
             .ledger()
             .list_events_of_kind(work_item_id, EPIC_RUN_SESSION)?
             .is_empty())
+    }
+
+    /// Teclado humano na sessão (`session.input`, canal de entrada do
+    /// `/ws`): numa sessão da execução de épico, grava [`HUMAN_INPUT`] no
+    /// máximo uma vez a cada [`HUMAN_INPUT_DEBOUNCE_MS`]. Devolve se gravou.
+    /// Erros não impedem a escrita no PTY (quem chama ignora).
+    pub fn note_human_input(&self, session_id: &str, now: i64) -> Result<bool> {
+        {
+            let seen = self
+                .inner
+                .human_input
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if seen
+                .get(session_id)
+                .is_some_and(|t| now - t < HUMAN_INPUT_DEBOUNCE_MS)
+            {
+                return Ok(false);
+            }
+        }
+        let s = self.ledger().get_session(session_id)?;
+        if !self.is_epic_run_session(&s)? {
+            return Ok(false);
+        }
+        let project_id = self.ledger().get_work_item(s.work_item_id)?.project_id;
+        self.ledger().append_event(ct_ledger::NewEvent {
+            project_id,
+            work_item_id: Some(s.work_item_id),
+            session_id: Some(&s.id),
+            kind: HUMAN_INPUT,
+            payload: serde_json::json!({ "session_id": s.id }),
+        })?;
+        self.inner
+            .human_input
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session_id.to_string(), now);
+        Ok(true)
     }
 
     /// Remove o worktree de uma sub-issue da execução de épico já mesclada
@@ -198,6 +242,39 @@ mod tests {
                 .unwrap()
                 .removed
         );
+    }
+
+    #[test]
+    fn teclado_humano_marca_a_sessao_da_execucao_e_o_texto_do_motor_nao() {
+        let env = env();
+        let s = env
+            .sessions
+            .start_epic_run(env.request(11, "Tela"), "wip/10-x")
+            .unwrap();
+        env.wait_fake_output(&s.id);
+        let count = || {
+            env.sessions
+                .ledger()
+                .list_events_of_kind(s.work_item_id, super::HUMAN_INPUT)
+                .unwrap()
+                .len()
+        };
+        // O texto do motor não marca.
+        env.sessions
+            .continue_session(&s.id, Some("CI verde: mescle"))
+            .unwrap();
+        assert_eq!(count(), 0);
+        assert!(env.sessions.note_human_input(&s.id, 1_000).unwrap());
+        // Debounce de 60 s.
+        assert!(!env.sessions.note_human_input(&s.id, 30_000).unwrap());
+        assert!(env.sessions.note_human_input(&s.id, 61_000).unwrap());
+        assert_eq!(count(), 2);
+        // Sessão comum: nada.
+        let outra = env.sessions.start(env.request(12, "Outra")).unwrap();
+        assert!(!env.sessions.note_human_input(&outra.id, 1_000).unwrap());
+        for id in [&s.id, &outra.id] {
+            env.sessions.kill(id).ok();
+        }
     }
 
     #[test]

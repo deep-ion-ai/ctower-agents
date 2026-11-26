@@ -33,8 +33,10 @@
 //!   pedido de rebase, enviado com a sessão ociosa. Head novo no PR limpa o
 //!   pedido; sem head novo depois do prazo de ociosidade, pedido de decisão
 //!   `conflito_rebase`.
-//! - **Assumida:** nada vai à sessão, ela não é encerrada nem conta sem
-//!   progresso. O merge ainda marca o nó.
+//! - **Assumida (#301):** entrada humana na sessão (o teclado da UI, não o
+//!   texto do motor) depois do último "devolver ao motor" marca o nó
+//!   `assumida`. Assumido, nada vai à sessão, ela não é encerrada nem conta
+//!   sem progresso. O merge ainda marca o nó.
 //! - **Sem progresso:** sessão do nó sumida (ou que não aparece
 //!   [`START_GRACE_MS`] depois do início) ou ociosa sem PR por
 //!   `idle_timeout_min`.
@@ -108,6 +110,8 @@ pub struct SessionSnap {
     pub state: SessionState,
     /// Ociosa desde (só com `state` = `idle`).
     pub idle_since: Option<i64>,
+    /// Última entrada humana pelo teclado da UI (#301).
+    pub human_input_at: Option<i64>,
 }
 
 /// O que o hub sabe de uma sub-issue do plano.
@@ -148,6 +152,9 @@ pub struct Snapshot {
     pub max_ci_attempts: u32,
     /// Prazo sem progresso (min); 0 = nunca.
     pub idle_timeout_min: u32,
+    /// Último "devolver ao motor" de cada nó (#301): entrada humana antes
+    /// disso não assume de novo.
+    pub handback_at: BTreeMap<i64, i64>,
 }
 
 /// Uma ação do ciclo. `message` vai para os eventos da execução.
@@ -409,6 +416,34 @@ pub fn decide(s: &Snapshot) -> Outcome {
                     ),
                 });
                 asked.insert(number);
+            }
+        }
+
+        // Entrada humana: o desenvolvedor assumiu a sessão.
+        let human = sess.and_then(|(_, x)| x.human_input_at);
+        let since = s.handback_at.get(&number).copied().unwrap_or(i64::MIN);
+        if human.is_some_and(|at| at > since) {
+            if matches!(
+                node.state,
+                EpicNodeState::EmExecucao
+                    | EpicNodeState::EmPr
+                    | EpicNodeState::Estacionada
+                    | EpicNodeState::Bloqueada
+            ) && !merged_now.contains(&number)
+            {
+                out.actions.push(Action::Node {
+                    number,
+                    to: EpicNodeState::Assumida,
+                    pr: None,
+                    reason: None,
+                    message: format!(
+                        "{}: o desenvolvedor digitou na sessão; o motor não a dirige até \
+                         \"devolver ao motor\"",
+                        slug(number)
+                    ),
+                });
+                live.insert(number);
+                continue;
             }
         }
 

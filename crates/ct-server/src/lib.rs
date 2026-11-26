@@ -99,7 +99,10 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// execução de épico, que sai da `wip` do épico e aceita texto no
 /// `session.continue`) e `worktree.remove { owner, repo, gh_number }` (também
 /// pelo canal do hub).
-pub const PROTOCOL_VERSION: &str = "2.26";
+/// 2.27 (#301): o evento `human_input` (teclado da UI numa sessão da
+/// execução de épico, no máximo um por minuto), que o hub usa para marcar a
+/// sub-issue como assumida.
+pub const PROTOCOL_VERSION: &str = "2.27";
 
 #[derive(Clone)]
 pub struct AppState {
