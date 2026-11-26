@@ -4,7 +4,7 @@
 
 use crate::remote::{self, Credentials, RemoteKind, RemoteSettings};
 use crate::secrets::HubSecrets;
-use ct_ledger::SharedHub;
+use ct_hub_store::SharedHub;
 use serde::{Deserialize, Serialize};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -548,7 +548,7 @@ impl Backups {
                 .snapshot(&st.dir, ct_core::now_ms())
                 .map_err(|e| e.to_string())?;
             let removed =
-                ct_ledger::rotate_snapshots(&st.dir, st.keep).map_err(|e| e.to_string())?;
+                ct_hub_store::rotate_snapshots(&st.dir, st.keep).map_err(|e| e.to_string())?;
             Ok((p, removed.len()))
         })();
         {
@@ -574,7 +574,7 @@ impl Backups {
         if st.remote.kind == RemoteKind::None {
             return;
         }
-        if let Ok(Some(p)) = ct_ledger::list_snapshots(&st.dir).map(|v| v.into_iter().next()) {
+        if let Ok(Some(p)) = ct_hub_store::list_snapshots(&st.dir).map(|v| v.into_iter().next()) {
             self.upload_remote(&p);
         }
     }
@@ -655,7 +655,7 @@ impl Backups {
 
     /// Idade do snapshot mais novo em `dir`.
     fn newest(&self) -> Option<(i64, Duration)> {
-        let p = ct_ledger::list_snapshots(&self.dir())
+        let p = ct_hub_store::list_snapshots(&self.dir())
             .ok()?
             .into_iter()
             .next()?;
@@ -1270,7 +1270,7 @@ pub fn spawn_docs_periodic(backups: Arc<Backups>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ct_ledger::Hub;
+    use ct_hub_store::Hub;
 
     #[test]
     fn snapshot_rotacao_e_avisos() {
@@ -1467,7 +1467,7 @@ mod tests {
         let local = crate::docs_backup::list_packages(&b.dir()).unwrap();
         assert_eq!(local.len(), 7);
         // A retenção dos docs não mexe nos snapshots do hub.db, e vice-versa.
-        assert_eq!(ct_ledger::list_snapshots(&b.dir()).unwrap().len(), 1);
+        assert_eq!(ct_hub_store::list_snapshots(&b.dir()).unwrap().len(), 1);
 
         let g = st.lock().unwrap();
         let docs: Vec<_> = g

@@ -25,7 +25,7 @@ pub use snapshots::CHECK_INTERVAL as SNAPSHOT_CHECK_INTERVAL;
 
 use crate::backup::Warning;
 use crate::config::Dirs;
-use ct_ledger::{EnvSecretsInput, SharedHub};
+use ct_hub_store::{EnvSecretsInput, SharedHub};
 use ct_secrets::{Entry, Kind, Scope, SecretValue, SecretsStore};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -480,7 +480,7 @@ pub fn spawn_snapshot_check(secrets: Arc<HubSecrets>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ct_ledger::Hub;
+    use ct_hub_store::Hub;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 

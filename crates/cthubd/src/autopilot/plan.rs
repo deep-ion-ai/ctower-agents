@@ -90,11 +90,11 @@ use super::deps;
 use ct_core::plan::budget::{BlockReason, BudgetDecision};
 use ct_core::plan::{PlanView, WindowView};
 use ct_core::{Priority, SessionState, SessionTemplates, WipUsage, WorkItemKind, WorkItemStatus};
-use ct_ledger::{
-    pr_feedback_text, AnalysisRound, AutopilotSession, AutopilotSettings, BlockerState,
-    ChecksState, CloseState, DependencyEdge, FeedbackTextOptions, IdleSession, ParkedSession,
-    PrChecks, PrFeedback, PrRow, WaitingSession,
+use ct_hub_store::{
+    AnalysisRound, AutopilotSession, AutopilotSettings, BlockerState, CloseState, DependencyEdge,
+    IdleSession, ParkedSession, WaitingSession,
 };
+use ct_ledger::{pr_feedback_text, ChecksState, FeedbackTextOptions, PrChecks, PrFeedback, PrRow};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -340,7 +340,7 @@ pub struct ItemSnap {
     pub priority: Option<Priority>,
     pub model: Option<String>,
     pub approved: bool,
-    /// Impressão digital (`ct_ledger::issue_fingerprint`): muda com o
+    /// Impressão digital (`ct_hub_store::issue_fingerprint`): muda com o
     /// título, o corpo, os rótulos ou a prioridade (#215).
     pub fingerprint: String,
 }

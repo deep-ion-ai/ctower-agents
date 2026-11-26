@@ -3,7 +3,7 @@
 //! recuperação pelo stdin e a rotação das chaves.
 
 use assert_cmd::Command;
-use ct_ledger::{Hub, SharedHub};
+use ct_hub_store::{Hub, SharedHub};
 use ct_secrets::{Kind, Scope, SecretValue};
 use cthubd::config::Dirs;
 use cthubd::secrets::HubSecrets;
@@ -251,7 +251,7 @@ fn secrets_list_por_ambiente_sem_valores() {
     hub_com_secrets(p);
     {
         let h = Hub::open(&p.join("data/hub.db")).unwrap();
-        h.add_project(&ct_ledger::NewHubProject {
+        h.add_project(&ct_hub_store::NewHubProject {
             owner: "deep-ion-ai".into(),
             repo: "demo".into(),
             name: "demo".into(),

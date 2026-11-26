@@ -26,7 +26,7 @@
 
 use super::{snapshots, HubSecrets};
 use crate::config::Dirs;
-use ct_ledger::{Hub, SharedHub};
+use ct_hub_store::{Hub, SharedHub};
 use ct_secrets::{Identity, Zeroizing};
 use std::io;
 use std::path::{Path, PathBuf};

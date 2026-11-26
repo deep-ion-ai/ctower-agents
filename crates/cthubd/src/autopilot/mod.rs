@@ -31,7 +31,7 @@ use crate::HubState;
 use ct_core::plan::budget::{evaluate, BudgetDecision, BudgetPolicy};
 use ct_core::plan::{group_accounts, PlanView, WindowView};
 use ct_http::rpc::{invalid, str_param, RpcResult};
-use ct_ledger::Hub;
+use ct_hub_store::Hub;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -194,7 +194,7 @@ mod tests {
     fn metodos_get_set_preview() {
         let now = ct_core::now_ms();
         let st = HubState::new(
-            ct_ledger::SharedHub::new(hub_with_reading(now)),
+            ct_hub_store::SharedHub::new(hub_with_reading(now)),
             "ui",
             "hub",
             "hub-id",

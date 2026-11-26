@@ -12,7 +12,7 @@ use crate::config::{Dirs, HubConfig};
 use crate::github::{self, HubGithub};
 use crate::HubState;
 use ct_gh::{GhClient, GhConfig};
-use ct_ledger::{Hub, IssuedEnvToken, SharedHub};
+use ct_hub_store::{Hub, IssuedEnvToken, SharedHub};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1132,7 +1132,7 @@ mod tests {
         let (url, st) = fake::serve();
         let hub = SharedHub::new(Hub::open(&ds.hub_db()).unwrap());
         hub.lock()
-            .add_project(&ct_ledger::NewHubProject {
+            .add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),

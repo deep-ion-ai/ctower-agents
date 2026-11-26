@@ -91,7 +91,7 @@ impl WebOptions {
     pub fn new(
         cfg: &crate::config::WebConfig,
         port: u16,
-        hub: ct_ledger::SharedHub,
+        hub: ct_hub_store::SharedHub,
         ui_token: &str,
     ) -> Self {
         WebOptions {
@@ -103,7 +103,7 @@ impl WebOptions {
     }
 
     /// Rotas web desligadas (o padrão do `[web]`).
-    pub fn disabled(hub: ct_ledger::SharedHub, ui_token: &str) -> Self {
+    pub fn disabled(hub: ct_hub_store::SharedHub, ui_token: &str) -> Self {
         Self::new(
             &crate::config::WebConfig::default(),
             crate::config::DEFAULT_PORT,
@@ -429,7 +429,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn st(enabled: bool) -> HubState {
-        let hub = ct_ledger::SharedHub::new(ct_ledger::Hub::open_in_memory().unwrap());
+        let hub = ct_hub_store::SharedHub::new(ct_hub_store::Hub::open_in_memory().unwrap());
         let mut st = HubState::new(hub.clone(), "ui", "h", "hub-id");
         let cfg = crate::config::WebConfig {
             enabled,
@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn origens_padrao_e_configuradas() {
-        let hub = ct_ledger::SharedHub::new(ct_ledger::Hub::open_in_memory().unwrap());
+        let hub = ct_hub_store::SharedHub::new(ct_hub_store::Hub::open_in_memory().unwrap());
         let mut o = WebOptions::disabled(hub, "ui");
         o.port = 7879;
         let h = |v: &str| {

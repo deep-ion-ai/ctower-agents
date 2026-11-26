@@ -62,8 +62,8 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hub::{HubProjectPatch, NewHubProject};
     use crate::IssueRow;
+    use crate::{HubProjectPatch, NewHubProject};
 
     fn issue(n: i64, labels: &[&str], parent: Option<i64>) -> IssueRow {
         IssueRow {

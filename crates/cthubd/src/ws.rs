@@ -51,7 +51,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use ct_http::rpc::{i64_param, invalid, str_param, RpcResult};
 use ct_http::{bearer_ok, unauthorized};
-use ct_ledger::{
+use ct_hub_store::{
     AssignmentFilter, HubAssignment, HubProjectPatch, HubSession, NewHubProject, Placement,
     ProjectProvider, QuarantineGroup, RankingFilter,
 };
@@ -370,7 +370,7 @@ async fn env_call(st: &HubState, p: Value) -> RpcResult {
 /// nos parâmetros, vale o da issue no hub, para a sessão iniciada à mão
 /// pela web, e pelo agendador (#183), usar o modelo decidido. Só com
 /// `owner`, `repo` e `gh_number`; o que veio nos parâmetros vence.
-pub(crate) fn with_issue_agent(hub: &ct_ledger::Hub, mut params: Value) -> Value {
+pub(crate) fn with_issue_agent(hub: &ct_hub_store::Hub, mut params: Value) -> Value {
     let (Some(owner), Some(repo), Some(n)) = (
         params.get("owner").and_then(Value::as_str),
         params.get("repo").and_then(Value::as_str),
@@ -393,13 +393,13 @@ pub(crate) fn with_issue_agent(hub: &ct_ledger::Hub, mut params: Value) -> Value
 
 /// `{ model, effort }` de `hub.workitem.set_model` (nulos ou ausentes =
 /// limpar).
-fn issue_agent_param(p: &Value) -> Result<ct_ledger::IssueAgent, (i64, String)> {
+fn issue_agent_param(p: &Value) -> Result<ct_hub_store::IssueAgent, (i64, String)> {
     let field = |k: &str| match p.get(k) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(v)) if !v.trim().is_empty() => Ok(Some(v.trim().to_string())),
         Some(_) => Err(invalid(format!("{k} deve ser texto ou null"))),
     };
-    let agent = ct_ledger::IssueAgent {
+    let agent = ct_hub_store::IssueAgent {
         model: field("model")?,
         effort: field("effort")?,
     };
@@ -666,7 +666,7 @@ fn web_sessions_call(st: &HubState, method: &str, p: &Value, current: Option<&st
 }
 
 /// Eventos de `hub.push.subscribe|update` (`events`), sem repetição.
-fn push_events(p: &Value) -> Result<Option<Vec<ct_ledger::PushEvent>>, (i64, String)> {
+fn push_events(p: &Value) -> Result<Option<Vec<ct_hub_store::PushEvent>>, (i64, String)> {
     let Some(v) = p.get("events").filter(|v| !v.is_null()) else {
         return Ok(None);
     };
@@ -676,7 +676,7 @@ fn push_events(p: &Value) -> Result<Option<Vec<ct_ledger::PushEvent>>, (i64, Str
     let mut out = Vec::new();
     for e in arr {
         let name = e.as_str().unwrap_or("");
-        let ev = ct_ledger::PushEvent::parse(name)
+        let ev = ct_hub_store::PushEvent::parse(name)
             .ok_or_else(|| invalid(format!("evento de push desconhecido: {name:?}")))?;
         if !out.contains(&ev) {
             out.push(ev);
@@ -714,7 +714,7 @@ fn push_call(st: &HubState, method: &str, p: &Value, current: Option<&str>) -> R
             let (p256dh, auth) = (str_param(&keys, "p256dh")?, str_param(&keys, "auth")?);
             push.validate(endpoint, p256dh, auth)
                 .map_err(|m| invalid(&m))?;
-            let sub = ct_ledger::NewPushSubscription {
+            let sub = ct_hub_store::NewPushSubscription {
                 endpoint: endpoint.to_string(),
                 p256dh: p256dh.to_string(),
                 auth: auth.to_string(),
@@ -1215,7 +1215,9 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
             let limit = p
                 .get("limit")
                 .and_then(Value::as_u64)
-                .map_or(ct_ledger::RANKING_LIMIT, |l| l.min(u32::MAX as u64) as u32);
+                .map_or(ct_hub_store::RANKING_LIMIT, |l| {
+                    l.min(u32::MAX as u64) as u32
+                });
             let f = RankingFilter { project, priority };
             Ok(json!(h.ranking(&f, limit).map_err(e)?))
         }
@@ -1226,11 +1228,11 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 _ => return Err(invalid("owner e repo vão juntos")),
             };
             let min_severity = opt_str(p, "min_severity")
-                .map(|s| s.parse::<ct_ledger::Severity>())
+                .map(|s| s.parse::<ct_hub_store::Severity>())
                 .transpose()
                 .map_err(invalid)?
-                .unwrap_or(ct_ledger::Severity::Info);
-            let f = ct_ledger::HealthFilter {
+                .unwrap_or(ct_hub_store::Severity::Info);
+            let f = ct_hub_store::HealthFilter {
                 project,
                 min_severity,
             };
@@ -1246,7 +1248,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 (None, None) => None,
                 _ => return Err(invalid("owner e repo vão juntos")),
             };
-            let f = ct_ledger::ProposalFilter {
+            let f = ct_hub_store::ProposalFilter {
                 state,
                 project,
                 number: p.get("number").and_then(Value::as_i64),
@@ -1254,7 +1256,9 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
             let limit = p
                 .get("limit")
                 .and_then(Value::as_u64)
-                .map_or(ct_ledger::RANKING_LIMIT, |l| l.min(u32::MAX as u64) as u32);
+                .map_or(ct_hub_store::RANKING_LIMIT, |l| {
+                    l.min(u32::MAX as u64) as u32
+                });
             Ok(json!(h
                 .list_proposals(&f, limit, ct_core::now_ms())
                 .map_err(e)?))
@@ -1283,21 +1287,21 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 (None, Some(ids)) => {
                     let ids: Vec<i64> = serde_json::from_value(ids.clone())
                         .map_err(|_| invalid("ids deve ser uma lista de números"))?;
-                    if ids.is_empty() || ids.len() > ct_ledger::PROPOSAL_PENDING_MAX as usize {
+                    if ids.is_empty() || ids.len() > ct_hub_store::PROPOSAL_PENDING_MAX as usize {
                         return Err(invalid(format!(
                             "ids deve ter de 1 a {} propostas",
-                            ct_ledger::PROPOSAL_PENDING_MAX
+                            ct_hub_store::PROPOSAL_PENDING_MAX
                         )));
                     }
-                    let out: Vec<ct_ledger::ProposalDecided> = ids
+                    let out: Vec<ct_hub_store::ProposalDecided> = ids
                         .into_iter()
                         .map(|id| match decide(id) {
-                            Ok(v) => ct_ledger::ProposalDecided {
+                            Ok(v) => ct_hub_store::ProposalDecided {
                                 id,
                                 proposal: Some(v),
                                 error: None,
                             },
-                            Err(err) => ct_ledger::ProposalDecided {
+                            Err(err) => ct_hub_store::ProposalDecided {
                                 id,
                                 proposal: None,
                                 error: Some(err.to_string()),
@@ -1379,7 +1383,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 (None, None) => None,
                 _ => return Err(invalid("owner e repo vão juntos")),
             };
-            let f = ct_ledger::RulesProposalFilter {
+            let f = ct_hub_store::RulesProposalFilter {
                 state,
                 project,
                 epic_number: p.get("epic_number").and_then(Value::as_i64),
@@ -1415,7 +1419,7 @@ fn placement<T>(before: Option<T>, after: Option<T>) -> Result<Placement<T>, (i6
 
 /// "sessões vivas relatadas: ..." para as mensagens de confirmação.
 fn sessions_text(
-    live: &[ct_ledger::HubSession],
+    live: &[ct_hub_store::HubSession],
     names: &std::collections::HashMap<String, String>,
 ) -> String {
     if live.is_empty() {
@@ -1864,7 +1868,7 @@ async fn notify_config_changed(st: &HubState, scope: &Scope) {
         Scope::Global => online.into_iter().collect(),
         Scope::Project(key) => {
             let (owner, repo) = key.rsplit_once('/').unwrap_or_default();
-            let f = ct_ledger::AssignmentFilter {
+            let f = ct_hub_store::AssignmentFilter {
                 env: None,
                 owner: Some(owner.to_string()),
                 repo: Some(repo.to_string()),
@@ -2195,11 +2199,11 @@ mod export {
         HubPlanAccounts::export_all_to(&dir).unwrap();
         crate::autopilot::AutopilotPolicyView::export_all_to(&dir).unwrap();
         crate::autopilot::AutopilotStatus::export_all_to(&dir).unwrap();
-        ct_ledger::MorningDigest::export_all_to(&dir).unwrap();
-        ct_ledger::AutonomyWip::export_all_to(&dir).unwrap();
-        ct_ledger::AutopilotEvent::export_all_to(&dir).unwrap();
+        ct_hub_store::MorningDigest::export_all_to(&dir).unwrap();
+        ct_hub_store::AutonomyWip::export_all_to(&dir).unwrap();
+        ct_hub_store::AutopilotEvent::export_all_to(&dir).unwrap();
         // `hub.autopilot.deps.set` (#215).
-        ct_ledger::DependencyEdge::export_all_to(&dir).unwrap();
+        ct_hub_store::DependencyEdge::export_all_to(&dir).unwrap();
         ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
@@ -2216,27 +2220,27 @@ mod export {
         HubEnvCall::export_all_to(&dir).unwrap();
         crate::push::PushRemoved::export_all_to(&dir).unwrap();
         crate::push::PushTestResult::export_all_to(&dir).unwrap();
-        ct_ledger::HubPushDevice::export_all_to(&dir).unwrap();
-        ct_ledger::HubWebSession::export_all_to(&dir).unwrap();
+        ct_hub_store::HubPushDevice::export_all_to(&dir).unwrap();
+        ct_hub_store::HubWebSession::export_all_to(&dir).unwrap();
         crate::secrets::SecretsList::export_all_to(&dir).unwrap();
         crate::secrets::RecoveryStatus::export_all_to(&dir).unwrap();
         crate::secrets::RecoveryGenerated::export_all_to(&dir).unwrap();
-        ct_ledger::ProjectAdded::export_all_to(&dir).unwrap();
-        ct_ledger::DeleteImpact::export_all_to(&dir).unwrap();
-        ct_ledger::AssignmentAdded::export_all_to(&dir).unwrap();
-        ct_ledger::HubProjectView::export_all_to(&dir).unwrap();
-        ct_ledger::HubEnv::export_all_to(&dir).unwrap();
-        ct_ledger::HubTree::export_all_to(&dir).unwrap();
-        ct_ledger::HubHistory::export_all_to(&dir).unwrap();
-        ct_ledger::HubDashboard::export_all_to(&dir).unwrap();
-        ct_ledger::HubRanking::export_all_to(&dir).unwrap();
-        ct_ledger::HubHealth::export_all_to(&dir).unwrap();
-        ct_ledger::HubProposals::export_all_to(&dir).unwrap();
-        ct_ledger::ProposalDecided::export_all_to(&dir).unwrap();
-        ct_ledger::HubRules::export_all_to(&dir).unwrap();
-        ct_ledger::HubRulesHistory::export_all_to(&dir).unwrap();
-        ct_ledger::HubRulesProposal::export_all_to(&dir).unwrap();
-        ct_ledger::HubRulesProposals::export_all_to(&dir).unwrap();
+        ct_hub_store::ProjectAdded::export_all_to(&dir).unwrap();
+        ct_hub_store::DeleteImpact::export_all_to(&dir).unwrap();
+        ct_hub_store::AssignmentAdded::export_all_to(&dir).unwrap();
+        ct_hub_store::HubProjectView::export_all_to(&dir).unwrap();
+        ct_hub_store::HubEnv::export_all_to(&dir).unwrap();
+        ct_hub_store::HubTree::export_all_to(&dir).unwrap();
+        ct_hub_store::HubHistory::export_all_to(&dir).unwrap();
+        ct_hub_store::HubDashboard::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRanking::export_all_to(&dir).unwrap();
+        ct_hub_store::HubHealth::export_all_to(&dir).unwrap();
+        ct_hub_store::HubProposals::export_all_to(&dir).unwrap();
+        ct_hub_store::ProposalDecided::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRules::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRulesHistory::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRulesProposal::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRulesProposals::export_all_to(&dir).unwrap();
         ct_gh::TokenStatus::export_all_to(&dir).unwrap();
         crate::update::HubUpdateStatus::export_all_to(&dir).unwrap();
         // Rastreador e forja (#347): os tipos soltos, além dos de `HubProject`.
@@ -2353,7 +2357,8 @@ pub(crate) mod tests {
     }
     use crate::router;
     use ct_core::WorkItemKind;
-    use ct_ledger::{Hub, Ledger, NewProject, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
+    use ct_ledger::{Ledger, NewProject};
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -2427,7 +2432,7 @@ pub(crate) mod tests {
     fn hub_com_dados() -> HubState {
         let hub = SharedHub::new(Hub::open_in_memory().unwrap());
         hub.lock()
-            .add_project(&ct_ledger::NewHubProject {
+            .add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -2738,7 +2743,7 @@ pub(crate) mod tests {
             .hub
             .lock()
             .create_proposal(
-                &ct_ledger::NewProposal {
+                &ct_hub_store::NewProposal {
                     kind: ct_core::ProposalKind::Model,
                     owner: "deep-ion-ai".into(),
                     repo: "demo".into(),
@@ -2829,7 +2834,7 @@ pub(crate) mod tests {
             st.hub
                 .lock()
                 .create_proposal(
-                    &ct_ledger::NewProposal {
+                    &ct_hub_store::NewProposal {
                         kind,
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
@@ -3077,7 +3082,7 @@ pub(crate) mod tests {
 
     /// Um ambiente "wsl" envia o work item `n` de `deep-ion-ai/novo`, com uma
     /// sessão viva.
-    fn push_novo(st: &HubState, l: &Ledger, n: i64) -> ct_ledger::IngestResult {
+    fn push_novo(st: &HubState, l: &Ledger, n: i64) -> ct_hub_store::IngestResult {
         if l.list_projects().unwrap().is_empty() {
             l.add_project(&NewProject {
                 name: "novo-local".into(),
@@ -3744,7 +3749,7 @@ pub(crate) mod tests {
             .unwrap()
             .to_string_lossy()
             .ends_with("-pre-delete.db"));
-        assert!(ct_ledger::list_snapshots(&tmp.path().join("backups"))
+        assert!(ct_hub_store::list_snapshots(&tmp.path().join("backups"))
             .unwrap()
             .is_empty());
         let v = ui.call("hub.projects.list", json!({})).await;

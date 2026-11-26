@@ -16,7 +16,8 @@ use ct_http::sync::{
     VersionRefusal, ENV_ID_HEADER, ENV_PUBKEY_HEADER,
 };
 use ct_http::{bearer_token, unauthorized};
-use ct_ledger::{project_key, Hub, IngestResult, LedgerError, AGENT_TOKEN_PREFIX};
+use ct_hub_store::{Hub, IngestResult, AGENT_TOKEN_PREFIX};
+use ct_ledger::{project_key, LedgerError};
 use ct_secrets::{Entry, Scope};
 use std::collections::HashSet;
 
@@ -412,7 +413,8 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use ct_core::{DecisionOrigin, WorkItemKind};
-    use ct_ledger::{Hub, Ledger, NewDecision, NewProject, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
+    use ct_ledger::{Ledger, NewDecision, NewProject};
     use http_body_util::BodyExt;
     use serde_json::{json, Value};
     use tower::ServiceExt;
@@ -570,7 +572,7 @@ mod tests {
                 h.quarantine_count("deep-ion-ai", "demo").unwrap(),
                 entries_len
             );
-            h.add_project(&ct_ledger::NewHubProject {
+            h.add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -698,7 +700,7 @@ mod tests {
         let tok = {
             let h = st.hub.lock();
             for repo in ["demo", "outro"] {
-                h.add_project(&ct_ledger::NewHubProject {
+                h.add_project(&ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: repo.into(),
                     name: repo.into(),
@@ -786,7 +788,7 @@ mod tests {
             let a = h.add_legacy_env_token("a").unwrap();
             let b = h.add_legacy_env_token("b").unwrap();
             for repo in ["demo", "outro"] {
-                h.add_project(&ct_ledger::NewHubProject {
+                h.add_project(&ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: repo.into(),
                     name: repo.into(),
@@ -1055,7 +1057,7 @@ mod tests {
         let tok = {
             let h = st.hub.lock();
             for repo in ["demo", "outro"] {
-                h.add_project(&ct_ledger::NewHubProject {
+                h.add_project(&ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: repo.into(),
                     name: repo.into(),

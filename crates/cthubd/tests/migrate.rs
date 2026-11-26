@@ -3,7 +3,7 @@
 //! (`tests/fixtures`).
 
 use assert_cmd::Command;
-use ct_ledger::{AssignmentFilter, Hub, SharedHub};
+use ct_hub_store::{AssignmentFilter, Hub, SharedHub};
 use cthubd::config::Dirs;
 use cthubd::migrate::{migrate, migrate_files, MigrateOpts};
 use predicates::str::contains;

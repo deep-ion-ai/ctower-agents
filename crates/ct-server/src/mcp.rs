@@ -10,7 +10,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ct_core::{DecisionOrigin, ProjectKind, WorkItemKind, WorkItemStatus};
-use ct_ledger::{DecisionScope, Ledger, NewDecision, Session, WorkItem};
+use ct_ledger::DecisionScope;
+use ct_ledger::{Ledger, NewDecision, Session, WorkItem};
 use ct_sessions::{GithubSync, Sessions};
 use serde_json::{json, Value};
 
@@ -903,7 +904,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn list_decisions_via_hub_com_fallback_parcial() {
         use crate::hub_sync::{HubSender, HubTarget};
-        use ct_ledger::{Hub, Ledger, NewDecision, NewProject, SharedHub};
+        use ct_hub_store::{Hub, SharedHub};
+        use ct_ledger::{Ledger, NewDecision, NewProject};
         use std::sync::Arc;
         use std::time::Duration;
         let mut srv = Srv::new(FakeClaude::sleep(30));
@@ -943,7 +945,7 @@ mod tests {
         // Hub (`cthubd`) no ar com uma decisão de outro ambiente.
         let hub = SharedHub::new(Hub::open_in_memory().unwrap());
         hub.lock()
-            .add_project(&ct_ledger::NewHubProject {
+            .add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -1026,7 +1028,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn gestor_tem_portfolio_e_ledger_restrito() {
         use crate::hub_sync::{HubSender, HubTarget};
-        use ct_ledger::{GithubSnapshot, Hub, IssueRow, SharedHub};
+        use ct_hub_store::{Hub, SharedHub};
+        use ct_ledger::{GithubSnapshot, IssueRow};
         use std::sync::Arc;
         use std::time::Duration;
         let mut srv = Srv::new(FakeClaude::sleep(30));
@@ -1130,7 +1133,7 @@ mod tests {
         let env_id = srv.env.sessions.ledger().env_id().to_string();
         let (sync, agent) = {
             let h = hub.lock();
-            h.add_project(&ct_ledger::NewHubProject {
+            h.add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -1675,7 +1678,7 @@ mod tests {
     /// o work item), e o mesmo evento chega ao hub pelo outbox.
     #[tokio::test]
     async fn start_sub_issue_na_sessao_do_epico() {
-        use ct_ledger::{Hub, SharedHub};
+        use ct_hub_store::{Hub, SharedHub};
         let srv = Srv::new(FakeClaude::sleep(30));
         let ep = epico(&srv);
         let lista = tool_names(&rpc(&srv, &ep.id, "tools/list", json!({})).await);
@@ -1740,7 +1743,7 @@ mod tests {
         // O hub recebe pelo outbox: cria o work item e aplica o status.
         let hub = SharedHub::new(Hub::open_in_memory().unwrap());
         hub.lock()
-            .add_project(&ct_ledger::NewHubProject {
+            .add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),

@@ -13,6 +13,7 @@ ct-gh.workspace = true
 ct-http.workspace = true
 # Descrição da issue do Jira → Markdown no "Ver issue" (#434).
 ct-jira.workspace = true
+ct-hub-store.workspace = true
 ct-ledger.workspace = true
 ct-secrets.workspace = true
 ct-update.workspace = true
@@ -48,7 +49,7 @@ ts-rs = { workspace = true, optional = true }
 
 [features]
 # Exporta os tipos do /ws do hub para ui/src/protocol/hub-gen (teste export_ts).
-ts = ["dep:ts-rs", "ct-core/ts", "ct-gh/ts", "ct-ledger/ts", "ct-secrets/ts", "ct-update/ts"]
+ts = ["dep:ts-rs", "ct-core/ts", "ct-gh/ts", "ct-hub-store/ts", "ct-ledger/ts", "ct-secrets/ts", "ct-update/ts"]
 
 [dev-dependencies]
 ct-gh = { workspace = true, features = ["test-support"] }

@@ -43,31 +43,7 @@ pub struct HubProjectView {
     pub wip: Option<ct_core::WipUsage>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct DecisionCounts {
-    pub total: usize,
-    /// Autônomas ainda não revisadas.
-    pub pending_autonomous: usize,
-}
-
-/// Resumo do work item na árvore (#46).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct WorkItemSummary {
-    /// PR mais recente da branch do work item.
-    pub pr: Option<PrRow>,
-    /// Resumo dos checks do head desse PR, se ele está aberto e os checks
-    /// já foram lidos (#129). Ausente num hub ou ambiente anterior.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts", ts(optional))]
-    pub pr_checks: Option<crate::PrChecksSummary>,
-    pub decisions: DecisionCounts,
-    /// `ts` do último evento do work item, sem os de prioridade e ordem.
-    pub last_activity_at: Option<i64>,
-    /// Ambientes com sessão viva neste work item.
-    pub live_envs: Vec<String>,
-}
+pub use ct_ledger::{DecisionCounts, DecisionScope, WorkItemSummary};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -148,15 +124,6 @@ pub struct HubDashboard {
     /// Work item das sessões do gestor (`_ctower/gestor#0`), se já houve
     /// uma: `live_sessions` com ele são do gestor.
     pub gestor_work_item_id: Option<i64>,
-}
-
-/// Escopo de `ledger_list_decisions` respondido pelo hub.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DecisionScope {
-    WorkItem,
-    Epic,
-    Project,
 }
 
 const FAILED_WINDOW_MS: i64 = 24 * 3600 * 1000;

@@ -353,7 +353,8 @@ impl Ledger {
     }
 
     /// Avança e devolve o HLC persistido deste ledger.
-    pub(crate) fn tick_hlc(&self) -> Result<i64> {
+    #[doc(hidden)]
+    pub fn tick_hlc(&self) -> Result<i64> {
         Ok(self.conn.query_row(
             "UPDATE ledger_meta SET value = max(?1, value + 1) WHERE key = 'hlc' RETURNING value",
             [hlc::from_ms(now_ms())],
@@ -378,7 +379,8 @@ impl Ledger {
         }
     }
 
-    pub(crate) fn enqueue(&self, change: &SyncChange) -> Result<()> {
+    #[doc(hidden)]
+    pub fn enqueue(&self, change: &SyncChange) -> Result<()> {
         let (kind, key) = (change.kind(), change.key());
         if change.coalesces() {
             self.conn.execute(
