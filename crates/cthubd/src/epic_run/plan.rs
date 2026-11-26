@@ -422,29 +422,27 @@ pub fn decide(s: &Snapshot) -> Outcome {
         // Entrada humana: o desenvolvedor assumiu a sessão.
         let human = sess.and_then(|(_, x)| x.human_input_at);
         let since = s.handback_at.get(&number).copied().unwrap_or(i64::MIN);
-        if human.is_some_and(|at| at > since) {
-            if matches!(
-                node.state,
-                EpicNodeState::EmExecucao
-                    | EpicNodeState::EmPr
-                    | EpicNodeState::Estacionada
-                    | EpicNodeState::Bloqueada
-            ) && !merged_now.contains(&number)
-            {
-                out.actions.push(Action::Node {
-                    number,
-                    to: EpicNodeState::Assumida,
-                    pr: None,
-                    reason: None,
-                    message: format!(
-                        "{}: o desenvolvedor digitou na sessão; o motor não a dirige até \
-                         \"devolver ao motor\"",
-                        slug(number)
-                    ),
-                });
-                live.insert(number);
-                continue;
-            }
+        let driven = matches!(
+            node.state,
+            EpicNodeState::EmExecucao
+                | EpicNodeState::EmPr
+                | EpicNodeState::Estacionada
+                | EpicNodeState::Bloqueada
+        );
+        if human.is_some_and(|at| at > since) && driven && !merged_now.contains(&number) {
+            out.actions.push(Action::Node {
+                number,
+                to: EpicNodeState::Assumida,
+                pr: None,
+                reason: None,
+                message: format!(
+                    "{}: o desenvolvedor digitou na sessão; o motor não a dirige até \
+                     \"devolver ao motor\"",
+                    slug(number)
+                ),
+            });
+            live.insert(number);
+            continue;
         }
 
         // Merge na `wip`.
