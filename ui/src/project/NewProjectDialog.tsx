@@ -70,7 +70,7 @@ export function NewProjectDialog({
     kind === "github"
       ? !form.url.trim()
       : kind === "jira"
-        ? !jiraOk || !form.jira.jira_url.trim() || !form.jira.jira_key.trim() || !form.jira.gitlab_url.trim()
+        ? !jiraOk || !form.jira.jira_conn || !form.jira.jira_key.trim() || !form.jira.gitlab_url.trim() || !form.jira.gitlab_conn
         : true;
 
   return (

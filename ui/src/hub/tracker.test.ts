@@ -4,6 +4,7 @@ import {
   DEFAULT_TYPE_MAP,
   EMPTY_JIRA,
   branchPreview,
+  connectionId,
   hostsOf,
   hubSupportsJira,
   extraFieldErrors,
@@ -17,6 +18,28 @@ import {
   searchJiraFields,
   typedFieldId,
 } from "./tracker";
+
+/** Formulário com as duas conexões escolhidas (#238): sem elas, o cadastro não vai ao hub. */
+const CONNECTED = { ...EMPTY_JIRA, jira_conn: "7", gitlab_conn: "8" };
+
+test("conexão do projeto: o id do seletor, ou nenhum", () => {
+  expect(connectionId("7")).toBe(7);
+  expect(connectionId(" 12 ")).toBe(12);
+  expect(connectionId("")).toBeNull();
+  expect(connectionId("0")).toBeNull();
+  expect(connectionId("jira-empresa")).toBeNull();
+});
+
+test("cadastro sem conexão não vai ao hub: a URL e a credencial vêm da conexão", () => {
+  expect(providerParams(EMPTY_JIRA)).toEqual({ error: "escolha a conexão do Jira (Hub › Conexões)" });
+  expect(providerParams({ ...EMPTY_JIRA, jira_conn: "7" })).toEqual({
+    error: "escolha a conexão do GitLab (Hub › Conexões)",
+  });
+  expect(providerParams(CONNECTED)).toMatchObject({
+    tracker: { url: "", credential_cmd: "", connection: 7 },
+    forge: { kind: "gitlab", credential_cmd: "", connection: 8 },
+  });
+});
 
 test("prévia do padrão de branch como o daemon gera", () => {
   expect(branchPreview("{prefix}/{key}-{slug}", "PROJ")).toBe("feat/PROJ-5450-portar-o-plugin");
@@ -38,17 +61,17 @@ test("formulário do cadastro ida e volta", () => {
   const legado = jiraFormOf(jiraHubProject());
   expect(legado).toMatchObject({ active_sprint_only: false, jql: "", max_issues: "100" });
   expect(providerParams(legado)).toHaveProperty("error");
-  const f = { ...legado, jql: "labels = web" };
+  const f = { ...legado, jql: "labels = web", jira_conn: "7", gitlab_conn: "8" };
   expect(f).toMatchObject({ jira_key: "PROJ", branch_pattern: "{key}", attribution: false, type_map: "Epic=epic, Bug=bug" });
   const pv = providerParams(f);
   expect(pv).toMatchObject({
-    tracker: { kind: "jira", project_key: "PROJ", epic_link_field: "customfield_10601", jql: "labels = web", max_issues: 100 },
-    forge: { kind: "gitlab", clone_url: "https://gitlab.example.com/grupo/projeto/app.git" },
+    tracker: { kind: "jira", project_key: "PROJ", epic_link_field: "customfield_10601", jql: "labels = web", max_issues: 100, connection: 7 },
+    forge: { kind: "gitlab", clone_url: "https://gitlab.example.com/grupo/projeto/app.git", connection: 8 },
   });
-  expect(providerParams({ ...EMPTY_JIRA, type_map: "x" })).toHaveProperty("error");
+  expect(providerParams({ ...CONNECTED, type_map: "x" })).toHaveProperty("error");
   // Projeto novo: sprint ativa, sem JQL.
-  expect(providerParams(EMPTY_JIRA)).toMatchObject({ tracker: { active_sprint_only: true, jql: "", max_issues: 100 } });
-  expect(providerParams({ ...EMPTY_JIRA, active_sprint_only: false, jql: "x", max_issues: "5001" })).toHaveProperty("error");
+  expect(providerParams(CONNECTED)).toMatchObject({ tracker: { active_sprint_only: true, jql: "", max_issues: 100 } });
+  expect(providerParams({ ...CONNECTED, active_sprint_only: false, jql: "x", max_issues: "5001" })).toHaveProperty("error");
 });
 
 test("kindOf: só GitHub + GitHub e GitLab + Jira são tipos de projeto", () => {
@@ -121,7 +144,7 @@ test("campos do projeto: ida e volta no formulário e validação como no hub", 
   if (p.tracker?.kind === "jira") {
     Object.assign(p.tracker, { extra_fields: [{ id: "customfield_10099", label: "Implementação" }] });
   }
-  const f = { ...jiraFormOf(p), jql: "x" };
+  const f = { ...jiraFormOf(p), jql: "x", jira_conn: "7", gitlab_conn: "8" };
   expect(f.extra_fields).toEqual([{ id: "customfield_10099", label: "Implementação" }]);
   const extra = [
     { id: " customfield_10099 ", label: " Implementação " },

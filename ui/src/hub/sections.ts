@@ -20,6 +20,8 @@ export type HubSection =
    */
   | "projects"
   | "envs"
+  /** Conexões com GitHub, GitLab e Jira (#238): cadastro, teste e remoção (desktop). */
+  | "connections"
   | "secrets"
   | "recovery"
   | "github"
@@ -38,6 +40,7 @@ export const HUB_SECTION_LABEL: Record<HubSection, string> = {
   health: "Saúde dos projetos",
   quarantine: "Quarentena",
   projects: "Projetos e atribuições",
+  connections: "Conexões",
   envs: "Ambientes",
   secrets: "Secrets e variáveis",
   recovery: "Chave de recuperação",
@@ -55,6 +58,7 @@ const KEYWORDS: Record<HubSection, string> = {
   health: "sinais riscos parado bloqueado",
   quarantine: "push não cadastrado descartar",
   projects: "cadastro atribuições repositórios projetos índice",
+  connections: "conexões github gitlab jira token credencial teste conta",
   envs: "ambientes envio pendências limpezas",
   secrets: "variáveis env tokens chaves",
   recovery: "chave recuperação secrets verificar",
@@ -75,7 +79,7 @@ export const HUB_GROUPS: HubGroup[] = [
   { label: "Operação", sections: ["overview", "proposals", "health", "quarantine"] },
   // Projetos e atribuições saiu daqui na #18: cada projeto se configura na
   // aba Configurações dele, e o cadastro e a ordem ficam no índice de Projetos.
-  { label: "Cadastro", sections: ["envs"] },
+  { label: "Cadastro", sections: ["connections", "envs"] },
   { label: "Segurança", sections: ["secrets", "recovery", "github"] },
   // Revogar só reduz acesso: fica no desktop e na web (spec §3.1).
   { label: "Acesso", sections: ["web-sessions", "devices"] },
