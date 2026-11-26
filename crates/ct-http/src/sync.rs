@@ -268,9 +268,6 @@ mod tests {
             "cleanup.status",
             "cleanup.plan",
             "cleanup.run",
-            "github.status",
-            "github.set_token",
-            "github.clear_token",
             "github.pr.comment",
             "sync.now",
             // Modo seguir do log (#65): por conexão, só no desktop.

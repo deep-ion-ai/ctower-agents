@@ -14,7 +14,7 @@ use crate::update::Updates;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -290,6 +290,82 @@ struct CredentialsOnly {
     credentials: ct_core::CredentialOverrides,
 }
 
+#[derive(serde::Deserialize)]
+struct ConnectionsOnly {
+    #[serde(default)]
+    connections: ct_core::ConnectionOverrides,
+}
+
+/// `[connections]` do `config.toml` (#237). Sem arquivo, ou sem a tabela,
+/// vazio. Erro de leitura não cita o conteúdo do arquivo.
+pub fn read_connection_overrides(path: &Path) -> ct_core::ConnectionOverrides {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Default::default();
+    };
+    match toml::from_str::<ConnectionsOnly>(&text) {
+        Ok(c) => c.connections,
+        Err(_) => {
+            tracing::warn!("config.toml: [connections] não lê; sem sobrescrita de conexão");
+            Default::default()
+        }
+    }
+}
+
+/// Primeiro pull com conexões (#237): o `[credentials."owner/repo"]` do
+/// arquivo vai para `[connections."nome"]`, pela conexão de cada projeto.
+/// O que não converte (projeto sem conexão aqui, ou comando que brigaria
+/// com outro) fica em `[credentials]`. Sem `[credentials]`, o arquivo não
+/// muda. Devolve as conexões em uso e os avisos.
+pub fn convert_credentials_file(
+    path: &Path,
+    projects: &[ct_core::ProjectConnections],
+) -> io::Result<(ct_core::ConnectionOverrides, Vec<String>)> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok((Default::default(), Vec::new()))
+        }
+        Err(e) => return Err(e),
+    };
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "config.toml não lê");
+    let creds = toml::from_str::<CredentialsOnly>(&text).map_err(|_| invalid())?;
+    let existing = read_connection_overrides(path);
+    if creds.credentials.is_empty() {
+        return Ok((existing, Vec::new()));
+    }
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|_| invalid())?;
+    let (conns, left, warnings) =
+        ct_core::convert_credentials(&creds.credentials, projects, &existing);
+    doc.remove("credentials");
+    if !left.is_empty() {
+        doc["credentials"] = toml_edit::table();
+        for (key, o) in &left.0 {
+            if !o.tracker_cmd.is_empty() {
+                doc["credentials"][key]["tracker_cmd"] = toml_edit::value(o.tracker_cmd.clone());
+            }
+            if !o.forge_cmd.is_empty() {
+                doc["credentials"][key]["forge_cmd"] = toml_edit::value(o.forge_cmd.clone());
+            }
+        }
+    }
+    doc["connections"] = toml_edit::table();
+    for (name, o) in &conns.0 {
+        doc["connections"][name]["credential_cmd"] = toml_edit::value(o.credential_cmd.clone());
+    }
+    write_atomic(path, &doc.to_string())?;
+    Ok((conns, warnings))
+}
+
+/// Temporário + rename, com a permissão do arquivo atual.
+fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text)?;
+    if let Ok(m) = std::fs::metadata(path) {
+        std::fs::set_permissions(&tmp, m.permissions())?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
 /// Nome de branch ou tag razoável (subconjunto de `git check-ref-format`).
 fn valid_ref(r: &str) -> bool {
     !r.is_empty()
@@ -405,5 +481,40 @@ mod tests {
         for r in ["", "-x", "a..b", "a b", "x.lock", "a~1", "/x", "x/"] {
             assert!(!valid_ref(r), "{r}");
         }
+    }
+}
+
+#[cfg(test)]
+mod conexoes_tests {
+    use super::*;
+
+    #[test]
+    fn credentials_viram_connections_e_a_segunda_passada_nao_muda_nada() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# meu comentário\nport = 7878\n\n[credentials.\"acme/acme-web\"]\ntracker_cmd = \"pass show a/jira\"\n",
+        )
+        .unwrap();
+        let projetos = [ct_core::ProjectConnections {
+            owner: "acme".into(),
+            repo: "acme-web".into(),
+            tracker: Some("jira-acme".into()),
+            forge: None,
+        }];
+        let (conns, avisos) = convert_credentials_file(&path, &projetos).unwrap();
+        assert!(avisos.is_empty(), "{avisos:?}");
+        assert_eq!(conns.credential_cmd("jira-acme"), Some("pass show a/jira"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("[credentials"), "{text}");
+        assert!(text.contains("# meu comentário"), "{text}");
+        assert!(text.contains("port = 7878"), "{text}");
+        assert_eq!(read_connection_overrides(&path), conns);
+
+        let (de_novo, avisos) = convert_credentials_file(&path, &projetos).unwrap();
+        assert_eq!(de_novo, conns);
+        assert!(avisos.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     }
 }

@@ -35,6 +35,7 @@ mod env_keys;
 mod github_sync;
 mod health;
 mod legacy;
+mod legacy_connections;
 mod model;
 mod pr_review;
 mod priority;

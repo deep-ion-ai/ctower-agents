@@ -51,6 +51,9 @@ pub struct ConfigOptions {
     pub pull_every: Duration,
     /// `gh` e token do GitHub do ambiente para clonar; `None` = `gh` sem token.
     pub github: Option<Arc<GithubSync>>,
+    /// `config.toml` do ambiente: o `[credentials]` vira `[connections]` no
+    /// primeiro pull com conexões (#237). `None` = sem conversão.
+    pub config_file: Option<PathBuf>,
 }
 
 impl Default for ConfigOptions {
@@ -59,7 +62,63 @@ impl Default for ConfigOptions {
             repos_root: PathBuf::from(expand_home("~/projetos")),
             pull_every: PULL_EVERY,
             github: None,
+            config_file: None,
         }
+    }
+}
+
+/// Liga as conexões (#237) à configuração que chegou: converte o
+/// `[credentials]` (se o hub mandou conexões) e preenche os campos de
+/// cadastro antigo dos projetos a partir delas, com as sobrescritas do
+/// ambiente. Falha de leitura ou conversão só registra aviso: o pull segue.
+fn apply_connections(cfg: &mut ConfigResponse, config_file: Option<&Path>) {
+    use ct_core::provider::Connection;
+    let overrides = match (config_file, &cfg.connections) {
+        (Some(path), Some(conns)) => {
+            let links: Vec<ct_core::ProjectConnections> = cfg
+                .projects
+                .iter()
+                .flatten()
+                .map(|p| {
+                    let name = |id: Option<i64>| -> Option<String> {
+                        let id = id?;
+                        conns
+                            .iter()
+                            .find(|c: &&Connection| c.id == id)
+                            .map(|c| c.name.clone())
+                    };
+                    ct_core::ProjectConnections {
+                        owner: p.owner.clone(),
+                        repo: p.repo.clone(),
+                        tracker: name(match &p.tracker {
+                            ct_core::TrackerConfig::Jira(j) => j.connection,
+                            _ => None,
+                        }),
+                        forge: name(match &p.forge {
+                            ct_core::ForgeConfig::Gitlab(g) => g.connection,
+                            _ => None,
+                        }),
+                    }
+                })
+                .collect();
+            match crate::env_config::convert_credentials_file(path, &links) {
+                Ok((o, warnings)) => {
+                    for w in warnings {
+                        tracing::warn!("conexões: {w}");
+                    }
+                    o
+                }
+                Err(e) => {
+                    tracing::warn!("conexões: conversão do config.toml falhou: {e}");
+                    crate::env_config::read_connection_overrides(path)
+                }
+            }
+        }
+        (Some(path), None) => crate::env_config::read_connection_overrides(path),
+        (None, _) => Default::default(),
+    };
+    for w in ct_ledger::materialize_connections(cfg, &overrides) {
+        tracing::warn!("conexões: {w}");
     }
 }
 
@@ -292,7 +351,8 @@ impl HubSender {
             }
             None => None,
         };
-        let cfg = reply.config;
+        let mut cfg = reply.config;
+        apply_connections(&mut cfg, self.config.config_file.as_deref());
         let root = self.config.repos_root.clone();
         let applied = self
             .sessions
@@ -599,6 +659,7 @@ mod tests {
                 repos_root: srv.env.tmp.path().join("projetos"),
                 pull_every: Duration::from_secs(60),
                 github: Some(github),
+                config_file: None,
             }),
         )
     }

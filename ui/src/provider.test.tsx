@@ -473,7 +473,6 @@ function hubApi(opts: { projects?: HubProjectView[]; health?: unknown; proposals
     .onHub("hub.dashboard.get", hubDash)
     .onHub("hub.proposals.list", opts.proposals ?? NO_PROPOSALS)
     .onHub("hub.health.get", opts.health ?? NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 0, recovery_configured: true }, items: [], delivery: [] })
     .onHub("hub.recovery.status", recoveryStatus());
 }

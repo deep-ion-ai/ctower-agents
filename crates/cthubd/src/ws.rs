@@ -776,7 +776,6 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
             .await
             .map_err(|e| (-32603, e.to_string()))?
         }
-        "github.status" | "github.set_token" | "github.clear_token" => github(st, method, &p).await,
         "hub.env.call" => env_call(st, p).await,
         "hub.plan.accounts" => plan_accounts(st, web_session.is_some()),
         // Agendador do piloto automático (#183): o painel (#185) lê o estado
@@ -2182,34 +2181,6 @@ fn secrets_call(st: &HubState, method: &str, p: &Value) -> RpcResult {
     }
 }
 
-/// Token do GitHub do hub. O token nunca volta na resposta: só conta e origem.
-async fn github(st: &HubState, method: &str, p: &Value) -> RpcResult {
-    let gh = st
-        .github
-        .clone()
-        .ok_or_else(|| (-32000, "integração com o GitHub desativada".into()))?;
-    let token = match method {
-        "github.set_token" => Some(str_param(p, "token")?.to_string()),
-        _ => None,
-    };
-    let method = method.to_string();
-    tokio::task::spawn_blocking(move || {
-        let c = gh.client();
-        match method.as_str() {
-            "github.set_token" => {
-                c.set_token(&token.unwrap_or_default())?;
-            }
-            "github.clear_token" => c.clear_token()?,
-            _ => {}
-        }
-        Ok::<_, ct_gh::GhError>(c.status())
-    })
-    .await
-    .map_err(|e| (-32603, e.to_string()))?
-    .map(|st| json!(st))
-    .map_err(|e| (-32000, e.to_string()))
-}
-
 #[cfg(all(test, feature = "ts"))]
 mod export {
     use super::*;
@@ -2525,8 +2496,9 @@ pub(crate) mod tests {
             let v = ui.call(m, json!({})).await;
             assert_eq!(v["error"]["code"], -32601, "{m}");
         }
+        // O RPC do token do GitHub saiu (#237): a conexão `github` cuida disso.
         let v = ui.call("github.status", json!({})).await;
-        assert_eq!(v["error"]["code"], -32000);
+        assert_eq!(v["error"]["code"], -32601);
     }
 
     /// Método fora do registro (`crate::methods`) não é despachado: a recusa
@@ -4025,47 +3997,6 @@ pub(crate) mod tests {
         assert_eq!(st.hub.lock().list_projects().unwrap().len(), 1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn token_do_github_do_hub_sem_expor_o_token() {
-        use ct_gh::fake::{fake_gh, FakeGitHub};
-        use ct_gh::{GhClient, GhConfig};
-        let tmp = tempfile::tempdir().unwrap();
-        let gh = FakeGitHub::start("tok");
-        gh.set("/user", json!({ "login": "octocat" }));
-        let bin = fake_gh(tmp.path(), "tok");
-        let file = tmp.path().join("github.token");
-        let client = GhClient::new(
-            GhConfig::new(&gh.url(), bin.to_str().unwrap())
-                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT)
-                .with_token_file(file.clone()),
-        );
-        let mut st = hub_com_dados();
-        st.github = Some(std::sync::Arc::new(crate::github::HubGithub::new(
-            st.hub.clone(),
-            client,
-            "hub-id",
-            st.events.clone(),
-        )));
-        let url = spawn_server(&st).await;
-        let mut ui = Ui::new(&url).await;
-        let v = ui.call("github.status", json!({})).await;
-        assert_eq!(v["result"]["source"], "gh", "{v}");
-        assert_eq!(v["result"]["login"], "octocat");
-        let v = ui
-            .call("github.set_token", json!({ "token": "invalido" }))
-            .await;
-        assert_eq!(v["error"]["code"], -32000, "{v}");
-        let v = ui.call("github.set_token", json!({ "token": "tok" })).await;
-        assert_eq!(v["result"]["source"], "token", "{v}");
-        assert!(!v.to_string().contains("\"tok\""), "{v}");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "tok");
-        let v = ui.call("github.clear_token", json!({})).await;
-        assert_eq!(v["result"]["source"], "gh", "{v}");
-        assert!(!file.exists());
-        let v = ui.call("github.set_token", json!({})).await;
-        assert_eq!(v["error"]["code"], -32602);
-    }
-
     /// Hub de dados com o store de secrets aberto em `tmp`.
     fn hub_com_secrets(tmp: &std::path::Path) -> HubState {
         let dirs = crate::config::Dirs {
@@ -4724,8 +4655,6 @@ pub(crate) mod tests {
             "hub.secrets.delete",
             "hub.recovery.generate",
             "hub.recovery.verify",
-            "github.set_token",
-            "github.clear_token",
         ];
         for m in sensiveis {
             let v = ui.call(m, params.clone()).await;
