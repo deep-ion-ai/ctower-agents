@@ -69,6 +69,11 @@ export const HUB_METHOD_SCOPES = {
     "hub.envs.list",
     "hub.envs.set_autonomous",
     "hub.plan.accounts",
+    "hub.connections.list",
+    "hub.connections.add",
+    "hub.connections.update",
+    "hub.connections.delete",
+    "hub.connections.test",
     "hub.assignments.list",
     "hub.assignments.add",
     "hub.assignments.remove",
@@ -198,6 +203,11 @@ export interface HubMethods {
   "hub.envs.list": { params: null; result: HubEnv[] };
   "hub.envs.set_autonomous": { params: { env: string; autonomous: boolean }; result: HubEnv | null };
   "hub.plan.accounts": { params: null; result: HubPlanAccounts };
+  "hub.connections.list": { params: null; result: unknown[] };
+  "hub.connections.add": { params: { name: string; kind: "github" | "gitlab" | "jira"; endpoint?: string; credential: unknown; options?: { [key: string]: unknown } }; result: unknown };
+  "hub.connections.update": { params: { id: number; name?: string | null; endpoint?: string | null; credential?: unknown; options?: { [key: string]: unknown } | null }; result: unknown };
+  "hub.connections.delete": { params: { id: number }; result: unknown };
+  "hub.connections.test": { params: { id: number }; result: unknown };
   "hub.assignments.list": { params: { env?: string | null; owner?: string | null; repo?: string | null } | null; result: HubAssignment[] };
   "hub.assignments.add": { params: { owner: string; repo: string; env: string; repo_path?: string | null }; result: AssignmentAdded };
   "hub.assignments.remove": { params: { owner: string; repo: string; env: string; confirm?: boolean | null }; result: AssignmentRemoved };

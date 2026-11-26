@@ -116,6 +116,11 @@ pub struct JiraConfig {
     /// na ordem do cadastro. Ausente (cadastro anterior) = nenhum.
     #[cfg_attr(feature = "ts", ts(as = "Option<Vec<JiraExtraField>>", optional))]
     pub extra_fields: Vec<JiraExtraField>,
+    /// Conexão do hub com o Jira (`tracker.connection`, #235). Quando há,
+    /// URL e credencial vêm dela, não do cadastro do projeto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub connection: Option<i64>,
 }
 
 /// Teto de campos próprios no cadastro do projeto Jira.
@@ -147,6 +152,7 @@ impl Default for JiraConfig {
             sprint_field: String::new(),
             type_map: BTreeMap::new(),
             extra_fields: Vec::new(),
+            connection: None,
         }
     }
 }
@@ -199,6 +205,11 @@ pub struct GitlabConfig {
     pub clone_url: String,
     /// Comando que imprime o token (`pass show gitlab | head -1`).
     pub credential_cmd: String,
+    /// Conexão do hub com o GitLab (`forge.connection`, #235). Quando há,
+    /// host e credencial vêm dela, não do cadastro do projeto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub connection: Option<i64>,
 }
 
 /// Rastreador do projeto com a configuração dele.

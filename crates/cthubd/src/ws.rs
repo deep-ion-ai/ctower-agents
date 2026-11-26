@@ -973,6 +973,11 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 .map(|v| json!(v))
                 .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))
         }
+        "hub.connections.list"
+        | "hub.connections.add"
+        | "hub.connections.update"
+        | "hub.connections.delete"
+        | "hub.connections.test" => connections_call(&h, method, p),
         "hub.projects.delete" => {
             let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
             let confirm = p.get("confirm").and_then(Value::as_bool).unwrap_or(false);
@@ -1650,6 +1655,35 @@ fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
 /// usa o token do GitHub. O cadastro confere só a forma (combinação,
 /// campos e padrão de branch); o ambiente de sync confere o resto no
 /// primeiro ciclo e relata pelo `tracker_status`.
+/// `hub.connections.*` (#235): o cadastro das conexões externas. O resultado
+/// não leva segredo: a credencial é o nome do secret ou o comando.
+fn connections_call(h: &ct_hub_store::Hub, method: &str, p: &Value) -> RpcResult {
+    let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
+    match method {
+        "hub.connections.list" => Ok(json!(h.list_connections().map_err(e)?)),
+        "hub.connections.add" => {
+            let new: ct_hub_store::NewConnection = serde_json::from_value(p.clone())
+                .map_err(|err| invalid(format!("conexão inválida: {err}")))?;
+            Ok(json!(h.add_connection(&new).map_err(e)?))
+        }
+        "hub.connections.update" => {
+            let id = i64_param(p, "id")?;
+            let patch: ct_hub_store::ConnectionPatch = serde_json::from_value(p.clone())
+                .map_err(|err| invalid(format!("alteração inválida: {err}")))?;
+            Ok(json!(h.update_connection(id, &patch).map_err(e)?))
+        }
+        "hub.connections.delete" => {
+            let id = i64_param(p, "id")?;
+            Ok(json!(h.delete_connection(id).map_err(e)?))
+        }
+        "hub.connections.test" => {
+            let id = i64_param(p, "id")?;
+            Ok(json!(h.test_connection(id).map_err(e)?))
+        }
+        _ => Err((-32601, format!("método desconhecido: {method}"))),
+    }
+}
+
 fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
     let github = || {
         st.github.clone().ok_or_else(|| {

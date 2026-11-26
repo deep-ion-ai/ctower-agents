@@ -29,6 +29,7 @@ mod autopilot;
 mod autopilot_deps;
 mod autopilot_run;
 mod config;
+mod connection;
 mod digest;
 mod env_keys;
 mod github_sync;
@@ -74,6 +75,7 @@ pub use autopilot_run::{
 pub use config::{
     DeleteImpact, HubProjectPatch, NewHubProject, ProjectAdded, ProjectProvider, QuarantineGroup,
 };
+pub use connection::{ConnectionPatch, ConnectionTest, NewConnection};
 pub use digest::{
     digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
 };
@@ -919,6 +921,22 @@ CREATE TABLE autopilot_analysis (
     r#"
 ALTER TABLE env ADD COLUMN protocol TEXT;
 ALTER TABLE env ADD COLUMN version TEXT;
+"#,
+    // 45: conexões externas do hub (épico #224, issue #235). `kind` é o tipo
+    // (`github`, `gitlab`, `jira`); `credential` e `options` são JSON de
+    // `CredentialSource` e das opções do tipo. Os projetos referenciam a
+    // conexão pelo `id` em `tracker_config`/`forge_config`.
+    r#"
+CREATE TABLE connection (
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  kind       TEXT NOT NULL,
+  endpoint   TEXT NOT NULL DEFAULT '',
+  credential TEXT NOT NULL DEFAULT '{}',
+  options    TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 "#,
 ];
 
@@ -5353,7 +5371,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 44);
+        assert_eq!(v, 45);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

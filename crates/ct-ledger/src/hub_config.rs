@@ -106,6 +106,10 @@ pub struct ConfigResponse {
     pub projects: Option<Vec<ConfigProject>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<Vec<ConfigRemoved>>,
+    /// Conexões (#235) que os projetos de `projects` referenciam. Ausente
+    /// num hub anterior, ou `changed: false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connections: Option<Vec<ct_core::provider::Connection>>,
 }
 
 /// Work item que o hub deu como `concluido`, em `GET /sync/done`.
@@ -581,6 +585,7 @@ mod tests {
 
     fn resp(rev: i64, projects: Vec<ConfigProject>) -> ConfigResponse {
         ConfigResponse {
+            connections: None,
             config_rev: rev,
             config_epoch: 7,
             changed: true,
@@ -659,6 +664,7 @@ mod tests {
 
         // `changed: false`: só a hora do pull.
         let sem = ConfigResponse {
+            connections: None,
             config_rev: 7,
             config_epoch: 7,
             changed: false,
@@ -773,6 +779,7 @@ mod tests {
     #[test]
     fn resposta_sem_mudanca_serializa_so_o_rev() {
         let v = serde_json::to_value(ConfigResponse {
+            connections: None,
             config_rev: 4,
             config_epoch: 9,
             changed: false,
@@ -803,6 +810,7 @@ mod tests {
         let outro_root = |p: &ConfigProject| format!("/novo/{}", p.repo);
         // Pull sem mudança no hub, com outra raiz.
         let sem = ConfigResponse {
+            connections: None,
             config_rev: 3,
             config_epoch: 7,
             changed: false,

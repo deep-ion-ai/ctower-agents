@@ -19,4 +19,9 @@ clone_url: string,
 /**
  * Comando que imprime o token (`pass show gitlab | head -1`).
  */
-credential_cmd: string, };
+credential_cmd: string, 
+/**
+ * Conexão do hub com o GitLab (`forge.connection`, #235). Quando há,
+ * host e credencial vêm dela, não do cadastro do projeto.
+ */
+connection?: number, };

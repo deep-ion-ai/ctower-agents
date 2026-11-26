@@ -134,6 +134,7 @@ mod tests {
 
     fn gitlab(clone_url: &str) -> ForgeConfig {
         ForgeConfig::Gitlab(ct_core::GitlabConfig {
+            connection: None,
             host: "gitlab.example.com".into(),
             path: "grupo/projeto/app".into(),
             clone_url: clone_url.into(),

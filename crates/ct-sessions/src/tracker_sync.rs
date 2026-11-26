@@ -1425,6 +1425,7 @@ mod tests {
 
     fn jira_config(fake: &FakeJira) -> JiraConfig {
         JiraConfig {
+            connection: None,
             url: FAKE_SERVER.into(),
             project_key: "PROJ".into(),
             jql: String::new(),
@@ -2323,6 +2324,7 @@ mod tests {
 
     fn gitlab_config() -> ct_core::GitlabConfig {
         ct_core::GitlabConfig {
+            connection: None,
             host: HOST.into(),
             path: PATH.into(),
             clone_url: format!("https://{HOST}/{PATH}.git"),

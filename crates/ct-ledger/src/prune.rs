@@ -706,6 +706,7 @@ mod tests {
     fn unassign_all(l: &Ledger) {
         l.apply_hub_config(
             &ConfigResponse {
+                connections: None,
                 config_rev: 1,
                 config_epoch: 1,
                 changed: true,

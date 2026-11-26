@@ -63,6 +63,12 @@ pub const METHODS: &[MethodSpec] = &[
         scopes: UI,
     },
     MethodSpec { name: "hub.plan.accounts", params: "null", result: "HubPlanAccounts", scopes: UI_WEB },
+    // Conexões externas (#235): o cadastro é só do desktop; `test` confere a prontidão sem rede.
+    MethodSpec { name: "hub.connections.list", params: "null", result: "unknown[]", scopes: UI },
+    MethodSpec { name: "hub.connections.add", params: "{ name: string; kind: \"github\" | \"gitlab\" | \"jira\"; endpoint?: string; credential: unknown; options?: { [key: string]: unknown } }", result: "unknown", scopes: UI },
+    MethodSpec { name: "hub.connections.update", params: "{ id: number; name?: string | null; endpoint?: string | null; credential?: unknown; options?: { [key: string]: unknown } | null }", result: "unknown", scopes: UI },
+    MethodSpec { name: "hub.connections.delete", params: "{ id: number }", result: "unknown", scopes: UI },
+    MethodSpec { name: "hub.connections.test", params: "{ id: number }", result: "unknown", scopes: UI },
     // Atribuições e quarentena: escrita só no desktop.
     MethodSpec {
         name: "hub.assignments.list",
