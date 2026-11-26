@@ -952,6 +952,40 @@ impl Hub {
         self.require_epic_run(run_id)
     }
 
+    /// Muda o modelo e o esforço de uma sub-issue no rascunho do plano
+    /// (a aprovação, #304). Só no rascunho: a versão aprovada não muda.
+    pub fn set_epic_plan_node_agent(
+        &self,
+        run_id: i64,
+        number: i64,
+        agent: &IssueAgent,
+    ) -> Result<EpicPlan> {
+        agent.validate().map_err(LedgerError::Invalid)?;
+        let Some(plan) = self.latest_epic_plan(run_id)? else {
+            return Err(LedgerError::Conflict(
+                "a execução ainda não tem plano".into(),
+            ));
+        };
+        if plan.state != EpicPlanState::Rascunho {
+            return Err(LedgerError::Conflict(
+                "só o rascunho do plano muda; a versão aprovada fica como está".into(),
+            ));
+        }
+        let n = self.conn.execute(
+            "UPDATE epic_plan_node SET model = ?4, effort = ?5
+             WHERE run_id = ?1 AND version = ?2 AND number = ?3",
+            params![run_id, plan.version, number, agent.model, agent.effort],
+        )?;
+        if n == 0 {
+            return Err(LedgerError::NotFound(
+                "sub-issue do plano",
+                format!("#{number}"),
+            ));
+        }
+        self.epic_plan(run_id, plan.version)?
+            .ok_or_else(|| LedgerError::Corrupt("plano sumiu".into()))
+    }
+
     /// Uma versão do plano.
     pub fn epic_plan(&self, run_id: i64, version: i64) -> Result<Option<EpicPlan>> {
         let head = self
@@ -1785,6 +1819,36 @@ mod tests {
         assert!(hub.set_epic_plan_fingerprint(run.id, 99, "x").is_err());
         let plan = hub.epic_plan(run.id, 1).unwrap().unwrap();
         assert_eq!(plan.nodes[1].fingerprint.as_deref(), Some("f12"));
+    }
+
+    #[test]
+    fn modelo_do_no_muda_so_no_rascunho() {
+        let (hub, pid) = hub();
+        let run = hub.create_epic_run(&new_run(pid, 10, "env-a"), 1).unwrap();
+        let mut d = draft(vec![node(11, "opus", &[])]);
+        d.nodes[0].model = None;
+        hub.save_epic_plan_draft(run.id, &d, 2).unwrap();
+        let agent = |m: &str, e: Option<&str>| IssueAgent {
+            model: Some(m.into()),
+            effort: e.map(String::from),
+        };
+        assert!(hub
+            .set_epic_plan_node_agent(run.id, 11, &agent("gpt", None))
+            .is_err());
+        assert!(hub
+            .set_epic_plan_node_agent(run.id, 99, &agent("haiku", None))
+            .is_err());
+        let p = hub
+            .set_epic_plan_node_agent(run.id, 11, &agent("haiku", Some("low")))
+            .unwrap();
+        assert_eq!(
+            (p.nodes[0].model.as_deref(), p.nodes[0].effort.as_deref()),
+            (Some("haiku"), Some("low"))
+        );
+        hub.approve_epic_plan(run.id, &approval(1), 3).unwrap();
+        assert!(hub
+            .set_epic_plan_node_agent(run.id, 11, &agent("opus", None))
+            .is_err());
     }
 
     #[test]

@@ -979,6 +979,12 @@ A execução de épico roda as sub-issues de um épico com um **plano por agente
     - `issue_alterada`: manter ou replanejar.
   - **Replanejar** leva a execução a `replanejando`. A nova sessão de plano recebe a versão em vigor, o estado e o modelo de cada sub-issue e o motivo. Nada novo inicia até a aprovação, e as sub-issues vivas continuam. O plano v2 aprovado segue sem reiniciar as mescladas.
   - Ao aprovar, as propostas da sessão de plano viram sub-issues do épico no GitHub, com o token do hub (evento `proposal_created`, ou `proposal_failed` com a causa). No Jira, ou sem o GitHub no hub, o evento `proposal_manual` pede a criação à mão. As criadas entram no próximo plano.
+- **Painel (#304):** "Executar épico" no detalhe do épico (com o ambiente, o paralelismo e o modelo da sessão de plano) abre **Hub › Execução de épicos**, também na web e no celular. A tela muda com a fase:
+  - **aprovação do plano:** as sub-issues em ondas, com o modelo e o esforço editáveis (`hub.epic_run.set_node`, só no rascunho) e as áreas, com as sobreposições em destaque; a justificativa e as propostas da sessão de plano; o paralelismo e o `/code-review` na integração; e os botões "Pedir outro plano" e "Aprovar e executar";
+  - **execução:** o estado de cada sub-issue (sessão, modelo, PR, tentativas), "Abrir sessão" e "Devolver ao motor"; a fila de decisões com as opções (em "Aguardar", a issue a esperar); os eventos do motor; os controles (pausar, interromper agora, retomar, cancelar e o paralelismo) e as faixas de pausado e estacionado, com o horário da retomada;
+  - **integração:** o checklist da sessão, o PR do épico com os `Closes` e o estado "Aguardando o seu merge".
+
+  O âmbar marca só o que pede o desenvolvedor: plano aguardando aprovação, decisões pendentes e o merge do épico.
 - **Web Push:** cada pedido de decisão novo gera a notificação `epic_decision`, com o épico, a sub-issue e o motivo, nunca o texto do pedido.
 
 ### Hub fora do ar

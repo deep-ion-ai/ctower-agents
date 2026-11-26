@@ -1,0 +1,380 @@
+/* Hub › Execução de épicos (#304). Âmbar só para o que pede o
+   desenvolvedor: plano aguardando aprovação, decisões e o merge do épico. */
+.er {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.er-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+}
+.er-title {
+  flex: 999 1 420px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.er-title h3 {
+  margin: 0;
+  font-size: 20px;
+}
+.er-chips,
+.er-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.er-chip[data-kind="epic"] {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--epic);
+  border: 1px solid var(--epic-border);
+  border-radius: 4px;
+  padding: 1px 8px;
+}
+.er-head .actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.er-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-start;
+}
+.er-main {
+  flex: 999 1 560px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.er-side {
+  flex: 1 1 280px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.er-main h4,
+.er-side h4,
+.er-box h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.er-waves {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.er-wave {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.er-wave-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.er-card,
+.er-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.er-box p {
+  margin: 0;
+  line-height: 1.5;
+}
+.er-card[data-tone="attention"],
+.er-box[data-tone="attention"] {
+  border-color: var(--attention-border);
+  background: var(--attention-card);
+}
+.er-card[data-tone="done"] {
+  border-color: var(--done);
+}
+.er-card[data-tone="running"] {
+  border-color: var(--running);
+}
+.er-card[data-tone="assumed"] {
+  border-color: var(--epic-border);
+}
+.er-card[data-tone="idle"] {
+  border-style: dashed;
+}
+.er-card[data-tone="done"] .er-state {
+  color: var(--done);
+}
+.er-card[data-tone="running"] .er-state {
+  color: var(--running);
+}
+.er-card[data-tone="assumed"] .er-state {
+  color: var(--epic);
+}
+.er-card[data-tone="attention"] .er-state,
+.er-attention {
+  color: var(--attention);
+}
+.er-done {
+  color: var(--done);
+}
+.er-card-title {
+  font-weight: 500;
+}
+.er-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.er-agent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.er-agent label,
+.er-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.er-agent select {
+  min-height: 32px;
+}
+.er-field input {
+  width: 96px;
+  min-height: 36px;
+}
+.er-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.er-inline input {
+  width: 64px;
+  min-height: 36px;
+}
+.er-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+}
+.er-check input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.er-areas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.er-area {
+  font-size: 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.er-area[data-tone="attention"] {
+  border-color: var(--attention-border);
+  background: var(--attention-bg);
+  color: var(--attention);
+}
+
+.er-facts {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+.er-facts dt {
+  color: var(--muted);
+}
+.er-facts dd {
+  margin: 0;
+  text-align: right;
+}
+
+.er-plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.er-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.er-banner {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.er-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.er-legend li::before {
+  content: "●";
+  margin-right: 4px;
+  color: var(--faint);
+}
+.er-legend li[data-tone="done"]::before {
+  color: var(--done);
+}
+.er-legend li[data-tone="running"]::before {
+  color: var(--running);
+}
+.er-legend li[data-tone="assumed"]::before {
+  color: var(--epic);
+}
+.er-legend li[data-tone="attention"]::before {
+  color: var(--attention);
+}
+
+.er-box-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.er-box[data-tone="attention"] h4 {
+  color: var(--attention);
+}
+.er-count {
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--attention);
+  color: var(--on-attention);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+.er-decision {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.er-decision blockquote {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--attention-border);
+  background: var(--surface-2);
+  line-height: 1.5;
+  font-size: 13px;
+}
+.er-option {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.er-option .btn {
+  min-height: 44px;
+  height: auto;
+  padding: 8px 12px;
+  text-align: left;
+}
+.er-option-hint {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.er-events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.er-events li {
+  display: flex;
+  gap: 12px;
+}
+.er-events li > :first-child {
+  flex: 0 0 44px;
+}
+
+.er-checklist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.er-checklist li::before {
+  content: "○";
+  display: inline-block;
+  width: 18px;
+  color: var(--faint);
+}
+.er-checklist li[data-done="true"]::before {
+  content: "✓";
+  color: var(--done);
+}
+.er-checklist li[data-off="true"] {
+  color: var(--muted);
+}
+.er-pre {
+  margin: 0;
+  padding: 10px;
+  background: var(--term-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 560px) {
+  .er-waves {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+  }
+  .er-head .actions {
+    width: 100%;
+  }
+}

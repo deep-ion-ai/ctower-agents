@@ -385,6 +385,18 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     event(&h, &run, "parallel_set", None, format!("paralelismo: {n}"));
                     Ok((json!(run), true))
                 }
+                "hub.epic_run.set_node" => {
+                    let run = run_of(&h, &p)?;
+                    let n = i64_param(&p, "number")?;
+                    let agent = ct_hub_store::IssueAgent {
+                        model: opt_str(&p, "model")?,
+                        effort: opt_str(&p, "effort")?,
+                    };
+                    let plan = h
+                        .set_epic_plan_node_agent(run.id, n, &agent)
+                        .map_err(ledger)?;
+                    Ok((json!(plan), true))
+                }
                 "hub.epic_run.handback" => {
                     let run = run_of(&h, &p)?;
                     let n = i64_param(&p, "number")?;

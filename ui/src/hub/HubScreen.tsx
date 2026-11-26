@@ -23,6 +23,7 @@ import { HubWebSessions } from "./HubWebSessions";
 import { HubDevices } from "./HubDevices";
 import { HubAutopilot } from "./HubAutopilot";
 import { HubAutopilotPanel } from "./HubAutopilotPanel";
+import { EpicRuns } from "./EpicRuns";
 import { hubSectionOnWeb } from "../web/mode";
 import { errText } from "./calls";
 import { settingsTab } from "../settings/sections";
@@ -114,6 +115,7 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
     body = (
       <Section
         section={section}
+        run={screen.run}
         now={now}
         open={open}
         proposals={proposals}
@@ -161,6 +163,7 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
 
 function Section({
   section,
+  run,
   now,
   open,
   proposals,
@@ -171,6 +174,8 @@ function Section({
   onTokenSaved,
 }: {
   section: HubSection;
+  /** Execução de épico aberta (`hubTab("epic-runs", { run })`, #304). */
+  run?: number;
   now: number;
   open(s: HubSection): void;
   proposals: ReturnType<typeof useHubProposals>;
@@ -206,6 +211,8 @@ function Section({
       return <HubRecovery />;
     case "autopilot-panel":
       return <HubAutopilotPanel now={now} />;
+    case "epic-runs":
+      return <EpicRuns now={now} initialRun={run} />;
     case "autopilot":
       return <HubAutopilot />;
     case "github":

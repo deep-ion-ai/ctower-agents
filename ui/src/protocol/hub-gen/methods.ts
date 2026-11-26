@@ -13,6 +13,7 @@ import type { DeleteImpact } from "./DeleteImpact";
 import type { DependencyEdge } from "./DependencyEdge";
 import type { EpicDecision } from "./EpicDecision";
 import type { EpicNode } from "./EpicNode";
+import type { EpicPlan } from "./EpicPlan";
 import type { EpicRun } from "./EpicRun";
 import type { EpicRunEvent } from "./EpicRunEvent";
 import type { EpicRunView } from "./EpicRunView";
@@ -136,6 +137,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.epic_run.cancel",
     "hub.epic_run.set_parallel",
     "hub.epic_run.decide",
+    "hub.epic_run.set_node",
     "hub.epic_run.handback",
     "hub.autopilot.policy.get",
     "hub.autopilot.policy.set",
@@ -209,6 +211,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.epic_run.cancel",
     "hub.epic_run.set_parallel",
     "hub.epic_run.decide",
+    "hub.epic_run.set_node",
     "hub.epic_run.handback",
     "hub.tracker.add_issue",
     "hub.release.status",
@@ -293,6 +296,7 @@ export interface HubMethods {
   "hub.epic_run.cancel": { params: { run_id: number }; result: EpicRun };
   "hub.epic_run.set_parallel": { params: { run_id: number; max_parallel: number }; result: EpicRun };
   "hub.epic_run.decide": { params: { decision_id: number; answer: string; blocker?: number | null }; result: EpicDecision };
+  "hub.epic_run.set_node": { params: { run_id: number; number: number; model?: string | null; effort?: string | null }; result: EpicPlan };
   "hub.epic_run.handback": { params: { run_id: number; number: number }; result: EpicNode };
   "hub.autopilot.policy.get": { params: { account: string }; result: AutopilotPolicyView };
   "hub.autopilot.policy.set": { params: { account: string; policy?: BudgetPolicy | null }; result: AutopilotPolicyView };
