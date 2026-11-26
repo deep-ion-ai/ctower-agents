@@ -16,4 +16,9 @@ areas: Array<string>,
 /**
  * Justificativa curta.
  */
-reason: string, };
+reason: string, 
+/**
+ * Impressão digital da sub-issue na aprovação
+ * ([`crate::issue_fingerprint`]); `None` no rascunho.
+ */
+fingerprint: string | null, };

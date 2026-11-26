@@ -23,7 +23,7 @@ use ct_core::{
 };
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Sub-issues por plano.
 pub const EPIC_PLAN_MAX_NODES: usize = 200;
@@ -90,6 +90,9 @@ pub struct EpicPlanNode {
     pub areas: Vec<String>,
     /// Justificativa curta.
     pub reason: String,
+    /// Impressão digital da sub-issue na aprovação
+    /// ([`crate::issue_fingerprint`]); `None` no rascunho.
+    pub fingerprint: Option<String>,
 }
 
 /// Aresta do plano: `number` é bloqueada por `blocker`.
@@ -174,6 +177,9 @@ pub struct EpicApproval {
     pub approved_by: String,
     pub max_parallel: u32,
     pub code_review: bool,
+    /// Impressão digital de cada sub-issue agora, congelada com o plano
+    /// (as que faltarem ficam sem).
+    pub fingerprints: BTreeMap<i64, String>,
 }
 
 /// O estado de uma sub-issue na execução.
@@ -194,6 +200,12 @@ pub struct EpicNode {
     pub assumed_since: Option<i64>,
     /// Motivo do estado (bloqueio, remoção do worktree recusada...).
     pub reason: Option<String>,
+    /// Head do PR quando o motor pediu o rebase (depois de um merge na
+    /// `wip`); `None` = nenhum pedido pendente.
+    pub rebase_head: Option<String>,
+    /// Quando o pedido de rebase foi enviado à sessão; `None` com
+    /// `rebase_head` = ainda por enviar.
+    pub rebase_at: Option<i64>,
     pub updated_at: i64,
 }
 
@@ -206,6 +218,8 @@ pub struct EpicNodePatch {
     pub pr: Option<Option<i64>>,
     pub attempts: Option<u32>,
     pub reason: Option<Option<String>>,
+    pub rebase_head: Option<Option<String>>,
+    pub rebase_at: Option<Option<i64>>,
 }
 
 /// Um pedido de decisão ao desenvolvedor.
@@ -274,7 +288,7 @@ const RUN_COLS: &str = "r.id, r.project_id, p.gh_owner, p.gh_repo, r.epic, r.env
                         r.paused_reason, r.resume_at, r.created_at, r.updated_at, r.ended_at";
 const RUN_FROM: &str = "epic_run r JOIN project p ON p.id = r.project_id";
 const NODE_COLS: &str = "run_id, number, state, prev_state, session_id, worktree, pr, attempts, \
-                         assumed_since, reason, updated_at";
+                         assumed_since, reason, rebase_head, rebase_at, updated_at";
 const DECISION_COLS: &str = "id, run_id, number, origin, text, options, answer, created_at, \
                              answered_at, answered_by";
 const ACTIVE: &str = "status NOT IN ('concluido', 'cancelado')";
@@ -313,7 +327,9 @@ fn row_to_node(r: &Row) -> rusqlite::Result<EpicNode> {
         attempts: r.get::<_, i64>(7)?.clamp(0, u32::MAX as i64) as u32,
         assumed_since: r.get(8)?,
         reason: r.get(9)?,
-        updated_at: r.get(10)?,
+        rebase_head: r.get(10)?,
+        rebase_at: r.get(11)?,
+        updated_at: r.get(12)?,
     })
 }
 
@@ -384,6 +400,7 @@ fn check_draft(epic: i64, d: &EpicPlanDraft) -> Result<(Vec<EpicPlanNode>, Vec<E
             effort: n.effort.clone(),
             areas,
             reason: clip(&n.reason, SHORT_MAX_CHARS),
+            fingerprint: None,
         });
     }
     if d.proposals.len() > EPIC_PLAN_MAX_PROPOSALS {
@@ -564,6 +581,46 @@ impl Hub {
         self.require_epic_run(id)
     }
 
+    /// Adia a retomada da execução estacionada (a janela renovou e esgotou
+    /// de novo).
+    pub fn set_epic_run_resume_at(&self, id: i64, resume_at: i64, now: i64) -> Result<EpicRun> {
+        let run = self.require_epic_run(id)?;
+        if run.status != EpicRunStatus::Estacionado {
+            return Err(LedgerError::Conflict(format!(
+                "a execução não está estacionada ({})",
+                run.status
+            )));
+        }
+        self.conn.execute(
+            "UPDATE epic_run SET resume_at = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, resume_at, now],
+        )?;
+        self.require_epic_run(id)
+    }
+
+    /// Grava a impressão digital atual da sub-issue na versão em vigor do
+    /// plano ("manter o plano" depois de a sub-issue mudar).
+    pub fn set_epic_plan_fingerprint(&self, run_id: i64, number: i64, fp: &str) -> Result<()> {
+        let run = self.require_epic_run(run_id)?;
+        let Some(v) = run.plan_version else {
+            return Err(LedgerError::Conflict(
+                "a execução não tem plano aprovado".into(),
+            ));
+        };
+        let n = self.conn.execute(
+            "UPDATE epic_plan_node SET fingerprint = ?4
+             WHERE run_id = ?1 AND version = ?2 AND number = ?3",
+            params![run_id, v, number, fp],
+        )?;
+        if n == 0 {
+            return Err(LedgerError::NotFound(
+                "sub-issue do plano",
+                format!("#{number} na versão {v}"),
+            ));
+        }
+        Ok(())
+    }
+
     /// Muda o paralelismo (1 a [`EPIC_RUN_PARALLEL_CEILING`]) da execução
     /// não terminada.
     pub fn set_epic_run_parallel(&self, id: i64, n: u32, now: i64) -> Result<EpicRun> {
@@ -722,6 +779,13 @@ impl Hub {
                 ],
             )?;
         }
+        for (n, f) in &a.fingerprints {
+            self.conn.execute(
+                "UPDATE epic_plan_node SET fingerprint = ?4
+                 WHERE run_id = ?1 AND version = ?2 AND number = ?3",
+                params![run_id, plan.version, n, f],
+            )?;
+        }
         self.conn.execute(
             "UPDATE epic_plan SET state = ?2 WHERE run_id = ?1 AND state = ?3",
             params![
@@ -812,7 +876,7 @@ impl Hub {
             return Ok(None);
         };
         let mut stmt = self.conn.prepare(
-            "SELECT number, position, model, effort, areas, reason FROM epic_plan_node
+            "SELECT number, position, model, effort, areas, reason, fingerprint FROM epic_plan_node
              WHERE run_id = ?1 AND version = ?2 ORDER BY position, number",
         )?;
         plan.nodes = stmt
@@ -824,6 +888,7 @@ impl Hub {
                     effort: r.get(3)?,
                     areas: json_vec(r, 4)?,
                     reason: r.get(5)?,
+                    fingerprint: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -1000,9 +1065,15 @@ impl Hub {
         if let Some(v) = &p.reason {
             n.reason = v.as_deref().map(|r| clip(r, SHORT_MAX_CHARS));
         }
+        if let Some(v) = &p.rebase_head {
+            n.rebase_head = v.clone();
+        }
+        if let Some(v) = p.rebase_at {
+            n.rebase_at = v;
+        }
         self.conn.execute(
             "UPDATE epic_node SET session_id = ?3, worktree = ?4, pr = ?5, attempts = ?6,
-                    reason = ?7, updated_at = ?8
+                    reason = ?7, rebase_head = ?8, rebase_at = ?9, updated_at = ?10
              WHERE run_id = ?1 AND number = ?2",
             params![
                 run_id,
@@ -1012,6 +1083,8 @@ impl Hub {
                 n.pr,
                 n.attempts,
                 n.reason,
+                n.rebase_head,
+                n.rebase_at,
                 now
             ],
         )?;
@@ -1222,6 +1295,7 @@ mod tests {
             approved_by: "fulano".into(),
             max_parallel: 3,
             code_review: true,
+            fingerprints: [(11, "f11".to_string())].into(),
         }
     }
 
@@ -1386,6 +1460,13 @@ mod tests {
         assert_eq!(plan.approved_by.as_deref(), Some("fulano"));
         assert_eq!(plan.edges.len(), 1);
         assert_eq!(plan.edges[0].source, "manual");
+        // Impressão digital congelada (a 12 não tinha).
+        assert_eq!(plan.nodes[0].fingerprint.as_deref(), Some("f11"));
+        assert_eq!(plan.nodes[1].fingerprint, None);
+        hub.set_epic_plan_fingerprint(run.id, 12, "f12").unwrap();
+        assert!(hub.set_epic_plan_fingerprint(run.id, 99, "x").is_err());
+        let plan = hub.epic_plan(run.id, 1).unwrap().unwrap();
+        assert_eq!(plan.nodes[1].fingerprint.as_deref(), Some("f12"));
     }
 
     #[test]
@@ -1501,6 +1582,8 @@ mod tests {
             (r.status, r.paused_reason.as_deref(), r.resume_at),
             (EpicRunStatus::Estacionado, Some("five_hour"), Some(1_000))
         );
+        let r = hub.set_epic_run_resume_at(run.id, 2_000, 4).unwrap();
+        assert_eq!(r.resume_at, Some(2_000));
         // Pausa manual sobre o estacionamento: some o resume_at.
         let r = hub
             .set_epic_run_status(run.id, EpicRunStatus::Pausado, Some("almoço"), Some(9), 5)
@@ -1509,6 +1592,8 @@ mod tests {
             (r.paused_reason.as_deref(), r.resume_at),
             (Some("almoço"), None)
         );
+        // Só a estacionada reagenda.
+        assert!(hub.set_epic_run_resume_at(run.id, 2_000, 5).is_err());
         // Pausado não estaciona.
         assert!(hub
             .set_epic_run_status(run.id, EpicRunStatus::Estacionado, None, Some(9), 6)
@@ -1574,6 +1659,7 @@ mod tests {
                 worktree: Some(Some("wt/11".into())),
                 pr: Some(Some(31)),
                 attempts: Some(2),
+                rebase_head: Some(Some("abc".into())),
                 ..Default::default()
             },
             4,
@@ -1593,6 +1679,7 @@ mod tests {
             (n.session_id.as_deref(), n.pr, n.attempts),
             (Some("s-11"), Some(31), 2)
         );
+        assert_eq!((n.rebase_head.as_deref(), n.rebase_at), (Some("abc"), None));
         let n = hub.restore_epic_node(run.id, 11, 7).unwrap();
         assert_eq!(
             (n.state, n.prev_state, n.assumed_since),

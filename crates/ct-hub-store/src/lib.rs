@@ -950,7 +950,9 @@ CREATE TABLE connection (
     // arestas vivas de `autopilot_dependency`; a aprovação as congela em
     // `epic_plan_edge`), os nós do plano (modelo, esforço, áreas em JSON), o
     // estado de cada sub-issue na execução, a fila de pedidos de decisão e
-    // os eventos do motor.
+    // os eventos do motor. A impressão digital de cada sub-issue é a da
+    // aprovação (sub-issue alterada depois do plano); `rebase_head` é o
+    // head do PR quando o motor pediu o rebase (`rebase_at` = enviado).
     r#"
 CREATE TABLE epic_run (
   id            INTEGER PRIMARY KEY,
@@ -990,8 +992,9 @@ CREATE TABLE epic_plan_node (
   position INTEGER NOT NULL,
   model    TEXT,
   effort   TEXT,
-  areas    TEXT NOT NULL DEFAULT '[]',
-  reason   TEXT NOT NULL DEFAULT '',
+  areas       TEXT NOT NULL DEFAULT '[]',
+  reason      TEXT NOT NULL DEFAULT '',
+  fingerprint TEXT,
   PRIMARY KEY (run_id, version, number),
   FOREIGN KEY (run_id, version) REFERENCES epic_plan(run_id, version) ON DELETE CASCADE
 );
@@ -1016,6 +1019,8 @@ CREATE TABLE epic_node (
   attempts      INTEGER NOT NULL DEFAULT 0,
   assumed_since INTEGER,
   reason        TEXT,
+  rebase_head   TEXT,
+  rebase_at     INTEGER,
   updated_at    INTEGER NOT NULL,
   PRIMARY KEY (run_id, number)
 );
