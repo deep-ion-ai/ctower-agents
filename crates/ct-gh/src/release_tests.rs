@@ -5,14 +5,46 @@ use crate::fake::{fake_gh, FakeGitHub, FAKE_GH_TOKEN_TIMEOUT};
 use crate::GhConfig;
 use ct_core::release::ReleaseConfig;
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 const R: &str = "/repos/acme/acme-web";
 
 struct Gh {
     fake: FakeGitHub,
     client: GhClient,
+    clock: TestClock,
     _dir: tempfile::TempDir,
+}
+
+/// Relógio controlado das etapas (#273): `sleep` avança o tempo sem dormir
+/// e roda o passo do GitHub falso ([`Gh::on_sleep`]) na mesma thread da
+/// etapa. As esperas e os prazos não dependem do tempo de parede.
+struct TestClock {
+    start: Instant,
+    elapsed: Cell<Duration>,
+    on_sleep: RefCell<Box<dyn Fn()>>,
+}
+
+impl TestClock {
+    fn new() -> Self {
+        TestClock {
+            start: Instant::now(),
+            elapsed: Cell::new(Duration::ZERO),
+            on_sleep: RefCell::new(Box::new(|| {})),
+        }
+    }
+}
+
+impl Clock for TestClock {
+    fn now(&self) -> Instant {
+        self.start + self.elapsed.get()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.elapsed.set(self.elapsed.get() + d);
+        (self.on_sleep.borrow())();
+    }
 }
 
 fn setup() -> Gh {
@@ -28,6 +60,7 @@ fn setup() -> Gh {
     let gh = Gh {
         fake,
         client,
+        clock: TestClock::new(),
         _dir: dir,
     };
     gh.branch("develop", "d1", "tree-a");
@@ -52,7 +85,15 @@ fn pace() -> Pace {
 
 impl Gh {
     fn release(&self) -> Release<'_> {
-        Release::new(&self.client, "acme", "acme-web", &cfg()).with_pace(pace())
+        Release::new(&self.client, "acme", "acme-web", &cfg())
+            .with_pace(pace())
+            .with_clock(&self.clock)
+    }
+
+    /// O que o GitHub falso faz a cada espera das etapas (o workflow abrir
+    /// o PR, os runs rodarem...). Substitui o passo anterior.
+    fn on_sleep(&self, f: impl Fn() + 'static) {
+        *self.clock.on_sleep.borrow_mut() = Box::new(f);
     }
 
     fn branch(&self, name: &str, sha: &str, tree: &str) {
@@ -337,9 +378,9 @@ fn wait_release_pr_espera_o_workflow_e_o_pr() {
     let gh = setup();
     gh.branch("main", "m2", "tree-b");
     gh.runs("m2", vec![run(50, "release", "m2", "in_progress", None, 1)]);
+    // Na primeira espera, o workflow abre o PR de release e termina.
     let fake = gh.fake.clone();
-    let t = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(40));
+    gh.on_sleep(move || {
         fake.set(
             &open_pulls_path("acme", "acme-web", "release-please--branches--main", "main"),
             json!([pr_json(
@@ -356,7 +397,6 @@ fn wait_release_pr_espera_o_workflow_e_o_pr() {
         );
     });
     let o = gh.release().wait_release_pr();
-    t.join().unwrap();
     assert_eq!(o.result, StepResult::Ok, "{}", o.message);
     assert_eq!(o.pr, Some(11));
     assert_eq!(o.details["version"], "1.2.3");
@@ -398,39 +438,32 @@ fn approve_runs_aprova_espera_e_reexecuta_uma_vez() {
         .set(&format!("{R}/actions/runs/61/approve"), json!({}));
     gh.fake
         .set(&format!("{R}/actions/runs/60/rerun-failed-jobs"), json!({}));
-    // O GitHub "roda" os runs: depois de aprovados, o ci falha (corrida
-    // do check de versões) e o ui passa; reexecutado, o ci passa.
+    // O GitHub "roda" os runs a cada espera: depois de aprovados, o ci
+    // falha (corrida do check de versões) e o ui passa; reexecutado, o ci
+    // passa.
     let fake = gh.fake.clone();
-    let t = std::thread::spawn(move || {
+    gh.on_sleep(move || {
         let path = format!("{R}/actions/runs?head_sha=r2&per_page=100");
-        let mut stage = 0;
-        for _ in 0..400 {
-            std::thread::sleep(Duration::from_millis(3));
-            let posted: Vec<String> = fake.posted().into_iter().map(|(p, _)| p).collect();
-            if stage == 0 && posted.iter().filter(|p| p.ends_with("/approve")).count() == 2 {
-                fake.set(
-                    &path,
-                    json!({ "workflow_runs": [
-                        run(60, "ci", "r2", "completed", Some("failure"), 1),
-                        run(61, "ui", "r2", "completed", Some("success"), 1),
-                    ]}),
-                );
-                stage = 1;
-            }
-            if stage == 1 && posted.iter().any(|p| p.ends_with("/rerun-failed-jobs")) {
-                fake.set(
-                    &path,
-                    json!({ "workflow_runs": [
-                        run(60, "ci", "r2", "completed", Some("success"), 2),
-                        run(61, "ui", "r2", "completed", Some("success"), 1),
-                    ]}),
-                );
-                return;
-            }
+        let posted: Vec<String> = fake.posted().into_iter().map(|(p, _)| p).collect();
+        if posted.iter().any(|p| p.ends_with("/rerun-failed-jobs")) {
+            fake.set(
+                &path,
+                json!({ "workflow_runs": [
+                    run(60, "ci", "r2", "completed", Some("success"), 2),
+                    run(61, "ui", "r2", "completed", Some("success"), 1),
+                ]}),
+            );
+        } else if posted.iter().filter(|p| p.ends_with("/approve")).count() == 2 {
+            fake.set(
+                &path,
+                json!({ "workflow_runs": [
+                    run(60, "ci", "r2", "completed", Some("failure"), 1),
+                    run(61, "ui", "r2", "completed", Some("success"), 1),
+                ]}),
+            );
         }
     });
     let o = gh.release().approve_runs(11);
-    t.join().unwrap();
     assert_eq!(o.result, StepResult::Ok, "{}", o.message);
     assert_eq!(o.details["approved"], json!([60, 61]));
     assert_eq!(o.details["reran"], json!([60]));
@@ -523,16 +556,15 @@ fn wait_publish_espera_sair_do_rascunho() {
         &format!("{R}/releases?per_page=20"),
         json!([{ "tag_name": "v1.2.3", "name": "v1.2.3", "html_url": "https://github.com/acme/acme-web/releases/tag/v1.2.3", "draft": true }]),
     );
+    // Na primeira espera, a release sai do rascunho.
     let fake = gh.fake.clone();
-    let t = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(40));
+    gh.on_sleep(move || {
         fake.set(
             &format!("{R}/releases?per_page=20"),
             json!([{ "tag_name": "v1.2.3", "name": "v1.2.3", "html_url": "https://github.com/acme/acme-web/releases/tag/v1.2.3", "draft": false }]),
         );
     });
     let o = gh.release().wait_publish();
-    t.join().unwrap();
     assert_eq!(o.result, StepResult::Ok, "{}", o.message);
     assert!(o.message.contains("v1.2.3"));
     // Já publicada: noop.
@@ -691,24 +723,20 @@ fn fluxo_completo_da_release() {
     gh.fake
         .set(&format!("{R}/actions/runs/60/approve"), json!({}));
     let fake = gh.fake.clone();
-    let t = std::thread::spawn(move || {
-        for _ in 0..400 {
-            std::thread::sleep(Duration::from_millis(3));
-            if fake
-                .posted()
-                .iter()
-                .any(|(p, _)| p.ends_with("/runs/60/approve"))
-            {
-                fake.set(
-                    &format!("{R}/actions/runs?head_sha=r2r2r2r2&per_page=100"),
-                    json!({ "workflow_runs": [run(60, "ci", "r2r2r2r2", "completed", Some("success"), 1)] }),
-                );
-                return;
-            }
+    gh.on_sleep(move || {
+        if fake
+            .posted()
+            .iter()
+            .any(|(p, _)| p.ends_with("/runs/60/approve"))
+        {
+            fake.set(
+                &format!("{R}/actions/runs?head_sha=r2r2r2r2&per_page=100"),
+                json!({ "workflow_runs": [run(60, "ci", "r2r2r2r2", "completed", Some("success"), 1)] }),
+            );
         }
     });
     let o = gh.release().approve_runs(11);
-    t.join().unwrap();
+    gh.on_sleep(|| {});
     assert_eq!(o.result, StepResult::Ok, "{}", o.message);
 
     // 5. merge-release

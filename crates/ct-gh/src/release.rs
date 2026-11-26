@@ -39,6 +39,26 @@ impl Default for Pace {
     }
 }
 
+/// Relógio das esperas: o de parede em produção ([`WallClock`]). Os testes
+/// injetam um relógio controlado, que avança sem dormir (#273).
+pub trait Clock {
+    fn now(&self) -> Instant;
+    fn sleep(&self, d: Duration);
+}
+
+/// O relógio de parede: [`Instant::now`] e [`std::thread::sleep`].
+pub struct WallClock;
+
+impl Clock for WallClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn sleep(&self, d: Duration) {
+        std::thread::sleep(d)
+    }
+}
+
 /// Título padrão do PR de promoção.
 pub fn promotion_title(cfg: &ReleaseConfig) -> String {
     format!("release: {} -> {}", cfg.source, cfg.target)
@@ -51,6 +71,7 @@ pub struct Release<'a> {
     repo: String,
     cfg: ReleaseConfig,
     pace: Pace,
+    clock: &'a dyn Clock,
 }
 
 /// Estado dos checks obrigatórios num commit.
@@ -82,11 +103,17 @@ impl<'a> Release<'a> {
             repo: repo.to_string(),
             cfg: cfg.normalized(),
             pace: Pace::default(),
+            clock: &WallClock,
         }
     }
 
     pub fn with_pace(mut self, pace: Pace) -> Self {
         self.pace = pace;
+        self
+    }
+
+    pub fn with_clock(mut self, clock: &'a dyn Clock) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -844,7 +871,7 @@ impl<'a> Release<'a> {
             // `mergeable` vem `null` enquanto o GitHub calcula.
             let mut tries = 0;
             while pr.get("mergeable").is_some_and(Value::is_null) && tries < 5 {
-                std::thread::sleep(self.pace.interval);
+                self.clock.sleep(self.pace.interval);
                 pr = self.pull(number)?;
                 tries += 1;
             }
@@ -976,13 +1003,13 @@ impl<'a> Release<'a> {
         minutes: u32,
         mut f: impl FnMut() -> Result<Poll<T>, GhError>,
     ) -> Result<Result<T, StepOutcome>, GhError> {
-        let deadline = Instant::now() + self.pace.minute * minutes;
+        let deadline = self.clock.now() + self.pace.minute * minutes;
         loop {
             match f()? {
                 Poll::Ready(v) => return Ok(Ok(v)),
                 Poll::Done(o) => return Ok(Err(o)),
                 Poll::NotYet(why) => {
-                    if Instant::now() >= deadline {
+                    if self.clock.now() >= deadline {
                         return Ok(Err(StepOutcome::new(
                             ReleaseStep::Status,
                             StepResult::Failed,
@@ -990,7 +1017,7 @@ impl<'a> Release<'a> {
                         )
                         .with_details(json!({ "timeout": true }))));
                     }
-                    std::thread::sleep(self.pace.interval);
+                    self.clock.sleep(self.pace.interval);
                 }
             }
         }
