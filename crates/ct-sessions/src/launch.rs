@@ -1198,12 +1198,15 @@ mod tests {
                 .credential_cmd,
             JIRA_CMD
         );
-        let (eff, applied) = env.sessions.with_env_credentials(p);
-        assert!(applied.tracker && !applied.forge);
+        let jira = env.sessions.jira_source(&p).unwrap();
+        assert!(jira.from_env);
         assert_eq!(
-            eff.tracker.jira().unwrap().credential_cmd,
-            "/usr/bin/pass show jira | head -1"
+            jira.source,
+            ct_core::provider::CredentialSource::Command {
+                cmd: "/usr/bin/pass show jira | head -1".into()
+            }
         );
+        assert!(!env.sessions.gitlab_source(&p).unwrap().from_env);
     }
 
     fn jira_gitlab_project(env: &TestEnv) -> Project {

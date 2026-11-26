@@ -72,22 +72,11 @@ fn check_name(name: &str) -> Result<()> {
     }
 }
 
-/// Confere o cadastro: nome, o que o descritor do tipo exige e a forma de
-/// credencial que o ambiente sabe entregar. O ambiente só materializa o
-/// comando de credencial do Jira e do GitLab (`materialize_connections`); o
-/// secret, o arquivo e a CLI ainda não chegam à sessão, então o hub recusa
-/// (senão o cadastro salvaria uma conexão que sobe sem token).
+/// Confere o cadastro: nome e o que o descritor do tipo exige, inclusive a
+/// forma de credencial (Jira e GitLab: comando, secret ou arquivo, #274; o
+/// `Cli` é só do GitHub).
 fn validate(c: &Connection) -> Result<()> {
     check_name(&c.name)?;
-    if matches!(c.kind, ProviderKind::Jira | ProviderKind::Gitlab)
-        && !matches!(c.credential, CredentialSource::Command { .. })
-    {
-        return Err(LedgerError::Invalid(format!(
-            "{}: a credencial precisa ser um comando que imprime o token; secret, arquivo e CLI \
-             ainda não chegam ao ambiente",
-            provider::descriptor(c.kind).label()
-        )));
-    }
     provider::descriptor(c.kind)
         .validate(c)
         .map_err(LedgerError::Invalid)
@@ -113,9 +102,12 @@ fn row_to_connection(r: &Row) -> rusqlite::Result<Connection> {
 /// Preenche, em memória, o rastreador e a forja do projeto a partir das
 /// conexões que ele referencia: URL, `config_file` e comando de credencial
 /// do Jira; host e comando de credencial do GitLab
-/// ([`provider::resolve_connections`]). O comando é o da conexão
-/// ([`provider::credential_cmd`]): o hub não conhece as sobrescritas dos
-/// ambientes. Conexão ausente deixa o lado como está.
+/// ([`provider::resolve_connections`]). O comando é o que imprime o token
+/// da fonte da conexão ([`provider::credential_cmd`]: o comando, o
+/// `ctower secret get` do secret ou a leitura do arquivo), que só vai a
+/// prefixos de sessão: o hub não resolve token de Jira nem de GitLab, e não
+/// conhece as sobrescritas dos ambientes. Conexão ausente deixa o lado como
+/// está.
 fn resolve_project(p: &mut HubProject, conns: &[Connection]) {
     provider::resolve_connections(&mut p.tracker, &mut p.forge, conns, |c| {
         provider::credential_cmd(c).unwrap_or_default()
@@ -535,28 +527,20 @@ mod tests {
         ));
     }
 
-    /// Jira e GitLab só aceitam comando de credencial: secret, arquivo e CLI
-    /// são recusados no cadastro e na edição, com mensagem clara. O GitHub
-    /// segue com a CLI, o arquivo e o secret.
+    /// Jira e GitLab aceitam comando, secret e arquivo (#274, decisão da
+    /// #279), no cadastro e na edição; o `Cli` e o `None` são recusados com
+    /// mensagem clara. O GitHub segue com a CLI, o arquivo e o secret.
     #[test]
-    fn jira_e_gitlab_so_aceitam_comando_de_credencial() {
+    fn jira_e_gitlab_aceitam_comando_secret_e_arquivo() {
         let hub = Hub::open_in_memory().unwrap();
-        for cred in [
-            CredentialSource::Secret {
-                name: "jira-acme".into(),
-            },
-            CredentialSource::File {
-                path: "/etc/acme/token".into(),
-            },
-            CredentialSource::Cli,
-            CredentialSource::None,
-        ] {
+        for cred in [CredentialSource::Cli, CredentialSource::None] {
             let mut j = jira("jira-acme", "https://jira.example.com");
             j.credential = cred.clone();
             let err = hub.add_connection(&j).unwrap_err();
             assert!(matches!(err, LedgerError::Invalid(_)), "{cred:?}: {err}");
             assert!(
-                err.to_string().contains("comando que imprime o token"),
+                err.to_string()
+                    .contains("comando de credencial, secret ou arquivo"),
                 "{err}"
             );
 
@@ -569,25 +553,77 @@ mod tests {
         }
         assert!(hub.list_connections().unwrap().is_empty());
 
-        let c = hub
-            .add_connection(&jira("jira-acme", "https://jira.example.com"))
+        let secret = CredentialSource::Secret {
+            name: "JIRA_TOKEN_ACME".into(),
+        };
+        let arquivo = CredentialSource::File {
+            path: "~/.config/acme/gitlab.token".into(),
+        };
+        let j = hub
+            .add_connection(&NewConnection {
+                credential: secret.clone(),
+                ..jira("jira-acme", "https://jira.example.com")
+            })
             .unwrap();
+        assert_eq!(j.credential, secret);
+        let g = hub
+            .add_connection(&NewConnection {
+                credential: arquivo.clone(),
+                ..gitlab("gitlab-acme")
+            })
+            .unwrap();
+        assert_eq!(g.credential, arquivo);
+        assert_eq!(
+            hub.test_connection(g.id).unwrap().readiness,
+            Readiness::Ready
+        );
+        // Edição: troca para arquivo; o `Cli` não passa.
+        let c = hub
+            .update_connection(
+                j.id,
+                &ConnectionPatch {
+                    credential: Some(arquivo.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(c.credential, arquivo);
         let err = hub
             .update_connection(
-                c.id,
+                j.id,
                 &ConnectionPatch {
-                    credential: Some(CredentialSource::Secret {
-                        name: "jira-acme".into(),
-                    }),
+                    credential: Some(CredentialSource::Cli),
                     ..Default::default()
                 },
             )
             .unwrap_err();
         assert!(matches!(err, LedgerError::Invalid(_)), "{err}");
-        assert!(matches!(
-            hub.connection(c.id).unwrap().credential,
-            CredentialSource::Command { .. }
-        ));
+        assert_eq!(hub.connection(j.id).unwrap().credential, arquivo);
+
+        // A visão efetiva do projeto (gestor, telas) leva o comando que
+        // imprime o token: o prefixo da sessão resolve o secret no ambiente
+        // (`ctower secret get`); o hub não resolve token de Jira e GitLab.
+        hub.update_connection(
+            j.id,
+            &ConnectionPatch {
+                credential: Some(secret),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        projeto(&hub, j.id, g.id).unwrap();
+        let p = hub
+            .effective_projects(hub.list_projects().unwrap())
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            ct_core::issue_view_cmd("acme", "acme-web", &p.tracker),
+            r#"JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira issue view ACME-<n> --plain"#
+        );
+        assert_eq!(
+            p.forge.gitlab().unwrap().credential_cmd,
+            provider::file_cmd("~/.config/acme/gitlab.token")
+        );
 
         let gh = hub
             .add_connection(&NewConnection {

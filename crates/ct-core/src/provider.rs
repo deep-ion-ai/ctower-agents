@@ -200,14 +200,64 @@ pub fn check_role(c: &Connection, role: Role) -> std::result::Result<(), String>
 }
 
 /// Comando de shell que imprime o token da conexão: o que o cadastro antigo
-/// guardava em `credential_cmd`. Por ora só a fonte `Command` vira comando;
-/// Secret, File e Cli entram aqui (#274), e o ambiente e o hub passam a
-/// recebê-las sem outra mudança.
+/// guardava em `credential_cmd` e o que o prefixo da sessão expande
+/// ([`source_cmd`]).
 pub fn credential_cmd(c: &Connection) -> Option<String> {
-    match &c.credential {
+    source_cmd(&c.credential)
+}
+
+/// Comando de shell que imprime o token da fonte, para o prefixo das
+/// instruções da sessão (`JIRA_API_TOKEN="$(<comando>)"`, #274):
+///
+/// - `Command`: o próprio comando;
+/// - `Secret`: `ctower secret get NOME`, que lê o valor atual no projeto da
+///   sessão (a entrada do projeto sobrepõe a global, #279);
+/// - `File`: a primeira linha não vazia do arquivo, sem espaços nas pontas,
+///   com `~` expandido, como o resolvedor do ambiente lê ([`file_cmd`]).
+///
+/// `Cli` e `None` não têm comando (o `Cli` é só do GitHub, que não leva
+/// prefixo). Fonte sem nome, comando ou caminho também não.
+pub fn source_cmd(source: &CredentialSource) -> Option<String> {
+    match source {
         CredentialSource::Command { cmd } if !cmd.trim().is_empty() => Some(cmd.trim().to_string()),
+        CredentialSource::Secret { name } if !name.trim().is_empty() => {
+            Some(format!("ctower secret get {}", shell_word(name.trim())))
+        }
+        CredentialSource::File { path } if !path.trim().is_empty() => Some(file_cmd(path.trim())),
         _ => None,
     }
+}
+
+/// Comando que imprime a primeira linha não vazia de `path`, sem espaços nas
+/// pontas: o mesmo token que o resolvedor do ambiente lê da fonte `File`.
+/// `~` e `~/...` viram `"$HOME"` (o resto vai entre aspas simples quando
+/// precisa, então espaço e aspas no caminho não quebram o comando). O
+/// arquivo entra pelo `<`, e não como argumento do `awk`, que trataria
+/// `a=b` como atribuição.
+pub fn file_cmd(path: &str) -> String {
+    const AWK: &str =
+        r#"awk '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "") } $0 != "" { print; exit }'"#;
+    format!("{AWK} < {}", file_word(path))
+}
+
+/// Caminho como palavra do shell, com `~` trocado por `"$HOME"` só nas
+/// formas `~` e `~/...` (as que o resolvedor expande). Outro `~` no começo
+/// (`~fulano/...`) vai entre aspas: o resolvedor não o expande, e o shell
+/// também não pode expandir.
+fn file_word(path: &str) -> String {
+    if path == "~" {
+        return r#""$HOME""#.into();
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        return match rest {
+            "" => r#""$HOME"/"#.into(),
+            r => format!(r#""$HOME"/{}"#, shell_word(r)),
+        };
+    }
+    if path.starts_with('~') {
+        return format!("'{}'", path.replace('\'', r"'\''"));
+    }
+    shell_word(path)
 }
 
 /// O que faltou ao resolver as conexões de um projeto
@@ -534,35 +584,33 @@ fn check_options(c: &Connection) -> std::result::Result<(), String> {
     }
 }
 
-/// Jira e GitLab aceitam comando de credencial ou secret do hub.
+/// Jira e GitLab aceitam comando de credencial, secret do hub ou arquivo
+/// (#279). O `Cli` é o token da CLI do próprio tipo e só existe no GitHub
+/// (`gh auth token`).
 fn check_token_source(label: &str, slug: &str, c: &Connection) -> std::result::Result<(), String> {
     match &c.credential {
         CredentialSource::Command { cmd } if cmd.trim().is_empty() => Err(format!(
             "informe o comando de credencial do {label} (ex.: pass show {slug} | head -1)"
         )),
-        CredentialSource::Command { .. } => Ok(()),
         CredentialSource::Secret { name } if name.trim().is_empty() => {
             Err(format!("informe o nome do secret da credencial do {label}"))
         }
-        CredentialSource::Secret { .. } => Ok(()),
-        _ => Err(format!(
-            "credencial do {label} precisa de comando de credencial ou de secret"
+        CredentialSource::File { path } if path.trim().is_empty() => Err(format!(
+            "informe o caminho do arquivo com o token do {label}"
+        )),
+        CredentialSource::Command { .. }
+        | CredentialSource::Secret { .. }
+        | CredentialSource::File { .. } => Ok(()),
+        CredentialSource::Cli | CredentialSource::None => Err(format!(
+            "credencial do {label} precisa de comando de credencial, secret ou arquivo"
         )),
     }
 }
 
-/// Expressão do token no prefixo: o comando da conexão, ou o secret do
-/// store do hub (`ctower secret get`, #165).
+/// Expressão do token no prefixo: `$(<comando>)`, com o comando da fonte
+/// ([`source_cmd`]).
 fn token_expr(credential: &CredentialSource) -> Option<String> {
-    match credential {
-        CredentialSource::Command { cmd } if !cmd.trim().is_empty() => {
-            Some(format!("$({})", cmd.trim()))
-        }
-        CredentialSource::Secret { name } => {
-            Some(format!("$(ctower secret get {})", shell_word(name.trim())))
-        }
-        _ => None,
-    }
+    source_cmd(credential).map(|cmd| format!("$({cmd})"))
 }
 
 fn options_str<'a>(c: &'a Connection, key: &str) -> &'a str {
@@ -724,6 +772,42 @@ mod tests {
             .validate(&secret_vazio)
             .unwrap_err()
             .contains("nome do secret"));
+        // Arquivo vale (#279); o `Cli` é só do GitHub.
+        let arquivo = Connection {
+            credential: CredentialSource::File {
+                path: "~/.config/acme/jira.token".into(),
+            },
+            ..base.clone()
+        };
+        assert!(JIRA.validate(&arquivo).is_ok());
+        let arquivo_vazio = Connection {
+            credential: CredentialSource::File { path: " ".into() },
+            ..base.clone()
+        };
+        assert!(JIRA
+            .validate(&arquivo_vazio)
+            .unwrap_err()
+            .contains("caminho do arquivo"));
+        let cli = Connection {
+            credential: CredentialSource::Cli,
+            ..base.clone()
+        };
+        assert!(JIRA
+            .validate(&cli)
+            .unwrap_err()
+            .contains("comando de credencial, secret ou arquivo"));
+        let gl = |credential| conn(ProviderKind::Gitlab, "gitlab.example.com", credential);
+        assert!(GITLAB
+            .validate(&gl(CredentialSource::Secret {
+                name: "GITLAB_TOKEN_ACME".into()
+            }))
+            .is_ok());
+        assert!(GITLAB
+            .validate(&gl(CredentialSource::File {
+                path: "/etc/acme/gitlab.token".into()
+            }))
+            .is_ok());
+        assert!(GITLAB.validate(&gl(CredentialSource::Cli)).is_err());
         let de_outro_tipo = Connection {
             kind: ProviderKind::Github,
             ..secret.clone()
@@ -937,6 +1021,31 @@ mod tests {
                 .unwrap(),
             "GITLAB_HOST=gitlab.example.com glab"
         );
+        let secret = conn(
+            ProviderKind::Gitlab,
+            "gitlab.example.com",
+            CredentialSource::Secret {
+                name: "GITLAB_TOKEN_ACME".into(),
+            },
+        );
+        assert_eq!(
+            GITLAB.session_prefix(&secret).unwrap(),
+            r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(ctower secret get GITLAB_TOKEN_ACME)" glab"#
+        );
+        let arquivo = conn(
+            ProviderKind::Gitlab,
+            "gitlab.example.com",
+            CredentialSource::File {
+                path: "~/.acme/gitlab".into(),
+            },
+        );
+        assert_eq!(
+            GITLAB.session_prefix(&arquivo).unwrap(),
+            format!(
+                r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$({})" glab"#,
+                file_cmd("~/.acme/gitlab")
+            )
+        );
     }
 
     #[test]
@@ -1061,7 +1170,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_cmd_so_da_fonte_command() {
+    fn credential_cmd_de_comando_secret_e_arquivo() {
         let c = |credential| conn(ProviderKind::Jira, "https://jira.example.com", credential);
         assert_eq!(
             credential_cmd(&c(CredentialSource::Command {
@@ -1075,10 +1184,77 @@ mod tests {
         );
         assert_eq!(
             credential_cmd(&c(CredentialSource::Secret {
-                name: "jira-acme".into()
+                name: " JIRA_TOKEN_ACME ".into()
             })),
+            Some("ctower secret get JIRA_TOKEN_ACME".into())
+        );
+        assert_eq!(
+            credential_cmd(&c(CredentialSource::Secret { name: " ".into() })),
+            None
+        );
+        let arquivo = credential_cmd(&c(CredentialSource::File {
+            path: "~/.config/acme/jira token".into(),
+        }))
+        .unwrap();
+        assert!(
+            arquivo.ends_with(r#" < "$HOME"/'.config/acme/jira token'"#),
+            "{arquivo}"
+        );
+        assert_eq!(
+            credential_cmd(&c(CredentialSource::File { path: "".into() })),
             None
         );
         assert_eq!(credential_cmd(&c(CredentialSource::Cli)), None);
+        assert_eq!(credential_cmd(&c(CredentialSource::None)), None);
+    }
+
+    #[test]
+    fn caminho_do_arquivo_vira_palavra_do_shell() {
+        assert_eq!(file_word("~"), r#""$HOME""#);
+        assert_eq!(file_word("~/"), r#""$HOME"/"#);
+        assert_eq!(file_word("~/.acme/tok"), r#""$HOME"/.acme/tok"#);
+        assert_eq!(file_word("~/a b/it's"), r#""$HOME"/'a b/it'\''s'"#);
+        assert_eq!(file_word("~fulano/tok"), "'~fulano/tok'");
+        assert_eq!(file_word("/etc/acme/tok"), "/etc/acme/tok");
+        assert_eq!(file_word("a=b"), "a=b");
+        assert_eq!(file_word("/x/$(rm -rf y)"), r"'/x/$(rm -rf y)'");
+    }
+
+    /// O prefixo com `File` lê o mesmo token que o resolvedor do ambiente:
+    /// a primeira linha não vazia, sem espaços nas pontas, com `~`
+    /// expandido, mesmo com espaço e aspas no caminho.
+    #[test]
+    fn prefixo_com_arquivo_le_o_mesmo_token_no_shell() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("acme cfg");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("it's token"),
+            "\r\n   \n\t tok-acme-arquivo \r\nsegunda\n",
+        )
+        .unwrap();
+        let c = conn(
+            ProviderKind::Jira,
+            "https://jira.example.com",
+            CredentialSource::File {
+                path: "~/acme cfg/it's token".into(),
+            },
+        );
+        let prefixo = JIRA.session_prefix(&c).unwrap();
+        // No lugar do `jira`, um `sh` que imprime o token que recebeu.
+        let atribuicao = prefixo.strip_suffix(" jira").unwrap();
+        let script = format!(r#"{atribuicao} sh -c 'printf "[%s]" "$JIRA_API_TOKEN"'"#);
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&script)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "[tok-acme-arquivo]",
+            "{script}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 }

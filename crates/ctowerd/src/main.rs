@@ -85,6 +85,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // `[credentials]` (#143): editável pela UI, vale no próximo uso.
     let credentials = ct_core::SharedCredentials::new(cfg.credentials.clone());
+    // Conexões do último pull e `[connections]` (#274): a fonte de
+    // credencial de cada projeto vale desde o boot; o pull as atualiza.
+    match ledger.hub_connections() {
+        Ok((conns, _)) => credentials.set_connections(conns, cfg.connections.clone()),
+        Err(e) => tracing::warn!("conexões: cache não lido no boot: {e}"),
+    }
     let (events, _) = broadcast::channel(1024);
     let sessions = Sessions::new(
         SessionsConfig {
@@ -146,7 +152,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Duration::from_secs(cfg.jira_view_timeout_secs.max(1)),
             Duration::from_secs(cfg.jira_list_timeout_secs.max(1)),
         );
-    let gitlab = Arc::new(tracker_cfg.gitlab().with_credentials(credentials.clone()));
+    let gitlab = Arc::new(
+        tracker_cfg
+            .gitlab()
+            .with_credentials(credentials.clone())
+            .with_env_cache(sessions.env_cache()),
+    );
     let tracker = Arc::new(JiraGitlabSync::new(sessions.clone(), tracker_cfg));
 
     // Sem hub o ambiente sobe, mas sem projetos e sem iniciar sessões;

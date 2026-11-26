@@ -80,7 +80,6 @@
 
 use crate::resolver::{gitlab_key, jira_key};
 use crate::Sessions;
-use ct_core::provider::CredentialSource;
 use ct_core::ProjectKind;
 use ct_ledger::{Project, Session};
 use ct_proc::Secret;
@@ -264,22 +263,34 @@ impl Sessions {
     /// uma sessão nunca roda comando de credencial, que pode esperar o
     /// pinentry ou o prazo inteiro. Quem resolve é o sync; o token novo
     /// chega às sessões vivas por [`Sessions::refresh_masks`].
+    ///
+    /// Vale para qualquer fonte (comando, secret ou arquivo, #274): o cache
+    /// guarda o token com a fonte que o resolveu, a mesma que o sync usa
+    /// ([`Sessions::jira_source`], [`Sessions::gitlab_source`]).
     pub(crate) fn connection_mask(&self, project: &Project) -> SessionMask {
-        let (eff, _) = self.with_env_credentials(project.clone());
         let resolver = self.credentials();
-        let command = |cmd: &str| CredentialSource::Command { cmd: cmd.into() };
         let mut found: Vec<std::sync::Arc<Secret>> = Vec::new();
-        if let Some(j) = eff.tracker.jira() {
-            found.extend(resolver.cached(&jira_key(eff.id), &command(&j.credential_cmd)));
+        if let Some(s) = self.jira_source(project) {
+            found.extend(resolver.cached(&jira_key(project.id), &s.source));
         }
-        if let Some(g) = eff.forge.gitlab() {
-            found.extend(resolver.cached(&gitlab_key(eff.id), &command(&g.credential_cmd)));
+        if let Some(s) = self.gitlab_source(project) {
+            found.extend(resolver.cached(&gitlab_key(project.id), &s.source));
         }
         let pairs: Vec<(&str, &str)> = found
             .iter()
             .map(|t| ("CONEXAO_TOKEN", t.expose()))
             .collect();
         SessionMask::new(&pairs)
+    }
+
+    /// Busca de secret do resolvedor para as conexões do projeto (fonte
+    /// `Secret`, #274): o valor atual no cache de secrets do ambiente, pelas
+    /// regras do spawn e do `ctower secret get` ([`cached_secret`]).
+    pub(crate) fn secret_lookup<'a>(
+        &'a self,
+        project: &'a Project,
+    ) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| cached_secret(&self.env_cache(), project, name)
     }
 
     /// Guarda (só em memória) o mascaramento de uma sessão.
@@ -547,6 +558,26 @@ pub(crate) fn scope_of(project: &Project) -> Option<String> {
         .then(|| format!("{}/{}", project.gh_owner, project.gh_repo))
 }
 
+/// Valor de `name` no cache de secrets do ambiente para o projeto (#279):
+/// globais e do projeto, o do projeto sobrepõe o global (no gestor, só os
+/// globais), como no spawn e no `ctower secret get`. Nome reservado, cache
+/// ausente ou ilegível: `None` (o resolvedor diz que o secret não existe no
+/// ambiente; o cache ilegível já avisa no log).
+pub(crate) fn cached_secret(cache: &EnvCache, project: &Project, name: &str) -> Option<String> {
+    if is_reserved_name(name) {
+        return None;
+    }
+    let secrets = match cache.load() {
+        Ok(s) => s?,
+        Err(e) => {
+            tracing::warn!("secrets: cache do ambiente ilegível ({e}); {name} não lido");
+            return None;
+        }
+    };
+    let resolved = secrets.resolve(scope_of(project).as_deref());
+    resolved.get(name).map(|e| e.value.expose().to_string())
+}
+
 /// Mascaramento dos secrets (não das variáveis) injetados na sessão.
 fn mask_of(secrets: &EnvSecrets, project: &Project) -> SessionMask {
     let key = scope_of(project);
@@ -581,6 +612,7 @@ mod tests {
         assert!(!String::from_utf8(json).unwrap().contains("tok-acme-123456"));
     }
     use crate::{AgentOptions, GestorScope};
+    use ct_core::provider::CredentialSource;
     use ct_core::SessionState;
     use std::time::{Duration, Instant};
 
@@ -911,6 +943,128 @@ mod tests {
         let sess = env.sessions.ledger().get_session(&s.id).unwrap();
         let t = env.sessions.transcript_mask(&sess);
         assert_eq!(t.apply(b"tok-acme-jira-777777"), b"***CONEXAO_TOKEN***");
+        env.sessions.kill(&s.id).unwrap();
+    }
+
+    /// Tokens de conexão com `Secret` e `File` (#274) que o sync resolve com
+    /// a sessão aberta entram no mascaramento dela, no PTY e no transcript.
+    #[test]
+    fn token_de_secret_e_de_arquivo_entra_na_sessao_viva() {
+        use ct_core::provider::{Connection, ProviderKind};
+        let env = TestEnv::new(FakeClaude::script(
+            "while read l; do echo \"saida=$l\"; done",
+        ));
+        let arquivo = env.tmp.path().join("gitlab token");
+        std::fs::write(&arquivo, " tok-acme-arquivo-424242 \n").unwrap();
+        env.assign_config(1, |p| {
+            p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
+                connection: Some(7),
+                url: "https://jira.example.com".into(),
+                project_key: "ACME".into(),
+                ..Default::default()
+            });
+            p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                connection: Some(8),
+                host: "gitlab.example.com".into(),
+                path: "acme/acme-web".into(),
+                clone_url: "https://gitlab.example.com/acme/acme-web.git".into(),
+                credential_cmd: String::new(),
+            });
+        });
+        let conn = |id, kind, credential| Connection {
+            id,
+            name: format!("{kind}-acme"),
+            kind,
+            endpoint: "https://jira.example.com".into(),
+            credential,
+            options: json!({}),
+            created_at: 0,
+            updated_at: 0,
+        };
+        env.cfg.credentials.set_connections(
+            vec![
+                conn(
+                    7,
+                    ProviderKind::Jira,
+                    CredentialSource::Secret {
+                        name: "JIRA_TOKEN_ACME".into(),
+                    },
+                ),
+                conn(
+                    8,
+                    ProviderKind::Gitlab,
+                    CredentialSource::File {
+                        path: arquivo.display().to_string(),
+                    },
+                ),
+            ],
+            Default::default(),
+        );
+        // Como variável, o valor não entra no mascaramento dos secrets do
+        // hub: o que o esconde é o cache do resolvedor.
+        env.write_secrets_cache_kinds(&[(
+            Some("deep-ion-ai/demo"),
+            "JIRA_TOKEN_ACME",
+            Kind::Variable,
+            "tok-acme-secret-313131",
+        )]);
+        let s = env.sessions.start(env.request(35, "Máscara")).unwrap();
+        env.wait_fake_output(&s.id);
+        assert!(!env.sessions.inner.masks.lock().unwrap().contains_key(&s.id));
+
+        // O que o sync faz: a fonte efetiva e a busca no cache de secrets.
+        let p = env.sessions.ledger().get_project(env.project_id).unwrap();
+        let lookup = env.sessions.secret_lookup(&p);
+        for (key, what, source) in [
+            (
+                crate::resolver::jira_key(p.id),
+                "Jira",
+                env.sessions.jira_source(&p).unwrap().source,
+            ),
+            (
+                crate::resolver::gitlab_key(p.id),
+                "GitLab",
+                env.sessions.gitlab_source(&p).unwrap().source,
+            ),
+        ] {
+            env.sessions
+                .credentials()
+                .token(crate::resolver::Ask {
+                    key: &key,
+                    what,
+                    source: &source,
+                    lookup: &lookup,
+                    deadline: Duration::from_secs(5),
+                })
+                .unwrap();
+        }
+        let deadline = Instant::now() + T;
+        loop {
+            let n = env
+                .sessions
+                .inner
+                .masks
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .map(|m| m.pty.apply(b"tok-acme-arquivo-424242"));
+            if n.as_deref() == Some(b"***CONEXAO_TOKEN***".as_slice()) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "máscara não atualizada");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pty = env.sessions.pty(&s.id).unwrap();
+        pty.write(b"tok-acme-secret-313131 tok-acme-arquivo-424242\n")
+            .unwrap();
+        let out = wait_output(&env, &s.id, "saida=***CONEXAO_TOKEN*** ***CONEXAO_TOKEN***");
+        assert!(!out.contains("tok-acme-"), "{out}");
+        let sess = env.sessions.ledger().get_session(&s.id).unwrap();
+        let t = env.sessions.transcript_mask(&sess);
+        assert_eq!(
+            t.apply(br#"{"t":"tok-acme-secret-313131 tok-acme-arquivo-424242"}"#),
+            br#"{"t":"***CONEXAO_TOKEN*** ***CONEXAO_TOKEN***"}"#
+        );
         env.sessions.kill(&s.id).unwrap();
     }
 }

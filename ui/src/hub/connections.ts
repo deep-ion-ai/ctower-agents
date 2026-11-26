@@ -19,14 +19,22 @@ export const CONNECTION_KINDS: ProviderKind[] = ["jira", "gitlab", "github"];
 export type CredKind = CredentialSource["kind"];
 
 /**
- * Formas de credencial que cada tipo aceita. Jira e GitLab só o comando: o
- * ambiente ainda não entrega secret, arquivo ou CLI à sessão (o hub recusa
- * os outros, `ct-hub-store`).
+ * Formas de credencial que cada tipo aceita (#274). Jira e GitLab: comando,
+ * secret do hub ou arquivo; o login da CLI é só do GitHub (`gh auth token`),
+ * e o hub recusa os outros (`ct_core::provider`).
  */
 export const CRED_KINDS: Record<ProviderKind, CredKind[]> = {
-  jira: ["command"],
-  gitlab: ["command"],
+  jira: ["command", "secret", "file"],
+  gitlab: ["command", "secret", "file"],
   github: ["cli", "file", "command", "secret", "none"],
+};
+
+/** Dica do campo da credencial, pela forma escolhida. */
+export const CRED_HINT: Partial<Record<CredKind, string>> = {
+  command: "O comando roda no ambiente: a senha e o token nunca passam pelo hub.",
+  secret:
+    "Secret do hub, lido pelo ambiente no projeto em uso: o do projeto vale sobre o global. Para uma conexão de vários projetos, grave o secret como global.",
+  file: "Caminho no ambiente (~ é a pasta pessoal); o token é a primeira linha não vazia do arquivo.",
 };
 
 /** Exemplo de endpoint por tipo (placeholder, sem dado real). */
@@ -83,7 +91,7 @@ export function connectionFormOf(c: Connection): ConnectionForm {
 export function credentialOf(f: ConnectionForm): { credential: CredentialSource } | { error: string } {
   if (!CRED_KINDS[f.kind].includes(f.cred)) {
     return {
-      error: `${KIND_LABEL[f.kind]}: a credencial precisa ser um comando que imprime o token; secret, arquivo e CLI ainda não chegam ao ambiente`,
+      error: `${KIND_LABEL[f.kind]}: a credencial precisa ser um comando, um secret do hub ou um arquivo; o login da CLI é só do GitHub`,
     };
   }
   const v = f.cred_value.trim();

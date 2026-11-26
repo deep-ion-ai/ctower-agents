@@ -59,6 +59,26 @@ test("lista as conexões, testa a prontidão e nunca mostra o valor do token", a
   expect(api.hubCallsTo("hub.connections.test")[0].params).toEqual({ id: 7 });
 });
 
+test("conexão do Jira com secret do hub (#274): a forma aparece no formulário e vai ao hub", async () => {
+  const { api, user } = setup();
+  await screen.findByRole("list", { name: "Conexões cadastradas" });
+  await user.click(screen.getByRole("button", { name: "Nova conexão" }));
+  const form = screen.getByRole("form", { name: "Nova conexão" });
+  const cred = within(form).getByLabelText("Credencial");
+  expect(within(cred).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["command", "secret", "file"]);
+  await user.selectOptions(cred, "secret");
+  await user.type(within(form).getByLabelText("Nome"), "jira-beta");
+  await user.type(within(form).getByLabelText("URL"), "https://jira.example.com");
+  await user.type(within(form).getByLabelText("Nome do secret do hub"), "JIRA_TOKEN_ACME");
+  expect(within(form).getByText(/o do projeto vale sobre o global/)).toBeInTheDocument();
+  await user.click(within(form).getByRole("button", { name: "Salvar conexão" }));
+  expect(await screen.findByText("Conexão jira-beta salva.")).toBeInTheDocument();
+  expect(api.hubCallsTo("hub.connections.add")[0].params).toMatchObject({
+    kind: "jira",
+    credential: { kind: "secret", name: "JIRA_TOKEN_ACME" },
+  });
+});
+
 test("cria uma conexão do Jira pelo formulário e manda o cadastro ao hub", async () => {
   const { api, user } = setup();
   await screen.findByRole("list", { name: "Conexões cadastradas" });

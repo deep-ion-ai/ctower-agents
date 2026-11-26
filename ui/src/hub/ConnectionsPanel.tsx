@@ -7,6 +7,7 @@ import { errText } from "./calls";
 import {
   CMD_HINT,
   CONNECTION_KINDS,
+  CRED_HINT,
   CRED_KINDS,
   ENDPOINT_HINT,
   EMPTY_CONNECTION_FORM,
@@ -354,7 +355,7 @@ function ConnectionFormView({
             value={f.cred_value}
             onChange={(e) => set({ cred_value: e.target.value })}
           />
-          <span className="hint muted">O comando roda no ambiente: a senha e o token nunca passam pelo hub.</span>
+          {CRED_HINT[credKind] && <span className="hint muted">{CRED_HINT[credKind]}</span>}
         </div>
       )}
       {f.kind === "jira" && (
