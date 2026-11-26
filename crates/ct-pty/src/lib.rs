@@ -69,6 +69,10 @@ impl Output {
 struct ExitState {
     /// `Some(código)` após a saída; código `None` = morto por sinal.
     status: Option<Option<i32>>,
+    /// O processo já foi colhido (`wait`), antes mesmo do dreno da saída e
+    /// do `status`: daqui em diante o pid pode ser de outro processo e
+    /// nenhum sinal sai.
+    reaped: bool,
     callbacks: Vec<ExitCallback>,
 }
 
@@ -149,6 +153,7 @@ impl PtySession {
                 Ok(st) => Some(st.exit_code() as i32),
                 Err(_) => None,
             };
+            waiting.exit.lock().unwrap().reaped = true;
             let _ = drained_rx.recv_timeout(DRAIN_GRACE);
             let callbacks = {
                 let mut ex = waiting.exit.lock().unwrap();
@@ -202,11 +207,46 @@ impl PtySession {
             .map_err(io::Error::other)
     }
 
+    /// `SIGHUP`, como fechar a janela do terminal. O processo pode não
+    /// sair: ignorar o sinal, ou recebê-lo numa janela em que o descarta
+    /// (o `bash -i` ainda inicializando, #294). Para garantir a saída, use
+    /// [`PtySession::terminate`].
     pub fn kill(&self) -> io::Result<()> {
-        if self.exit_status().is_some() {
+        if self.inner.exit.lock().unwrap().reaped {
             return Ok(());
         }
         self.inner.killer.lock().unwrap().kill()
+    }
+
+    /// `SIGKILL`: o processo não tem como ignorar.
+    pub fn force_kill(&self) -> io::Result<()> {
+        let ex = self.inner.exit.lock().unwrap();
+        let Some(pid) = self.inner.pid.filter(|_| !ex.reaped) else {
+            return Ok(());
+        };
+        let pid = libc::pid_t::try_from(pid).map_err(io::Error::other)?;
+        // SAFETY: só manda um sinal; o pid é do filho ainda não colhido.
+        if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::ESRCH) {
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
+    /// [`PtySession::kill`] agora e, se o processo não tiver saído depois de
+    /// `grace`, [`PtySession::force_kill`]. Não bloqueia: a escalada roda
+    /// numa thread à parte, e a saída chega pelo [`PtySession::on_exit`].
+    pub fn terminate(&self, grace: Duration) -> io::Result<()> {
+        self.kill()?;
+        let pty = self.clone();
+        std::thread::spawn(move || {
+            if pty.wait_timeout(grace).is_none() {
+                let _ = pty.force_kill();
+            }
+        });
+        Ok(())
     }
 
     /// Snapshot do scrollback e receptor da saída ao vivo, obtidos sob a mesma
@@ -455,6 +495,31 @@ mod tests {
         assert_ne!(st, Some(0));
         // kill depois de sair é inofensivo
         p.kill().unwrap();
+    }
+
+    #[test]
+    fn terminate_mata_quem_ignora_o_sighup() {
+        let p = PtySession::spawn(sh("trap '' HUP; echo pronto; read x"), 1024).unwrap();
+        let (snap, rx) = p.attach();
+        read_until(&rx, snap, "pronto");
+        // Só o SIGHUP não basta: o processo segue vivo.
+        p.kill().unwrap();
+        assert_eq!(p.wait_timeout(Duration::from_millis(300)), None);
+        p.terminate(Duration::from_millis(100)).unwrap();
+        assert_eq!(p.wait_timeout(T), Some(None), "morto por sinal");
+        // Depois da saída, nada mais é sinalizado.
+        p.force_kill().unwrap();
+        p.terminate(Duration::ZERO).unwrap();
+    }
+
+    #[test]
+    fn terminate_nao_escala_quem_sai_com_o_sighup() {
+        let p = PtySession::spawn(sh("echo pronto; read x"), 1024).unwrap();
+        let (snap, rx) = p.attach();
+        read_until(&rx, snap, "pronto");
+        // A escalada ficaria para bem depois do prazo: quem encerra é o SIGHUP.
+        p.terminate(Duration::from_secs(600)).unwrap();
+        assert_eq!(p.wait_timeout(T), Some(None));
     }
 
     #[test]
