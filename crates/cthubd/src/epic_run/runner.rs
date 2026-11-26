@@ -1552,4 +1552,55 @@ mod tests {
         );
         assert!(kinds(&hub.lock(), run.id).contains(&"assumed".to_string()));
     }
+
+    #[tokio::test]
+    async fn integracao_inicia_a_sessao_do_epico_com_o_corpo_do_pr() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = approved(&hub.lock(), pid);
+        {
+            let h = hub.lock();
+            for n in [11, 12] {
+                for to in [
+                    EpicNodeState::Pronta,
+                    EpicNodeState::EmExecucao,
+                    EpicNodeState::Mesclada,
+                ] {
+                    h.set_epic_node_state(run.id, n, to, None, T).unwrap();
+                }
+            }
+        }
+        let port = FakePort::default();
+        // Ciclo 1: integrando; ciclo 2: a sessão de integração.
+        tick(&hub, &port, T + 1).await.unwrap();
+        assert_eq!(
+            hub.lock().epic_run(run.id).unwrap().unwrap().status,
+            EpicRunStatus::Integrando
+        );
+        tick(&hub, &port, T + 2).await.unwrap();
+        let p = port.call_of("session.start").unwrap();
+        assert_eq!(
+            (p["gh_number"].as_i64(), p["kind"].as_str()),
+            (Some(10), Some("epic"))
+        );
+        assert_eq!(p["epic_run"]["base"], "wip/10-x");
+        let prompt = p["prompt"].as_str().unwrap();
+        for l in [
+            "Closes #11",
+            "Closes #12",
+            "Closes #10",
+            "Não rode o /code-review",
+        ] {
+            assert!(prompt.contains(l), "{l}\n{prompt}");
+        }
+        assert_eq!(
+            hub.lock()
+                .epic_run(run.id)
+                .unwrap()
+                .unwrap()
+                .integration_session
+                .as_deref(),
+            Some("s-10")
+        );
+    }
 }

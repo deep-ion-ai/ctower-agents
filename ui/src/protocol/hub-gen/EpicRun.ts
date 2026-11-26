@@ -39,6 +39,10 @@ plan_session: string | null,
  */
 plan_model: string | null, plan_effort: string | null, 
 /**
+ * Sessão de integração em andamento (#302); `None` = nenhuma.
+ */
+integration_session: string | null, 
+/**
  * Motivo da pausa ou do estacionamento.
  */
 paused_reason: string | null, 
