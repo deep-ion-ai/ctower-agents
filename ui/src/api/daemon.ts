@@ -107,6 +107,27 @@ function subscribe<T>(event: string, cb: (payload: T) => void): Unsubscribe {
   };
 }
 
+/**
+ * Métodos sensíveis do ambiente (#231) e o comando Tauri dedicado de cada
+ * um. Espelho de `SENSITIVE_ENV` em `ui/src-tauri/src/gate.rs`; o teste
+ * `sensitive.test.ts` confere os dois. Um `Map`, não um objeto: `method`
+ * vem de fora e não pode achar `constructor` e afins.
+ */
+export const SENSITIVE_COMMANDS: ReadonlyMap<string, string> = new Map([
+  ["github.set_token", "github_set_token"],
+  ["github.clear_token", "github_clear_token"],
+  ["github.pr.comment", "github_pr_comment"],
+  ["env.update", "env_update"],
+  ["env.rollback", "env_rollback"],
+  ["env.config.set", "env_config_set"],
+  ["env.credentials.set", "env_credentials_set"],
+  ["shell.open", "shell_open"],
+  ["shell.close", "shell_close"],
+  ["session.input", "session_input"],
+  ["session.permission.respond", "session_permission_respond"],
+  ["cleanup.run", "cleanup_run"],
+]);
+
 /** `invoke` com a rejeição convertida em `ApiError`, igual à da web. */
 function invokeApi<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return invoke<T>(cmd, args).catch((e: unknown) => Promise.reject(toApiError(e)));
@@ -124,6 +145,9 @@ export class TauriDaemonApi implements DaemonApi {
     return invokeApi<EnvStatus[]>("env_statuses");
   }
   call<T>(env: string, method: string, params: object = {}) {
+    // Sensível (#231): só pelo comando dedicado; o genérico o recusa.
+    const dedicated = SENSITIVE_COMMANDS.get(method);
+    if (dedicated) return invokeApi<T>(dedicated, { env, params });
     return invokeApi<T>("daemon_call", { env, method, params });
   }
   getHub() {
