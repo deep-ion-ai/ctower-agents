@@ -3,31 +3,13 @@
 // testadas em connections.test.ts. A credencial nunca passa pela UI como
 // valor: o hub guarda o nome do secret, o comando que imprime o token ou o
 // caminho do arquivo, e é isso que a tela mostra e edita.
+// O que é de cada tipo (rótulo, formas de credencial aceitas, exemplos e
+// opções do formulário) vem do registro `providers.ts` (#278).
 import type { Connection, CredentialSource, ProviderKind, Readiness } from "../protocol/gen";
 import type { HubProject } from "../protocol/hub-gen";
-import { DEFAULT_GITHUB_CONNECTION, githubConnOf, gitlabOf, isGithub, jiraOf } from "./tracker";
-
-export const KIND_LABEL: Record<ProviderKind, string> = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  jira: "Jira",
-};
-
-/** Tipos de conexão na ordem do formulário. */
-export const CONNECTION_KINDS: ProviderKind[] = ["jira", "gitlab", "github"];
+import { acceptsCredential, providerOf, refusedCredentialText, usesConnection } from "./providers";
 
 export type CredKind = CredentialSource["kind"];
-
-/**
- * Formas de credencial que cada tipo aceita (#274). Jira e GitLab: comando,
- * secret do hub ou arquivo; o login da CLI é só do GitHub (`gh auth token`),
- * e o hub recusa os outros (`ct_core::provider`).
- */
-export const CRED_KINDS: Record<ProviderKind, CredKind[]> = {
-  jira: ["command", "secret", "file"],
-  gitlab: ["command", "secret", "file"],
-  github: ["cli", "file", "command", "secret", "none"],
-};
 
 /** Dica do campo da credencial, pela forma escolhida. */
 export const CRED_HINT: Partial<Record<CredKind, string>> = {
@@ -37,20 +19,6 @@ export const CRED_HINT: Partial<Record<CredKind, string>> = {
   file: "Caminho no ambiente (~ é a pasta pessoal); o token é a primeira linha não vazia do arquivo.",
 };
 
-/** Exemplo de endpoint por tipo (placeholder, sem dado real). */
-export const ENDPOINT_HINT: Record<ProviderKind, string> = {
-  jira: "https://jira.example.com",
-  gitlab: "gitlab.example.com",
-  github: "vazio = api.github.com",
-};
-
-/** Exemplo de comando de credencial por tipo (placeholder). */
-export const CMD_HINT: Record<ProviderKind, string> = {
-  jira: "pass show jira/token | head -1",
-  gitlab: "pass show gitlab/token | head -1",
-  github: "pass show github/token | head -1",
-};
-
 /** Formulário de uma conexão. `cred_value` guarda o nome, o comando ou o caminho, conforme `cred`. */
 export interface ConnectionForm {
   name: string;
@@ -58,8 +26,8 @@ export interface ConnectionForm {
   endpoint: string;
   cred: CredKind;
   cred_value: string;
-  /** Jira: arquivo de configuração do jira-cli; vazio = o padrão. */
-  config_file: string;
+  /** Opções do tipo (`providerOf(kind).options`), por chave; vazio não vai ao hub. */
+  options: Record<string, string>;
 }
 
 export const EMPTY_CONNECTION_FORM: ConnectionForm = {
@@ -68,7 +36,7 @@ export const EMPTY_CONNECTION_FORM: ConnectionForm = {
   endpoint: "",
   cred: "command",
   cred_value: "",
-  config_file: "",
+  options: {},
 };
 
 /** Os campos de `c` no formulário (edição). */
@@ -76,24 +44,24 @@ export function connectionFormOf(c: Connection): ConnectionForm {
   const cr = c.credential;
   const cred_value =
     cr.kind === "secret" ? cr.name : cr.kind === "command" ? cr.cmd : cr.kind === "file" ? cr.path : "";
-  const cfg = c.options?.config_file;
+  const options: Record<string, string> = {};
+  for (const { key } of providerOf(c.kind).options) {
+    const v = c.options?.[key];
+    options[key] = typeof v === "string" ? v : "";
+  }
   return {
     name: c.name,
     kind: c.kind,
     endpoint: c.endpoint,
     cred: cr.kind,
     cred_value,
-    config_file: typeof cfg === "string" ? cfg : "",
+    options,
   };
 }
 
 /** A credencial do formulário, ou o erro de quem falta. */
 export function credentialOf(f: ConnectionForm): { credential: CredentialSource } | { error: string } {
-  if (!CRED_KINDS[f.kind].includes(f.cred)) {
-    return {
-      error: `${KIND_LABEL[f.kind]}: a credencial precisa ser um comando, um secret do hub ou um arquivo; o login da CLI é só do GitHub`,
-    };
-  }
+  if (!acceptsCredential(f.kind, f.cred)) return { error: refusedCredentialText(f.kind) };
   const v = f.cred_value.trim();
   switch (f.cred) {
     case "command":
@@ -121,7 +89,11 @@ export function connectionParams(
   if (!name) return { error: "informe o nome da conexão (ex.: jira-empresa)" };
   const cred = credentialOf(f);
   if ("error" in cred) return cred;
-  const options = f.kind === "jira" && f.config_file.trim() ? { config_file: f.config_file.trim() } : {};
+  const options: Record<string, string> = {};
+  for (const { key } of providerOf(f.kind).options) {
+    const v = (f.options[key] ?? "").trim();
+    if (v) options[key] = v;
+  }
   const common = { name, endpoint: f.endpoint.trim(), credential: cred.credential, options };
   if (id === undefined) return { params: { ...common, kind: f.kind } };
   return { params: { id, ...common } };
@@ -167,22 +139,15 @@ export function connectionLabel(c: Connection): string {
 /**
  * Projetos (`owner/repo`, em ordem) que usam a conexão, como
  * `tracker.connection` ou `forge.connection`: o espelho na UI do que o hub
- * confere em `connection_users`. A conexão GitHub padrão (`github`) também é
- * usada pelos projetos GitHub sem conexão (#275).
+ * confere em `connection_users`. A conexão padrão do tipo (a `github`)
+ * também é usada pelos projetos do tipo sem conexão (#275).
  */
 export function connectionUsers(
   c: Pick<Connection, "id" | "name" | "kind">,
   projects: readonly { project: Pick<HubProject, "gh_owner" | "gh_repo" | "tracker" | "forge"> }[],
 ): string[] {
-  const isDefault = c.kind === "github" && c.name === DEFAULT_GITHUB_CONNECTION;
-  const uses = (p: Pick<HubProject, "tracker" | "forge">) => {
-    if (jiraOf(p)?.connection === c.id || gitlabOf(p)?.connection === c.id) return true;
-    if (!isGithub(p)) return false;
-    const gh = githubConnOf(p);
-    return gh === c.id || (gh === null && isDefault);
-  };
   return projects
-    .filter(({ project: p }) => uses(p))
+    .filter(({ project: p }) => usesConnection(c, p))
     .map(({ project: p }) => `${p.gh_owner}/${p.gh_repo}`)
     .sort();
 }

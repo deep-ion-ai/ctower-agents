@@ -1,6 +1,5 @@
 import type { Connection } from "../protocol/gen";
 import {
-  CRED_KINDS,
   EMPTY_CONNECTION_FORM,
   connectionFormOf,
   connectionLabel,
@@ -30,7 +29,7 @@ test("cadastro novo: tipo, endereço e credencial; o arquivo do jira-cli só no 
     name: " jira-acme ",
     endpoint: "https://jira.example.com",
     cred_value: "pass show jira | head -1",
-    config_file: " ~/.config/.jira/acme.yml ",
+    options: { config_file: " ~/.config/.jira/acme.yml " },
   };
   expect(connectionParams(f)).toEqual({
     params: {
@@ -41,7 +40,7 @@ test("cadastro novo: tipo, endereço e credencial; o arquivo do jira-cli só no 
       kind: "jira",
     },
   });
-  const gh = connectionParams({ ...EMPTY_CONNECTION_FORM, kind: "github", name: "github-acme", cred: "cli", config_file: "x" });
+  const gh = connectionParams({ ...EMPTY_CONNECTION_FORM, kind: "github", name: "github-acme", cred: "cli", options: { config_file: "x" } });
   expect(gh).toEqual({
     params: { name: "github-acme", endpoint: "", credential: { kind: "cli" }, options: {}, kind: "github" },
   });
@@ -64,7 +63,7 @@ test("ida e volta do formulário com a credencial de cada forma", () => {
   expect(connectionFormOf(JIRA)).toMatchObject({
     cred: "command",
     cred_value: "pass show jira | head -1",
-    config_file: "~/.config/.jira/acme.yml",
+    options: { config_file: "~/.config/.jira/acme.yml" },
   });
   // Secret e arquivo do Jira (#274): ida e volta sem perder a forma.
   const secret = { ...JIRA, credential: { kind: "secret" as const, name: "JIRA_TOKEN" } };
@@ -79,9 +78,6 @@ test("ida e volta do formulário com a credencial de cada forma", () => {
 });
 
 test("Jira e GitLab aceitam comando, secret e arquivo; a CLI é só do GitHub", () => {
-  expect(CRED_KINDS.jira).toEqual(["command", "secret", "file"]);
-  expect(CRED_KINDS.gitlab).toEqual(["command", "secret", "file"]);
-  expect(CRED_KINDS.github).toContain("cli");
   expect(
     connectionParams({ ...EMPTY_CONNECTION_FORM, name: "gitlab-acme", kind: "gitlab", cred: "file", cred_value: " /t " }),
   ).toEqual({

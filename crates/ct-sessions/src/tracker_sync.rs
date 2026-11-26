@@ -708,7 +708,7 @@ impl JiraGitlabSync {
             return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
         };
         let conns = self.sessions.project_connections(project);
-        if conns.jira.is_none() {
+        if conns.tracker.is_none() {
             return Err(SessionsError::Invalid(no_connection(project, "Jira")));
         }
         Ok((jira, conns))
@@ -1063,7 +1063,7 @@ impl JiraGitlabSync {
     ) -> std::result::Result<Arc<Secret>, CycleError> {
         let cli = self.gitlab_cli(conns);
         g.cli = Some(cli.version().map_err(|e| e.to_string())?);
-        if conns.gitlab.is_none() {
+        if conns.forge.is_none() {
             return Err(no_connection(project, "GitLab"));
         }
         let (token, cached) = self.gitlab_token(project)?;
@@ -1082,7 +1082,7 @@ impl JiraGitlabSync {
         cli: &JiraCli,
     ) -> std::result::Result<Arc<Secret>, CycleError> {
         j.cli = Some(cli.version().map_err(|e| e.to_string())?);
-        if conns.jira.is_none() {
+        if conns.tracker.is_none() {
             return Err(no_connection(project, "Jira"));
         }
         j.config_present = cli.config_path().is_file();

@@ -1479,61 +1479,26 @@ fn provider_param(
 ) -> Result<(ct_core::TrackerConfig, ct_core::ForgeConfig), (i64, String)> {
     use ct_core::{ForgeConfig, TrackerConfig};
     let tracker: TrackerConfig = match p.get("tracker") {
-        None | Some(Value::Null) => TrackerConfig::Github(Default::default()),
+        None | Some(Value::Null) => TrackerConfig::default(),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| invalid(format!("tracker inválido: {e}")))?,
     };
     let forge: ForgeConfig = match p.get("forge") {
-        None | Some(Value::Null) => ForgeConfig::Github(Default::default()),
+        None | Some(Value::Null) => ForgeConfig::default(),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| invalid(format!("forge inválido: {e}")))?,
     };
-    let tracker = match tracker {
-        TrackerConfig::Jira(mut j) => {
-            j.project_key = j.project_key.trim().to_ascii_uppercase();
-            j.jql = j.jql.trim().to_string();
-            j.epic_link_field = j.epic_link_field.trim().to_string();
-            j.epic_name_field = j.epic_name_field.trim().to_string();
-            if j.type_map.is_empty() {
-                j.type_map = ct_core::default_type_map();
-            }
-            TrackerConfig::Jira(j)
-        }
-        t => t,
-    };
-    let forge = match forge {
-        ForgeConfig::Gitlab(mut g) => {
-            let url = Some(g.clone_url.trim())
-                .filter(|u| !u.is_empty())
-                .or_else(|| p.get("url").and_then(Value::as_str).map(str::trim))
-                .filter(|u| !u.is_empty())
-                .map(String::from);
-            let url = url.ok_or_else(|| invalid("informe a URL de clone do GitLab"))?;
-            let r = ct_core::repo_from_url(&url)
-                .ok_or_else(|| invalid(format!("URL do GitLab não reconhecida: {url}")))?;
-            let path = g.path.trim().trim_matches('/');
-            if !path.is_empty() && !path.eq_ignore_ascii_case(&r.path) {
-                return Err(invalid(format!(
-                    "caminho do GitLab ({path}) não bate com a URL {url}"
-                )));
-            }
-            g.path = r.path;
-            g.clone_url = url;
-            ForgeConfig::Gitlab(g)
-        }
-        f => f,
-    };
+    use ct_core::provider;
+    // As normalizações de cada tipo são do descritor (#278).
+    let (mut tracker, mut forge) = (tracker, forge);
+    provider::descriptor(tracker.provider()).normalize_tracker(&mut tracker);
+    let url = p.get("url").and_then(Value::as_str);
+    provider::descriptor(forge.provider())
+        .normalize_forge(&mut forge, url)
+        .map_err(invalid)?;
     // GitHub (#275): o rastreador e a forja usam a mesma conexão; a dada
     // num lado só vale para os dois. Duas diferentes, o cadastro recusa.
-    let (tracker, forge) = match (tracker, forge) {
-        (TrackerConfig::Github(mut t), ForgeConfig::Github(mut f)) => {
-            let c = t.connection.or(f.connection);
-            t.connection = t.connection.or(c);
-            f.connection = f.connection.or(c);
-            (TrackerConfig::Github(t), ForgeConfig::Github(f))
-        }
-        other => other,
-    };
+    provider::share_connection(&mut tracker, &mut forge);
     Ok((tracker, forge))
 }
 

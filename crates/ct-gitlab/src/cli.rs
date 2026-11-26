@@ -1,6 +1,7 @@
 //! Chamadas ao glab (spec §7.2, §7.3), conferidas com as flags do glab
 //! 1.124.0 (`glab mr list --help`, `glab api --help`).
 
+use ct_core::provider::{ProviderDescriptor, GITLAB};
 use ct_proc::process::{cite, describe_status, has_token, run, RunError};
 use ct_proc::Secret;
 use serde_json::Value;
@@ -107,7 +108,7 @@ impl Glab {
             c.env("GITLAB_HOST", &self.host);
         }
         if let Some(t) = token {
-            c.env("GITLAB_TOKEN", t.expose());
+            c.env(GITLAB.token_env(), t.expose());
         }
         let out = match run(c, self.deadline) {
             Ok(o) => o,

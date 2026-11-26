@@ -219,46 +219,59 @@ impl Sessions {
         &self.inner.credentials
     }
 
-    /// Fonte do token do Jira do projeto neste ambiente (#274): a da conexão
-    /// do hub, com a sobrescrita `[connections]`, ou o comando de
-    /// `[credentials]` (#143). `None` = o rastreador não é Jira. Só para
-    /// resolver aqui: o que vai ao hub sai do ledger, sem a sobrescrita.
+    /// Fonte do token do tipo `kind` do projeto neste ambiente (#274,
+    /// #275): a da conexão do hub (a referenciada ou a padrão do tipo), com
+    /// a sobrescrita `[connections]`, ou o comando de `[credentials]` (#143)
+    /// ([`ct_core::SharedCredentials::source`]). `None` = nenhum lado do
+    /// projeto é do tipo. Só para resolver aqui: o que vai ao hub sai do
+    /// ledger, sem a sobrescrita.
+    pub fn source(
+        &self,
+        project: &ct_ledger::Project,
+        kind: ct_core::provider::ProviderKind,
+    ) -> Option<ct_core::EnvSource> {
+        self.inner.cfg.credentials.source(
+            &project.gh_owner,
+            &project.gh_repo,
+            &project.tracker,
+            &project.forge,
+            kind,
+        )
+    }
+
+    /// As fontes de todos os tipos que o projeto usa, sem repetir o tipo
+    /// (o GitHub nos dois lados conta uma vez).
+    pub fn sources(
+        &self,
+        project: &ct_ledger::Project,
+    ) -> Vec<(ct_core::provider::ProviderKind, ct_core::EnvSource)> {
+        let mut out: Vec<(ct_core::provider::ProviderKind, ct_core::EnvSource)> = Vec::new();
+        for side in ct_core::provider::project_sides(&project.tracker, &project.forge) {
+            if out.iter().any(|(k, _)| *k == side.kind) {
+                continue;
+            }
+            out.extend(self.source(project, side.kind).map(|s| (side.kind, s)));
+        }
+        out
+    }
+
+    /// Fonte do token do Jira do projeto ([`Self::source`]). `None` = o
+    /// rastreador não é Jira.
     pub fn jira_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        let j = project.tracker.jira()?;
-        Some(
-            self.inner
-                .cfg
-                .credentials
-                .jira_source(&project.gh_owner, &project.gh_repo, j),
-        )
+        self.source(project, ct_core::provider::ProviderKind::Jira)
     }
 
-    /// Fonte do token do GitLab do projeto neste ambiente, como
-    /// [`Self::jira_source`]. `None` = a forja não é GitLab.
+    /// Fonte do token do GitLab do projeto ([`Self::source`]). `None` = a
+    /// forja não é GitLab.
     pub fn gitlab_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        let g = project.forge.gitlab()?;
-        Some(
-            self.inner
-                .cfg
-                .credentials
-                .gitlab_source(&project.gh_owner, &project.gh_repo, g),
-        )
+        self.source(project, ct_core::provider::ProviderKind::Gitlab)
     }
 
-    /// Fonte do token do GitHub do projeto neste ambiente (#275): a da
-    /// conexão GitHub do projeto ([`ct_core::github_connection`]) ou da
-    /// `github` padrão, com a sobrescrita `[connections]`
-    /// ([`ct_core::SharedCredentials::github_source`]). `None` = o projeto
-    /// não usa o GitHub.
+    /// Fonte do token do GitHub do projeto ([`Self::source`]): sem a
+    /// conexão no pull, o `gh auth token`. `None` = o projeto não usa o
+    /// GitHub.
     pub fn github_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        let github = project.tracker.kind() == ct_core::TrackerKind::Github
-            || project.forge.kind() == ct_core::ForgeKind::Github;
-        github.then(|| {
-            self.inner
-                .cfg
-                .credentials
-                .github_source(ct_core::github_connection(&project.tracker, &project.forge))
-        })
+        self.source(project, ct_core::provider::ProviderKind::Github)
     }
 
     /// As conexões do projeto neste ambiente (#277): as do último pull, com
@@ -292,29 +305,15 @@ impl Sessions {
     /// `name` (#276): a sobrescrita editada pela UI vale no próximo uso,
     /// mesmo quando o comando não muda (o token por trás dele mudou).
     pub fn invalidate_connection(&self, name: &str) -> Result<()> {
-        use ct_core::provider::{self, ProviderKind};
         let (conns, _) = self.inner.cfg.credentials.connections();
         let Some(c) = conns.iter().find(|c| c.name == name) else {
             return Ok(());
         };
         let projects = self.ledger().list_projects()?;
         for p in projects {
-            let key = match c.kind {
-                ProviderKind::Jira => (p.tracker.jira().and_then(|j| j.connection) == Some(c.id))
-                    .then(|| resolver::jira_key(p.id)),
-                ProviderKind::Gitlab => (p.forge.gitlab().and_then(|g| g.connection) == Some(c.id))
-                    .then(|| resolver::gitlab_key(p.id)),
-                ProviderKind::Github => self
-                    .github_source(&p)
-                    .and(provider::github_connection(
-                        &conns,
-                        ct_core::github_connection(&p.tracker, &p.forge),
-                    ))
-                    .filter(|g| g.id == c.id)
-                    .map(|_| resolver::github_key(p.id)),
-            };
-            if let Some(k) = key {
-                self.credentials().invalidate(&k);
+            if ct_core::provider::uses_connection(&p.tracker, &p.forge, &conns, c) {
+                self.credentials()
+                    .invalidate(&resolver::cache_key(c.kind, p.id));
             }
         }
         Ok(())

@@ -2,6 +2,7 @@
 
 use crate::process::{cite as clean, describe_status, has_token, run, RunError};
 use crate::Secret;
+use ct_core::provider::{ProviderDescriptor, JIRA};
 use ct_core::JiraFieldInfo;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -196,11 +197,11 @@ impl JiraCli {
     ) -> Result<String, JiraError> {
         let mut c = Command::new(&self.bin);
         c.args(args)
-            .env_remove("JIRA_API_TOKEN")
+            .env_remove(JIRA.token_env())
             .env_remove("JIRA_CONFIG_FILE")
             .env("NO_COLOR", "1");
         if let Some(t) = token {
-            c.env("JIRA_API_TOKEN", t.expose());
+            c.env(JIRA.token_env(), t.expose());
         }
         if let Some(f) = &self.config_file {
             c.env("JIRA_CONFIG_FILE", f);

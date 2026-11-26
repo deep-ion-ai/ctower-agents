@@ -47,8 +47,8 @@ pub struct ProjectProvider {
 impl Default for ProjectProvider {
     fn default() -> Self {
         ProjectProvider {
-            tracker: TrackerConfig::Github(Default::default()),
-            forge: ForgeConfig::Github(Default::default()),
+            tracker: TrackerConfig::default(),
+            forge: ForgeConfig::default(),
             branch_pattern: None,
             attribution: true,
             docs: ct_core::DocsConfig::default(),
@@ -65,10 +65,7 @@ impl ProjectProvider {
     /// primeiro ciclo (`tracker_status`).
     pub fn validate(&self) -> std::result::Result<(), String> {
         self.validate_base()?;
-        match self.tracker.jira() {
-            Some(j) => provider::JIRA.validate_sync_filter(j),
-            None => Ok(()),
-        }
+        provider::descriptor(self.tracker.provider()).validate_sync(&self.tracker)
     }
 
     /// [`ProjectProvider::validate`] sem o filtro do sync do Jira: a edição
@@ -82,26 +79,11 @@ impl ProjectProvider {
                  github ou jira + gitlab)"
             ));
         }
-        // Os descritores conferem o projeto de cada tipo (#234). Jira e
-        // GitLab exigem a conexão (#277): a credencial e a URL vêm dela e são
-        // conferidas em `Hub::check_project_connections`.
-        if let Some(j) = self.tracker.jira() {
-            provider::JIRA.validate_project(j)?;
-        }
-        if let Some(g) = self.forge.gitlab() {
-            provider::GITLAB.validate_project(g)?;
-        }
-        // GitHub (#275): uma conexão só para o rastreador e a forja.
-        if let (Some(t), Some(f)) = (
-            self.tracker.github().and_then(|g| g.connection),
-            self.forge.github().and_then(|g| g.connection),
-        ) {
-            if t != f {
-                return Err(format!(
-                    "o rastreador e a forja GitHub usam a mesma conexão (rastreador {t}, forja {f})"
-                ));
-            }
-        }
+        // Os descritores conferem o lado do projeto de cada tipo (#234,
+        // #278). Jira e GitLab exigem a conexão (#277): a credencial e a URL
+        // vêm dela e são conferidas em `Hub::check_project_connections`. O
+        // GitHub (#275) usa uma conexão só para o rastreador e a forja.
+        provider::validate_project(&self.tracker, &self.forge)?;
         if let Some(pat) = &self.branch_pattern {
             ct_core::branch::validate_branch_pattern(pat).map_err(|e| e.to_string())?;
         }

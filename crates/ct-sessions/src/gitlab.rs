@@ -10,7 +10,7 @@
 use crate::cleanup::RemoteBranches;
 use crate::resolver::{gitlab_key, Ask, CredentialResolver};
 use crate::{Result, SessionsError};
-use ct_core::provider::CredentialSource;
+use ct_core::provider::{CredentialSource, ProviderKind};
 use ct_core::{GitlabConfig, ResolvedConnections};
 use ct_gitlab::{GitlabError, Glab};
 use ct_jira::{Secret, CREDENTIAL_DEADLINE};
@@ -82,7 +82,7 @@ impl GitlabRemote {
             &project.tracker,
             &project.forge,
         );
-        if conns.gitlab.is_none() {
+        if conns.forge.is_none() {
             return Err(SessionsError::Invalid(format!(
                 "{}/{} sem conexão do GitLab neste ambiente",
                 project.gh_owner, project.gh_repo
@@ -90,8 +90,14 @@ impl GitlabRemote {
         }
         let source = self
             .credentials
-            .gitlab_source(&project.gh_owner, &project.gh_repo, &gl)
-            .source;
+            .source(
+                &project.gh_owner,
+                &project.gh_repo,
+                &project.tracker,
+                &project.forge,
+                ProviderKind::Gitlab,
+            )
+            .map_or(CredentialSource::None, |s| s.source);
         let cli = self.cli(&conns);
         Ok((gl, cli, source))
     }

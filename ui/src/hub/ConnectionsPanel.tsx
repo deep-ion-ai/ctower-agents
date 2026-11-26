@@ -5,13 +5,8 @@ import { useTower } from "../state/tower";
 import type { Connection } from "../protocol/gen";
 import { errText } from "./calls";
 import {
-  CMD_HINT,
-  CONNECTION_KINDS,
   CRED_HINT,
-  CRED_KINDS,
-  ENDPOINT_HINT,
   EMPTY_CONNECTION_FORM,
-  KIND_LABEL,
   connectionFormOf,
   connectionParams,
   connectionUsers,
@@ -22,6 +17,7 @@ import {
   type ConnectionTest,
   type CredKind,
 } from "./connections";
+import { CRED_TEXT, PROVIDERS, providerOf } from "./providers";
 import { useHubConnections } from "./useConnections";
 
 interface Editing {
@@ -29,14 +25,6 @@ interface Editing {
   id?: number;
   form: ConnectionForm;
 }
-
-const CRED_TEXT: Record<CredKind, string> = {
-  command: "Comando que imprime o token",
-  secret: "Nome do secret do hub",
-  cli: "Login da CLI",
-  file: "Caminho do arquivo com o token",
-  none: "Sem autenticação",
-};
 
 /**
  * Conexões do hub (#238): lista, criação, edição, teste e remoção
@@ -158,7 +146,7 @@ export function HubConnections() {
               <li key={c.id} className="hub-card">
                 <div className="hub-card-head">
                   <h3>{c.name}</h3>
-                  <span className="muted">{KIND_LABEL[c.kind]}</span>
+                  <span className="muted">{providerOf(c.kind).label}</span>
                 </div>
                 <dl className="hub-kv">
                   <div>
@@ -173,12 +161,15 @@ export function HubConnections() {
                     <dt>Usada por</dt>
                     <dd>{users.length > 0 ? users.join(", ") : "nenhum projeto"}</dd>
                   </div>
-                  {typeof c.options?.config_file === "string" && c.options.config_file && (
-                    <div>
-                      <dt>Configuração do jira-cli</dt>
-                      <dd className="mono">{c.options.config_file}</dd>
-                    </div>
-                  )}
+                  {providerOf(c.kind).options.map(({ key, label }) => {
+                    const v = c.options?.[key];
+                    return typeof v === "string" && v ? (
+                      <div key={key}>
+                        <dt>{label}</dt>
+                        <dd className="mono">{v}</dd>
+                      </div>
+                    ) : null;
+                  })}
                 </dl>
                 <div className="form-actions">
                   <button type="button" className="btn" disabled={busy} onClick={() => void test(c)}>
@@ -276,7 +267,8 @@ function ConnectionFormView({
   const nameLocked = id !== undefined && users.length > 0;
   const set = (patch: Partial<ConnectionForm>) => onChange({ ...editing, form: { ...f, ...patch } });
   // Trocar o tipo troca a forma de credencial que ele aceita.
-  const kinds = CRED_KINDS[f.kind];
+  const provider = providerOf(f.kind);
+  const kinds = provider.credential_kinds;
   const credKind = kinds.includes(f.cred) ? f.cred : kinds[0];
   const valueLabel =
     credKind === "secret"
@@ -302,11 +294,14 @@ function ConnectionFormView({
           <select
             id={`${prefix}-kind`}
             value={f.kind}
-            onChange={(e) => set({ kind: e.target.value as ConnectionForm["kind"], cred: CRED_KINDS[e.target.value as ConnectionForm["kind"]][0] })}
+            onChange={(e) => {
+              const kind = e.target.value as ConnectionForm["kind"];
+              set({ kind, cred: providerOf(kind).credential_kinds[0] });
+            }}
           >
-            {CONNECTION_KINDS.map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABEL[k]}
+            {PROVIDERS.map((p) => (
+              <option key={p.kind} value={p.kind}>
+                {p.label}
               </option>
             ))}
           </select>
@@ -314,7 +309,7 @@ function ConnectionFormView({
       ) : (
         <div className="field">
           <span className="label">Tipo (não muda)</span>
-          <span>{KIND_LABEL[f.kind]}</span>
+          <span>{provider.label}</span>
         </div>
       )}
       <div className="field">
@@ -333,11 +328,11 @@ function ConnectionFormView({
         </span>
       </div>
       <div className="field">
-        <label htmlFor={`${prefix}-endpoint`}>{f.kind === "gitlab" ? "Host" : f.kind === "jira" ? "URL" : "API"}</label>
+        <label htmlFor={`${prefix}-endpoint`}>{provider.endpointLabel}</label>
         <input
           id={`${prefix}-endpoint`}
           type="text"
-          placeholder={ENDPOINT_HINT[f.kind]}
+          placeholder={provider.endpointHint}
           value={f.endpoint}
           onChange={(e) => set({ endpoint: e.target.value })}
         />
@@ -359,25 +354,25 @@ function ConnectionFormView({
             id={`${prefix}-value`}
             type="text"
             autoComplete="off"
-            placeholder={credKind === "command" ? CMD_HINT[f.kind] : credKind === "file" ? "~/.config/…/token" : "NOME_DO_SECRET"}
+            placeholder={credKind === "command" ? provider.cmdHint : credKind === "file" ? "~/.config/…/token" : "NOME_DO_SECRET"}
             value={f.cred_value}
             onChange={(e) => set({ cred_value: e.target.value })}
           />
           {CRED_HINT[credKind] && <span className="hint muted">{CRED_HINT[credKind]}</span>}
         </div>
       )}
-      {f.kind === "jira" && (
-        <div className="field hub-wide">
-          <label htmlFor={`${prefix}-config`}>Configuração do jira-cli (opcional)</label>
+      {provider.options.map(({ key, label, placeholder }) => (
+        <div key={key} className="field hub-wide">
+          <label htmlFor={`${prefix}-opt-${key}`}>{label} (opcional)</label>
           <input
-            id={`${prefix}-config`}
+            id={`${prefix}-opt-${key}`}
             type="text"
-            placeholder="vazio = ~/.config/.jira/.config.yml"
-            value={f.config_file}
-            onChange={(e) => set({ config_file: e.target.value })}
+            placeholder={placeholder}
+            value={f.options[key] ?? ""}
+            onChange={(e) => set({ options: { ...f.options, [key]: e.target.value } })}
           />
         </div>
-      )}
+      ))}
       {error && (
         <p role="alert" className="start-error hub-wide">
           {error}

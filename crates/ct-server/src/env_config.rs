@@ -114,20 +114,9 @@ pub fn connection_rows(
     overrides: &ct_core::ConnectionOverrides,
     projects: &[ct_ledger::Project],
 ) -> Vec<EnvConnection> {
-    use ct_core::provider::{self, CredentialSource, ProviderKind};
-    let uses = |p: &ct_ledger::Project, c: &provider::Connection| match c.kind {
-        ProviderKind::Jira => p.tracker.jira().and_then(|j| j.connection) == Some(c.id),
-        ProviderKind::Gitlab => p.forge.gitlab().and_then(|g| g.connection) == Some(c.id),
-        ProviderKind::Github => {
-            let github = p.tracker.kind() == ct_core::TrackerKind::Github
-                || p.forge.kind() == ct_core::ForgeKind::Github;
-            github
-                && provider::github_connection(
-                    conns,
-                    ct_core::github_connection(&p.tracker, &p.forge),
-                )
-                .is_some_and(|g| g.id == c.id)
-        }
+    use ct_core::provider::{self, CredentialSource};
+    let uses = |p: &ct_ledger::Project, c: &provider::Connection| {
+        provider::uses_connection(&p.tracker, &p.forge, conns, c)
     };
     let mut all: std::collections::BTreeSet<&str> = names.iter().map(String::as_str).collect();
     all.extend(conns.iter().map(|c| c.name.as_str()));

@@ -2,6 +2,7 @@
 //! `~/.config/cthub/config.toml` e `~/.local/share/cthub/`, separados do
 //! `ctowerd`.
 
+use ct_core::provider::{ProviderDescriptor, GITHUB};
 use serde::Deserialize;
 use std::io;
 use std::path::PathBuf;
@@ -296,7 +297,7 @@ impl Default for HubConfig {
             bind: "127.0.0.1".into(),
             test_mode: false,
             gh_sync_interval_secs: 180,
-            gh_api_url: "https://api.github.com".into(),
+            gh_api_url: GITHUB.default_endpoint().unwrap_or_default().into(),
             gh_bin: "gh".into(),
             backup_dir: String::new(),
             backup_interval_hours: 6,
