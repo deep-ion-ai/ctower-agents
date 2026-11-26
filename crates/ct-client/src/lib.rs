@@ -74,7 +74,12 @@ pub enum ClientError {
     #[error("ambiente desconectado")]
     Disconnected,
     #[error("{message}")]
-    Rpc { code: i64, message: String },
+    Rpc {
+        code: i64,
+        message: String,
+        /// `error.data` da resposta, se o daemon mandou.
+        data: Option<Value>,
+    },
     #[error("daemon com protocolo incompatível ({daemon})")]
     Incompatible { daemon: String },
     #[error("o daemon não respondeu a tempo")]
@@ -437,6 +442,7 @@ fn rpc_result(v: &Value) -> Result<Value, ClientError> {
                 .and_then(Value::as_str)
                 .unwrap_or("erro sem mensagem")
                 .into(),
+            data: e.get("data").cloned(),
         }),
         None => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
     }
@@ -617,7 +623,18 @@ mod tests {
             rpc_result(&json!({ "id": 1, "error": { "code": -32601, "message": "x" } })),
             Err(ClientError::Rpc {
                 code: -32601,
-                message: "x".into()
+                message: "x".into(),
+                data: None,
+            })
+        );
+        assert_eq!(
+            rpc_result(
+                &json!({ "id": 1, "error": { "code": -32052, "message": "m", "data": { "label": "aprovada" } } })
+            ),
+            Err(ClientError::Rpc {
+                code: -32052,
+                message: "m".into(),
+                data: Some(json!({ "label": "aprovada" })),
             })
         );
     }

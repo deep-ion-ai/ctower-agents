@@ -8,6 +8,7 @@
 // `@tauri-apps/*`.
 
 import type { DaemonApi } from "./daemon";
+import { ApiError } from "./errors";
 import type { EnvStatus, EnvView, HubConnView, PushEvent, UiConfig, UiUpdate, Unsubscribe } from "./types";
 import type { HubEnv, HubInfo } from "../protocol/hub-gen";
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
@@ -217,7 +218,7 @@ export class WebDaemonApi implements DaemonApi, WebAuth {
   }
 
   private failPending(reason: string) {
-    for (const p of this.pending.values()) p.reject(new Error(reason));
+    for (const p of this.pending.values()) p.reject(new ApiError(reason));
     this.pending.clear();
     this.queue = [];
   }
@@ -321,12 +322,15 @@ export class WebDaemonApi implements DaemonApi, WebAuth {
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
-    if (msg.error) p.reject(new Error(msg.error.message ?? "erro do hub"));
+    if (msg.error) {
+      const { code, message, data } = msg.error;
+      p.reject(new ApiError(message ?? "erro do hub", typeof code === "number" ? code : undefined, data));
+    }
     else p.resolve(msg.result);
   }
 
   private send<T>(method: string, params: object): Promise<T> {
-    if (!this.running) return Promise.reject(new Error("hub desconectado"));
+    if (!this.running) return Promise.reject(new ApiError("hub desconectado"));
     const id = ++this.next;
     const frame = JSON.stringify({ id, method, params });
     return new Promise<T>((resolve, reject) => {
