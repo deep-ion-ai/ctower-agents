@@ -826,6 +826,14 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
         }
+        "hub.connections.test" => {
+            // Fora de `hub_call`: lê a conexão com o lock do hub, solta, e
+            // só então confere o secret no store (#281), sem os dois locks.
+            let st2 = st.clone();
+            tokio::task::spawn_blocking(move || connection_test(&st2, &p))
+                .await
+                .map_err(|e| (-32603, e.to_string()))?
+        }
         m if m.starts_with("hub.secrets.") => {
             // Fora de `hub_call`: o `HubSecrets` pega o lock do store e
             // depois o do hub, que `hub_call` já seguraria.
@@ -986,8 +994,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
         "hub.connections.list"
         | "hub.connections.add"
         | "hub.connections.update"
-        | "hub.connections.delete"
-        | "hub.connections.test" => connections_call(&h, method, p),
+        | "hub.connections.delete" => connections_call(&h, method, p),
         "hub.projects.delete" => {
             let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
             let confirm = p.get("confirm").and_then(Value::as_bool).unwrap_or(false);
@@ -1619,6 +1626,61 @@ fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
 /// primeiro ciclo e relata pelo `tracker_status`.
 /// `hub.connections.*` (#235): o cadastro das conexões externas. O resultado
 /// não leva segredo: a credencial é o nome do secret ou o comando.
+/// `hub.connections.test`: a prontidão do descritor e, com credencial
+/// `secret`, se o secret existe no store do hub para cada projeto que usa a
+/// conexão (global ou do projeto; sem projeto, o global). O teste segue sem
+/// rede (#281).
+fn connection_test(st: &HubState, p: &Value) -> RpcResult {
+    let id = i64_param(p, "id")?;
+    let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
+    let (mut t, conn, users) = {
+        let h = st.hub.lock();
+        (
+            h.test_connection(id).map_err(e)?,
+            h.connection(id).map_err(e)?,
+            h.connection_users(id).map_err(e)?,
+        )
+    };
+    if let (
+        ct_core::provider::Readiness::Ready,
+        ct_core::provider::CredentialSource::Secret { name },
+        Some(secrets),
+    ) = (&t.readiness, &conn.credential, st.secrets.as_ref())
+    {
+        if let Some(reason) = missing_secret(name.trim(), &users, |scope| {
+            secrets.resolve(scope).contains_key(name.trim())
+        }) {
+            t.readiness = ct_core::provider::Readiness::NeedsSetup { reason };
+        }
+    }
+    Ok(json!(t))
+}
+
+/// Por que o secret `name` da conexão falta: `has(None)` confere o global,
+/// `has(Some("owner/repo"))` o que vale para o projeto (o dele ou o global).
+/// `None` = existe para todos os que usam a conexão.
+fn missing_secret(
+    name: &str,
+    users: &[String],
+    has: impl Fn(Option<&str>) -> bool,
+) -> Option<String> {
+    let fix = "grave-o em Hub › Secrets e variáveis (global, para uma conexão de vários projetos)";
+    if users.is_empty() {
+        return (!has(None)).then(|| format!("o secret {name} não existe no hub; {fix}"));
+    }
+    let missing: Vec<&str> = users
+        .iter()
+        .map(String::as_str)
+        .filter(|u| !has(Some(u)))
+        .collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "o secret {name} não existe no hub para {}; {fix}",
+            missing.join(", ")
+        )
+    })
+}
+
 fn connections_call(h: &ct_hub_store::Hub, method: &str, p: &Value) -> RpcResult {
     let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
     match method {
@@ -1637,10 +1699,6 @@ fn connections_call(h: &ct_hub_store::Hub, method: &str, p: &Value) -> RpcResult
         "hub.connections.delete" => {
             let id = i64_param(p, "id")?;
             Ok(json!(h.delete_connection(id).map_err(e)?))
-        }
-        "hub.connections.test" => {
-            let id = i64_param(p, "id")?;
-            Ok(json!(h.test_connection(id).map_err(e)?))
         }
         _ => Err((-32601, format!("método desconhecido: {method}"))),
     }
@@ -4053,6 +4111,56 @@ pub(crate) mod tests {
 
     const SEGREDO: &str = "valor-que-nunca-sai-987";
 
+    /// #281: "Testar" de uma conexão com credencial `secret` confere se o
+    /// secret existe no store do hub; antes de gravar, fica a configurar.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn testar_conexao_com_secret_confere_o_store_do_hub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = hub_com_secrets(tmp.path());
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui
+            .call(
+                "hub.connections.add",
+                json!({ "name": "jira-acme", "kind": "jira", "endpoint": "https://jira.example.com",
+                        "credential": { "kind": "secret", "name": "JIRA_TOKEN_ACME" } }),
+            )
+            .await;
+        let id = v["result"]["id"].as_i64().unwrap();
+        let v = ui.call("hub.connections.test", json!({ "id": id })).await;
+        let r = &v["result"]["readiness"];
+        assert_eq!(r["state"], "needs_setup", "{v}");
+        assert!(
+            r["reason"]
+                .as_str()
+                .unwrap()
+                .contains("o secret JIRA_TOKEN_ACME não existe no hub"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.secrets.set",
+                json!({ "scope": "global", "name": "JIRA_TOKEN_ACME", "kind": "secret", "value": SEGREDO }),
+            )
+            .await;
+        assert!(v.get("error").is_none(), "{v}");
+        let v = ui.call("hub.connections.test", json!({ "id": id })).await;
+        assert_eq!(v["result"]["readiness"]["state"], "ready", "{v}");
+        assert!(!v.to_string().contains(SEGREDO));
+    }
+
+    #[test]
+    fn secret_da_conexao_falta_por_projeto() {
+        let users = vec!["acme/web".to_string(), "acme/api".to_string()];
+        // Só o acme/web tem o secret no escopo dele, e não há global.
+        let has = |scope: Option<&str>| scope == Some("acme/web");
+        let r = missing_secret("TOKEN", &users, has).unwrap();
+        assert!(r.contains("para acme/api;"), "{r}");
+        assert!(!r.contains("acme/web"), "{r}");
+        assert_eq!(missing_secret("TOKEN", &users, |_| true), None);
+        assert!(missing_secret("TOKEN", &[], |s| s.is_some()).is_some());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn secrets_list_nunca_devolve_o_valor_de_um_secret() {
         let tmp = tempfile::tempdir().unwrap();
@@ -4963,7 +5071,7 @@ pub(crate) mod tests {
                         7 => json!("h2. Contexto\n*a* <script>x</script>"),
                         8 => Value::Null,
                         _ => {
-                            let e = format!("Jira, PROJ-{n}: o Jira recusou a senha (401)");
+                            let e = format!("Jira, PROJ-{n}: o Jira recusou a credencial (401)");
                             let r =
                                 json!({ "id": v["id"], "error": { "code": -32000, "message": e } });
                             let _ = tx.send(WsMsg::Text(r.to_string().into())).await;
@@ -5347,7 +5455,7 @@ pub(crate) mod tests {
         assert_eq!(v["result"]["body"], "", "{v}");
         let v = ui.call("hub.workitem.body", p(9)).await;
         assert_eq!(
-            v["error"]["message"], "Jira, PROJ-9: o Jira recusou a senha (401)",
+            v["error"]["message"], "Jira, PROJ-9: o Jira recusou a credencial (401)",
             "{v}"
         );
     }
