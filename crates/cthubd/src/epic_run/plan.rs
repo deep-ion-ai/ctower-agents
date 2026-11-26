@@ -49,7 +49,13 @@
 //!   `resume_at` (se a conta não esgotou de novo, senão adia), e os nós
 //!   estacionados voltam antes de qualquer início, que só vem no ciclo
 //!   seguinte. Pausa manual tem precedência: não retoma sozinha.
-//! - **Integração:** todos os nós do plano `mesclada` → `integrando`.
+//! - **Integração (#302):** todos os nós do plano `mesclada` → `integrando`.
+//!   Sem PR do épico aberto (`wip` → base), o motor inicia a sessão de
+//!   integração (e a reinicia se ela sumir). Com o PR aberto, a execução vai
+//!   a `aguardando_merge`: falha de CI e review de colaborador voltam à
+//!   sessão (com tentativas), mas o merge nunca é pedido, e o PR verde
+//!   esperando o humano não conta como parado. PR mesclado → `concluido`
+//!   (a sessão é encerrada); fechado sem merge → `integrando` de novo.
 
 use crate::autopilot::deps::cycle_members;
 use crate::autopilot::plan::{
@@ -128,6 +134,18 @@ pub struct ItemSnap {
     pub merged: Option<i64>,
 }
 
+/// A integração do épico (#302).
+#[derive(Debug, Clone, Default)]
+pub struct IntegrationSnap {
+    /// Sessão de integração (a de `EpicRun::integration_session`) como o
+    /// hub a conhece; `None` com a sessão gravada = ainda desconhecida.
+    pub session: Option<SessionSnap>,
+    /// PR do épico (`wip` → base) aberto, com o fechamento.
+    pub open: Option<Closing>,
+    /// PR do épico mesclado na base.
+    pub merged: bool,
+}
+
 /// Fotografia de uma execução para uma decisão.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -155,6 +173,7 @@ pub struct Snapshot {
     /// Último "devolver ao motor" de cada nó (#301): entrada humana antes
     /// disso não assume de novo.
     pub handback_at: BTreeMap<i64, i64>,
+    pub integration: IntegrationSnap,
 }
 
 /// Uma ação do ciclo. `message` vai para os eventos da execução.
@@ -225,6 +244,19 @@ pub enum Action {
     RemoveWorktree {
         number: i64,
         worktree: String,
+        message: String,
+    },
+    /// Inicia a sessão de integração do épico (#302).
+    StartIntegration { message: String },
+    /// A sessão de integração sumiu: limpa para reiniciar no próximo ciclo.
+    ClearIntegration { message: String },
+    /// Encerra a sessão de integração (épico mesclado).
+    EndIntegration { session_id: String, message: String },
+    /// Texto do fechamento do PR do épico à sessão de integração.
+    IntegrationSend {
+        session_id: String,
+        close: CloseState,
+        text: String,
         message: String,
     },
     /// Pedido de decisão ao desenvolvedor; com `block`, o nó fica
@@ -663,8 +695,149 @@ pub fn decide(s: &Snapshot) -> Outcome {
             resume_at: None,
             message: "todas as sub-issues foram mescladas na wip: começa a integração".into(),
         });
+    } else if matches!(
+        status,
+        EpicRunStatus::Integrando | EpicRunStatus::AguardandoMerge
+    ) && !resumed
+    {
+        integration_step(s, status, exhausted.is_some(), &mut out);
     }
     out
+}
+
+/// A integração do épico (veja o módulo).
+fn integration_step(s: &Snapshot, status: EpicRunStatus, exhausted: bool, out: &mut Outcome) {
+    let now = s.now;
+    let i = &s.integration;
+    let epic = format!("{}/{}#{}", s.run.owner, s.run.repo, s.run.epic);
+    let sess_id = s.run.integration_session.clone();
+    let live = i.session.as_ref().is_some_and(|x| x.state.is_live());
+    let status_to = |to: EpicRunStatus, message: String| Action::Status {
+        to,
+        reason: None,
+        resume_at: None,
+        message,
+    };
+    if i.merged {
+        if status == EpicRunStatus::Integrando {
+            out.actions.push(status_to(
+                EpicRunStatus::AguardandoMerge,
+                format!("{epic}: PR do épico aberto"),
+            ));
+        }
+        out.actions.push(status_to(
+            EpicRunStatus::Concluido,
+            format!("{epic}: o PR do épico foi mesclado; execução concluída"),
+        ));
+        if let Some(id) = sess_id.filter(|_| live) {
+            out.actions.push(Action::EndIntegration {
+                session_id: id,
+                message: format!("{epic}: a sessão de integração foi encerrada"),
+            });
+        }
+        return;
+    }
+    if let Some(c) = &i.open {
+        if status == EpicRunStatus::Integrando {
+            out.actions.push(status_to(
+                EpicRunStatus::AguardandoMerge,
+                format!(
+                    "{epic}: PR #{} do épico aberto; aguardando o merge do desenvolvedor",
+                    c.pr.number
+                ),
+            ));
+        }
+        // CI e review voltam à sessão; o merge é humano.
+        let (Some(id), Some(x)) = (sess_id, i.session.as_ref()) else {
+            return;
+        };
+        let Some(since) = x.idle_since.filter(|_| x.state == SessionState::Idle) else {
+            return;
+        };
+        if exhausted {
+            return;
+        }
+        match close_decision(&CloseInput {
+            now,
+            max_ci_attempts: s.max_ci_attempts,
+            idle_timeout_min: s.idle_timeout_min,
+            idle_since: since,
+            closing: c,
+            slug: &epic,
+            texts: EPIC_TEXTS,
+        }) {
+            CloseStep::Send {
+                kind: SendKind::Feedback(_),
+                close,
+                text,
+                message,
+            } => out.actions.push(Action::IntegrationSend {
+                session_id: id,
+                close,
+                text,
+                message,
+            }),
+            CloseStep::Track(close) => out.actions.push(Action::Track {
+                number: s.run.epic,
+                close,
+            }),
+            CloseStep::Block {
+                reason,
+                status_reason,
+                ..
+            } => {
+                let green = c
+                    .checks
+                    .as_ref()
+                    .is_some_and(|k| k.state == ct_ledger::ChecksState::Success);
+                let origin = if reason == BLOCK_ATTEMPTS {
+                    EpicDecisionOrigin::CiEsgotado
+                } else {
+                    EpicDecisionOrigin::SemProgresso
+                };
+                // Verde e sem pendência: é a vez do desenvolvedor mesclar.
+                if (origin == EpicDecisionOrigin::SemProgresso && green)
+                    || s.pending.contains(&(None, origin))
+                {
+                    return;
+                }
+                let why = status_reason
+                    .strip_prefix("piloto automático: ")
+                    .unwrap_or(&status_reason);
+                out.actions.push(Action::Ask {
+                    number: None,
+                    origin,
+                    block: false,
+                    text: format!("{epic} (PR do épico): {why}. Assumir ou replanejar?"),
+                });
+            }
+            // Merge: nunca pedido.
+            _ => {}
+        }
+        return;
+    }
+    if status == EpicRunStatus::AguardandoMerge {
+        out.actions.push(status_to(
+            EpicRunStatus::Integrando,
+            format!("{epic}: o PR do épico foi fechado sem merge; a integração recomeça"),
+        ));
+    }
+    match (&sess_id, &i.session) {
+        (Some(_), Some(x)) if x.state.is_live() => {}
+        (Some(_), None) if now - s.run.updated_at < START_GRACE_MS => {}
+        (Some(_), _) => out.actions.push(Action::ClearIntegration {
+            message: format!(
+                "{epic}: a sessão de integração terminou sem abrir o PR; o hub inicia outra"
+            ),
+        }),
+        (None, _) => {
+            if s.env_online && !exhausted {
+                out.actions.push(Action::StartIntegration {
+                    message: format!("{epic}: sessão de integração iniciada"),
+                });
+            }
+        }
+    }
 }
 
 /// Um nó com sessão (`em_execucao` ou `em_pr`) na execução que roda: PR

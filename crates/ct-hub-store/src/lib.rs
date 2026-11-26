@@ -1057,6 +1057,11 @@ CREATE INDEX epic_run_event_run ON epic_run_event (run_id, id);
 ALTER TABLE epic_run ADD COLUMN plan_model TEXT;
 ALTER TABLE epic_run ADD COLUMN plan_effort TEXT;
 "#,
+    // 48: sessão de integração da execução de épico (#302): a sessão do
+    // épico que valida a `wip` e abre o PR para a base.
+    r#"
+ALTER TABLE epic_run ADD COLUMN integration_session TEXT;
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -5490,7 +5495,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 47);
+        assert_eq!(v, 48);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

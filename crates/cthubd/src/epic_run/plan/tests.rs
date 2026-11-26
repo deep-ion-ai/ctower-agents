@@ -23,6 +23,7 @@ fn run(status: EpicRunStatus) -> EpicRun {
         plan_session: None,
         plan_model: None,
         plan_effort: None,
+        integration_session: None,
         paused_reason: None,
         resume_at: None,
         created_at: 0,
@@ -117,6 +118,7 @@ fn snap(status: EpicRunStatus, plan: Vec<EpicPlanNode>, edges: Vec<EpicPlanEdge>
         max_ci_attempts: 2,
         idle_timeout_min: 30,
         handback_at: BTreeMap::new(),
+        integration: IntegrationSnap::default(),
     }
 }
 
@@ -819,4 +821,142 @@ fn entrada_humana_assume_e_o_handback_devolve() {
     set(&mut s, 11, |x| x.state = EpicNodeState::Assumida);
     s.handback_at.clear();
     assert!(node_moves(&decide(&s)).is_empty());
+}
+
+// --- Integração (#302) -----------------------------------------------------
+
+/// Execução em `status` com as duas sub-issues mescladas.
+fn integrating(status: EpicRunStatus) -> Snapshot {
+    let mut s = snap(status, vec![pnode(11, &[]), pnode(12, &[])], vec![]);
+    for n in [11, 12] {
+        set(&mut s, n, |x| x.state = EpicNodeState::Mesclada);
+    }
+    s
+}
+
+fn epic_pr(s: &mut Snapshot, head: &str, conclusion: &str, close: CloseState) {
+    let mut c = Closing {
+        work_item_id: 10,
+        integration: "develop".into(),
+        pr: pr(10, head),
+        checks: Some(checks(10, head, conclusion)),
+        feedback: None,
+        state: close,
+    };
+    c.pr.base = "develop".into();
+    c.pr.head = WIP.into();
+    c.feedback = Some(PrFeedback {
+        pr: c.pr.clone(),
+        read_at_updated: Some(50),
+        threads: vec![],
+        changes_requested: vec![],
+    });
+    s.integration.open = Some(c);
+}
+
+fn integ_session(s: &mut Snapshot, state: SessionState, idle_min: i64) {
+    s.run.integration_session = Some("s-int".into());
+    s.integration.session = Some(SessionSnap {
+        state,
+        idle_since: (state == SessionState::Idle).then_some(T - idle_min * 60_000),
+        human_input_at: None,
+    });
+}
+
+fn has(o: &Outcome, f: impl Fn(&Action) -> bool) -> bool {
+    o.actions.iter().any(f)
+}
+
+#[test]
+fn integracao_inicia_a_sessao_e_espera_o_pr() {
+    let s = integrating(EpicRunStatus::Executando);
+    assert_eq!(
+        status_to(&decide(&s)),
+        vec![(EpicRunStatus::Integrando, None)]
+    );
+    let mut s = integrating(EpicRunStatus::Integrando);
+    assert!(has(&decide(&s), |a| matches!(
+        a,
+        Action::StartIntegration { .. }
+    )));
+    // Ambiente offline ou janela esgotada: espera.
+    s.env_online = false;
+    assert!(!has(&decide(&s), |a| matches!(
+        a,
+        Action::StartIntegration { .. }
+    )));
+    // Sessão viva: nada; sessão que terminou: limpa para reiniciar.
+    let mut s = integrating(EpicRunStatus::Integrando);
+    integ_session(&mut s, SessionState::Running, 0);
+    assert!(decide(&s).actions.is_empty());
+    integ_session(&mut s, SessionState::Exited, 0);
+    assert!(has(&decide(&s), |a| matches!(
+        a,
+        Action::ClearIntegration { .. }
+    )));
+}
+
+#[test]
+fn pr_do_epico_aguarda_o_merge_sem_pedir_e_devolve_o_ci() {
+    let mut s = integrating(EpicRunStatus::Integrando);
+    integ_session(&mut s, SessionState::Idle, 1);
+    epic_pr(&mut s, "e1", "success", CloseState::default());
+    let o = decide(&s);
+    assert_eq!(status_to(&o), vec![(EpicRunStatus::AguardandoMerge, None)]);
+    // Verde, mesmo ociosa há muito: nem merge, nem pedido de decisão.
+    s.run.status = EpicRunStatus::AguardandoMerge;
+    integ_session(&mut s, SessionState::Idle, 600);
+    let o = decide(&s);
+    assert!(
+        !has(&o, |a| matches!(
+            a,
+            Action::IntegrationSend { .. } | Action::Send { .. } | Action::Ask { .. }
+        )),
+        "{o:?}"
+    );
+    // CI falho: correção à sessão de integração.
+    integ_session(&mut s, SessionState::Idle, 1);
+    epic_pr(&mut s, "e2", "failure", CloseState::default());
+    let o = decide(&s);
+    let Some(Action::IntegrationSend { text, close, .. }) = o
+        .actions
+        .iter()
+        .find(|a| matches!(a, Action::IntegrationSend { .. }))
+    else {
+        panic!("{o:?}")
+    };
+    assert!(text.starts_with(EPIC_FEEDBACK_REQUEST));
+    assert_eq!(close.attempts, 1);
+    // Esgotou: pedido de decisão da execução (sem nó).
+    epic_pr(
+        &mut s,
+        "e3",
+        "failure",
+        CloseState {
+            attempts: 2,
+            feedback_head: Some("e2".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        asks(&decide(&s)),
+        vec![(None, EpicDecisionOrigin::CiEsgotado, false)]
+    );
+}
+
+#[test]
+fn merge_do_epico_conclui_e_fechado_sem_merge_recomeca() {
+    let mut s = integrating(EpicRunStatus::AguardandoMerge);
+    integ_session(&mut s, SessionState::Idle, 1);
+    s.integration.merged = true;
+    let o = decide(&s);
+    assert_eq!(status_to(&o), vec![(EpicRunStatus::Concluido, None)]);
+    assert!(has(&o, |a| matches!(a, Action::EndIntegration { .. })));
+    // PR fechado sem merge: volta a integrando.
+    let mut s = integrating(EpicRunStatus::AguardandoMerge);
+    integ_session(&mut s, SessionState::Running, 0);
+    assert_eq!(
+        status_to(&decide(&s)),
+        vec![(EpicRunStatus::Integrando, None)]
+    );
 }
