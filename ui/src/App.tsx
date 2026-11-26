@@ -109,7 +109,7 @@ function Incompatible({ env, name, error }: { env: string; name: string; error: 
 
 function Main() {
   const { screen, go, openTab, current, editors } = useNav();
-  const { dashboards, status, envs, hub, web, api } = useTower();
+  const { dashboards, status, envs, envsLoaded, hub, web, api } = useTower();
   const now = useNow();
   // PWA (#203): deep link das notificações e a inscrição presa à sessão web.
   usePwa(api, !!web, openTab);
@@ -140,6 +140,17 @@ function Main() {
         <div className="banner" role="status">
           hub indisponível: visão parcial. As sessões seguem nos ambientes com a última configuração recebida; as
           mudanças esperam no outbox e seguem quando o hub voltar.
+        </div>
+      )}
+      {/* Primeiro uso (#281): sem ambiente nem hub, a Sala de controle vazia
+          não diz por onde começar. */}
+      {!web && envsLoaded && envs.length === 0 && !hub.conn && (
+        <div className="banner" role="status" aria-label="Primeiros passos">
+          Primeiros passos: cadastre o ambiente (o ctowerd, com o token de UI dele) e a conexão com o hub (cthubd). Os
+          projetos, as atribuições e as conexões com GitHub, GitLab e Jira ficam no hub.{" "}
+          <button type="button" className="btn" onClick={() => openTab(settingsTab({ section: "connections" }))}>
+            Configurar ambiente e hub
+          </button>
         </div>
       )}
       {hub.unconfigured && (

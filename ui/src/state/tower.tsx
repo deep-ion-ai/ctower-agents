@@ -123,6 +123,8 @@ export interface Tower {
    */
   web: boolean;
   envs: EnvView[];
+  /** A lista de ambientes já foi lida (antes disso, `envs` vazio não diz nada). */
+  envsLoaded: boolean;
   status: Record<string, EnvStatus>;
   dashboards: Record<string, Dashboard>;
   /** `env.info` de cada ambiente conectado. */
@@ -167,6 +169,7 @@ export function useTower(): Tower {
 export function TowerProvider({ api, children }: { api: DaemonApi; children: ReactNode }) {
   const web = !!api.web;
   const [localEnvs, setEnvs] = useState<EnvView[]>([]);
+  const [envsLoaded, setEnvsLoaded] = useState(false);
   const [localStatus, setStatus] = useState<Record<string, EnvStatus>>({});
   const [localDashboards, setDashboards] = useState<Record<string, Dashboard>>({});
   const [infos, setInfos] = useState<Record<string, EnvInfo>>({});
@@ -346,6 +349,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
     if (web) return refreshHub();
     const list = await api.listEnvs();
     setEnvs(list);
+    setEnvsLoaded(true);
     const st = await api.statuses();
     setStatus(Object.fromEntries(st.map((s) => [s.env, s])));
     for (const s of st) {
@@ -512,6 +516,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
       api,
       web,
       envs,
+      envsLoaded,
       status,
       dashboards,
       infos,
@@ -537,6 +542,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
       api,
       web,
       envs,
+      envsLoaded,
       status,
       dashboards,
       infos,
