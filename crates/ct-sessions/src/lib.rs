@@ -156,10 +156,29 @@ pub struct Sessions {
     inner: Arc<Inner>,
 }
 
+/// Aviso do resolvedor de token novo no cache (#266): o sync acabou de
+/// resolver o token de uma conexão, e as sessões vivas passam a mascará-lo
+/// ([`Sessions::refresh_masks`]). Roda em outra thread porque quem resolve
+/// pode estar com o ledger ou outro lock do `Sessions`.
+fn mask_refresher(weak: std::sync::Weak<Inner>) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        let Some(inner) = weak.upgrade() else {
+            return;
+        };
+        let sessions = Sessions { inner };
+        let spawned = std::thread::Builder::new()
+            .name("ct-mask-refresh".into())
+            .spawn(move || sessions.refresh_masks());
+        if let Err(e) = spawned {
+            tracing::warn!("secrets: mascaramento das sessões não atualizado ({e})");
+        }
+    }
+}
+
 impl Sessions {
     pub fn new(cfg: SessionsConfig, ledger: Ledger, notify: Notifier) -> Self {
         Sessions {
-            inner: Arc::new(Inner {
+            inner: Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| Inner {
                 cfg,
                 ledger: Mutex::new(ledger),
                 live: Mutex::new(HashMap::new()),
@@ -167,7 +186,9 @@ impl Sessions {
                 masks: Mutex::new(HashMap::new()),
                 session_tokens: Mutex::new(HashMap::new()),
                 shells: Mutex::new(HashMap::new()),
-                credentials: Arc::new(resolver::CredentialResolver::new()),
+                credentials: Arc::new(resolver::CredentialResolver::with_on_new(mask_refresher(
+                    weak.clone(),
+                ))),
                 release_start: Mutex::new(()),
                 notify,
             }),

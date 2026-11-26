@@ -13,6 +13,12 @@
 //! ambiente), o token é resolvido de novo. [`CredentialResolver::with_refresh`]
 //! descarta o token quando a operação falha por autenticação e tenta uma vez
 //! com um token novo. Nenhum valor entra em log ou erro.
+//!
+//! [`CredentialResolver::cached`] só lê o cache, sem resolver: é o que o
+//! mascaramento das sessões usa (#266), para que abrir uma sessão nunca
+//! rode comando de credencial. Cada token resolvido de novo avisa quem
+//! criou o resolvedor ([`CredentialResolver::with_on_new`]), que atualiza o
+//! mascaramento das sessões vivas.
 
 use ct_core::provider::CredentialSource;
 use ct_proc::{run_credential, CredentialError, Secret};
@@ -58,9 +64,13 @@ struct Entry {
     token: Arc<Secret>,
 }
 
+/// Aviso de token novo no cache (sem o valor).
+type OnNew = Box<dyn Fn() + Send + Sync>;
+
 /// Cache de tokens por chave. Fica no `Sessions`, compartilhado.
 pub(crate) struct CredentialResolver {
     cache: Mutex<HashMap<String, Entry>>,
+    on_new: Option<OnNew>,
 }
 
 impl std::fmt::Debug for CredentialResolver {
@@ -77,7 +87,26 @@ impl CredentialResolver {
     pub(crate) fn new() -> Self {
         CredentialResolver {
             cache: Mutex::new(HashMap::new()),
+            on_new: None,
         }
+    }
+
+    /// Resolvedor que chama `on_new` a cada token resolvido e guardado no
+    /// cache, já fora do lock (#266). Quem chama `token` pode estar com
+    /// outros locks: `on_new` não deve tomá-los na mesma thread.
+    pub(crate) fn with_on_new(on_new: impl Fn() + Send + Sync + 'static) -> Self {
+        CredentialResolver {
+            cache: Mutex::new(HashMap::new()),
+            on_new: Some(Box::new(on_new)),
+        }
+    }
+
+    /// Token da chave só se já estiver no cache com a mesma fonte. Nunca
+    /// resolve (não roda comando, não lê arquivo).
+    pub(crate) fn cached(&self, key: &str, source: &CredentialSource) -> Option<Arc<Secret>> {
+        let cache = self.cache.lock().unwrap();
+        let e = cache.get(key)?;
+        (e.source == *source).then(|| e.token.clone())
     }
 
     /// Token da chave: do cache se a fonte não mudou, senão resolvido agora.
@@ -95,6 +124,9 @@ impl CredentialResolver {
                 token: token.clone(),
             },
         );
+        if let Some(f) = &self.on_new {
+            f();
+        }
         Ok(token)
     }
 
@@ -276,6 +308,43 @@ mod tests {
         let none = CredentialSource::None;
         let e = r.token(ask("x:1", "GitLab", &none)).unwrap_err();
         assert_eq!(e, CredentialError::Missing { what: "GitLab" });
+    }
+
+    #[test]
+    fn cached_nao_resolve_e_so_vale_com_a_mesma_fonte() {
+        let dir = tempfile::tempdir().unwrap();
+        let marca = dir.path().join("marca");
+        let c = cmd(&format!(
+            "echo x >> {}; printf 'tok-acme-5\\n'",
+            marca.display()
+        ));
+        let r = CredentialResolver::new();
+        assert!(r.cached("jira:5", &c).is_none());
+        assert!(!marca.exists(), "cached rodou o comando");
+        r.token(ask("jira:5", "Jira", &c)).unwrap();
+        assert_eq!(r.cached("jira:5", &c).unwrap().expose(), "tok-acme-5");
+        assert!(r.cached("jira:5", &cmd("printf 'outro\\n'")).is_none());
+        assert!(r.cached("gitlab:5", &c).is_none());
+    }
+
+    #[test]
+    fn token_novo_avisa_e_o_do_cache_nao() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let avisos = Arc::new(AtomicUsize::new(0));
+        let n = avisos.clone();
+        let r = CredentialResolver::with_on_new(move || {
+            n.fetch_add(1, Ordering::SeqCst);
+        });
+        let c = cmd("printf 'tok-acme-6\\n'");
+        r.token(ask("jira:6", "Jira", &c)).unwrap();
+        r.token(ask("jira:6", "Jira", &c)).unwrap();
+        assert_eq!(avisos.load(Ordering::SeqCst), 1);
+        r.invalidate("jira:6");
+        r.token(ask("jira:6", "Jira", &c)).unwrap();
+        assert_eq!(avisos.load(Ordering::SeqCst), 2);
+        // Falha ao resolver não avisa.
+        let _ = r.token(ask("x:6", "GitLab", &CredentialSource::None));
+        assert_eq!(avisos.load(Ordering::SeqCst), 2);
     }
 
     #[test]
