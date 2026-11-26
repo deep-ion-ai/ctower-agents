@@ -20,4 +20,14 @@ assumed_since: number | null,
 /**
  * Motivo do estado (bloqueio, remoção do worktree recusada...).
  */
-reason: string | null, updated_at: number, };
+reason: string | null, 
+/**
+ * Head do PR quando o motor pediu o rebase (depois de um merge na
+ * `wip`); `None` = nenhum pedido pendente.
+ */
+rebase_head: string | null, 
+/**
+ * Quando o pedido de rebase foi enviado à sessão; `None` com
+ * `rebase_head` = ainda por enviar.
+ */
+rebase_at: number | null, updated_at: number, };
