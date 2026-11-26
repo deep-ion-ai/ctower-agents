@@ -950,7 +950,8 @@ CREATE TABLE connection (
     // arestas vivas de `autopilot_dependency`; a aprovação as congela em
     // `epic_plan_edge`), os nós do plano (modelo, esforço, áreas em JSON), o
     // estado de cada sub-issue na execução, a fila de pedidos de decisão e
-    // os eventos do motor. A impressão digital de cada sub-issue é a da
+    // os eventos do motor. `plan_session` é a sessão de plano viva (a única
+    // que grava o rascunho). A impressão digital de cada sub-issue é a da
     // aprovação (sub-issue alterada depois do plano); `rebase_head` é o
     // head do PR quando o motor pediu o rebase (`rebase_at` = enviado).
     r#"
@@ -964,6 +965,7 @@ CREATE TABLE epic_run (
   max_parallel  INTEGER NOT NULL DEFAULT 2,
   code_review   INTEGER NOT NULL DEFAULT 0,
   started_by    TEXT NOT NULL,
+  plan_session  TEXT,
   paused_reason TEXT,
   resume_at     INTEGER,
   created_at    INTEGER NOT NULL,
