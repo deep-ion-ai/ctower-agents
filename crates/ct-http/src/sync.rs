@@ -88,62 +88,7 @@ pub const CHANNEL_PATH: &str = "/sync/channel";
 /// despachar. Fora: terminal (`session.attach|detach|input|resize|peek`),
 /// o shell livre (`shell.*`, #428), `session.permission.*`, `env.update|rollback|check_update`,
 /// `env.config.*`, `cleanup.*`, `github.*` e `sync.now`.
-pub const CHANNEL_METHODS: &[&str] = &[
-    "env.info",
-    "projects.list",
-    "dashboard.get",
-    "tree.get",
-    "review.get",
-    "events.list",
-    "review.mark_reviewed",
-    "recovery.list",
-    "recovery.archived",
-    "transcript.tail",
-    "session.context",
-    // Uso da sessão pelo statusline (#106), só leitura. O plano da conta
-    // vem de `hub.plan.accounts` (o `account.get` traz o e-mail).
-    "session.usage",
-    "session.get",
-    "session.start",
-    "session.start_project",
-    "session.start_gestor",
-    // Sessão de release (#204): só a UI inicia.
-    "session.start_release",
-    "session.resume",
-    // Retomada da sessão parada pelo limite do plano (#183): só um texto
-    // fixo no PTY, para o agendador do piloto automático.
-    "session.continue",
-    "session.kill",
-    "session.archive",
-    "session.remote_control.enable",
-    "hub.sync.now",
-    // Aviso do hub de que a configuração mudou (#165: um secret renovado):
-    // só acorda o pull, que segue com o token de sync e o `since` de
-    // sempre. Sem parâmetros e sem nada na resposta.
-    "hub.config.changed",
-    // "Ver issue" de projeto Jira (#434): o hub não alcança o Jira e lê a
-    // descrição pelo ambiente de sync, sem gravar.
-    "tracker.issue_body",
-    // "Adicionar issue pelo ID" (#148): o hub pede ao ambiente de sync do
-    // projeto Jira; só traz ao espelho uma issue que o Jira já mostra (sai
-    // na próxima poda se não ganhar work item).
-    "tracker.add_issue",
-    // Tela Logs na web (#65): só as últimas linhas, já mascaradas; o modo
-    // seguir é por conexão e fica no app desktop.
-    "logs.tail",
-    // Visualizador de markdown (#167): só leitura de `.md` dentro das pastas
-    // da sessão ou da pasta de docs do projeto, validado no ambiente.
-    "file.read",
-    "files.shared",
-    "docs.list",
-    // Visualizador de diff (#168): só leitura da worktree do work item.
-    "git.diff",
-    "git.diff_file",
-    "git.commits",
-    // Modo autônomo (#181): alinhar a branch de integração com a base
-    // (o agendador da #183 e o "Verificar agora" da tela do projeto).
-    "autonomy.align",
-];
+pub const CHANNEL_METHODS: &[&str] = crate::methods::CHANNEL_METHODS;
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:
 /// `permission_request` (traz o `tool_input`), `update.status`,

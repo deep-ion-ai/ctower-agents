@@ -1073,21 +1073,20 @@ mod tests {
         );
     }
 
-    /// A `WebDaemonApi` (`ui/src/api/web.ts`, `ENV_METHODS`) recusa sem ir
-    /// ao hub o que está fora da lista do canal: as duas listas são iguais.
+    /// A `WebDaemonApi` (`ui/src/api/web.ts`, `ENV_METHODS`) usa o escopo
+    /// `web` gerado do registro do ambiente (`METHOD_SCOPES.web` em
+    /// `protocol/gen/methods.ts`): é a mesma lista do canal reverso, e o
+    /// hub recusa sem ir ao ambiente o que não estiver nela.
     #[test]
     fn lista_de_metodos_do_ambiente_da_ui_web_e_a_do_canal() {
-        let src = include_str!("../../../ui/src/api/web.ts");
-        let start = src.find("ENV_METHODS").expect("ENV_METHODS na web.ts");
+        let src = include_str!("../../../ui/src/protocol/gen/methods.ts");
+        let start = src.find("  web: [").expect("escopo web em methods.ts");
         let body = &src[start..];
-        let body = &body[body.find('[').unwrap() + 1..body.find(']').unwrap()];
-        let ui: std::collections::BTreeSet<&str> = body
-            .split(',')
-            .map(|m| m.trim().trim_matches('"'))
-            .filter(|m| !m.is_empty())
-            .collect();
+        let body = &body[..body.find("  ],").unwrap()];
+        let ui: std::collections::BTreeSet<&str> = body.split('"').skip(1).step_by(2).collect();
         let hub: std::collections::BTreeSet<&str> =
             ct_http::sync::CHANNEL_METHODS.iter().copied().collect();
+        assert!(!hub.is_empty());
         assert_eq!(ui, hub);
     }
 }
