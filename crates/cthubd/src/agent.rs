@@ -6,6 +6,8 @@
 //! A exceção é `POST /agent/v1/autopilot/dependencies` (#215): a sessão de
 //! análise da rodada (e só ela) grava as dependências entre as issues da
 //! fila do piloto automático, que valem na hora (a pessoa corrige na UI).
+//! E `POST /agent/v1/epic/plan` (#299): a sessão de plano da execução de
+//! épico (e só ela) grava o rascunho do plano, que espera a aprovação.
 //!
 //! O ambiente manda `X-Ctower-Env-Id`; um `env_id` diferente do preso ao
 //! token de sync do mesmo ambiente dá `403`, como no sync.
@@ -490,6 +492,125 @@ pub(crate) async fn set_dependencies(
         notify.autopilot.kick();
     }
     resp
+}
+
+#[derive(Deserialize)]
+struct EpicPlanBody {
+    owner: String,
+    repo: String,
+    epic: i64,
+    #[serde(flatten)]
+    input: ct_hub_store::EpicPlanSessionInput,
+}
+
+/// `POST /agent/v1/epic/plan` (#299): o plano da sessão de plano da
+/// execução ativa do épico, no ambiente da execução. Recusa (400) nó fora
+/// do épico e ciclo no grafo efetivo (as arestas informadas, menos as que
+/// a pessoa removeu à mão, mais as manuais).
+pub(crate) async fn set_epic_plan(
+    State(st): State<HubState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let session = headers
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    with_env(st, headers, move |h, env_id| {
+        let b: EpicPlanBody =
+            serde_json::from_slice(&body).map_err(|e| bad(format!("plano inválido: {e}")))?;
+        let p = h
+            .find_project(&b.owner, &b.repo)
+            .map_err(internal)?
+            .ok_or_else(|| not_found(format!("projeto {}/{} não cadastrado", b.owner, b.repo)))?;
+        let forbidden = |m: String| (StatusCode::FORBIDDEN, m);
+        let Some(run) = h.active_epic_run(p.id, b.epic).map_err(internal)? else {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("o épico #{} não tem execução ativa", b.epic),
+            ));
+        };
+        if run.env_id != env_id {
+            return Err(forbidden(format!(
+                "a execução do épico #{} roda em outro ambiente",
+                b.epic
+            )));
+        }
+        let Some(session) = session.filter(|s| run.plan_session.as_ref() == Some(s)) else {
+            return Err(forbidden(
+                "só a sessão de plano da execução grava o plano".into(),
+            ));
+        };
+        // Ciclo no grafo efetivo.
+        let numbers: std::collections::BTreeSet<i64> =
+            b.input.nodes.iter().map(|n| n.node.number).collect();
+        let deps = h.autopilot_dependencies(p.id).map_err(internal)?;
+        let mut graph: std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>> =
+            Default::default();
+        for n in &b.input.nodes {
+            for x in &n.blocked_by {
+                let removed = deps.iter().any(|d| {
+                    d.number == n.node.number
+                        && d.blocker == x.number
+                        && d.removed
+                        && d.source == ct_hub_store::DEP_SOURCE_MANUAL
+                });
+                if !removed && x.number != n.node.number {
+                    graph.entry(n.node.number).or_default().insert(x.number);
+                }
+            }
+        }
+        for d in deps.iter().filter(|d| {
+            !d.removed && d.source == ct_hub_store::DEP_SOURCE_MANUAL && numbers.contains(&d.number)
+        }) {
+            graph.entry(d.number).or_default().insert(d.blocker);
+        }
+        let cycle = crate::autopilot::deps::cycle_members(&graph);
+        if !cycle.is_empty() {
+            let list: Vec<String> = cycle.iter().map(|n| format!("#{n}")).collect();
+            return Err(bad(format!(
+                "o plano tem um ciclo de dependências entre {}: corrija blocked_by (as \
+                 dependências corrigidas à mão pelo desenvolvedor também contam)",
+                list.join(", ")
+            )));
+        }
+        let now = ct_core::now_ms();
+        let plan = h
+            .save_epic_plan_from_session(run.id, &b.input, &session, now)
+            .map_err(|e| match e {
+                LedgerError::Invalid(m) => bad(m),
+                LedgerError::Conflict(m) => (StatusCode::CONFLICT, m),
+                e => internal(e),
+            })?;
+        h.add_epic_run_event(&ct_hub_store::EpicRunEvent {
+            run_id: run.id,
+            at: now,
+            kind: "plan_saved".into(),
+            message: format!(
+                "plano v{} gravado pela sessão de plano ({} {})",
+                plan.version,
+                plan.nodes.len(),
+                if plan.nodes.len() == 1 {
+                    "sub-issue"
+                } else {
+                    "sub-issues"
+                }
+            ),
+            ..Default::default()
+        })
+        .map_err(internal)?;
+        Ok(Json(serde_json::json!({
+            "version": plan.version,
+            "nodes": plan.nodes.len(),
+            "edges": plan.edges.len(),
+            "status": ct_core::EpicRunStatus::AguardandoAprovacao,
+            "message": "plano gravado: ele aguarda a aprovação do desenvolvedor. Encerre a sessão.",
+        }))
+        .into_response())
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1038,5 +1159,100 @@ mod tests {
         let ev = h.list_autopilot_events(5, None).unwrap();
         assert_eq!(ev[0].kind, "analysis_done");
         assert_eq!(ev[0].session_id.as_deref(), Some("s-gestor"));
+    }
+
+    /// #299: só a sessão de plano da execução ativa, no ambiente dela,
+    /// grava o plano; nó fora do épico e ciclo são recusados com a causa.
+    #[tokio::test]
+    async fn plano_so_da_sessao_de_plano_da_execucao() {
+        let f = fx();
+        let path = "/agent/v1/epic/plan";
+        let node = |n: i64, bs: &[i64]| {
+            json!({ "number": n, "model": "sonnet", "areas": ["crates/x/"],
+                    "reason": "r", "blocked_by": bs.iter()
+                        .map(|b| json!({ "number": b, "reason": "antes" }))
+                        .collect::<Vec<_>>() })
+        };
+        let body = json!({ "owner": "deep-ion-ai", "repo": "demo", "epic": 10,
+                           "summary": "resumo",
+                           "nodes": [node(11, &[]), node(12, &[11])],
+                           "proposals": [{ "kind": "nova", "title": "Faltou a doc" }] });
+        // Sem execução ativa.
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{v}");
+        let (pid, run) = {
+            let h = f.st.hub.lock();
+            let pid = h.find_project("deep-ion-ai", "demo").unwrap().unwrap().id;
+            let r = h
+                .create_epic_run(
+                    &ct_hub_store::NewEpicRun {
+                        project_id: pid,
+                        epic: 10,
+                        env_id: f.env_id.clone(),
+                        started_by: "fulano".into(),
+                        max_parallel: None,
+                    },
+                    1,
+                )
+                .unwrap();
+            (pid, r.id)
+        };
+        // Sem a sessão de plano (o `post` manda `s-gestor`).
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+        f.st.hub
+            .lock()
+            .set_epic_run_plan_session(run, Some("s-gestor"), 2)
+            .unwrap();
+        // Fora do épico.
+        let mut fora = body.clone();
+        fora["nodes"] = json!([node(11, &[]), node(20, &[])]);
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, fora).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert!(
+            v.as_str().unwrap().contains("fora do épico #10: #20"),
+            "{v}"
+        );
+        // Ciclo, inclusive com uma aresta manual.
+        f.st.hub
+            .lock()
+            .set_dependency_manual(pid, 11, 12, ct_hub_store::ManualEdit::Add, "", 2)
+            .unwrap();
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert!(
+            v.as_str()
+                .unwrap()
+                .contains("ciclo de dependências entre #11, #12"),
+            "{v}"
+        );
+        assert!(f.st.hub.lock().latest_epic_plan(run).unwrap().is_none());
+        f.st.hub
+            .lock()
+            .set_dependency_manual(pid, 11, 12, ct_hub_store::ManualEdit::Reset, "", 3)
+            .unwrap();
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(
+            (v["version"].as_i64(), v["nodes"].as_i64()),
+            (Some(1), Some(2))
+        );
+        let h = f.st.hub.lock();
+        let r = h.epic_run(run).unwrap().unwrap();
+        assert_eq!(r.status, ct_core::EpicRunStatus::AguardandoAprovacao);
+        let plan = h.latest_epic_plan(run).unwrap().unwrap();
+        assert_eq!(plan.summary, "resumo");
+        assert_eq!(plan.proposals[0].title, "Faltou a doc");
+        assert_eq!(plan.nodes[1].areas, vec!["crates/x/".to_string()]);
+        assert_eq!(plan.nodes[1].model.as_deref(), Some("sonnet"));
+        assert_eq!(
+            plan.edges
+                .iter()
+                .map(|e| (e.number, e.blocker, e.source.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(12, 11, "analysis")]
+        );
+        let ev = h.epic_run_events(run, 0, 10).unwrap();
+        assert_eq!(ev[0].kind, "plan_saved");
     }
 }

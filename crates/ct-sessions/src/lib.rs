@@ -9,6 +9,7 @@ pub mod cleanup_worktree;
 pub mod config;
 pub mod diff;
 pub mod docs;
+pub mod epic_plan;
 pub mod files;
 pub mod github;
 pub mod gitlab;

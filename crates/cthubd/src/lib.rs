@@ -247,6 +247,10 @@ pub fn router(state: HubState) -> Router {
         .route(
             "/agent/v1/autopilot/dependencies",
             axum::routing::post(agent::set_dependencies),
+        )
+        .route(
+            "/agent/v1/epic/plan",
+            axum::routing::post(agent::set_epic_plan),
         );
     // Desligada, `/`, `/assets/*` e `/web/*` caem no 404 padrão.
     let r = if web {

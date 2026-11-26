@@ -738,8 +738,22 @@ impl Conn {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(invalid("analysis deve ser true ou false")),
                 };
+                // Sessão de plano da execução de épico (#299): o número do
+                // épico; só ela vê `epic_set_plan`.
+                let epic_plan = match p.get("epic_plan") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => match v.as_i64().filter(|n| *n > 0) {
+                        Some(n) => Some(n),
+                        None => return Err(invalid("epic_plan deve ser o número do épico")),
+                    },
+                };
+                if analysis && epic_plan.is_some() {
+                    return Err(invalid("analysis e epic_plan não vão juntos"));
+                }
                 let v = blocking(&sessions, move |s| {
-                    if analysis {
+                    if let Some(epic) = epic_plan {
+                        s.start_epic_plan(project_id, epic, &prompt, size, &agent)
+                    } else if analysis {
                         s.start_analysis(project_id, &prompt, size, &agent)
                     } else {
                         s.start_project(project_id, &prompt, size, &agent)

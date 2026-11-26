@@ -92,7 +92,10 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// de dependências do piloto automático, só no ambiente do modo autônomo), o
 /// texto do `session.continue` também nela e a ferramenta MCP
 /// `autopilot_set_dependencies`.
-pub const PROTOCOL_VERSION: &str = "2.24";
+/// 2.25 (#299): `epic_plan` (número do épico) no `session.start_project`
+/// (a sessão de plano da execução de épico) e a ferramenta MCP
+/// `epic_set_plan`, só nela.
+pub const PROTOCOL_VERSION: &str = "2.25";
 
 #[derive(Clone)]
 pub struct AppState {

@@ -16,6 +16,7 @@
 
 use super::Hub;
 use crate::model::IssueAgent;
+use crate::BlockerInput;
 use crate::{LedgerError, Result};
 use ct_core::{
     normalize_areas, EpicDecisionOrigin, EpicNodeState, EpicPlanState, EpicRunStatus,
@@ -170,6 +171,28 @@ pub struct EpicPlanDraft {
     pub proposals: Vec<EpicProposal>,
     #[serde(default)]
     pub session_id: Option<String>,
+}
+
+/// Uma sub-issue do plano como a sessão de plano a grava (#299): o nó e as
+/// issues que a bloqueiam.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct EpicPlanSessionNode {
+    #[serde(flatten)]
+    pub node: EpicPlanNodeInput,
+    #[serde(default)]
+    pub blocked_by: Vec<BlockerInput>,
+}
+
+/// O plano da sessão de plano (`epic_set_plan`, #299).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct EpicPlanSessionInput {
+    pub nodes: Vec<EpicPlanSessionNode>,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub proposals: Vec<EpicProposal>,
 }
 
 /// A aprovação de uma versão ([`Hub::approve_epic_plan`]).
@@ -973,6 +996,73 @@ impl Hub {
             Some(v) => self.epic_plan(run_id, v),
             None => Ok(None),
         }
+    }
+
+    /// Sub-issues do épico no espelho do projeto (abertas ou fechadas).
+    pub fn epic_sub_issues(&self, project_id: i64, epic: i64) -> Result<BTreeSet<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT gh_number FROM issue_cache WHERE project_id = ?1 AND parent_number = ?2",
+        )?;
+        let rows = stmt.query_map(params![project_id, epic], |r| r.get::<_, i64>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Grava o plano da sessão de plano (#299): recusa nó fora das
+    /// sub-issues do épico; substitui as arestas de análise de todas as
+    /// sub-issues do épico pelas informadas (as manuais ficam) e grava o
+    /// rascunho ([`Hub::save_epic_plan_draft`]) com a sessão. A detecção de
+    /// ciclo fica com quem chama (o `cthubd`, com o grafo efetivo).
+    pub fn save_epic_plan_from_session(
+        &self,
+        run_id: i64,
+        input: &EpicPlanSessionInput,
+        session_id: &str,
+        now: i64,
+    ) -> Result<EpicPlan> {
+        let run = self.require_epic_run(run_id)?;
+        let subs = self.epic_sub_issues(run.project_id, run.epic)?;
+        let outside: Vec<String> = input
+            .nodes
+            .iter()
+            .map(|n| n.node.number)
+            .filter(|n| !subs.contains(n))
+            .map(|n| format!("#{n}"))
+            .collect();
+        if !outside.is_empty() {
+            let known: Vec<String> = subs.iter().map(|n| format!("#{n}")).collect();
+            return Err(LedgerError::Invalid(format!(
+                "fora do épico #{}: {} (sub-issues do épico: {})",
+                run.epic,
+                outside.join(", "),
+                if known.is_empty() {
+                    "nenhuma no espelho".to_string()
+                } else {
+                    known.join(", ")
+                }
+            )));
+        }
+        let draft = EpicPlanDraft {
+            nodes: input.nodes.iter().map(|n| n.node.clone()).collect(),
+            summary: input.summary.clone(),
+            proposals: input.proposals.clone(),
+            session_id: Some(session_id.to_string()),
+        };
+        // Valida antes de mexer nas arestas.
+        check_draft(run.epic, &draft)?;
+        let tx = self.tx()?;
+        for n in &subs {
+            self.conn.execute(
+                "DELETE FROM autopilot_dependency
+                 WHERE project_id = ?1 AND number = ?2 AND source = 'analysis'",
+                params![run.project_id, n],
+            )?;
+        }
+        for n in &input.nodes {
+            self.insert_analysis_edges(run.project_id, n.node.number, &n.blocked_by, now)?;
+        }
+        let plan = self.save_epic_plan_draft(run_id, &draft, now)?;
+        tx.commit()?;
+        Ok(plan)
     }
 
     // --- nós -------------------------------------------------------------
@@ -1930,6 +2020,92 @@ mod tests {
         hub.set_epic_run_status(run.id, EpicRunStatus::Cancelado, None, None, 4)
             .unwrap();
         assert!(hub.epic_run_numbers(pid).unwrap().is_empty());
+    }
+
+    #[test]
+    fn plano_da_sessao_substitui_as_arestas_de_analise_do_epico() {
+        use crate::{GithubSnapshot, IssueRow};
+        let (hub, pid) = hub();
+        let issue = |n: i64, parent: Option<i64>| IssueRow {
+            gh_number: n,
+            title: format!("ACME-{n}"),
+            state: "open".into(),
+            url: String::new(),
+            updated_at: 1,
+            parent_number: parent,
+            ..Default::default()
+        };
+        hub.apply_github(
+            &GithubSnapshot {
+                project_id: pid,
+                issues: vec![
+                    issue(10, None),
+                    issue(11, Some(10)),
+                    issue(12, Some(10)),
+                    issue(13, Some(10)),
+                    issue(20, None),
+                ],
+                ..Default::default()
+            },
+            "env-a",
+        )
+        .unwrap();
+        // Arestas de antes: análise da 13 (sai), manual da 12 (fica),
+        // análise fora do épico (fica).
+        let blocker = |n: i64| BlockerInput {
+            number: n,
+            reason: format!("precisa da #{n}"),
+        };
+        hub.insert_analysis_edges(pid, 13, &[blocker(11)], 1)
+            .unwrap();
+        hub.insert_analysis_edges(pid, 20, &[blocker(11)], 1)
+            .unwrap();
+        hub.set_dependency_manual(pid, 12, 99, ManualEdit::Add, "manual", 1)
+            .unwrap();
+        let run = hub.create_epic_run(&new_run(pid, 10, "env-a"), 1).unwrap();
+        let sn = |n: i64, bs: &[i64]| EpicPlanSessionNode {
+            node: node(n, "sonnet", &["crates/x/"]),
+            blocked_by: bs.iter().map(|b| blocker(*b)).collect(),
+        };
+        let input = EpicPlanSessionInput {
+            nodes: vec![sn(11, &[]), sn(12, &[11]), sn(13, &[])],
+            summary: "resumo".into(),
+            proposals: vec![],
+        };
+        // Nó fora do épico: recusado sem mexer em nada.
+        let mut bad = input.clone();
+        bad.nodes.push(sn(20, &[]));
+        let e = hub
+            .save_epic_plan_from_session(run.id, &bad, "s-plano", 2)
+            .unwrap_err();
+        assert!(e.to_string().contains("fora do épico #10: #20"), "{e}");
+        assert_eq!(hub.latest_epic_plan(run.id).unwrap(), None);
+        let plan = hub
+            .save_epic_plan_from_session(run.id, &input, "s-plano", 3)
+            .unwrap();
+        assert_eq!(plan.session_id.as_deref(), Some("s-plano"));
+        assert_eq!(plan.summary, "resumo");
+        let mut edges: Vec<(i64, i64, String)> = hub
+            .autopilot_dependencies(pid)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.number, e.blocker, e.source))
+            .collect();
+        edges.sort();
+        assert_eq!(
+            edges,
+            vec![
+                (12, 11, "analysis".into()),
+                (12, 99, "manual".into()),
+                (20, 11, "analysis".into()),
+            ]
+        );
+        assert_eq!(
+            hub.epic_run(run.id).unwrap().unwrap().status,
+            EpicRunStatus::AguardandoAprovacao
+        );
+        // O rascunho mostra as arestas vivas dos nós.
+        assert_eq!(plan.edges.len(), 2);
     }
 
     #[test]
