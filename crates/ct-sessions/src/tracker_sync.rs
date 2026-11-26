@@ -47,21 +47,23 @@
 
 use crate::github::ProjectSync;
 use crate::gitlab::{project_path, GitlabRemote};
+use crate::resolver::{gitlab_key, jira_key, no_lookup, Ask, CredentialResolver};
 use crate::{Result, Sessions, SessionsError};
+use ct_core::provider::CredentialSource;
 use ct_core::{
     now_ms, GitlabConfig, GitlabReadiness, JiraConfig, JiraReadiness, PrState, TrackerIssueAdded,
     TrackerKind, TrackerProgress, TrackerReadiness, WorkItemStatus,
 };
 use ct_gitlab::{mr_row, Glab};
 use ct_jira::{
-    issue_row, list_entry, run_credential, server_version, JiraCli, JiraError, ListEvent,
-    ListQuery, Secret, CREDENTIAL_DEADLINE, DEADLINE, LIST_DEADLINE, LIST_RETRY_WAITS, PAGE_SIZE,
+    issue_row, list_entry, server_version, JiraCli, JiraError, ListEvent, ListQuery, Secret,
+    CREDENTIAL_DEADLINE, DEADLINE, LIST_DEADLINE, LIST_RETRY_WAITS, PAGE_SIZE,
 };
 use ct_ledger::{project_key, GithubSnapshot, IssueRow, Ledger, PrRow, Project};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Intervalo entre reconciliações completas.
@@ -141,6 +143,7 @@ impl TrackerSyncConfig {
             cli_deadline: self.glab_deadline,
             credential_deadline: self.credential_deadline,
             credentials: Default::default(),
+            resolver: Arc::new(CredentialResolver::new()),
         }
     }
 }
@@ -457,7 +460,7 @@ type CycleError = String;
 
 /// Credenciais do ciclo: a senha do Jira e o token do GitLab (`None` sem
 /// forja GitLab).
-type Tokens = (Secret, Option<Secret>);
+type Tokens = (Arc<Secret>, Option<Arc<Secret>>);
 
 pub struct JiraGitlabSync {
     sessions: Sessions,
@@ -530,9 +533,9 @@ impl JiraGitlabSync {
         let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
             .with_deadline(self.cfg.view_deadline);
         let fail = |e: String| SessionsError::Invalid(format!("Jira, {key}: {e}"));
-        let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
+        let v = self
+            .jira_call(&project, &jira, |t| cli.view(t, &key))
             .map_err(|e| fail(e.to_string()))?;
-        let v = cli.view(&token, &key).map_err(|e| fail(e.to_string()))?;
         Ok(json!({
             "title": v.pointer("/fields/summary").cloned().unwrap_or_default(),
             "description": v.pointer("/fields/description").cloned().unwrap_or_default(),
@@ -558,9 +561,9 @@ impl JiraGitlabSync {
         let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
             .with_deadline(self.cfg.view_deadline);
         let fail = |e: String| SessionsError::Invalid(format!("Jira, {key}: {e}"));
-        let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
+        let v = self
+            .jira_call(&project, &jira, |t| cli.view(t, &key))
             .map_err(|e| fail(e.to_string()))?;
-        let v = cli.view(&token, &key).map_err(|e| fail(e.to_string()))?;
         let Some(row) = issue_row(&v, &jira) else {
             return Ok(None);
         };
@@ -616,10 +619,8 @@ impl JiraGitlabSync {
         }
         let cli = JiraCli::new(&self.cfg.jira_bin, &jira.config_file)
             .with_deadline(self.cfg.view_deadline);
-        let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
-            .map_err(|e| SessionsError::Invalid(format!("Jira, {key}: {e}")))?;
-        let v = cli
-            .view(&token, &key)
+        let v = self
+            .jira_call(&project, &jira, |t| cli.view(t, &key))
             .map_err(|e| SessionsError::Invalid(view_error(&key, &e)))?;
         let row = match issue_row(&v, &jira) {
             Some(r) => r,
@@ -640,7 +641,7 @@ impl JiraGitlabSync {
                 break;
             }
             let pkey = ct_core::item_key(&project.tracker_ref(), p);
-            let parent_row = match cli.view(&token, &pkey) {
+            let parent_row = match self.jira_call(&project, &jira, |t| cli.view(t, &pkey)) {
                 Ok(pv) => issue_row(&pv, &jira).ok_or_else(|| row_refused(&pkey, &pv, &jira)),
                 Err(e) => Err(view_error(&pkey, &e)),
             };
@@ -683,6 +684,52 @@ impl JiraGitlabSync {
     pub fn sync_project(&self, project_id: i64) -> Result<ProjectSync> {
         let _one = self.running.lock().unwrap_or_else(|e| e.into_inner());
         self.sync_one(project_id)
+    }
+
+    /// Token do Jira do projeto, pelo cache do ambiente (#236): o comando
+    /// de credencial só roda sem token em cache.
+    fn jira_token(
+        &self,
+        project_id: i64,
+        jira: &JiraConfig,
+    ) -> std::result::Result<Arc<Secret>, String> {
+        let source = CredentialSource::Command {
+            cmd: jira.credential_cmd.clone(),
+        };
+        self.sessions
+            .credentials()
+            .token(Ask {
+                key: &jira_key(project_id),
+                what: "Jira",
+                source: &source,
+                lookup: &no_lookup,
+                deadline: self.cfg.credential_deadline,
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    /// Roda `op` com o jira-cli e o token do projeto. Recusa de autenticação
+    /// (401/403) descarta o token do cache e tenta uma vez com um token novo.
+    fn jira_call<T>(
+        &self,
+        project: &Project,
+        jira: &JiraConfig,
+        op: impl Fn(&Secret) -> std::result::Result<T, JiraError>,
+    ) -> std::result::Result<T, JiraError> {
+        let source = CredentialSource::Command {
+            cmd: jira.credential_cmd.clone(),
+        };
+        self.sessions.credentials().with_refresh(
+            Ask {
+                key: &jira_key(project.id),
+                what: "Jira",
+                source: &source,
+                lookup: &no_lookup,
+                deadline: self.cfg.credential_deadline,
+            },
+            |e: &JiraError| matches!(e, JiraError::Unauthorized),
+            op,
+        )
     }
 
     fn sync_one(&self, project_id: i64) -> Result<ProjectSync> {
@@ -793,6 +840,18 @@ impl JiraGitlabSync {
                 })
             }
         };
+        // Recusa de autenticação no ciclo (401/403): o token em cache sai, e
+        // o próximo ciclo resolve de novo. Outras falhas mantêm o cache.
+        if let Err(e) = &fetched {
+            if e.contains("recusou") {
+                self.sessions
+                    .credentials()
+                    .invalidate(&jira_key(project.id));
+                self.sessions
+                    .credentials()
+                    .invalidate(&gitlab_key(project.id));
+            }
+        }
         let result = match fetched {
             Ok((snap, failed, pruned)) => {
                 let applied = self.sessions.ledger().apply_github(&snap)?;
@@ -906,14 +965,14 @@ impl JiraGitlabSync {
             checked_at: now,
             ..TrackerReadiness::default()
         };
-        let token = self.check_jira(&mut r.jira, jira, cli);
+        let token = self.check_jira(&mut r.jira, project.id, jira, cli);
         if let Err(e) = &token {
             r.jira.error.get_or_insert_with(|| e.clone());
         }
         let gl_token = match gitlab {
             None => Ok(None),
             Some(gl) => {
-                let t = self.check_gitlab(&mut r.gitlab, gl);
+                let t = self.check_gitlab(&mut r.gitlab, project.id, gl);
                 if let Err(e) = &t {
                     r.gitlab.error.get_or_insert_with(|| e.clone());
                 }
@@ -929,15 +988,18 @@ impl JiraGitlabSync {
     fn check_gitlab(
         &self,
         g: &mut GitlabReadiness,
+        project_id: i64,
         gl: &GitlabConfig,
-    ) -> std::result::Result<Secret, CycleError> {
-        let remote = self.cfg.gitlab();
+    ) -> std::result::Result<Arc<Secret>, CycleError> {
+        let mut remote = self.cfg.gitlab();
+        // O cache do ambiente: o comando de credencial não roda a cada ciclo (#236).
+        remote.resolver = self.sessions.credentials_handle();
         let cli = remote.cli(gl);
         g.cli = Some(cli.version().map_err(|e| e.to_string())?);
         if gl.host.trim().is_empty() {
             return Err("host do GitLab ausente no cadastro do projeto".into());
         }
-        let token = remote.token(gl)?;
+        let token = remote.token(project_id, gl)?;
         g.credential_ok = true;
         cli.api_version(&token).map_err(|e| e.to_string())?;
         g.api_ok = true;
@@ -947,9 +1009,10 @@ impl JiraGitlabSync {
     fn check_jira(
         &self,
         j: &mut JiraReadiness,
+        project_id: i64,
         jira: &JiraConfig,
         cli: &JiraCli,
-    ) -> std::result::Result<Secret, CycleError> {
+    ) -> std::result::Result<Arc<Secret>, CycleError> {
         j.cli = Some(cli.version().map_err(|e| e.to_string())?);
         j.config_present = cli.config_path().is_file();
         if !j.config_present {
@@ -971,8 +1034,7 @@ impl JiraGitlabSync {
         }
         // Catálogo do mesmo servidor do cadastro; sem a seção, lista vazia.
         j.custom_fields = cli.config_custom_fields();
-        let token = run_credential("Jira", &jira.credential_cmd, self.cfg.credential_deadline)
-            .map_err(|e| e.to_string())?;
+        let token = self.jira_token(project_id, jira)?;
         j.credential_ok = true;
         match cli.me(&token) {
             Ok(me) => {

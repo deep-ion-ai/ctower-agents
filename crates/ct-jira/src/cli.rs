@@ -38,8 +38,18 @@ pub enum JiraError {
     Unavailable(String),
     #[error("jira-cli falhou: {0}")]
     Failed(String),
+    /// O comando de credencial falhou antes de chamar o jira-cli (#236).
+    #[error("{0}")]
+    Credential(String),
     #[error("resposta inesperada do jira-cli: {0}")]
     Parse(String),
+}
+
+impl From<ct_proc::CredentialError> for JiraError {
+    /// Falha do comando de credencial, com a mensagem dele (#236).
+    fn from(c: ct_proc::CredentialError) -> Self {
+        JiraError::Credential(c.to_string())
+    }
 }
 
 impl JiraError {
@@ -348,7 +358,11 @@ fn classify(msg: &str, status: &str, config: &str) -> JiraError {
     if lower.contains("missing configuration file") {
         return JiraError::ConfigMissing(config.to_string());
     }
-    if lower.contains("401") || lower.contains("unauthorized") {
+    if lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("403")
+        || lower.contains("forbidden")
+    {
         return JiraError::Unauthorized;
     }
     let down = [
