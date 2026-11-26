@@ -21,7 +21,7 @@
 
 use crate::config::WebConfig;
 use axum::http::{header, HeaderMap};
-use ct_ledger::{IssuedWebSession, SharedHub};
+use ct_hub_store::{IssuedWebSession, SharedHub};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -385,7 +385,7 @@ impl WebAuth {
             .filter(|v| !v.is_empty())
     }
 
-    fn cookie_session(&self, headers: &HeaderMap) -> Option<ct_ledger::HubWebSession> {
+    fn cookie_session(&self, headers: &HeaderMap) -> Option<ct_hub_store::HubWebSession> {
         let c = Self::cookie(headers)?;
         match self.hub.lock().check_web_session(&c, self.idle_ms) {
             Ok(s) => s,
@@ -526,7 +526,7 @@ pub(crate) mod tests {
     pub(crate) const ISS: &str = "https://equipe.cloudflareaccess.com";
 
     pub(crate) fn hub() -> SharedHub {
-        SharedHub::new(ct_ledger::Hub::open_in_memory().unwrap())
+        SharedHub::new(ct_hub_store::Hub::open_in_memory().unwrap())
     }
 
     fn n(k: &str) -> String {

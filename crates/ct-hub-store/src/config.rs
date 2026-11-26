@@ -9,6 +9,7 @@
 use super::{row_to_project, Hub, HubAssignment, HubProject, HubSession, PROJECT_COLS};
 use crate::sync::project_key;
 use crate::{LedgerError, Result, SyncChange};
+use ct_core::provider::{self, Connection, ProviderDescriptor};
 use ct_core::{now_ms, ForgeConfig, TrackerConfig};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ impl ProjectProvider {
     pub fn validate(&self) -> std::result::Result<(), String> {
         self.validate_base()?;
         match self.tracker.jira() {
-            Some(j) => validate_jira_filter(j),
+            Some(j) => provider::JIRA.validate_sync_filter(j),
             None => Ok(()),
         }
     }
@@ -81,39 +82,19 @@ impl ProjectProvider {
                  github ou jira + gitlab)"
             ));
         }
+        // Os descritores conferem a conexão e o projeto de cada tipo (#234).
+        // Com conexão referenciada (#235), a credencial e a URL vêm dela e
+        // são conferidas em `Hub::check_project_connections`.
         if let Some(j) = self.tracker.jira() {
-            let url = j.url.to_ascii_lowercase();
-            if !(url.starts_with("https://") || url.starts_with("http://")) || url.len() < 10 {
-                return Err(format!("URL do Jira inválida: {:?}", j.url));
+            if j.connection.is_none() {
+                provider::JIRA.validate(&Connection::from_jira(j))?;
             }
-            let key_ok = j.project_key.starts_with(|c: char| c.is_ascii_uppercase())
-                && j.project_key
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-            if !key_ok {
-                return Err(format!(
-                    "chave do projeto Jira inválida: {:?} (maiúsculas, como PROJ)",
-                    j.project_key
-                ));
-            }
-            if j.credential_cmd.trim().is_empty() {
-                return Err("informe o comando de credencial do Jira (ex.: pass show \
-                            jira | head -1)"
-                    .into());
-            }
-            validate_jira_extra_fields(&j.extra_fields)?;
+            provider::JIRA.validate_project(j)?;
         }
         if let Some(g) = self.forge.gitlab() {
-            if g.host.is_empty() || !g.path.contains('/') {
-                return Err(format!(
-                    "repositório do GitLab inválido: host {:?}, caminho {:?}",
-                    g.host, g.path
-                ));
-            }
-            if g.credential_cmd.trim().is_empty() {
-                return Err("informe o comando de credencial do GitLab (ex.: pass show \
-                            gitlab | head -1)"
-                    .into());
+            provider::GITLAB.validate_project(g)?;
+            if g.connection.is_none() {
+                provider::GITLAB.validate(&Connection::from_gitlab(g))?;
             }
         }
         if let Some(pat) = &self.branch_pattern {
@@ -123,66 +104,6 @@ impl ProjectProvider {
         self.session_templates.validate()?;
         self.approval.validate()
     }
-}
-
-/// Campos do projeto na tela da issue: ID e rótulo preenchidos, sem ID
-/// repetido e no máximo [`ct_core::MAX_JIRA_EXTRA_FIELDS`]. O ID não
-/// precisa estar no catálogo do jira-cli: pode ser digitado à mão.
-fn validate_jira_extra_fields(
-    fields: &[ct_core::JiraExtraField],
-) -> std::result::Result<(), String> {
-    let max = ct_core::MAX_JIRA_EXTRA_FIELDS;
-    if fields.len() > max {
-        return Err(format!(
-            "campos do projeto: no máximo {max} campos na tela da issue ({} informados)",
-            fields.len()
-        ));
-    }
-    let mut seen = std::collections::HashSet::new();
-    for (i, f) in fields.iter().enumerate() {
-        let (id, label) = (f.id.trim(), f.label.trim());
-        let n = i + 1;
-        if id.is_empty() {
-            return Err(format!(
-                "campos do projeto: informe o campo do Jira na linha {n} (ex.: customfield_10099)"
-            ));
-        }
-        if label.is_empty() {
-            return Err(format!(
-                "campos do projeto: informe o rótulo na tela do campo {id} (linha {n})"
-            ));
-        }
-        if !seen.insert(id.to_ascii_lowercase()) {
-            return Err(format!(
-                "campos do projeto: o campo {id} aparece mais de uma vez (linha {n})"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// O filtro do sync do Jira: no modo sprint ativa, nada a conferir; fora
-/// dele, JQL obrigatório e limite de issues entre 1 e
-/// [`ct_core::MAX_ISSUES_CEILING`].
-fn validate_jira_filter(j: &ct_core::JiraConfig) -> std::result::Result<(), String> {
-    if j.active_sprint_only {
-        return Ok(());
-    }
-    if j.jql.trim().is_empty() {
-        return Err(
-            "informe o JQL do sync (ex.: labels = minha-equipe AND updated >= -90d) \
-                    ou marque \"sincronizar somente a sprint ativa\""
-                .into(),
-        );
-    }
-    if j.max_issues == 0 || j.max_issues > ct_core::MAX_ISSUES_CEILING {
-        return Err(format!(
-            "limite de issues sincronizadas inválido: {} (de 1 a {})",
-            j.max_issues,
-            ct_core::MAX_ISSUES_CEILING
-        ));
-    }
-    Ok(())
 }
 
 /// Campos de `hub.projects.update`; `None` = não muda.
@@ -365,6 +286,7 @@ impl Hub {
             ..provider.clone()
         };
         pv.validate().map_err(LedgerError::Conflict)?;
+        self.check_project_connections(pv)?;
         let key = project_key(&p.owner, &p.repo);
         let protected =
             serde_json::to_string(&p.protected_branches).expect("Vec<String> serializa");
@@ -512,6 +434,7 @@ impl Hub {
             ));
         };
         let provider = self.patched_provider(&cur, patch)?;
+        self.check_project_connections(&provider)?;
         // O modo autônomo é conferido contra a base e as protegidas que o
         // projeto terá depois desta edição; sem mudar o modo, a edição da
         // base ou das protegidas também o confere (se estiver ligado).

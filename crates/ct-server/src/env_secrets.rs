@@ -225,7 +225,7 @@ mod tests {
     use super::*;
     use crate::hub_sync::HubTarget;
     use crate::test_util::{serve_hub_state, DeadHub, Srv, UI};
-    use ct_ledger::{Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
     use ct_secrets::{Identity, Kind, Scope, SecretValue};
     use ct_sessions::test_support::FakeClaude;
     use std::sync::Arc;
@@ -285,7 +285,7 @@ mod tests {
         let tok = {
             let h = hub.lock();
             for repo in ["demo", "outro"] {
-                h.add_project(&ct_ledger::NewHubProject {
+                h.add_project(&ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: repo.into(),
                     name: repo.into(),
@@ -438,7 +438,7 @@ mod tests {
         let hub = SharedHub::new(Hub::open(&hub_dirs.hub_db()).unwrap());
         let tok = {
             let h = hub.lock();
-            h.add_project(&ct_ledger::NewHubProject {
+            h.add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -773,7 +773,7 @@ mod tests {
         hub_dirs.ensure().unwrap();
         let hub = SharedHub::new(Hub::open_in_memory().unwrap());
         hub.lock()
-            .add_project(&ct_ledger::NewHubProject {
+            .add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),

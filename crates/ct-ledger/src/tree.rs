@@ -1,11 +1,9 @@
 //! Árvore do projeto (spec §10, tela Projeto): épicos → sub-issues, cada
 //! issue com o seu work item, a partir do `issue_cache`.
 
-use crate::{
-    DecisionCounts, IssueRow, Ledger, Project, Result, SyncState, WorkItem, WorkItemSummary,
-};
+use crate::{IssueRow, Ledger, PrRow, Project, Result, SyncState, WorkItem};
 use ct_core::DecisionOrigin;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -122,6 +120,32 @@ impl Ledger {
             untracked,
         })
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DecisionCounts {
+    pub total: usize,
+    /// Autônomas ainda não revisadas.
+    pub pending_autonomous: usize,
+}
+
+/// Resumo do work item na árvore (#46).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct WorkItemSummary {
+    /// PR mais recente da branch do work item.
+    pub pr: Option<PrRow>,
+    /// Resumo dos checks do head desse PR, se ele está aberto e os checks
+    /// já foram lidos (#129). Ausente num hub ou ambiente anterior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub pr_checks: Option<crate::PrChecksSummary>,
+    pub decisions: DecisionCounts,
+    /// `ts` do último evento do work item, sem os de prioridade e ordem.
+    pub last_activity_at: Option<i64>,
+    /// Ambientes com sessão viva neste work item.
+    pub live_envs: Vec<String>,
 }
 
 #[cfg(test)]

@@ -100,8 +100,7 @@ function setup(
     .onHub("hub.proposals.list", (p: { state: string }) =>
       p.state === "pendente" || !opts.proposals ? (opts.proposals?.() ?? NO_PROPOSALS) : opts.proposals(),
     )
-    .onHub("hub.health.get", opts.health ?? NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null });
+    .onHub("hub.health.get", opts.health ?? NO_HEALTH);
   render(<App api={api} initial={{ name: "hub", section: opts.section }} />);
   return { api, user: userEvent.setup() };
 }

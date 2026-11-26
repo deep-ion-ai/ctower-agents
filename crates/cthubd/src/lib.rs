@@ -40,7 +40,7 @@ pub mod ws;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
-use ct_ledger::SharedHub;
+use ct_hub_store::SharedHub;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -125,7 +125,7 @@ pub struct HubState {
     pub hub_id: Arc<str>,
     pub backups: Arc<backup::Backups>,
     /// Limiares de `hub.health.get` (`[health]`).
-    pub health: Arc<ct_ledger::HealthThresholds>,
+    pub health: Arc<ct_hub_store::HealthThresholds>,
     /// Intervalo do sync do GitHub, para o sinal `github_sem_sync`; `0` = desligado.
     pub gh_sync_interval_secs: u64,
     /// Store de secrets e variáveis (#164); `None` = não aberto (testes).

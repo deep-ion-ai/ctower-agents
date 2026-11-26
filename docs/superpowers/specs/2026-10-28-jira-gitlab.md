@@ -56,6 +56,8 @@ Não entra:
 
 ## 3. Modelo neutro de provedor (#347)
 
+> **Substituído pelo modelo de conexões (épico #224).** Esta seção descreve o cadastro antigo, em que cada projeto guardava a URL, o `credential_cmd` e o `config_file`. O modelo vigente é o de conexões: a URL e a credencial ficam numa conexão cadastrada no hub, e o projeto aponta para ela (`tracker.connection` no Jira, `forge.connection` no GitLab). Veja `docs/hub.md`, seção 2, "Conexões", e o guia `docs/providers.md`. Os campos `url`, `credential_cmd` e `config_file` continuam no código como ponte: o hub os tira do cadastro migrado, e o ambiente os preenche a partir da conexão. A remoção deles está pendente. O descritor por tipo e a fonte de credencial estão em `crates/ct-core/src/provider.rs`.
+
 ### 3.1 Tipos em `ct-core`
 
 Módulo novo `crates/ct-core/src/tracker.rs`:
@@ -387,6 +389,8 @@ O daemon **nunca escreve** no Jira nem no GitLab, exceto a remoção da branch r
 Só o comentário com o link do MR é automático. É ele que liga o Jira ao MR, já que o Control Tower não faz transição. Os outros comentários dependem do ok do usuário na conversa.
 
 ## 8. Credenciais (#348, #349, #351)
+
+> **Substituído pelo modelo de conexões (épico #224).** O comando de credencial deixou de ser texto do cadastro do projeto (§8.1): a credencial pertence à conexão, como `CredentialSource` (`command`, `secret`, e nos outros tipos `cli`, `file`, `none`). O ambiente a resolve pelo `CredentialResolver` (`crates/ct-sessions/src/resolver.rs`), que guarda o token em memória por projeto. No Jira, o token é descartado e pedido de novo só depois de uma recusa de autenticação (401/403). O hub ainda não resolve credencial. A sobrescrita por ambiente é o `[connections."nome"] credential_cmd` do `config.toml`, lido no pull, e é esse comando que o prefixo do §8.2 usa. Veja `docs/hub.md`, "Conexões" e "Secrets e conexões", e `docs/providers.md`.
 
 ### 8.1 Comando de credencial
 

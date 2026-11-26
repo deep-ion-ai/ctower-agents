@@ -259,7 +259,7 @@ pub fn gh_epic_merged_uid(owner: &str, repo: &str, epic_pr: i64, sub: i64) -> St
 
 /// Gatilho do PR de uma sub-issue para a branch do épico (#454): só o merge
 /// conta (aberto, a sub-issue segue em execução; fechado, nada muda).
-pub(crate) fn sub_issue_pr_trigger(prev: Option<PrState>, new: PrState) -> Option<WorkItemTrigger> {
+pub fn sub_issue_pr_trigger(prev: Option<PrState>, new: PrState) -> Option<WorkItemTrigger> {
     (new == PrState::Merged && prev != Some(PrState::Merged))
         .then_some(WorkItemTrigger::SubIssuePrMerged)
 }
@@ -267,7 +267,7 @@ pub(crate) fn sub_issue_pr_trigger(prev: Option<PrState>, new: PrState) -> Optio
 /// Gatilho do PR de uma issue para a branch de integração do modo autônomo
 /// (#181): aberto vai para revisão como sempre; mesclado continua em revisão
 /// ([`WorkItemTrigger::AutonomyPrMerged`]) até a branch chegar na base.
-pub(crate) fn autonomy_pr_trigger(prev: Option<PrState>, new: PrState) -> Option<WorkItemTrigger> {
+pub fn autonomy_pr_trigger(prev: Option<PrState>, new: PrState) -> Option<WorkItemTrigger> {
     pr_trigger(prev, new).map(|t| match t {
         WorkItemTrigger::PrMerged => WorkItemTrigger::AutonomyPrMerged,
         t => t,
@@ -276,7 +276,7 @@ pub(crate) fn autonomy_pr_trigger(prev: Option<PrState>, new: PrState) -> Option
 
 /// Caminho de um PR do sync.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum PrRoute {
+pub enum PrRoute {
     /// PR da branch do work item para outra base: gatilhos comuns.
     Comum,
     /// PR da sub-issue `sub` para a branch do épico (#454).
@@ -294,11 +294,11 @@ pub(crate) enum PrRoute {
 
 /// Espelho do GitHub numa conexão: as mesmas tabelas (`issue_cache`,
 /// `pr_cache`, `gh_etag`, `sync_state`) existem no `ledger.db` e no `hub.db`.
-pub(crate) struct GhMirror<'a>(pub(crate) &'a Connection);
+pub struct GhMirror<'a>(pub &'a Connection);
 
 impl GhMirror<'_> {
     /// Grava o PR e devolve o estado anterior no cache.
-    pub(crate) fn upsert_pr(
+    pub fn upsert_pr(
         &self,
         project_id: i64,
         pr: &PrRow,
@@ -338,7 +338,7 @@ impl GhMirror<'_> {
     }
 
     /// Grava a issue e devolve o estado anterior (`open`/`closed`) no cache.
-    pub(crate) fn upsert_issue(
+    pub fn upsert_issue(
         &self,
         project_id: i64,
         i: &IssueRow,
@@ -387,7 +387,7 @@ impl GhMirror<'_> {
     }
 
     /// Tira a issue do espelho; `true` = estava nele.
-    pub(crate) fn delete_issue(&self, project_id: i64, gh_number: i64) -> Result<bool> {
+    pub fn delete_issue(&self, project_id: i64, gh_number: i64) -> Result<bool> {
         Ok(self.0.execute(
             "DELETE FROM issue_cache WHERE project_id = ?1 AND gh_number = ?2",
             params![project_id, gh_number],
@@ -397,12 +397,7 @@ impl GhMirror<'_> {
     /// Caminho do PR: a base é a branch de um épico? Então só vale para uma
     /// sub-issue dele, pelo número no head (`<tipo>/<n>-<slug>`). A filha é
     /// conferida nas issues da rodada e, se não vier nelas, no cache.
-    pub(crate) fn route_pr(
-        &self,
-        project_id: i64,
-        pr: &PrRow,
-        issues: &[IssueRow],
-    ) -> Result<PrRoute> {
+    pub fn route_pr(&self, project_id: i64, pr: &PrRow, issues: &[IssueRow]) -> Result<PrRoute> {
         if let Some((branch, base)) = self.autonomy_branches(project_id)? {
             if pr.head == branch && pr.base == base {
                 return Ok(PrRoute::Integracao);
@@ -448,7 +443,7 @@ impl GhMirror<'_> {
 
     /// Work items das sub-issues do épico `epic` (pelo cache) que aguardam o
     /// merge dele: `(id, número)`.
-    pub(crate) fn awaiting_epic(&self, project_id: i64, epic: i64) -> Result<Vec<(i64, i64)>> {
+    pub fn awaiting_epic(&self, project_id: i64, epic: i64) -> Result<Vec<(i64, i64)>> {
         let mut stmt = self.0.prepare(
             "SELECT w.id, w.gh_number FROM work_item w
              JOIN issue_cache i ON i.project_id = w.project_id AND i.gh_number = w.gh_number
@@ -466,7 +461,7 @@ impl GhMirror<'_> {
     /// se o modo já foi configurado (ligado ou não: as issues que entraram
     /// na branch ainda concluem quando ela chega na base). A coluna existe
     /// no `ledger.db` e no `hub.db`.
-    pub(crate) fn autonomy_branches(&self, project_id: i64) -> Result<Option<(String, String)>> {
+    pub fn autonomy_branches(&self, project_id: i64) -> Result<Option<(String, String)>> {
         let row: Option<(String, String)> = self
             .0
             .query_row(
@@ -490,7 +485,7 @@ impl GhMirror<'_> {
     /// Work items não concluídos com PR mesclado em `branch` até `until`
     /// (o `updated_at` do PR da branch de integração mesclado): `(id,
     /// número)`.
-    pub(crate) fn merged_into(
+    pub fn merged_into(
         &self,
         project_id: i64,
         branch: &str,
@@ -515,7 +510,7 @@ impl GhMirror<'_> {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub(crate) fn has_merged_pr(&self, work_item_id: i64) -> Result<bool> {
+    pub fn has_merged_pr(&self, work_item_id: i64) -> Result<bool> {
         Ok(self.0.query_row(
             "SELECT EXISTS (SELECT 1 FROM pr_cache WHERE work_item_id = ?1 AND state = 'merged')",
             [work_item_id],
@@ -524,7 +519,7 @@ impl GhMirror<'_> {
     }
 
     /// ETags da rodada e sucesso do sync.
-    pub(crate) fn finish_ok(&self, s: &GithubSnapshot) -> Result<()> {
+    pub fn finish_ok(&self, s: &GithubSnapshot) -> Result<()> {
         for (key, etag) in &s.etags {
             self.0.execute(
                 "INSERT INTO gh_etag (key, etag, updated_at) VALUES (?1, ?2, ?3)
@@ -545,7 +540,7 @@ impl GhMirror<'_> {
     }
 
     /// Rodada com falha: conta mais uma na sequência e marca o início dela.
-    pub(crate) fn record_sync_error(&self, project_id: i64, error: &str) -> Result<()> {
+    pub fn record_sync_error(&self, project_id: i64, error: &str) -> Result<()> {
         self.0.execute(
             "INSERT INTO sync_state (project_id, last_attempt_at, last_error, failures, failing_since)
              VALUES (?1, ?2, ?3, 1, ?2)
@@ -560,7 +555,7 @@ impl GhMirror<'_> {
 
     /// Rodada concluída com aviso (issues não lidas no Jira): guarda a
     /// mensagem sem contar como falha, já que o cursor avançou.
-    pub(crate) fn record_sync_warning(&self, project_id: i64, warning: &str) -> Result<()> {
+    pub fn record_sync_warning(&self, project_id: i64, warning: &str) -> Result<()> {
         self.0.execute(
             "UPDATE sync_state SET last_error = ?2 WHERE project_id = ?1",
             params![project_id, warning],
@@ -568,7 +563,7 @@ impl GhMirror<'_> {
         Ok(())
     }
 
-    pub(crate) fn sync_states(&self) -> Result<Vec<SyncState>> {
+    pub fn sync_states(&self) -> Result<Vec<SyncState>> {
         let mut stmt = self.0.prepare(&format!(
             "SELECT {SYNC_COLS} FROM sync_state ORDER BY project_id"
         ))?;
@@ -576,7 +571,7 @@ impl GhMirror<'_> {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub(crate) fn sync_state(&self, project_id: i64) -> Result<Option<SyncState>> {
+    pub fn sync_state(&self, project_id: i64) -> Result<Option<SyncState>> {
         Ok(self
             .0
             .query_row(
@@ -587,7 +582,7 @@ impl GhMirror<'_> {
             .optional()?)
     }
 
-    pub(crate) fn list_issues(&self, project_id: i64) -> Result<Vec<IssueRow>> {
+    pub fn list_issues(&self, project_id: i64) -> Result<Vec<IssueRow>> {
         let mut stmt = self.0.prepare(&format!(
             "SELECT {ISSUE_COLS} FROM issue_cache WHERE project_id = ?1 ORDER BY gh_number"
         ))?;
@@ -595,7 +590,7 @@ impl GhMirror<'_> {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub(crate) fn get_issue(&self, project_id: i64, gh_number: i64) -> Result<Option<IssueRow>> {
+    pub fn get_issue(&self, project_id: i64, gh_number: i64) -> Result<Option<IssueRow>> {
         Ok(self
             .0
             .query_row(
@@ -608,7 +603,7 @@ impl GhMirror<'_> {
             .optional()?)
     }
 
-    pub(crate) fn prs_for_work_item(&self, work_item_id: i64) -> Result<Vec<PrRow>> {
+    pub fn prs_for_work_item(&self, work_item_id: i64) -> Result<Vec<PrRow>> {
         let mut stmt = self.0.prepare(&format!(
             "SELECT {PR_COLS} FROM pr_cache WHERE work_item_id = ?1 ORDER BY number DESC"
         ))?;
@@ -616,7 +611,7 @@ impl GhMirror<'_> {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub(crate) fn get_pr(&self, project_id: i64, number: i64) -> Result<Option<PrRow>> {
+    pub fn get_pr(&self, project_id: i64, number: i64) -> Result<Option<PrRow>> {
         Ok(self
             .0
             .query_row(
@@ -627,7 +622,7 @@ impl GhMirror<'_> {
             .optional()?)
     }
 
-    pub(crate) fn list_prs(&self, project_id: i64) -> Result<Vec<PrRow>> {
+    pub fn list_prs(&self, project_id: i64) -> Result<Vec<PrRow>> {
         let mut stmt = self.0.prepare(&format!(
             "SELECT {PR_COLS} FROM pr_cache WHERE project_id = ?1 ORDER BY number"
         ))?;
@@ -635,7 +630,7 @@ impl GhMirror<'_> {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub(crate) fn open_prs(&self, project_id: i64) -> Result<Vec<PrRow>> {
+    pub fn open_prs(&self, project_id: i64) -> Result<Vec<PrRow>> {
         let mut stmt = self.0.prepare(&format!(
             "SELECT {PR_COLS} FROM pr_cache WHERE project_id = ?1 AND state = 'open' ORDER BY number"
         ))?;
@@ -643,7 +638,7 @@ impl GhMirror<'_> {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub(crate) fn set_pr_head_sha(&self, project_id: i64, number: i64, sha: &str) -> Result<()> {
+    pub fn set_pr_head_sha(&self, project_id: i64, number: i64, sha: &str) -> Result<()> {
         self.0.execute(
             "UPDATE pr_cache SET head_sha = ?3 WHERE project_id = ?1 AND number = ?2",
             params![project_id, number, sha],
@@ -651,7 +646,7 @@ impl GhMirror<'_> {
         Ok(())
     }
 
-    pub(crate) fn etag(&self, key: &str) -> Result<Option<String>> {
+    pub fn etag(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .0
             .query_row("SELECT etag FROM gh_etag WHERE key = ?1", [key], |r| {

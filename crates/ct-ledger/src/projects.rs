@@ -18,7 +18,7 @@ pub struct NewProject {
 /// Campos a alterar num projeto local legado; `None` mantém o valor atual.
 /// O ambiente não edita projetos (vêm do hub, #178): só os testes simulam
 /// ambientes antigos que ainda editavam.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Default)]
 pub struct ProjectPatch {
     pub name: Option<String>,
@@ -201,7 +201,7 @@ pub(crate) fn row_to_project(r: &Row) -> rusqlite::Result<Project> {
 }
 
 /// O cache vindo do hub é somente leitura: atributos de projeto vêm do hub.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn refuse_hub_row(p: &Project, action: &str) -> Result<()> {
     if p.from_hub() {
         return Err(LedgerError::Conflict(format!(
@@ -242,8 +242,9 @@ impl Ledger {
 
     /// Altera só os campos presentes em `patch`; dono e repositório no GitHub
     /// não mudam. Só nos testes (ambiente anterior à #178).
-    #[cfg(test)]
-    pub(crate) fn update_project(&self, id: i64, patch: &ProjectPatch) -> Result<Project> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn update_project(&self, id: i64, patch: &ProjectPatch) -> Result<Project> {
         if let Ok(p) = self.get_project(id) {
             refuse_hub_row(&p, "edite")?;
         }
@@ -481,6 +482,7 @@ mod gestor_tests {
             .any(|e| matches!(&e.change, crate::SyncChange::Project(p) if p.owner == "_ctower")));
         // O pull do hub (sem o sentinela) não o desatribui.
         let cfg = ConfigResponse {
+            connections: None,
             config_rev: 1,
             config_epoch: 1,
             changed: true,

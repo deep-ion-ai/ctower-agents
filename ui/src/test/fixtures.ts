@@ -361,6 +361,7 @@ export function jiraHubProject(p: Partial<HubProject> = {}): HubProject {
       epic_link_field: "customfield_10601",
       epic_name_field: "customfield_10604",
       type_map: { Epic: "epic", Bug: "bug" },
+      connection: 7,
     },
     forge: {
       kind: "gitlab",
@@ -368,6 +369,7 @@ export function jiraHubProject(p: Partial<HubProject> = {}): HubProject {
       path: "grupo/projeto/app",
       clone_url: "https://gitlab.example.com/grupo/projeto/app.git",
       credential_cmd: "pass show gitlab | head -1",
+      connection: 8,
     },
     branch_pattern: "{key}",
     attribution: false,

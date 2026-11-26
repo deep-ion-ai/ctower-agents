@@ -7,17 +7,20 @@ mod decisions;
 mod error;
 mod events;
 mod feedback_text;
-mod github;
-mod hub;
+#[doc(hidden)]
+pub mod github;
 mod hub_config;
 mod pr_review;
-mod projects;
+#[doc(hidden)]
+pub mod projects;
 mod prune;
 mod rules;
-mod schema;
+#[doc(hidden)]
+pub mod schema;
 mod sessions;
 mod shared_files;
-mod sync;
+#[doc(hidden)]
+pub mod sync;
 mod tracker_mirror;
 mod tree;
 mod work_items;
@@ -27,7 +30,7 @@ pub use checks::{
     checks_state, CheckSource, ChecksRead, ChecksState, PrCheck, PrChecks, PrChecksFetch,
     PrChecksSnapshot, PrChecksSummary,
 };
-pub use decisions::{Decision, NewDecision};
+pub use decisions::{Decision, DecisionScope, HubDecision, NewDecision};
 pub use error::{LedgerError, Result};
 pub use events::{Event, NewEvent};
 pub use feedback_text::{
@@ -39,67 +42,18 @@ pub use github::{
     GithubSnapshot, GoneIssue, IssueMeta, IssueRow, PrRow, SyncState, GH_ISSUE_GONE_CAUSE,
     GH_ISSUE_GONE_REASON,
 };
-pub use hub::IssueAgent;
-pub use hub::{
-    digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
-};
-pub use hub::{
-    issue_fingerprint, AnalysisRound, BlockerInput, BlockerState, DependencyEdge, DependencyInput,
-    DependencySet, DependencySetResult, ManualEdit, DEP_SOURCE_ANALYSIS, DEP_SOURCE_MANUAL,
-};
-pub use hub::{list_snapshots, rotate_snapshots, IssuedEnvToken, AGENT_TOKEN_PREFIX};
-pub use hub::{
-    AgentAssignment, AgentDecision, AgentDecisionFilter, AgentDecisions, AgentEnv, AgentEvent,
-    AgentItemRef, AgentNode, AgentOverview, AgentPr, AgentProject, AgentProjectSummary,
-    AgentSession, AgentWorkItem,
-};
-pub use hub::{
-    ApprovalStatus, AssignmentAdded, AssignmentFilter, AssignmentState, DeleteImpact,
-    HubAssignment, HubProjectPatch, HubTrackerStatus, LegacyAdoption, NewHubProject, ProjectAdded,
-    ProjectProvider, QuarantineGroup,
-};
-pub use hub::{
-    AutopilotEvent, AutopilotSession, AutopilotSettings, CloseState, IdleSession, ParkedSession,
-    WaitingSession, AUTOPILOT_EVENT_TTL_MS, AUTOPILOT_IDLE_TIMEOUT_DEFAULT_MIN,
-    AUTOPILOT_IDLE_TIMEOUT_MAX_MIN, AUTOPILOT_MAX_CI_ATTEMPTS_CEILING,
-    AUTOPILOT_MAX_CI_ATTEMPTS_DEFAULT, AUTOPILOT_MAX_PER_ENV_CEILING,
-    AUTOPILOT_MAX_PER_ENV_DEFAULT, AUTOPILOT_WAITING_TIMEOUT_DEFAULT_MIN,
-    AUTOPILOT_WAITING_TIMEOUT_MAX_MIN,
-};
-pub use hub::{
-    ChannelStates, HubPushDevice, NewPushSubscription, PushEvent, PushNotice, PushTarget,
-    CHANNEL_STALE_MS, PUSH_FAILURES_MAX, PUSH_SUBSCRIPTIONS_MAX,
-};
-pub use hub::{
-    CleanupSummary, DecisionCounts, DecisionScope, EnvAssignmentRev, EnvPubkey, EnvSecretsInput,
-    Hub, HubDashboard, HubDashboardProject, HubDashboardWorkItem, HubDecision, HubEnv, HubEvent,
-    HubHistory, HubLocation, HubProject, HubProjectView, HubSession, HubTree, HubTreeItem,
-    HubTreeNode, HubWorkItem, IngestResult, SharedHub, WorkItemSummary,
-};
-pub use hub::{
-    HealthCounts, HealthFilter, HealthKind, HealthSignal, HealthThresholds, HubHealth, Severity,
-};
-pub use hub::{
-    HubProposal, HubProposals, NewProposal, ProposalDecided, ProposalFilter, PROPOSAL_PENDING_MAX,
-    PROPOSAL_TTL_MS,
-};
-pub use hub::{HubRanking, HubRankingItem, Placement, RankingFilter, RANKING_LIMIT, RANKING_MAX};
-pub use hub::{
-    HubRuleVersion, HubRules, HubRulesHistory, HubRulesProposal, HubRulesProposals,
-    RulesProposalFilter,
-};
-pub use hub::{HubWebSession, IssuedWebSession, WEB_SESSION_TOUCH_MS};
 pub use hub_config::{
-    ConfigApplied, ConfigDone, ConfigProject, ConfigRemoved, ConfigResponse, DoneResponse,
+    materialize_connections, ConfigApplied, ConfigDone, ConfigProject, ConfigRemoved,
+    ConfigResponse, DoneResponse,
 };
 pub use pr_review::{
     is_external_association, ChangesRequest, PrFeedback, PrReviews, ReviewTarget, ReviewThread,
     TRUSTED_ASSOCIATIONS,
 };
-#[cfg(test)]
-pub(crate) use projects::ProjectPatch;
+#[cfg(any(test, feature = "test-support"))]
+pub use projects::ProjectPatch;
 pub use projects::{NewProject, Project};
-pub use prune::{PruneReport, PruneSkip, PrunedSession};
+pub use prune::{CleanupSummary, PruneReport, PruneSkip, PrunedSession};
 pub use rules::{
     check_rules_size, ConfigRules, EpicRuleText, RuleText, RulesProposalChange, SessionRules,
     RULES_MAX_BYTES, RULES_REASON_MAX, RULES_WARN_BYTES,
@@ -111,7 +65,7 @@ pub use sync::{
     LocationState, MirrorPr, OutboxEntry, OutboxStats, PrMirrorChange, ProjectChange,
     SessionChange, SyncChange, TrackerStatusChange, WorkItemChange,
 };
-pub use tree::{ProjectTree, TreeNode};
+pub use tree::{DecisionCounts, ProjectTree, TreeNode, WorkItemSummary};
 pub use work_items::WorkItem;
 
 use rusqlite::{types::Type, Connection, Row};
@@ -119,7 +73,8 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+#[doc(hidden)]
+pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Ledger {
     conn: Connection,
@@ -144,6 +99,12 @@ impl Ledger {
         )
     }
 
+    /// Conexão crua: só para os testes de integração com o `ct-hub-store`.
+    #[doc(hidden)]
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
     fn init(conn: Connection, env_id: &str) -> Result<Self> {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "foreign_keys", true)?;
@@ -156,7 +117,8 @@ impl Ledger {
 }
 
 /// Lê uma coluna TEXT e converte via `FromStr` (enums do domínio).
-pub(crate) fn parse_col<T>(row: &Row, idx: usize) -> rusqlite::Result<T>
+#[doc(hidden)]
+pub fn parse_col<T>(row: &Row, idx: usize) -> rusqlite::Result<T>
 where
     T: FromStr,
     T::Err: std::error::Error + Send + Sync + 'static,
@@ -167,7 +129,8 @@ where
 }
 
 /// Como `parse_col`, para coluna que aceita nulo.
-pub(crate) fn opt_parse_col<T>(row: &Row, idx: usize) -> rusqlite::Result<Option<T>>
+#[doc(hidden)]
+pub fn opt_parse_col<T>(row: &Row, idx: usize) -> rusqlite::Result<Option<T>>
 where
     T: FromStr,
     T::Err: std::error::Error + Send + Sync + 'static,
@@ -179,24 +142,24 @@ where
 }
 
 /// Lê o par de colunas (`tracker_kind`, `tracker_config`) a partir de `idx`.
-pub(crate) fn tracker_col(row: &Row, idx: usize) -> rusqlite::Result<ct_core::TrackerConfig> {
+#[doc(hidden)]
+pub fn tracker_col(row: &Row, idx: usize) -> rusqlite::Result<ct_core::TrackerConfig> {
     let (kind, json): (String, String) = (row.get(idx)?, row.get(idx + 1)?);
     ct_core::TrackerConfig::from_columns(&kind, &json)
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(idx, Type::Text, Box::new(e)))
 }
 
 /// Lê o par de colunas (`forge_kind`, `forge_config`) a partir de `idx`.
-pub(crate) fn forge_col(row: &Row, idx: usize) -> rusqlite::Result<ct_core::ForgeConfig> {
+#[doc(hidden)]
+pub fn forge_col(row: &Row, idx: usize) -> rusqlite::Result<ct_core::ForgeConfig> {
     let (kind, json): (String, String) = (row.get(idx)?, row.get(idx + 1)?);
     ct_core::ForgeConfig::from_columns(&kind, &json)
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(idx, Type::Text, Box::new(e)))
 }
 
 /// Lê uma coluna TEXT contendo JSON.
-pub(crate) fn json_col<T: serde::de::DeserializeOwned>(
-    row: &Row,
-    idx: usize,
-) -> rusqlite::Result<T> {
+#[doc(hidden)]
+pub fn json_col<T: serde::de::DeserializeOwned>(row: &Row, idx: usize) -> rusqlite::Result<T> {
     let s: String = row.get(idx)?;
     serde_json::from_str(&s)
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(idx, Type::Text, Box::new(e)))

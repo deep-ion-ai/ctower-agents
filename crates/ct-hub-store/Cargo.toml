@@ -1,0 +1,28 @@
+[package]
+name = "ct-hub-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Store do hub (`hub.db`): a visão consolidada de todos os ambientes. Vive
+# fora do ct-ledger para que o ctowerd (o ambiente) não compile o código do
+# hub. Os tipos do sync (SyncChange, OutboxEntry...) continuam no ct-ledger,
+# que é a base comum dos dois lados.
+[dependencies]
+ct-core.workspace = true
+ct-gh.workspace = true
+ct-ledger.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+ts = ["dep:ts-rs", "ct-core/ts", "ct-ledger/ts"]
+
+[dev-dependencies]
+ct-ledger = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

@@ -25,5 +25,6 @@ libc.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+ct-hub-store.workspace = true
 tokio-tungstenite.workspace = true
 ureq = { workspace = true, features = ["json"] }

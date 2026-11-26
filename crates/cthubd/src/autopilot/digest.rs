@@ -16,13 +16,13 @@
 //!   integração, as bloqueadas, as decisões autônomas sem revisão, as
 //!   issues à frente da base e o PR `branch → base` com o estado do CI do
 //!   espelho; e, por conta com política, o uso da semanal no período.
-//!   Nada da conversa do agente (veja `ct_ledger::MorningDigest`).
+//!   Nada da conversa do agente (veja `ct_hub_store::MorningDigest`).
 //! - **Avisos:** o resumo novo vira o push `hub.autopilot.changed` às UIs
 //!   (o card na Visão geral) e a Web Push `morning_digest`.
 
 use ct_core::plan::budget::BudgetPolicy;
 use ct_core::plan::WindowView;
-use ct_ledger::{DigestUsage, Hub, MorningDigest};
+use ct_hub_store::{DigestUsage, Hub, MorningDigest};
 use std::collections::BTreeMap;
 
 const DAY_MS: i64 = 86_400_000;
@@ -128,7 +128,7 @@ mod tests {
     use super::*;
     use ct_core::plan::{EnvPlanReport, PlanAccount, PlanReading, PlanWindow};
     use ct_core::AutonomyConfig;
-    use ct_ledger::{HubProjectPatch, NewHubProject};
+    use ct_hub_store::{HubProjectPatch, NewHubProject};
 
     const H: i64 = 3_600_000;
     const MIN: i64 = 60_000;

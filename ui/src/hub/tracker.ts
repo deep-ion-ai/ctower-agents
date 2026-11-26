@@ -55,7 +55,8 @@ export function hubSupportsJira(protocol: string | null | undefined): boolean {
 
 /** Campos do Jira + GitLab no formulário de Hub › Projetos. */
 export interface JiraForm {
-  jira_url: string;
+  /** Conexão do Jira (`hub.connections`, #238): URL e credencial vêm dela. */
+  jira_conn: string;
   jira_key: string;
   /** Sync só da sprint ativa (`sprint in openSprints()`), sem JQL nem limite. */
   active_sprint_only: boolean;
@@ -63,10 +64,10 @@ export interface JiraForm {
   jql: string;
   /** Limite de issues sincronizadas (as mais recentes do JQL), sem `active_sprint_only`. */
   max_issues: string;
-  jira_cmd: string;
   /** URL de clone do GitLab (HTTPS ou SSH); host e caminho saem dela. */
   gitlab_url: string;
-  gitlab_cmd: string;
+  /** Conexão do GitLab (#238): host e credencial vêm dela. */
+  gitlab_conn: string;
   /** Vazio = o padrão do Jira (`{prefix}/{key}-{slug}`). */
   branch_pattern: string;
   attribution: boolean;
@@ -97,15 +98,14 @@ export const DEFAULT_MAX_ISSUES = 100;
 export const MAX_ISSUES_CEILING = 5000;
 
 export const EMPTY_JIRA: JiraForm = {
-  jira_url: "",
+  jira_conn: "",
   jira_key: "",
   // Projeto novo: só a sprint ativa, o recorte que não precisa de JQL.
   active_sprint_only: true,
   jql: "",
   max_issues: String(DEFAULT_MAX_ISSUES),
-  jira_cmd: "",
   gitlab_url: "",
-  gitlab_cmd: "",
+  gitlab_conn: "",
   branch_pattern: "",
   attribution: true,
   type_map: DEFAULT_TYPE_MAP,
@@ -283,8 +283,22 @@ export function branchPreview(pattern: string, key: string | null): string | nul
     .replaceAll("{slug}", "portar-o-plugin");
 }
 
+/**
+ * A conexão escolhida no formulário (o id do seletor): `null` = nenhuma. Com
+ * ela, o projeto não leva URL nem comando de credencial.
+ */
+export function connectionId(v: string): number | null {
+  const n = Number(v.trim());
+  return v.trim() && Number.isInteger(n) && n > 0 ? n : null;
+}
+
 /** Parâmetros `tracker` e `forge` de `hub.projects.add|update`. */
 export function providerParams(f: JiraForm): { tracker: object; forge: object } | { error: string } {
+  // URL e credencial vêm da conexão (#238): o projeto só diz qual.
+  const jiraConn = connectionId(f.jira_conn);
+  if (jiraConn === null) return { error: "escolha a conexão do Jira (Hub › Conexões)" };
+  const gitlabConn = connectionId(f.gitlab_conn);
+  if (gitlabConn === null) return { error: "escolha a conexão do GitLab (Hub › Conexões)" };
   const tm = parseTypeMap(f.type_map);
   if ("error" in tm) return tm;
   const extra = extraFieldsParam(f.extra_fields);
@@ -299,21 +313,22 @@ export function providerParams(f: JiraForm): { tracker: object; forge: object } 
   return {
     tracker: {
       kind: "jira",
-      url: f.jira_url.trim(),
+      url: "",
       project_key: f.jira_key.trim(),
       active_sprint_only: f.active_sprint_only,
       // Com a sprint ativa, o JQL e o limite são ignorados pelo sync; vão como estão.
       jql: f.jql.trim(),
       max_issues: Number.isInteger(max) && max >= 1 && max <= MAX_ISSUES_CEILING ? max : DEFAULT_MAX_ISSUES,
-      credential_cmd: f.jira_cmd.trim(),
+      credential_cmd: "",
       config_file: "",
+      connection: jiraConn,
       epic_link_field: f.epic_link_field.trim(),
       epic_name_field: f.epic_name_field.trim(),
       sprint_field: f.sprint_field.trim(),
       type_map: tm.map,
       extra_fields: extra.fields,
     },
-    forge: { kind: "gitlab", clone_url: f.gitlab_url.trim(), credential_cmd: f.gitlab_cmd.trim() },
+    forge: { kind: "gitlab", clone_url: f.gitlab_url.trim(), credential_cmd: "", connection: gitlabConn },
   };
 }
 
@@ -322,15 +337,14 @@ export function jiraFormOf(p: HubProject): JiraForm {
   const j = jiraOf(p);
   const g = gitlabOf(p);
   return {
-    jira_url: j?.url ?? "",
+    jira_conn: j?.connection !== undefined ? String(j.connection) : "",
     jira_key: j?.project_key ?? "",
     // Cadastro anterior ao modo: sem os campos (JQL com limite 100).
     active_sprint_only: j?.active_sprint_only ?? false,
     jql: j?.jql ?? "",
     max_issues: String(j?.max_issues ?? DEFAULT_MAX_ISSUES),
-    jira_cmd: j?.credential_cmd ?? "",
     gitlab_url: g?.clone_url ?? "",
-    gitlab_cmd: g?.credential_cmd ?? "",
+    gitlab_conn: g?.connection !== undefined ? String(g.connection) : "",
     branch_pattern: p.branch_pattern ?? "",
     attribution: p.attribution,
     type_map: j ? typeMapText(j.type_map) : DEFAULT_TYPE_MAP,
@@ -357,11 +371,10 @@ export interface ReadinessCheck {
  * O que o ambiente de sync conferiu (§8.4), na ordem em que uma falha
  * impede a seguinte, com a instrução de configuração de cada item que falta.
  */
-export function readinessChecks(r: TrackerReadiness, p: Provider): { jira: ReadinessCheck[]; gitlab: ReadinessCheck[] } {
-  const j = jiraOf(p);
-  const g = gitlabOf(p);
-  const jiraCmd = j?.credential_cmd || "o comando de credencial do Jira";
-  const gitlabCmd = g?.credential_cmd || "o comando de credencial do GitLab";
+export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; gitlab: ReadinessCheck[] } {
+  // Credencial e URL vêm da conexão (#238): a instrução fala dela, não do cadastro.
+  const jiraCmd = "o comando de credencial da conexão do Jira";
+  const gitlabCmd = "o comando de credencial da conexão do GitLab";
   return {
     jira: [
       {
@@ -376,9 +389,9 @@ export function readinessChecks(r: TrackerReadiness, p: Provider): { jira: Readi
         fix: 'rode "jira init" num terminal do ambiente',
       },
       {
-        label: `servidor do .config.yml é ${j?.url ?? "o do cadastro"}`,
+        label: "servidor do .config.yml é o da conexão do Jira",
         ok: r.jira.server_matches,
-        fix: `rode "jira init" de novo com o servidor ${j?.url ?? "do cadastro"}`,
+        fix: 'rode "jira init" de novo com o servidor da conexão do Jira',
       },
       {
         label: "comando de credencial do Jira ok",
@@ -405,7 +418,7 @@ export function readinessChecks(r: TrackerReadiness, p: Provider): { jira: Readi
         fix: `rode "${gitlabCmd}" num terminal do ambiente: o cache do gpg-agent pode ter expirado`,
       },
       {
-        label: `API do GitLab ok${g ? ` (${g.host})` : ""}`,
+        label: "API do GitLab ok",
         ok: r.gitlab.api_ok,
         fix: "confira o token de acesso que o comando de credencial imprime e o host do GitLab",
       },
@@ -428,7 +441,7 @@ export function sessionReadiness(
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
   const r = trackers?.find((t) => same(t.owner, p.gh_owner) && same(t.repo, p.gh_repo));
   if (!r) return { unknown: true };
-  const c = readinessChecks(r, p);
+  const c = readinessChecks(r);
   const missing = [...c.jira, ...c.gitlab].filter((x) => !x.ok);
   if (missing.length === 0) return null;
   const errors = [r.jira.error, r.gitlab.error].filter((e): e is string => !!e);

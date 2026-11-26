@@ -63,4 +63,9 @@ type_map: { [key in string]?: JiraTypeRole },
  * Campos próprios do projeto na tela da issue, depois dos 5 padrão e
  * na ordem do cadastro. Ausente (cadastro anterior) = nenhum.
  */
-extra_fields?: Array<JiraExtraField>, };
+extra_fields?: Array<JiraExtraField>, 
+/**
+ * Conexão do hub com o Jira (`tracker.connection`, #235). Quando há,
+ * URL e credencial vêm dela, não do cadastro do projeto.
+ */
+connection?: number, };

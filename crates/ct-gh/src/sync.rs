@@ -6,8 +6,8 @@ use crate::{time, Fetched, GhClient, GhError};
 use ct_core::branch::issue_number_from_branch;
 use ct_core::{PrState, WorkItemKind, WorkItemStatus};
 use ct_ledger::{
-    project_key, CheckSource, ChecksRead, GithubSnapshot, GoneIssue, Hub, IssueMeta, IssueRow,
-    Ledger, PrCheck, PrChecks, PrChecksFetch, PrChecksSnapshot, PrRow, Project, WorkItem,
+    project_key, CheckSource, ChecksRead, GithubSnapshot, GoneIssue, IssueMeta, IssueRow, Ledger,
+    PrCheck, PrChecks, PrChecksFetch, PrChecksSnapshot, PrRow, Project, WorkItem,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -76,50 +76,7 @@ impl SyncInput {
         Self::build(project, work_items, mirror, now_ms, |k| l.etag(k))
     }
 
-    /// Entrada de um projeto central do `hub.db`, que não precisa de clone
-    /// no hub (issue #60): ids e espelho são os do hub, `repo_path` vazio.
-    pub fn load_hub(hub: &Hub, project_id: i64, now_ms: i64) -> ct_ledger::Result<Self> {
-        let p = hub
-            .list_projects()?
-            .into_iter()
-            .find(|p| p.id == project_id)
-            .ok_or_else(|| ct_ledger::LedgerError::NotFound("project", project_id.to_string()))?;
-        let project = Project {
-            id: p.id,
-            name: p.name,
-            gh_owner: p.gh_owner,
-            gh_repo: p.gh_repo,
-            repo_path: String::new(),
-            base_branch: p.base_branch,
-            protected_branches: p.protected_branches,
-            created_at: p.created_at,
-            autonomy: p.autonomy,
-            ..Project::default()
-        };
-        let work_items = hub
-            .github_work_items(project_id)?
-            .into_iter()
-            .map(|w| WorkItem {
-                id: w.id,
-                project_id: w.project_id,
-                gh_number: w.gh_number,
-                kind: w.kind,
-                status: w.status,
-                branch: w.branch,
-                worktree_path: None,
-                created_at: w.created_at,
-                closed_at: w.closed_at,
-            })
-            .collect();
-        let mirror = Mirror {
-            issues: hub.list_issues(project_id)?,
-            open_prs: hub.open_prs(project_id)?,
-            checks: hub.list_pr_checks(project_id)?,
-        };
-        Self::build(project, work_items, mirror, now_ms, |k| hub.etag(k))
-    }
-
-    fn build(
+    pub fn build(
         project: Project,
         mut work_items: Vec<WorkItem>,
         mirror: Mirror,
@@ -191,10 +148,10 @@ impl SyncInput {
 }
 
 /// O espelho lido para a entrada do sync.
-struct Mirror {
-    issues: Vec<IssueRow>,
-    open_prs: Vec<PrRow>,
-    checks: Vec<PrChecks>,
+pub struct Mirror {
+    pub issues: Vec<IssueRow>,
+    pub open_prs: Vec<PrRow>,
+    pub checks: Vec<PrChecks>,
 }
 
 /// `since` das issues fechadas: início do dia UTC de 30 dias atrás (estável

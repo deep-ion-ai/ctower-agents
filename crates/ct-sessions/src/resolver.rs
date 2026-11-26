@@ -1,0 +1,290 @@
+//! Resolvedor único de credencial (#236): um lugar só para obter o token de
+//! uma conexão, qualquer que seja a fonte ([`CredentialSource`]).
+//!
+//! - `Command` roda o comando de credencial (primeira linha da saída);
+//! - `Cli` pede o token ao `gh auth token`;
+//! - `File` lê o arquivo (primeira linha não vazia);
+//! - `Secret` pede o valor ao store de secrets do ambiente (quem chama
+//!   passa a busca por nome);
+//! - `None` não tem token e vira erro.
+//!
+//! O cache é em memória, por chave (`jira:<projeto>`, `gitlab:<projeto>`),
+//! e guarda a fonte usada: se a fonte mudar (cadastro ou sobrescrita por
+//! ambiente), o token é resolvido de novo. [`CredentialResolver::with_refresh`]
+//! descarta o token quando a operação falha por autenticação e tenta uma vez
+//! com um token novo. Nenhum valor entra em log ou erro.
+
+use ct_core::provider::CredentialSource;
+use ct_proc::{run_credential, CredentialError, Secret};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// Comando do `Cli` (token da CLI do GitHub; só GitHub por ora).
+const CLI_TOKEN_CMD: &str = "gh auth token";
+
+/// Busca de um secret do store do ambiente pelo nome.
+pub(crate) type SecretLookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Sem store de secrets na busca (Jira e GitLab usam só o comando de
+/// credencial do cadastro).
+pub(crate) fn no_lookup(_: &str) -> Option<String> {
+    None
+}
+
+/// Chave do cache do Jira de um projeto.
+pub(crate) fn jira_key(project_id: i64) -> String {
+    format!("jira:{project_id}")
+}
+
+/// Chave do cache do GitLab de um projeto.
+pub(crate) fn gitlab_key(project_id: i64) -> String {
+    format!("gitlab:{project_id}")
+}
+
+/// O que pedir ao resolvedor: a chave do cache, o provedor (para as
+/// mensagens), a fonte, a busca de secrets e o prazo do comando.
+#[derive(Clone, Copy)]
+pub(crate) struct Ask<'a> {
+    pub key: &'a str,
+    pub what: &'static str,
+    pub source: &'a CredentialSource,
+    pub lookup: SecretLookup<'a>,
+    pub deadline: Duration,
+}
+
+struct Entry {
+    source: CredentialSource,
+    token: Arc<Secret>,
+}
+
+/// Cache de tokens por chave. Fica no `Sessions`, compartilhado.
+pub(crate) struct CredentialResolver {
+    cache: Mutex<HashMap<String, Entry>>,
+}
+
+impl std::fmt::Debug for CredentialResolver {
+    /// Sem o conteúdo do cache: só quantas chaves há.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let n = self.cache.lock().map(|c| c.len()).unwrap_or(0);
+        f.debug_struct("CredentialResolver")
+            .field("chaves", &n)
+            .finish()
+    }
+}
+
+impl CredentialResolver {
+    pub(crate) fn new() -> Self {
+        CredentialResolver {
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Token da chave: do cache se a fonte não mudou, senão resolvido agora.
+    pub(crate) fn token(&self, ask: Ask<'_>) -> Result<Arc<Secret>, CredentialError> {
+        if let Some(e) = self.cache.lock().unwrap().get(ask.key) {
+            if e.source == *ask.source {
+                return Ok(e.token.clone());
+            }
+        }
+        let token = Arc::new(resolve(&ask)?);
+        self.cache.lock().unwrap().insert(
+            ask.key.to_string(),
+            Entry {
+                source: ask.source.clone(),
+                token: token.clone(),
+            },
+        );
+        Ok(token)
+    }
+
+    /// Descarta o token da chave: a próxima chamada resolve de novo.
+    pub(crate) fn invalidate(&self, key: &str) {
+        self.cache.lock().unwrap().remove(key);
+    }
+
+    /// Roda `op` com o token. Se a falha for de autenticação (`is_auth`),
+    /// descarta o token, resolve de novo e tenta uma única vez. Falha do
+    /// próprio comando de credencial vira `E` pelo `From`.
+    pub(crate) fn with_refresh<T, E: From<CredentialError>>(
+        &self,
+        ask: Ask<'_>,
+        is_auth: impl Fn(&E) -> bool,
+        mut op: impl FnMut(&Secret) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let token = self.token(ask)?;
+        match op(&token) {
+            Err(e) if is_auth(&e) => {
+                drop(token);
+                self.invalidate(ask.key);
+                let fresh = self.token(ask)?;
+                op(&fresh)
+            }
+            other => other,
+        }
+    }
+}
+
+fn resolve(ask: &Ask<'_>) -> Result<Secret, CredentialError> {
+    let what = ask.what;
+    match ask.source {
+        CredentialSource::Command { cmd } => run_credential(what, cmd, ask.deadline),
+        CredentialSource::Cli => run_credential(what, CLI_TOKEN_CMD, ask.deadline),
+        CredentialSource::File { path } => read_file(what, path),
+        CredentialSource::Secret { name } => (ask.lookup)(name.trim())
+            .filter(|v| !v.trim().is_empty())
+            .map(Secret::new)
+            .ok_or_else(|| CredentialError::Io {
+                what,
+                message: format!("secret {:?} não existe no ambiente", name.trim()),
+            }),
+        CredentialSource::None => Err(CredentialError::Missing { what }),
+    }
+}
+
+/// Primeira linha não vazia do arquivo. O erro cita o caminho, nunca o
+/// conteúdo.
+fn read_file(what: &'static str, path: &str) -> Result<Secret, CredentialError> {
+    let text = std::fs::read_to_string(path).map_err(|e| CredentialError::Io {
+        what,
+        message: format!("não foi possível ler {path:?}: {}", e.kind()),
+    })?;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .ok_or(CredentialError::Empty { what })?;
+    Ok(Secret::new(line))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    const D: Duration = Duration::from_secs(5);
+
+    fn cmd(s: &str) -> CredentialSource {
+        CredentialSource::Command { cmd: s.into() }
+    }
+
+    fn ask<'a>(key: &'a str, what: &'static str, source: &'a CredentialSource) -> Ask<'a> {
+        Ask {
+            key,
+            what,
+            source,
+            lookup: &no_lookup,
+            deadline: D,
+        }
+    }
+
+    /// Erro de teste: a recusa de autenticação, a falha e a do comando.
+    #[derive(Debug, PartialEq)]
+    enum Erro {
+        Auth,
+        Outro,
+        Credencial(CredentialError),
+    }
+
+    impl From<CredentialError> for Erro {
+        fn from(c: CredentialError) -> Self {
+            Erro::Credencial(c)
+        }
+    }
+
+    #[test]
+    fn comando_roda_uma_vez_e_o_cache_serve_as_proximas() {
+        let dir = tempfile::tempdir().unwrap();
+        let marca = dir.path().join("marca");
+        let c = cmd(&format!(
+            "echo x >> {}; printf 'tok-acme-1\\n'",
+            marca.display()
+        ));
+        let r = CredentialResolver::new();
+        for _ in 0..3 {
+            let t = r.token(ask("jira:1", "Jira", &c)).unwrap();
+            assert_eq!(t.expose(), "tok-acme-1");
+        }
+        let linhas = std::fs::read_to_string(&marca).unwrap();
+        assert_eq!(linhas.lines().count(), 1, "o comando rodou mais de uma vez");
+    }
+
+    #[test]
+    fn fonte_nova_resolve_de_novo() {
+        let r = CredentialResolver::new();
+        let (a, b) = (cmd("printf 'um\\n'"), cmd("printf 'dois\\n'"));
+        let x = r.token(ask("gitlab:1", "GitLab", &a)).unwrap();
+        let y = r.token(ask("gitlab:1", "GitLab", &b)).unwrap();
+        assert_eq!((x.expose(), y.expose()), ("um", "dois"));
+    }
+
+    #[test]
+    fn auth_refaz_uma_vez_e_nao_mais() {
+        let r = CredentialResolver::new();
+        let c = cmd("printf 'tok-acme-2\\n'");
+        let tentativas = Cell::new(0);
+        let out: Result<(), Erro> = r.with_refresh(
+            ask("jira:2", "Jira", &c),
+            |e| *e == Erro::Auth,
+            |_t| {
+                tentativas.set(tentativas.get() + 1);
+                Err(Erro::Auth)
+            },
+        );
+        assert_eq!(out, Err(Erro::Auth));
+        assert_eq!(tentativas.get(), 2, "uma tentativa a mais, e só");
+    }
+
+    #[test]
+    fn erro_que_nao_e_auth_nao_refaz() {
+        let r = CredentialResolver::new();
+        let c = cmd("printf 'tok\\n'");
+        let tentativas = Cell::new(0);
+        let out: Result<(), Erro> = r.with_refresh(
+            ask("jira:3", "Jira", &c),
+            |e| *e == Erro::Auth,
+            |_t| {
+                tentativas.set(tentativas.get() + 1);
+                Err(Erro::Outro)
+            },
+        );
+        assert_eq!(out, Err(Erro::Outro));
+        assert_eq!(tentativas.get(), 1);
+    }
+
+    #[test]
+    fn arquivo_secret_e_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("tok");
+        std::fs::write(&p, "\n  tok-arquivo  \nresto\n").unwrap();
+        let r = CredentialResolver::new();
+        let src = CredentialSource::File {
+            path: p.display().to_string(),
+        };
+        let t = r.token(ask("gh:1", "GitHub", &src)).unwrap();
+        assert_eq!(t.expose(), "tok-arquivo");
+
+        let sec = CredentialSource::Secret {
+            name: "API_TOKEN_ACME".into(),
+        };
+        let lookup = |n: &str| (n == "API_TOKEN_ACME").then(|| "tok-secret".to_string());
+        let mut a = ask("jira:9", "Jira", &sec);
+        a.lookup = &lookup;
+        assert_eq!(r.token(a).unwrap().expose(), "tok-secret");
+        assert!(r.token(ask("jira:8", "Jira", &sec)).is_err());
+
+        let none = CredentialSource::None;
+        let e = r.token(ask("x:1", "GitLab", &none)).unwrap_err();
+        assert_eq!(e, CredentialError::Missing { what: "GitLab" });
+    }
+
+    #[test]
+    fn invalidar_tira_do_cache() {
+        let r = CredentialResolver::new();
+        let c = cmd("printf 'tok-x\\n'");
+        r.token(ask("jira:4", "Jira", &c)).unwrap();
+        assert_eq!(r.cache.lock().unwrap().len(), 1);
+        r.invalidate("jira:4");
+        assert!(r.cache.lock().unwrap().is_empty());
+    }
+}

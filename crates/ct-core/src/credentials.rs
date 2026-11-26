@@ -165,6 +165,115 @@ fn replace_cmd(text: &str, from: &str, to: &str) -> String {
     text.replace(&format!("$({from})"), &format!("$({})", to.trim()))
 }
 
+/// `[connections."nome"]` do `config.toml` do ambiente (#237): o comando de
+/// credencial que este ambiente usa para uma conexão do hub. Vale sobre o da
+/// conexão; vazio = o da conexão.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConnectionOverride {
+    pub credential_cmd: String,
+}
+
+/// `[connections]` do `config.toml`, pelo nome da conexão no hub.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConnectionOverrides(pub BTreeMap<String, ConnectionOverride>);
+
+impl ConnectionOverrides {
+    /// Comando de credencial deste ambiente para a conexão, se houver.
+    pub fn credential_cmd(&self, connection: &str) -> Option<&str> {
+        self.0
+            .get(connection)
+            .map(|o| o.credential_cmd.trim())
+            .filter(|c| !c.is_empty())
+    }
+}
+
+/// Os nomes das conexões que o projeto `owner/repo` usa, do lado do
+/// rastreador e da forja. `None` = o projeto não tem conexão ali.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectConnections {
+    pub owner: String,
+    pub repo: String,
+    pub tracker: Option<String>,
+    pub forge: Option<String>,
+}
+
+/// Conversão do `[credentials]` para `[connections]` (#237), no primeiro
+/// pull com a configuração nova. Cada comando do projeto vai para a conexão
+/// dele (`tracker_cmd` para a do rastreador, `forge_cmd` para a da forja).
+///
+/// Devolve as conexões em uso (as já existentes e as novas), as sobrescritas
+/// que ficaram em `[credentials]` e os avisos. Ficam em `[credentials]`: o
+/// projeto sem conexão neste ambiente, e o comando que brigaria com outro
+/// já convertido para a mesma conexão (o aviso diz qual). Esses continuam
+/// valendo pelo caminho antigo, por projeto.
+pub fn convert_credentials(
+    creds: &CredentialOverrides,
+    projects: &[ProjectConnections],
+    existing: &ConnectionOverrides,
+) -> (ConnectionOverrides, CredentialOverrides, Vec<String>) {
+    let mut conns = existing.clone();
+    let mut left = CredentialOverrides::default();
+    let mut warnings = Vec::new();
+    for (key, ov) in &creds.0 {
+        let Some(p) = projects
+            .iter()
+            .find(|p| format!("{}/{}", p.owner, p.repo).eq_ignore_ascii_case(key.trim()))
+        else {
+            warnings.push(format!(
+                "[credentials.\"{key}\"] não é de projeto atribuído a este ambiente: fica no config.toml"
+            ));
+            left.0.insert(key.clone(), ov.clone());
+            continue;
+        };
+        let mut keep = CredentialOverride::default();
+        for (cmd, conn, role) in [
+            (ov.tracker_cmd.trim(), p.tracker.as_deref(), "rastreador"),
+            (ov.forge_cmd.trim(), p.forge.as_deref(), "forja"),
+        ] {
+            if cmd.is_empty() {
+                continue;
+            }
+            let Some(name) = conn else {
+                warnings.push(format!(
+                    "[credentials.\"{key}\"]: o projeto não tem conexão de {role}; o comando fica no config.toml"
+                ));
+                if role == "rastreador" {
+                    keep.tracker_cmd = cmd.to_string();
+                } else {
+                    keep.forge_cmd = cmd.to_string();
+                }
+                continue;
+            };
+            match conns.credential_cmd(name) {
+                Some(cur) if cur != cmd => {
+                    warnings.push(format!(
+                        "[credentials.\"{key}\"]: a conexão {name} já tem outro comando neste ambiente; o do projeto fica no config.toml"
+                    ));
+                    if role == "rastreador" {
+                        keep.tracker_cmd = cmd.to_string();
+                    } else {
+                        keep.forge_cmd = cmd.to_string();
+                    }
+                }
+                _ => {
+                    conns.0.insert(
+                        name.to_string(),
+                        ConnectionOverride {
+                            credential_cmd: cmd.to_string(),
+                        },
+                    );
+                }
+            }
+        }
+        if keep != CredentialOverride::default() {
+            left.0.insert(key.clone(), keep);
+        }
+    }
+    (conns, left, warnings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +399,102 @@ mod tests {
             CredentialOverrides::default().rewrite_prompt("acme", "web", &t, &f, &prompt),
             prompt
         );
+    }
+}
+
+#[cfg(test)]
+mod conexoes_tests {
+    use super::*;
+
+    fn cred(tracker: &str, forge: &str) -> CredentialOverride {
+        CredentialOverride {
+            tracker_cmd: tracker.into(),
+            forge_cmd: forge.into(),
+        }
+    }
+
+    fn proj(repo: &str, tracker: Option<&str>, forge: Option<&str>) -> ProjectConnections {
+        ProjectConnections {
+            owner: "acme".into(),
+            repo: repo.into(),
+            tracker: tracker.map(String::from),
+            forge: forge.map(String::from),
+        }
+    }
+
+    #[test]
+    fn credentials_viram_connections_pela_conexao_do_projeto() {
+        let creds = CredentialOverrides(
+            [
+                (
+                    "acme/acme-web".to_string(),
+                    cred("pass show a/jira", "pass show a/gl"),
+                ),
+                ("acme/acme-api".to_string(), cred("pass show a/jira", "")),
+            ]
+            .into(),
+        );
+        let projetos = [
+            proj("acme-web", Some("jira-acme"), Some("gitlab-acme")),
+            proj("acme-api", Some("jira-acme"), None),
+        ];
+        let (conns, left, warnings) =
+            convert_credentials(&creds, &projetos, &ConnectionOverrides::default());
+        // Os dois projetos dividem a conexão do Jira com o mesmo comando.
+        assert_eq!(conns.credential_cmd("jira-acme"), Some("pass show a/jira"));
+        assert_eq!(conns.credential_cmd("gitlab-acme"), Some("pass show a/gl"));
+        assert!(left.is_empty(), "{left:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn conflito_e_projeto_sem_conexao_ficam_com_aviso_e_no_credentials() {
+        let creds = CredentialOverrides(
+            [
+                ("acme/acme-api".to_string(), cred("pass show outro", "")),
+                ("acme/acme-mobile".to_string(), cred("pass show x", "")),
+                ("acme/fora".to_string(), cred("pass show y", "")),
+            ]
+            .into(),
+        );
+        let projetos = [
+            proj("acme-web", Some("jira-acme"), None),
+            proj("acme-api", Some("jira-acme"), None),
+            proj("acme-mobile", None, None),
+        ];
+        let existing = ConnectionOverrides(
+            [(
+                "jira-acme".to_string(),
+                ConnectionOverride {
+                    credential_cmd: "pass show a/jira".into(),
+                },
+            )]
+            .into(),
+        );
+        let (conns, left, warnings) = convert_credentials(&creds, &projetos, &existing);
+        // A conexão já tem outro comando: o do projeto fica no credentials.
+        assert_eq!(conns.credential_cmd("jira-acme"), Some("pass show a/jira"));
+        assert_eq!(
+            left.get("acme", "acme-api").unwrap().tracker_cmd,
+            "pass show outro"
+        );
+        // Sem conexão de rastreador aqui, e projeto não atribuído.
+        assert!(left.get("acme", "acme-mobile").is_some());
+        assert!(left.get("acme", "fora").is_some());
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+    }
+
+    #[test]
+    fn comando_vazio_nao_sobrescreve() {
+        let o = ConnectionOverrides(
+            [(
+                "jira-acme".to_string(),
+                ConnectionOverride {
+                    credential_cmd: "  ".into(),
+                },
+            )]
+            .into(),
+        );
+        assert_eq!(o.credential_cmd("jira-acme"), None);
     }
 }

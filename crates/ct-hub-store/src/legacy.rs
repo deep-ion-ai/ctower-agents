@@ -226,7 +226,7 @@ fn meta(conn: &Connection, key: &str) -> Result<Option<i64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hub::HUB_MIGRATIONS;
+    use crate::HUB_MIGRATIONS;
     use crate::{AssignmentFilter, AssignmentState};
 
     /// `hub.db` no esquema do #64 (migrações 1 a 5), com dois ambientes:

@@ -122,7 +122,7 @@ pub fn analysis_prompt(p: &ProjectSnap, candidates: &[&ItemSnap]) -> String {
         .iter()
         .filter(|e| !e.removed)
         .map(|e| {
-            let origin = if e.source == ct_ledger::DEP_SOURCE_MANUAL {
+            let origin = if e.source == ct_hub_store::DEP_SOURCE_MANUAL {
                 "manual"
             } else {
                 "análise"

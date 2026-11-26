@@ -29,6 +29,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Hub › Propostas do gestor",
     "Hub › Saúde dos projetos",
     "Hub › Quarentena",
+    "Hub › Conexões",
     "Hub › Projetos e atribuições",
     "Hub › Ambientes",
     "Hub › Secrets e variáveis",

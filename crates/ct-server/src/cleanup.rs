@@ -811,7 +811,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn resumo_vai_ao_hub() {
         let fx = fixture();
-        let hub = ct_ledger::SharedHub::new(ct_ledger::Hub::open_in_memory().unwrap());
+        let hub = ct_hub_store::SharedHub::new(ct_hub_store::Hub::open_in_memory().unwrap());
         let tok = hub.lock().add_legacy_env_token("a").unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());

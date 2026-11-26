@@ -1,4 +1,4 @@
-import type { HubProject, HubTrackerStatus } from "../protocol/hub-gen";
+import type { HubTrackerStatus } from "../protocol/hub-gen";
 import { ago } from "../util/time";
 import { readinessChecks, type ReadinessCheck } from "./tracker";
 
@@ -33,11 +33,9 @@ function Checks({ title, checks, error }: { title: string; checks: ReadinessChec
  * sync. O hub não alcança o Jira nem o GitLab; só mostra o relato.
  */
 export function TrackerReadiness({
-  project,
   status,
   now,
 }: {
-  project: HubProject;
   /** Último `tracker_status` aceito; `null` = o ambiente de sync ainda não relatou. */
   status: HubTrackerStatus | null;
   now: number;
@@ -50,7 +48,7 @@ export function TrackerReadiness({
     );
   }
   const r = status.readiness;
-  const c = readinessChecks(r, project);
+  const c = readinessChecks(r);
   const missing = [...c.jira, ...c.gitlab].filter((x) => !x.ok).length;
   // Ciclo lendo agora (ausente no ambiente anterior ao progresso).
   const progress = r.progress ?? null;

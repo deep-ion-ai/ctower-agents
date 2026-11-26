@@ -169,7 +169,7 @@ pub struct HubConfig {
     /// instala, #421); `0` desliga (o `hub.update.check` continua).
     pub update_check_interval_hours: u64,
     /// Limiares dos sinais de saúde (`[health]`, spec do gestor §5.2).
-    pub health: ct_ledger::HealthThresholds,
+    pub health: ct_hub_store::HealthThresholds,
     /// Dias até o lembrete para verificar de novo a chave de recuperação
     /// (#169); `0` desliga o lembrete.
     pub recovery_reverify_days: u64,
@@ -309,7 +309,7 @@ impl Default for HubConfig {
             update_repo: "https://github.com/deep-ion-ai/ctower-agents.git".into(),
             update_ref: "main".into(),
             update_check_interval_hours: 6,
-            health: ct_ledger::HealthThresholds::default(),
+            health: ct_hub_store::HealthThresholds::default(),
             recovery_reverify_days: crate::secrets::DEFAULT_REVERIFY_DAYS,
             web: WebConfig::default(),
             logs: Default::default(),

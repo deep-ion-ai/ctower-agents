@@ -19,6 +19,7 @@ mod prune;
 mod recovery;
 pub mod release;
 pub mod remote;
+mod resolver;
 mod secrets;
 pub mod shell;
 pub mod tracker_sync;
@@ -140,6 +141,9 @@ struct Inner {
     session_tokens: Mutex<HashMap<String, String>>,
     /// Shells livres vivos (#428), só em memória.
     shells: Mutex<HashMap<String, shell::LiveShell>>,
+    /// Token de cada conexão (Jira, GitLab), em cache: o comando de
+    /// credencial não roda a cada ciclo (#236).
+    credentials: Arc<resolver::CredentialResolver>,
     /// Serializa a conferência "uma sessão de release viva por projeto" com
     /// a criação da sessão (#204).
     release_start: Mutex<()>,
@@ -163,6 +167,7 @@ impl Sessions {
                 masks: Mutex::new(HashMap::new()),
                 session_tokens: Mutex::new(HashMap::new()),
                 shells: Mutex::new(HashMap::new()),
+                credentials: Arc::new(resolver::CredentialResolver::new()),
                 release_start: Mutex::new(()),
                 notify,
             }),
@@ -171,6 +176,15 @@ impl Sessions {
 
     pub fn config(&self) -> &SessionsConfig {
         &self.inner.cfg
+    }
+
+    /// Resolvedor de credencial do ambiente (#236).
+    pub(crate) fn credentials(&self) -> &resolver::CredentialResolver {
+        &self.inner.credentials
+    }
+
+    pub(crate) fn credentials_handle(&self) -> Arc<resolver::CredentialResolver> {
+        self.inner.credentials.clone()
     }
 
     /// Projeto com os comandos de credencial deste ambiente

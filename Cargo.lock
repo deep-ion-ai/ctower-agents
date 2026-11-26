@@ -518,6 +518,7 @@ version = "1.10.0"
 dependencies = [
  "axum",
  "ct-core",
+ "ct-hub-store",
  "ct-ledger",
  "ct-server",
  "ct-sessions",
@@ -598,6 +599,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct-hub-store"
+version = "1.10.0"
+dependencies = [
+ "ct-core",
+ "ct-gh",
+ "ct-ledger",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "ct-jira"
 version = "1.10.0"
 dependencies = [
@@ -666,6 +684,7 @@ dependencies = [
  "ct-gh",
  "ct-git",
  "ct-http",
+ "ct-hub-store",
  "ct-jira",
  "ct-ledger",
  "ct-proc",
@@ -741,6 +760,7 @@ dependencies = [
  "ct-core",
  "ct-gh",
  "ct-http",
+ "ct-hub-store",
  "ct-jira",
  "ct-ledger",
  "ct-secrets",
@@ -779,6 +799,7 @@ dependencies = [
  "clap",
  "ct-core",
  "ct-gh",
+ "ct-hub-store",
  "ct-ledger",
  "ct-secrets",
  "ct-sessions",
@@ -802,6 +823,7 @@ dependencies = [
  "ct-gh",
  "ct-git",
  "ct-http",
+ "ct-hub-store",
  "ct-ledger",
  "ct-server",
  "ct-sessions",

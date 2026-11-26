@@ -1053,6 +1053,7 @@ mod tests {
             let l = env.sessions.ledger();
             let p = l.get_project(env.project_id).unwrap();
             let cfg = ct_ledger::ConfigResponse {
+                connections: None,
                 config_rev: rev,
                 config_epoch: 1,
                 changed: true,
@@ -1137,6 +1138,7 @@ mod tests {
                 ..Default::default()
             });
             p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                connection: None,
                 host: "gitlab.example.com".into(),
                 path: "grupo/projeto/app".into(),
                 clone_url: "https://gitlab.example.com/grupo/projeto/app.git".into(),
@@ -2486,6 +2488,7 @@ mod tests {
         // Um pull bem-sucedido, mesmo sem mudança, prova que o cache está em
         // dia: vale o `config_pulled_at`, e o aviso some.
         let cfg = ct_ledger::ConfigResponse {
+            connections: None,
             config_rev: 1,
             config_epoch: 1,
             changed: false,

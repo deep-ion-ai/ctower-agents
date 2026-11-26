@@ -33,6 +33,7 @@ ts-rs = { workspace = true, optional = true }
 ts = ["dep:ts-rs", "ct-core/ts", "ct-gh/ts", "ct-ledger/ts", "ct-sessions/ts"]
 
 [dev-dependencies]
+ct-hub-store.workspace = true
 cthubd.workspace = true
 ct-gh = { workspace = true, features = ["test-support"] }
 ct-jira = { workspace = true, features = ["test-support"] }

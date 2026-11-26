@@ -2,7 +2,8 @@
 //! §8; spec do hub como plano de controle §4): o `ctowerd` é o cliente
 //! (`ct-server::hub_sync`), o `cthubd` o servidor.
 
-use ct_ledger::{CleanupSummary, DecisionScope, HubDecision, OutboxEntry};
+use ct_ledger::OutboxEntry;
+use ct_ledger::{CleanupSummary, DecisionScope, HubDecision};
 pub use ct_ledger::{ConfigDone, ConfigProject, ConfigRemoved, ConfigResponse, DoneResponse};
 
 use serde::{Deserialize, Serialize};
@@ -267,9 +268,6 @@ mod tests {
             "cleanup.status",
             "cleanup.plan",
             "cleanup.run",
-            "github.status",
-            "github.set_token",
-            "github.clear_token",
             "github.pr.comment",
             "sync.now",
             // Modo seguir do log (#65): por conexão, só no desktop.

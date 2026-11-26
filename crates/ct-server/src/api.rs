@@ -158,6 +158,10 @@ mod export {
         // Uso por sessão e plano da conta (#106).
         ct_sessions::SessionUsage::export_all_to(&dir).unwrap();
         ct_sessions::StatuslineInstall::export_all_to(&dir).unwrap();
+        // Conexões externas (#234): tipo, fonte de credencial e descritor.
+        ct_core::provider::Connection::export_all_to(&dir).unwrap();
+        ct_core::provider::Capabilities::export_all_to(&dir).unwrap();
+        ct_core::provider::Readiness::export_all_to(&dir).unwrap();
         crate::plan::EnvAccount::export_all_to(&dir).unwrap();
         ct_sessions::ProjectSync::export_all_to(&dir).unwrap();
         ct_sessions::GestorScope::export_all_to(&dir).unwrap();

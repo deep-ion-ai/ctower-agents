@@ -13,6 +13,7 @@ import { useShell } from "../shell/Shell";
 import { Icon } from "../shell/icons";
 import { shortcutLabel } from "../shell/layout";
 import { HubEnvs } from "./HubEnvs";
+import { HubConnections } from "./ConnectionsPanel";
 import { HealthPanel, useHubHealth } from "./HubHealth";
 import { ProposalsPanel, useHubProposals } from "./HubProposals";
 import { HubSecrets } from "./HubSecrets";
@@ -191,6 +192,8 @@ function Section({
     case "projects":
       // Nunca chega aqui: `screenTab` (state/nav.tsx) leva o endereço ao projeto ou ao índice (#18).
       return null;
+    case "connections":
+      return <HubConnections />;
     case "envs":
       return <HubEnvs now={now} />;
     case "web-sessions":

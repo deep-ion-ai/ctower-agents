@@ -1,7 +1,7 @@
 //! Configuração vinda do hub (spec do hub como plano de controle §4; issue
 //! #177): o contrato de `GET /sync/config` e o cache dela no `ledger.db`.
 //!
-//! O hub monta a resposta com [`crate::Hub::env_config`]; o ambiente grava
+//! O hub monta a resposta com `Hub::env_config` (`ct-hub-store`); o ambiente grava
 //! com [`Ledger::apply_hub_config`]. A tabela `project` vira **cache somente
 //! leitura**: só o pull escreve nas linhas vindas do hub (`config_rev` não
 //! nulo), e gravar o cache **nunca** põe fotografia de projeto no outbox. A
@@ -11,6 +11,7 @@
 use crate::projects::{row_to_project, COLS, COLS_LEN};
 use crate::sync::project_key;
 use crate::{ConfigRules, Ledger, LocationState, Project, Result};
+use ct_core::provider::Connection;
 use ct_core::{
     now_ms, ApprovalConfig, AutonomyConfig, DocsConfig, ForgeConfig, SessionTemplates,
     TrackerConfig,
@@ -106,6 +107,10 @@ pub struct ConfigResponse {
     pub projects: Option<Vec<ConfigProject>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<Vec<ConfigRemoved>>,
+    /// Conexões (#235) que os projetos de `projects` referenciam. Ausente
+    /// num hub anterior, ou `changed: false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connections: Option<Vec<ct_core::provider::Connection>>,
 }
 
 /// Work item que o hub deu como `concluido`, em `GET /sync/done`.
@@ -343,7 +348,84 @@ impl Ledger {
             }
             self.set_meta("config_rev", cfg.config_rev)?;
             self.set_meta("config_epoch", cfg.config_epoch)?;
+            self.set_hub_connections(cfg.connections.as_deref().unwrap_or_default())?;
             Ok(out)
+        })
+    }
+
+    /// Conexões do hub do último pull com mudança (`[]` se não havia).
+    fn set_hub_connections(&self, conns: &[Connection]) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO hub_connection_cache (id, json) VALUES (1, ?1)
+             ON CONFLICT (id) DO UPDATE SET json = excluded.json",
+            [serde_json::to_string(conns).expect("Vec<Connection> serializa")],
+        )?;
+        Ok(())
+    }
+
+    /// `true` se o cache já tem as conexões do hub (gravado num pull com
+    /// mudança). Sem elas, o próximo pull pede o conjunto completo.
+    pub fn hub_connections_cached(&self) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM hub_connection_cache WHERE id = 1",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    /// Reaplica as sobrescritas `[connections]` do `config.toml` aos projetos
+    /// já gravados, com as conexões do último pull com mudança. Roda em todo
+    /// pull, inclusive o sem mudança: editar o comando à mão vale sem o hub
+    /// mudar. Só grava o cache (nada vai ao outbox). Devolve os avisos.
+    pub fn refresh_connection_overrides(
+        &self,
+        overrides: &ct_core::ConnectionOverrides,
+    ) -> Result<Vec<String>> {
+        let conns = self.hub_connections()?;
+        self.atomic(|| {
+            let rows: Vec<Project> = {
+                let mut stmt = self.conn.prepare(&format!(
+                    "SELECT {COLS} FROM project
+                     WHERE config_rev IS NOT NULL AND unassigned_at IS NULL
+                     ORDER BY id"
+                ))?;
+                let rows = stmt.query_map([], row_to_project)?;
+                rows.collect::<rusqlite::Result<_>>()?
+            };
+            let mut cfgs: Vec<ConfigProject> = rows
+                .iter()
+                .map(|p| config_project_of(p, p.repo_path.clone()))
+                .collect();
+            let avisos = materialize_projects(&mut cfgs, &conns, overrides);
+            for (p, c) in rows.iter().zip(&cfgs) {
+                if p.tracker != c.tracker || p.forge != c.forge {
+                    self.conn.execute(
+                        "UPDATE project SET tracker_config = ?2, forge_config = ?3
+                         WHERE id = ?1",
+                        params![p.id, c.tracker.config_json(), c.forge.config_json()],
+                    )?;
+                }
+            }
+            Ok(avisos)
+        })
+    }
+
+    fn hub_connections(&self) -> Result<Vec<Connection>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT json FROM hub_connection_cache WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(match json {
+            Some(j) => serde_json::from_str(&j).unwrap_or_default(),
+            None => Vec::new(),
         })
     }
 
@@ -415,27 +497,7 @@ impl Ledger {
             rows.collect::<rusqlite::Result<_>>()?
         };
         for (p, hub_path) in rows {
-            let path = resolve(&ConfigProject {
-                owner: p.gh_owner.clone(),
-                repo: p.gh_repo.clone(),
-                name: p.name.clone(),
-                base_branch: p.base_branch.clone(),
-                protected_branches: p.protected_branches.clone(),
-                repo_path: hub_path,
-                rev: p.config_rev.unwrap_or_default(),
-                tracker: p.tracker.clone(),
-                forge: p.forge.clone(),
-                branch_pattern: p.branch_pattern.clone(),
-                attribution: p.attribution,
-                sync: p.sync_role,
-                rules: Default::default(),
-                docs: p.docs.clone(),
-                session_templates: p.session_templates.clone(),
-                autonomy: p.autonomy.clone(),
-                autonomy_runner: p.autonomy_runner,
-                approval: p.approval.clone(),
-                release: p.release.clone(),
-            });
+            let path = resolve(&config_project_of(&p, hub_path));
             if path != p.repo_path {
                 self.conn.execute(
                     "UPDATE project SET repo_path = ?2 WHERE id = ?1",
@@ -549,6 +611,131 @@ impl Ledger {
     }
 }
 
+/// `ConfigProject` que a linha do cache representa, com o caminho dado.
+fn config_project_of(p: &Project, repo_path: String) -> ConfigProject {
+    ConfigProject {
+        owner: p.gh_owner.clone(),
+        repo: p.gh_repo.clone(),
+        name: p.name.clone(),
+        base_branch: p.base_branch.clone(),
+        protected_branches: p.protected_branches.clone(),
+        repo_path,
+        rev: p.config_rev.unwrap_or_default(),
+        tracker: p.tracker.clone(),
+        forge: p.forge.clone(),
+        branch_pattern: p.branch_pattern.clone(),
+        attribution: p.attribution,
+        sync: p.sync_role,
+        rules: Default::default(),
+        docs: p.docs.clone(),
+        session_templates: p.session_templates.clone(),
+        autonomy: p.autonomy.clone(),
+        autonomy_runner: p.autonomy_runner,
+        approval: p.approval.clone(),
+        release: p.release.clone(),
+    }
+}
+
+/// Preenche, na configuração que chegou do hub, os campos de cadastro antigo
+/// (`url`, `host`, `credential_cmd`, `config_file`) dos projetos que referenciam
+/// uma conexão (#237). Assim o ambiente segue lendo o que sempre leu. O
+/// comando de credencial é o deste ambiente, se houver em `[connections]`,
+/// senão o da conexão (quando é um comando). Devolve os avisos.
+pub fn materialize_connections(
+    cfg: &mut ConfigResponse,
+    overrides: &ct_core::ConnectionOverrides,
+) -> Vec<String> {
+    let conns = cfg.connections.clone().unwrap_or_default();
+    match cfg.projects.as_deref_mut() {
+        Some(ps) => materialize_projects(ps, &conns, overrides),
+        None => materialize_projects(&mut [], &conns, overrides),
+    }
+}
+
+/// Núcleo de [`materialize_connections`]: as conexões são `conns`. Avisa
+/// também as sobrescritas que não casam com nenhuma conexão (chave antiga,
+/// depois de renomear a conexão no hub, ou conexão apagada): o ambiente
+/// volta ao comando do hub sem sobrescrita, e o aviso é o único sinal.
+fn materialize_projects(
+    projects: &mut [ConfigProject],
+    conns: &[Connection],
+    overrides: &ct_core::ConnectionOverrides,
+) -> Vec<String> {
+    use ct_core::provider::{CredentialSource, ProviderKind};
+    fn cmd_of(c: &Connection, overrides: &ct_core::ConnectionOverrides) -> String {
+        if let Some(cmd) = overrides.credential_cmd(&c.name) {
+            return cmd.to_string();
+        }
+        match &c.credential {
+            CredentialSource::Command { cmd } => cmd.clone(),
+            _ => String::new(),
+        }
+    }
+    let mut warnings = Vec::new();
+    for key in overrides.0.keys() {
+        if !conns.iter().any(|c| &c.name == key) {
+            warnings.push(format!(
+                "conexões: [connections.\"{key}\"] não casa com nenhuma conexão do hub \
+                 (renomeada ou apagada?); a sobrescrita não vale"
+            ));
+        }
+    }
+    for p in projects.iter_mut() {
+        let key = format!("{}/{}", p.owner, p.repo);
+        if let TrackerConfig::Jira(j) = &mut p.tracker {
+            if let Some(id) = j.connection {
+                match conns
+                    .iter()
+                    .find(|c| c.id == id && c.kind == ProviderKind::Jira)
+                {
+                    Some(c) => {
+                        j.url = c.endpoint.clone();
+                        j.config_file = c
+                            .options
+                            .get("config_file")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        j.credential_cmd = cmd_of(c, overrides);
+                        if j.credential_cmd.is_empty() {
+                            warnings.push(format!(
+                                "{key}: a conexão {} não tem comando de credencial neste ambiente",
+                                c.name
+                            ));
+                        }
+                    }
+                    None => warnings.push(format!(
+                        "{key}: conexão {id} do Jira ausente na configuração do hub"
+                    )),
+                }
+            }
+        }
+        if let ForgeConfig::Gitlab(g) = &mut p.forge {
+            if let Some(id) = g.connection {
+                match conns
+                    .iter()
+                    .find(|c| c.id == id && c.kind == ProviderKind::Gitlab)
+                {
+                    Some(c) => {
+                        g.host = c.endpoint.clone();
+                        g.credential_cmd = cmd_of(c, overrides);
+                        if g.credential_cmd.is_empty() {
+                            warnings.push(format!(
+                                "{key}: a conexão {} não tem comando de credencial neste ambiente",
+                                c.name
+                            ));
+                        }
+                    }
+                    None => warnings.push(format!(
+                        "{key}: conexão {id} do GitLab ausente na configuração do hub"
+                    )),
+                }
+            }
+        }
+    }
+    warnings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,6 +768,7 @@ mod tests {
 
     fn resp(rev: i64, projects: Vec<ConfigProject>) -> ConfigResponse {
         ConfigResponse {
+            connections: None,
             config_rev: rev,
             config_epoch: 7,
             changed: true,
@@ -659,6 +847,7 @@ mod tests {
 
         // `changed: false`: só a hora do pull.
         let sem = ConfigResponse {
+            connections: None,
             config_rev: 7,
             config_epoch: 7,
             changed: false,
@@ -773,6 +962,7 @@ mod tests {
     #[test]
     fn resposta_sem_mudanca_serializa_so_o_rev() {
         let v = serde_json::to_value(ConfigResponse {
+            connections: None,
             config_rev: 4,
             config_epoch: 9,
             changed: false,
@@ -803,6 +993,7 @@ mod tests {
         let outro_root = |p: &ConfigProject| format!("/novo/{}", p.repo);
         // Pull sem mudança no hub, com outra raiz.
         let sem = ConfigResponse {
+            connections: None,
             config_rev: 3,
             config_epoch: 7,
             changed: false,
@@ -1123,5 +1314,147 @@ mod tests {
         assert_eq!(r.updated.len(), 1);
         assert!(!l.get_project(pid).unwrap().release.enabled);
         assert!(serde_json::to_value(&p2).unwrap().get("release").is_none());
+    }
+}
+
+#[cfg(test)]
+mod conexoes_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn campos_antigos_vem_da_conexao_e_a_sobrescrita_vence() {
+        let mut cfg: ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 7,
+            "changed": true,
+            "projects": [{
+                "owner": "acme", "repo": "acme-web", "name": "Acme Web",
+                "base_branch": "main", "protected_branches": ["main"],
+                "repo_path": "", "rev": 7,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1 },
+                "forge": { "kind": "gitlab", "path": "acme/web", "connection": 2 }
+            }],
+            "connections": [
+                { "id": 1, "name": "jira-acme", "kind": "jira",
+                  "endpoint": "https://jira.example.com",
+                  "credential": { "kind": "command", "cmd": "pass show a/jira | head -1" },
+                  "options": { "config_file": "jira-acme.yml" },
+                  "created_at": 0, "updated_at": 0 },
+                { "id": 2, "name": "gitlab-acme", "kind": "gitlab",
+                  "endpoint": "gitlab.example.com",
+                  "credential": { "kind": "command", "cmd": "pass show a/gl | head -1" },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ]
+        }))
+        .unwrap();
+        let mut ov = ct_core::ConnectionOverrides::default();
+        ov.0.insert(
+            "gitlab-acme".into(),
+            ct_core::ConnectionOverride {
+                credential_cmd: "/usr/bin/pass show a/gl".into(),
+            },
+        );
+        let avisos = materialize_connections(&mut cfg, &ov);
+        assert!(avisos.is_empty(), "{avisos:?}");
+        let p = &cfg.projects.as_ref().unwrap()[0];
+        match &p.tracker {
+            TrackerConfig::Jira(j) => {
+                assert_eq!(j.url, "https://jira.example.com");
+                assert_eq!(j.credential_cmd, "pass show a/jira | head -1");
+                assert_eq!(j.config_file, "jira-acme.yml");
+            }
+            _ => panic!("rastreador"),
+        }
+        match &p.forge {
+            ForgeConfig::Gitlab(g) => {
+                assert_eq!(g.host, "gitlab.example.com");
+                // A sobrescrita do ambiente vence o comando da conexão.
+                assert_eq!(g.credential_cmd, "/usr/bin/pass show a/gl");
+            }
+            _ => panic!("forja"),
+        }
+    }
+
+    fn cfg_com_jira(changed: bool) -> ConfigResponse {
+        serde_json::from_value(json!({
+            "config_rev": 7,
+            "changed": changed,
+            "projects": if changed { json!([{
+                "owner": "acme", "repo": "acme-web", "name": "Acme Web",
+                "base_branch": "main", "protected_branches": ["main"],
+                "repo_path": "", "rev": 7,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1 }
+            }]) } else { json!(null) },
+            "connections": [
+                { "id": 1, "name": "jira-acme", "kind": "jira",
+                  "endpoint": "https://jira.example.com",
+                  "credential": { "kind": "command", "cmd": "pass show a/jira | head -1" },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn sobrescrita(name: &str, cmd: &str) -> ct_core::ConnectionOverrides {
+        let mut ov = ct_core::ConnectionOverrides::default();
+        ov.0.insert(
+            name.into(),
+            ct_core::ConnectionOverride {
+                credential_cmd: cmd.into(),
+            },
+        );
+        ov
+    }
+
+    /// Sobrescrita editada no config.toml vale no próximo pull, mesmo sem
+    /// mudança no hub (`changed: false`), e o ledger guarda as conexões.
+    #[test]
+    fn sobrescrita_editada_vale_sem_mudanca_no_hub() {
+        let l = Ledger::open_in_memory().unwrap();
+        assert!(!l.hub_connections_cached().unwrap());
+        l.apply_hub_config(&cfg_com_jira(true), |p| format!("/r/{}", p.repo))
+            .unwrap();
+        assert!(l.hub_connections_cached().unwrap());
+        let jira_cmd =
+            |l: &Ledger| match l.project_by_key("acme/acme-web").unwrap().unwrap().tracker {
+                TrackerConfig::Jira(j) => j.credential_cmd,
+                _ => panic!("rastreador"),
+            };
+
+        l.refresh_connection_overrides(&sobrescrita("jira-acme", "/usr/bin/a"))
+            .unwrap();
+        assert_eq!(jira_cmd(&l), "/usr/bin/a");
+
+        // Pull sem mudança no hub: a sobrescrita editada à mão aparece.
+        l.apply_hub_config(&cfg_com_jira(false), |p| format!("/r/{}", p.repo))
+            .unwrap();
+        let avisos = l
+            .refresh_connection_overrides(&sobrescrita("jira-acme", "/usr/bin/b"))
+            .unwrap();
+        assert!(avisos.is_empty(), "{avisos:?}");
+        assert_eq!(jira_cmd(&l), "/usr/bin/b");
+
+        // Sem sobrescrita, volta o comando da conexão do hub.
+        l.refresh_connection_overrides(&Default::default()).unwrap();
+        assert_eq!(jira_cmd(&l), "pass show a/jira | head -1");
+    }
+
+    /// Sobrescrita que não casa com conexão (renomeada ou apagada no hub)
+    /// gera aviso; o ambiente cai no comando do hub.
+    #[test]
+    fn sobrescrita_orfa_gera_aviso() {
+        let mut cfg = cfg_com_jira(true);
+        let ov = sobrescrita("jira-antigo", "/usr/bin/a");
+        let avisos = materialize_connections(&mut cfg, &ov);
+        assert!(
+            avisos.iter().any(|a| a.contains("jira-antigo")),
+            "{avisos:?}"
+        );
+        match &cfg.projects.unwrap()[0].tracker {
+            TrackerConfig::Jira(j) => assert_eq!(j.credential_cmd, "pass show a/jira | head -1"),
+            _ => panic!("rastreador"),
+        }
     }
 }

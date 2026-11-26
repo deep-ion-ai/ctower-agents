@@ -29,11 +29,15 @@ mod autopilot;
 mod autopilot_deps;
 mod autopilot_run;
 mod config;
+mod connection;
 mod digest;
 mod env_keys;
+mod github_sync;
 mod health;
 mod legacy;
+mod legacy_connections;
 mod model;
+mod pr_review;
 mod priority;
 mod proposals;
 mod push;
@@ -43,6 +47,12 @@ mod tracker;
 mod views;
 mod web_sessions;
 mod wip;
+
+// Peças do ct-ledger que o hub reusa (leitura de colunas, espelho do GitHub,
+// esquema, sync). Ficam aqui por `crate::x`, como estavam no ct-ledger.
+pub(crate) use ct_ledger::*;
+
+pub use github_sync::sync_input_from_hub;
 
 pub use agent::{
     AgentAssignment, AgentDecision, AgentDecisionFilter, AgentDecisions, AgentEnv, AgentEvent,
@@ -66,6 +76,7 @@ pub use autopilot_run::{
 pub use config::{
     DeleteImpact, HubProjectPatch, NewHubProject, ProjectAdded, ProjectProvider, QuarantineGroup,
 };
+pub use connection::{ConnectionPatch, ConnectionTest, NewConnection};
 pub use digest::{
     digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
 };
@@ -95,8 +106,8 @@ pub use push::{
 pub use web_sessions::{HubWebSession, IssuedWebSession, WEB_SESSION_TOUCH_MS};
 
 pub use views::{
-    DecisionCounts, DecisionScope, HubDashboard, HubDashboardProject, HubDashboardWorkItem,
-    HubHistory, HubLocation, HubProjectView, HubTree, HubTreeItem, HubTreeNode, WorkItemSummary,
+    DecisionCounts, HubDashboard, HubDashboardProject, HubDashboardWorkItem, HubHistory,
+    HubLocation, HubProjectView, HubTree, HubTreeItem, HubTreeNode, WorkItemSummary,
 };
 
 use crate::github::{autonomy_pr_trigger, sub_issue_pr_trigger, GhMirror, PrRoute};
@@ -111,8 +122,8 @@ use crate::{
     ProjectChange, Result, SessionChange, SyncChange, WorkItemChange,
 };
 use ct_core::{
-    hlc, next_status, now_ms, pr_trigger, DecisionOrigin, ForgeConfig, Priority, SessionMode,
-    SessionState, Tool, TrackerConfig, TrackerRef, WorkItemKind, WorkItemStatus, WorkItemTrigger,
+    hlc, next_status, now_ms, pr_trigger, ForgeConfig, Priority, SessionMode, SessionState, Tool,
+    TrackerConfig, TrackerRef, WorkItemKind, WorkItemStatus, WorkItemTrigger,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -912,6 +923,22 @@ CREATE TABLE autopilot_analysis (
 ALTER TABLE env ADD COLUMN protocol TEXT;
 ALTER TABLE env ADD COLUMN version TEXT;
 "#,
+    // 45: conexões externas do hub (épico #224, issue #235). `kind` é o tipo
+    // (`github`, `gitlab`, `jira`); `credential` e `options` são JSON de
+    // `CredentialSource` e das opções do tipo. Os projetos referenciam a
+    // conexão pelo `id` em `tracker_config`/`forge_config`.
+    r#"
+CREATE TABLE connection (
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  kind       TEXT NOT NULL,
+  endpoint   TEXT NOT NULL DEFAULT '',
+  credential TEXT NOT NULL DEFAULT '{}',
+  options    TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+"#,
 ];
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1206,24 +1233,6 @@ pub struct HubSession {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct HubDecision {
-    pub id: i64,
-    pub uid: String,
-    pub env_id: String,
-    pub work_item_id: i64,
-    pub session_id: Option<String>,
-    pub origin: DecisionOrigin,
-    pub title: String,
-    pub context: String,
-    pub decision: String,
-    pub consequences: Option<String>,
-    pub reviewed_at: Option<i64>,
-    pub reviewed_in_pr: Option<i64>,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct HubEvent {
     pub id: i64,
     pub uid: String,
@@ -1268,19 +1277,6 @@ pub struct HubEnv {
     /// "desatualizado".
     #[serde(default)]
     pub version: Option<String>,
-}
-
-/// Resumo do último plano de limpeza de um ambiente (issue #287): vai a cada
-/// envio ao hub e aparece na tela Hub.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct CleanupSummary {
-    /// Quando o plano foi montado (ms).
-    pub checked_at: i64,
-    /// Work items com alguma etapa pendente.
-    pub items: i64,
-    /// Espaço estimado das etapas pendentes, em bytes.
-    pub bytes: i64,
 }
 
 const PROJECT_COLS: &str =
@@ -2922,8 +2918,10 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Ledger, NewDecision, NewProject, NewSession, ProjectPatch};
+    use crate::{Ledger, NewDecision, NewProject, NewSession};
+    use ct_core::DecisionOrigin;
     use ct_core::WorkItemTrigger;
+    use ct_ledger::ProjectPatch;
 
     fn ledger(path: &str) -> Ledger {
         let l = Ledger::open_in_memory().unwrap();
@@ -3106,7 +3104,7 @@ mod tests {
         let a = ledger("/a/demo");
         let b = ledger("/b/Demo");
         // Mesmo repositório com outra caixa no segundo ambiente.
-        b.conn
+        b.conn()
             .execute("UPDATE project SET gh_owner = 'Deep-Ion-AI'", [])
             .unwrap();
         let wa = a.ensure_work_item(1, 12, WorkItemKind::Epic).unwrap();
@@ -3189,13 +3187,13 @@ mod tests {
     /// Põe o HLC de `depois` à frente do de `antes`, sem depender do relógio de parede.
     fn adianta_hlc(depois: &Ledger, antes: &Ledger) {
         let atual: i64 = antes
-            .conn
+            .conn()
             .query_row("SELECT value FROM ledger_meta WHERE key = 'hlc'", [], |r| {
                 r.get(0)
             })
             .unwrap();
         depois
-            .conn
+            .conn()
             .execute(
                 "UPDATE ledger_meta SET value = max(value, ?1) WHERE key = 'hlc'",
                 [atual + 1],
@@ -5374,7 +5372,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 44);
+        assert_eq!(v, 45);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));
