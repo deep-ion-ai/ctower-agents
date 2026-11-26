@@ -1,0 +1,798 @@
+//! Conexões externas (épico #224, análise de providers §3): o tipo de
+//! provider, a fonte de credencial e um descritor por tipo, que leva a
+//! validação, o prefixo das instruções da sessão e o nome da variável do
+//! token. Puro, sem I/O: a checagem de "quem sou eu" na rede fica com o
+//! ambiente.
+//!
+//! Ainda não há conexão gravada. O cadastro atual (`JiraConfig`,
+//! `GitlabConfig`) entra por [`Connection::from_jira`] e
+//! [`Connection::from_gitlab`] até a migração do épico.
+
+use crate::model::ParseEnumError;
+use crate::tracker::{GitlabConfig, JiraConfig, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS};
+use crate::JiraExtraField;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::fmt;
+use std::str::FromStr;
+
+str_enum!(ProviderKind, "provider_kind", {
+    Github => "github",
+    Gitlab => "gitlab",
+    Jira => "jira",
+});
+
+/// Conexão com um serviço externo (GitHub, GitLab, Jira).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Connection {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub id: i64,
+    /// Único no hub, ex.: `jira-empresa`.
+    pub name: String,
+    pub kind: ProviderKind,
+    /// URL (Jira), host (GitLab) ou API (GitHub; vazio = padrão do tipo).
+    pub endpoint: String,
+    pub credential: CredentialSource,
+    /// Específico do tipo, validado pelo descritor (ex.: Jira: `config_file`).
+    #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown>"))]
+    pub options: Value,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub created_at: i64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub updated_at: i64,
+}
+
+impl Connection {
+    /// Conexão equivalente ao cadastro atual do Jira (ponte até a migração).
+    pub fn from_jira(j: &JiraConfig) -> Self {
+        Connection {
+            id: 0,
+            name: String::new(),
+            kind: ProviderKind::Jira,
+            endpoint: j.url.clone(),
+            credential: CredentialSource::Command {
+                cmd: j.credential_cmd.clone(),
+            },
+            options: json!({ "config_file": j.config_file }),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// Conexão equivalente ao cadastro atual do GitLab (ponte até a migração).
+    pub fn from_gitlab(g: &GitlabConfig) -> Self {
+        Connection {
+            id: 0,
+            name: String::new(),
+            kind: ProviderKind::Gitlab,
+            endpoint: g.host.clone(),
+            credential: CredentialSource::Command {
+                cmd: g.credential_cmd.clone(),
+            },
+            options: json!({}),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
+/// De onde vem o token de uma conexão.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CredentialSource {
+    /// Secret do store do hub, pelo nome.
+    Secret { name: String },
+    /// Comando de shell; a primeira linha da saída é o token.
+    Command { cmd: String },
+    /// Token da CLI do serviço (`gh auth token`; só GitHub por ora).
+    Cli,
+    /// Arquivo com o token (compatível com `github.token`).
+    File { path: String },
+    /// Sem autenticação.
+    None,
+}
+
+/// O que o tipo sabe fazer: rastrear issues e/ou operar a forja (PRs, MRs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Capabilities {
+    pub tracker: bool,
+    pub forge: bool,
+}
+
+/// Prontidão de uma conexão, sem rede: se o cadastro basta para tentar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Readiness {
+    Ready,
+    NeedsSetup { reason: String },
+}
+
+/// Descritor de um tipo de provider: o que os `match` por tipo faziam
+/// espalhados pelo código.
+pub trait ProviderDescriptor: Sync {
+    fn kind(&self) -> ProviderKind;
+    fn label(&self) -> &'static str;
+    fn capabilities(&self) -> Capabilities;
+    /// Endpoint quando a conexão não diz outro.
+    fn default_endpoint(&self) -> Option<&'static str> {
+        None
+    }
+    /// Variável de ambiente que leva o token (`GH_TOKEN`...).
+    fn token_env(&self) -> &'static str;
+    /// Confere a conexão sem rede: tipo, endpoint, credencial e opções.
+    fn validate(&self, c: &Connection) -> std::result::Result<(), String>;
+    /// Prefixo das instruções da sessão (`JIRA_API_TOKEN="$(...)" jira`).
+    fn session_prefix(&self, c: &Connection) -> Option<String>;
+    /// Prontidão estática; o "quem sou eu" na rede é do ambiente.
+    fn readiness(&self, c: &Connection) -> Readiness {
+        match self.validate(c) {
+            Ok(()) => Readiness::Ready,
+            Err(reason) => Readiness::NeedsSetup { reason },
+        }
+    }
+}
+
+pub struct GithubDescriptor;
+pub struct GitlabDescriptor;
+pub struct JiraDescriptor;
+
+/// Descritor do GitHub.
+pub static GITHUB: GithubDescriptor = GithubDescriptor;
+/// Descritor do GitLab.
+pub static GITLAB: GitlabDescriptor = GitlabDescriptor;
+/// Descritor do Jira.
+pub static JIRA: JiraDescriptor = JiraDescriptor;
+
+/// Registro estático: um descritor por [`ProviderKind`].
+pub static PROVIDERS: &[&dyn ProviderDescriptor] = &[&GITHUB, &GITLAB, &JIRA];
+
+/// Descritor do tipo. Panics só se um tipo novo ficar sem descritor, o que
+/// o teste `registro_tem_um_descritor_por_tipo` pega.
+pub fn descriptor(kind: ProviderKind) -> &'static dyn ProviderDescriptor {
+    PROVIDERS
+        .iter()
+        .copied()
+        .find(|d| d.kind() == kind)
+        .expect("todo ProviderKind tem descritor no registro")
+}
+
+impl ProviderDescriptor for GithubDescriptor {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Github
+    }
+
+    fn label(&self) -> &'static str {
+        "GitHub"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            tracker: true,
+            forge: true,
+        }
+    }
+
+    fn default_endpoint(&self) -> Option<&'static str> {
+        Some("https://api.github.com")
+    }
+
+    fn token_env(&self) -> &'static str {
+        "GH_TOKEN"
+    }
+
+    fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
+        check_kind(ProviderKind::Github, c)?;
+        check_options(c)
+    }
+
+    /// O GitHub não leva prefixo: o `gh` lê o token do ambiente da sessão.
+    fn session_prefix(&self, _c: &Connection) -> Option<String> {
+        None
+    }
+}
+
+impl ProviderDescriptor for GitlabDescriptor {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Gitlab
+    }
+
+    fn label(&self) -> &'static str {
+        "GitLab"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            tracker: false,
+            forge: true,
+        }
+    }
+
+    fn token_env(&self) -> &'static str {
+        "GITLAB_TOKEN"
+    }
+
+    fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
+        check_kind(ProviderKind::Gitlab, c)?;
+        check_options(c)?;
+        if c.endpoint.is_empty() {
+            return Err("informe o host do GitLab".into());
+        }
+        check_token_source("GitLab", "gitlab", c)
+    }
+
+    /// `GITLAB_HOST=<host> GITLAB_TOKEN="$(<cmd>)" glab`.
+    fn session_prefix(&self, c: &Connection) -> Option<String> {
+        let mut parts = Vec::new();
+        if !c.endpoint.trim().is_empty() {
+            parts.push(format!("GITLAB_HOST={}", shell_word(c.endpoint.trim())));
+        }
+        if let Some(expr) = token_expr(&c.credential) {
+            parts.push(format!("GITLAB_TOKEN=\"{expr}\""));
+        }
+        parts.push("glab".into());
+        Some(parts.join(" "))
+    }
+}
+
+impl GitlabDescriptor {
+    /// Repositório do GitLab: host e caminho (`grupo/projeto`). Fica no
+    /// cadastro do projeto, não na conexão.
+    pub fn validate_project(&self, g: &GitlabConfig) -> std::result::Result<(), String> {
+        if g.host.is_empty() || !g.path.contains('/') {
+            return Err(format!(
+                "repositório do GitLab inválido: host {:?}, caminho {:?}",
+                g.host, g.path
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ProviderDescriptor for JiraDescriptor {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Jira
+    }
+
+    fn label(&self) -> &'static str {
+        "Jira"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            tracker: true,
+            forge: false,
+        }
+    }
+
+    fn token_env(&self) -> &'static str {
+        "JIRA_API_TOKEN"
+    }
+
+    fn validate(&self, c: &Connection) -> std::result::Result<(), String> {
+        check_kind(ProviderKind::Jira, c)?;
+        check_options(c)?;
+        let url = c.endpoint.to_ascii_lowercase();
+        if !(url.starts_with("https://") || url.starts_with("http://")) || url.len() < 10 {
+            return Err(format!("URL do Jira inválida: {:?}", c.endpoint));
+        }
+        check_token_source("Jira", "jira", c)
+    }
+
+    /// `JIRA_CONFIG_FILE=<arquivo> JIRA_API_TOKEN="$(<cmd>)" jira`. O
+    /// `$(...)` é expandido pelo shell do agente, só no processo do `jira`:
+    /// o prefixo nunca leva a senha.
+    fn session_prefix(&self, c: &Connection) -> Option<String> {
+        let mut parts = Vec::new();
+        let config_file = options_str(c, "config_file").trim();
+        if !config_file.is_empty() {
+            parts.push(format!("JIRA_CONFIG_FILE={}", shell_word(config_file)));
+        }
+        if let Some(expr) = token_expr(&c.credential) {
+            parts.push(format!("JIRA_API_TOKEN=\"{expr}\""));
+        }
+        parts.push("jira".into());
+        Some(parts.join(" "))
+    }
+}
+
+impl JiraDescriptor {
+    /// Projeto Jira: chave e campos próprios da tela da issue. Fica no
+    /// cadastro do projeto, não na conexão.
+    pub fn validate_project(&self, j: &JiraConfig) -> std::result::Result<(), String> {
+        let key_ok = j.project_key.starts_with(|c: char| c.is_ascii_uppercase())
+            && j.project_key
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+        if !key_ok {
+            return Err(format!(
+                "chave do projeto Jira inválida: {:?} (maiúsculas, como PROJ)",
+                j.project_key
+            ));
+        }
+        validate_extra_fields(&j.extra_fields)
+    }
+
+    /// Filtro do sync: no modo sprint ativa, nada a conferir; fora dele,
+    /// JQL obrigatório e limite de issues entre 1 e o teto.
+    pub fn validate_sync_filter(&self, j: &JiraConfig) -> std::result::Result<(), String> {
+        if j.active_sprint_only {
+            return Ok(());
+        }
+        if j.jql.trim().is_empty() {
+            return Err(
+                "informe o JQL do sync (ex.: labels = minha-equipe AND updated >= -90d) \
+                        ou marque \"sincronizar somente a sprint ativa\""
+                    .into(),
+            );
+        }
+        if j.max_issues == 0 || j.max_issues > MAX_ISSUES_CEILING {
+            return Err(format!(
+                "limite de issues sincronizadas inválido: {} (de 1 a {})",
+                j.max_issues, MAX_ISSUES_CEILING
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Campos do projeto na tela da issue: ID e rótulo preenchidos, sem ID
+/// repetido e no máximo [`MAX_JIRA_EXTRA_FIELDS`]. O ID não precisa estar
+/// no catálogo do jira-cli: pode ser digitado à mão.
+fn validate_extra_fields(fields: &[JiraExtraField]) -> std::result::Result<(), String> {
+    let max = MAX_JIRA_EXTRA_FIELDS;
+    if fields.len() > max {
+        return Err(format!(
+            "campos do projeto: no máximo {max} campos na tela da issue ({} informados)",
+            fields.len()
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (i, f) in fields.iter().enumerate() {
+        let (id, label) = (f.id.trim(), f.label.trim());
+        let n = i + 1;
+        if id.is_empty() {
+            return Err(format!(
+                "campos do projeto: informe o campo do Jira na linha {n} (ex.: customfield_10099)"
+            ));
+        }
+        if label.is_empty() {
+            return Err(format!(
+                "campos do projeto: informe o rótulo na tela do campo {id} (linha {n})"
+            ));
+        }
+        if !seen.insert(id.to_ascii_lowercase()) {
+            return Err(format!(
+                "campos do projeto: o campo {id} aparece mais de uma vez (linha {n})"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_kind(expected: ProviderKind, c: &Connection) -> std::result::Result<(), String> {
+    if c.kind == expected {
+        Ok(())
+    } else {
+        Err(format!("conexão do tipo {} não é {expected}", c.kind))
+    }
+}
+
+fn check_options(c: &Connection) -> std::result::Result<(), String> {
+    match &c.options {
+        Value::Object(_) | Value::Null => Ok(()),
+        _ => Err("opções da conexão devem ser um objeto".into()),
+    }
+}
+
+/// Jira e GitLab aceitam comando de credencial ou secret do hub.
+fn check_token_source(label: &str, slug: &str, c: &Connection) -> std::result::Result<(), String> {
+    match &c.credential {
+        CredentialSource::Command { cmd } if cmd.trim().is_empty() => Err(format!(
+            "informe o comando de credencial do {label} (ex.: pass show {slug} | head -1)"
+        )),
+        CredentialSource::Command { .. } => Ok(()),
+        CredentialSource::Secret { name } if name.trim().is_empty() => {
+            Err(format!("informe o nome do secret da credencial do {label}"))
+        }
+        CredentialSource::Secret { .. } => Ok(()),
+        _ => Err(format!(
+            "credencial do {label} precisa de comando de credencial ou de secret"
+        )),
+    }
+}
+
+/// Expressão do token no prefixo: o comando da conexão, ou o secret do
+/// store do hub (`ctower secret get`, #165).
+fn token_expr(credential: &CredentialSource) -> Option<String> {
+    match credential {
+        CredentialSource::Command { cmd } if !cmd.trim().is_empty() => {
+            Some(format!("$({})", cmd.trim()))
+        }
+        CredentialSource::Secret { name } => {
+            Some(format!("$(ctower secret get {})", shell_word(name.trim())))
+        }
+        _ => None,
+    }
+}
+
+fn options_str<'a>(c: &'a Connection, key: &str) -> &'a str {
+    c.options.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+/// Palavra do shell com aspas simples só quando precisa (caminho com espaço
+/// ou caractere especial).
+pub(crate) fn shell_word(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-~+=:,@%".contains(&b));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn jira_cfg() -> JiraConfig {
+        JiraConfig {
+            url: "https://jira.example.com".into(),
+            project_key: "ACME".into(),
+            jql: "labels = acme-web".into(),
+            max_issues: 100,
+            credential_cmd: "pass show jira | head -1".into(),
+            ..Default::default()
+        }
+    }
+
+    fn conn(kind: ProviderKind, endpoint: &str, credential: CredentialSource) -> Connection {
+        Connection {
+            id: 1,
+            name: "acme".into(),
+            kind,
+            endpoint: endpoint.into(),
+            credential,
+            options: json!({}),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn registro_tem_um_descritor_por_tipo() {
+        assert_eq!(PROVIDERS.len(), ProviderKind::ALL.len());
+        for kind in ProviderKind::ALL {
+            assert_eq!(descriptor(*kind).kind(), *kind);
+        }
+        assert_eq!(
+            GITHUB.capabilities(),
+            Capabilities {
+                tracker: true,
+                forge: true
+            }
+        );
+        assert_eq!(
+            GITLAB.capabilities(),
+            Capabilities {
+                tracker: false,
+                forge: true
+            }
+        );
+        assert_eq!(
+            JIRA.capabilities(),
+            Capabilities {
+                tracker: true,
+                forge: false
+            }
+        );
+        assert_eq!(GITHUB.default_endpoint(), Some("https://api.github.com"));
+        assert_eq!(GITLAB.default_endpoint(), None);
+        assert_eq!(JIRA.default_endpoint(), None);
+        assert_eq!(GITHUB.token_env(), "GH_TOKEN");
+        assert_eq!(GITLAB.token_env(), "GITLAB_TOKEN");
+        assert_eq!(JIRA.token_env(), "JIRA_API_TOKEN");
+    }
+
+    #[test]
+    fn tipo_e_fonte_de_credencial_serializam_como_no_contrato() {
+        assert_eq!("jira".parse::<ProviderKind>(), Ok(ProviderKind::Jira));
+        assert!("bitbucket".parse::<ProviderKind>().is_err());
+        assert_eq!(
+            serde_json::to_value(CredentialSource::Command {
+                cmd: "pass show jira | head -1".into()
+            })
+            .unwrap(),
+            json!({"kind": "command", "cmd": "pass show jira | head -1"})
+        );
+        assert_eq!(
+            serde_json::to_value(CredentialSource::Secret {
+                name: "jira-acme".into()
+            })
+            .unwrap(),
+            json!({"kind": "secret", "name": "jira-acme"})
+        );
+        assert_eq!(
+            serde_json::to_value(CredentialSource::Cli).unwrap(),
+            json!({"kind": "cli"})
+        );
+        assert_eq!(
+            serde_json::to_value(CredentialSource::File {
+                path: "/etc/acme/token".into()
+            })
+            .unwrap(),
+            json!({"kind": "file", "path": "/etc/acme/token"})
+        );
+        assert_eq!(
+            serde_json::to_value(CredentialSource::None).unwrap(),
+            json!({"kind": "none"})
+        );
+    }
+
+    #[test]
+    fn jira_valida_tipo_url_credencial_e_opcoes() {
+        assert!(JIRA.validate(&Connection::from_jira(&jira_cfg())).is_ok());
+        let url_ruim = JiraConfig {
+            url: "jira.example.com".into(),
+            ..jira_cfg()
+        };
+        let err = JIRA
+            .validate(&Connection::from_jira(&url_ruim))
+            .unwrap_err();
+        assert!(err.contains("URL do Jira inválida"), "{err}");
+        let sem_cmd = JiraConfig {
+            credential_cmd: "  ".into(),
+            ..jira_cfg()
+        };
+        let err = JIRA.validate(&Connection::from_jira(&sem_cmd)).unwrap_err();
+        assert!(
+            err.contains("informe o comando de credencial do Jira"),
+            "{err}"
+        );
+        let base = conn(
+            ProviderKind::Jira,
+            "https://jira.example.com",
+            CredentialSource::None,
+        );
+        assert!(JIRA
+            .validate(&base)
+            .unwrap_err()
+            .contains("precisa de comando"));
+        let secret = Connection {
+            credential: CredentialSource::Secret {
+                name: "jira-acme".into(),
+            },
+            ..base.clone()
+        };
+        assert!(JIRA.validate(&secret).is_ok());
+        let secret_vazio = Connection {
+            credential: CredentialSource::Secret { name: " ".into() },
+            ..base.clone()
+        };
+        assert!(JIRA
+            .validate(&secret_vazio)
+            .unwrap_err()
+            .contains("nome do secret"));
+        let de_outro_tipo = Connection {
+            kind: ProviderKind::Github,
+            ..secret.clone()
+        };
+        assert!(JIRA
+            .validate(&de_outro_tipo)
+            .unwrap_err()
+            .contains("não é jira"));
+        let opcoes_ruins = Connection {
+            options: json!("x"),
+            ..secret
+        };
+        assert!(JIRA
+            .validate(&opcoes_ruins)
+            .unwrap_err()
+            .contains("opções da conexão"));
+    }
+
+    #[test]
+    fn jira_valida_chave_campos_e_filtro_do_projeto() {
+        assert!(JIRA.validate_project(&jira_cfg()).is_ok());
+        let chave = JiraConfig {
+            project_key: "acme".into(),
+            ..jira_cfg()
+        };
+        assert!(JIRA
+            .validate_project(&chave)
+            .unwrap_err()
+            .contains("chave do projeto Jira inválida"));
+        let sem_rotulo = JiraConfig {
+            extra_fields: vec![JiraExtraField {
+                id: "customfield_10099".into(),
+                label: " ".into(),
+            }],
+            ..jira_cfg()
+        };
+        assert!(JIRA
+            .validate_project(&sem_rotulo)
+            .unwrap_err()
+            .contains("informe o rótulo na tela do campo customfield_10099"));
+        let repetido = JiraConfig {
+            extra_fields: vec![
+                JiraExtraField {
+                    id: "customfield_1".into(),
+                    label: "A".into(),
+                },
+                JiraExtraField {
+                    id: "CUSTOMFIELD_1".into(),
+                    label: "B".into(),
+                },
+            ],
+            ..jira_cfg()
+        };
+        assert!(JIRA
+            .validate_project(&repetido)
+            .unwrap_err()
+            .contains("aparece mais de uma vez (linha 2)"));
+        // Filtro: só fora do modo sprint ativa.
+        let sem_jql = JiraConfig {
+            jql: " ".into(),
+            ..jira_cfg()
+        };
+        assert!(JIRA
+            .validate_sync_filter(&sem_jql)
+            .unwrap_err()
+            .contains("informe o JQL do sync"));
+        let sem_limite = JiraConfig {
+            max_issues: MAX_ISSUES_CEILING + 1,
+            ..jira_cfg()
+        };
+        assert!(JIRA
+            .validate_sync_filter(&sem_limite)
+            .unwrap_err()
+            .contains("limite de issues sincronizadas inválido"));
+        let sprint = JiraConfig {
+            active_sprint_only: true,
+            jql: String::new(),
+            max_issues: 0,
+            ..jira_cfg()
+        };
+        assert!(JIRA.validate_sync_filter(&sprint).is_ok());
+    }
+
+    #[test]
+    fn jira_prefixo_leva_o_comando_nunca_a_senha() {
+        let prefixo = |c: &Connection| JIRA.session_prefix(c).unwrap();
+        assert_eq!(
+            prefixo(&Connection::from_jira(&jira_cfg())),
+            r#"JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#
+        );
+        let com_arquivo = JiraConfig {
+            config_file: "acme/jira config.yml".into(),
+            ..jira_cfg()
+        };
+        assert_eq!(
+            prefixo(&Connection::from_jira(&com_arquivo)),
+            r#"JIRA_CONFIG_FILE='acme/jira config.yml' JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#
+        );
+        let sem_cmd = JiraConfig {
+            credential_cmd: "   ".into(),
+            ..jira_cfg()
+        };
+        assert_eq!(prefixo(&Connection::from_jira(&sem_cmd)), "jira");
+        let secret = conn(
+            ProviderKind::Jira,
+            "https://jira.example.com",
+            CredentialSource::Secret {
+                name: "jira-acme".into(),
+            },
+        );
+        assert_eq!(
+            prefixo(&secret),
+            r#"JIRA_API_TOKEN="$(ctower secret get jira-acme)" jira"#
+        );
+    }
+
+    #[test]
+    fn gitlab_valida_repositorio_host_e_credencial() {
+        let g = GitlabConfig {
+            host: "gitlab.example.com".into(),
+            path: "acme/web".into(),
+            credential_cmd: "pass show gitlab | head -1".into(),
+            ..Default::default()
+        };
+        assert!(GITLAB.validate_project(&g).is_ok());
+        assert!(GITLAB.validate(&Connection::from_gitlab(&g)).is_ok());
+        let sem_host = GitlabConfig {
+            host: String::new(),
+            ..g.clone()
+        };
+        assert!(GITLAB
+            .validate_project(&sem_host)
+            .unwrap_err()
+            .contains("repositório do GitLab inválido"));
+        let sem_barra = GitlabConfig {
+            path: "acme".into(),
+            ..g.clone()
+        };
+        assert!(GITLAB
+            .validate_project(&sem_barra)
+            .unwrap_err()
+            .contains("caminho \"acme\""));
+        let sem_cmd = GitlabConfig {
+            credential_cmd: String::new(),
+            ..g.clone()
+        };
+        assert!(GITLAB
+            .validate(&Connection::from_gitlab(&sem_cmd))
+            .unwrap_err()
+            .contains("informe o comando de credencial do GitLab"));
+        let sem_endpoint = conn(ProviderKind::Gitlab, "", CredentialSource::Cli);
+        assert!(GITLAB
+            .validate(&sem_endpoint)
+            .unwrap_err()
+            .contains("informe o host do GitLab"));
+    }
+
+    #[test]
+    fn gitlab_prefixo_leva_host_e_comando() {
+        let g = GitlabConfig {
+            host: "gitlab.example.com".into(),
+            path: "acme/web".into(),
+            credential_cmd: "pass show gitlab | head -1".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            GITLAB.session_prefix(&Connection::from_gitlab(&g)).unwrap(),
+            r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab"#
+        );
+        let sem_cmd = GitlabConfig {
+            credential_cmd: String::new(),
+            ..g
+        };
+        assert_eq!(
+            GITLAB
+                .session_prefix(&Connection::from_gitlab(&sem_cmd))
+                .unwrap(),
+            "GITLAB_HOST=gitlab.example.com glab"
+        );
+    }
+
+    #[test]
+    fn github_aceita_as_fontes_e_nao_tem_prefixo() {
+        for credential in [
+            CredentialSource::Cli,
+            CredentialSource::None,
+            CredentialSource::File {
+                path: "/etc/acme/token".into(),
+            },
+        ] {
+            let c = conn(ProviderKind::Github, "", credential);
+            assert!(GITHUB.validate(&c).is_ok());
+            assert_eq!(GITHUB.readiness(&c), Readiness::Ready);
+            assert_eq!(GITHUB.session_prefix(&c), None);
+        }
+        let de_outro = conn(ProviderKind::Jira, "", CredentialSource::Cli);
+        assert!(GITHUB
+            .validate(&de_outro)
+            .unwrap_err()
+            .contains("não é github"));
+    }
+
+    #[test]
+    fn prontidao_reflete_a_validacao() {
+        let ok = Connection::from_jira(&jira_cfg());
+        assert_eq!(JIRA.readiness(&ok), Readiness::Ready);
+        let sem_cmd = Connection {
+            credential: CredentialSource::Command { cmd: String::new() },
+            ..ok
+        };
+        match JIRA.readiness(&sem_cmd) {
+            Readiness::NeedsSetup { reason } => {
+                assert!(reason.contains("comando de credencial do Jira"), "{reason}")
+            }
+            outro => panic!("esperado NeedsSetup, veio {outro:?}"),
+        }
+    }
+}

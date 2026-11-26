@@ -12,6 +12,7 @@
 //! projeto (`{project_key}-{n}`), nunca gravada. As referências saem todas
 //! de [`item_ref`], [`item_short`], [`item_key`] e [`item_url`].
 
+use crate::provider::{self, Connection, ProviderDescriptor};
 use crate::ParseEnumError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -548,53 +549,24 @@ pub fn change_url(owner: &str, repo: &str, forge: &ForgeConfig, n: i64) -> Strin
     }
 }
 
-/// Palavra do shell com aspas simples só quando precisa (caminho com espaço
-/// ou caractere especial).
-fn shell_word(s: &str) -> String {
-    let safe = !s.is_empty()
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/._-~+=:,@%".contains(&b));
-    if safe {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', r"'\''"))
-    }
-}
-
 /// Prefixo do jira-cli nas sessões (`{{jira}}` dos templates, spec §8.2 e
 /// §9.2): `JIRA_API_TOKEN="$(<credential_cmd>)" jira`, com
 /// `JIRA_CONFIG_FILE=<arquivo>` antes quando configurado. Leva o comando de
-/// credencial do cadastro, nunca a senha: o `$(...)` é expandido pelo shell
-/// do agente, só no processo do `jira`.
+/// credencial do cadastro, nunca a senha. A lógica está no descritor do Jira
+/// ([`crate::provider::JIRA`]).
 pub fn jira_cli_prefix(j: &JiraConfig) -> String {
-    let mut parts = Vec::new();
-    if !j.config_file.trim().is_empty() {
-        parts.push(format!(
-            "JIRA_CONFIG_FILE={}",
-            shell_word(j.config_file.trim())
-        ));
-    }
-    if !j.credential_cmd.trim().is_empty() {
-        parts.push(format!("JIRA_API_TOKEN=\"$({})\"", j.credential_cmd.trim()));
-    }
-    parts.push("jira".into());
-    parts.join(" ")
+    provider::JIRA
+        .session_prefix(&Connection::from_jira(j))
+        .unwrap_or_default()
 }
 
 /// Prefixo do glab nas sessões (`{{glab}}`):
-/// `GITLAB_HOST=<host> GITLAB_TOKEN="$(<credential_cmd>)" glab`, no mesmo
-/// modelo do [`jira_cli_prefix`]. O `GITLAB_HOST` também vem no ambiente da
-/// sessão; no prefixo, o comando funciona fora dela.
+/// `GITLAB_HOST=<host> GITLAB_TOKEN="$(<credential_cmd>)" glab`. A lógica
+/// está no descritor do GitLab ([`crate::provider::GITLAB`]).
 pub fn glab_cli_prefix(g: &GitlabConfig) -> String {
-    let mut parts = Vec::new();
-    if !g.host.trim().is_empty() {
-        parts.push(format!("GITLAB_HOST={}", shell_word(g.host.trim())));
-    }
-    if !g.credential_cmd.trim().is_empty() {
-        parts.push(format!("GITLAB_TOKEN=\"$({})\"", g.credential_cmd.trim()));
-    }
-    parts.push("glab".into());
-    parts.join(" ")
+    provider::GITLAB
+        .session_prefix(&Connection::from_gitlab(g))
+        .unwrap_or_default()
 }
 
 /// Como ler uma issue do projeto, para o gestor (spec §13): `gh issue view
