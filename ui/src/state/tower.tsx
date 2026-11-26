@@ -15,6 +15,7 @@ import type { HubDashboard, HubEnv, HubInfo, HubProjectView, HubStatus, HubUpdat
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
 import { HUB_LOGS_PUSH } from "../logs/types";
 import { useTheme } from "./theme";
+import { mergeHubStatus } from "./hubStatus";
 import { dashboardsFromHub, envStatusesFromHub, envViewsFromHub } from "../web/hubData";
 
 /** Alerta recebido por push (não fica no ledger): transcript volátil, confiança. */
@@ -277,8 +278,12 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
   }, [api, hubConnected, refreshHubDashboard]);
 
   const reloadHub = useCallback(async () => {
-    setHubConn(await api.getHub());
-    setHubStatus(await api.hubStatus());
+    const startedAt = Date.now();
+    const conn = await api.getHub();
+    setHubConn(conn);
+    const fetched = await api.hubStatus();
+    // O evento `hub://status` pode chegar antes desta leitura (#281).
+    setHubStatus((prev) => mergeHubStatus(prev, fetched, conn, startedAt));
   }, [api]);
 
   // Tudo do hub: ao conectar e periodicamente.
