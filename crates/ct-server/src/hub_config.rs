@@ -13,7 +13,9 @@
 //!   hub também avisa pelo canal (`hub.config.changed`, #165) quando um
 //!   secret ou variável muda, e o laço puxa na hora;
 //! - quando a entrega de secrets regrava o cache, o mascaramento das sessões
-//!   vivas ganha os valores novos (`Sessions::refresh_masks`, #165);
+//!   vivas ganha os valores novos antes da troca (`Sessions::premask`, #320:
+//!   o valor novo nunca fica legível sem máscara) e é refeito depois
+//!   (`Sessions::refresh_masks`, #165);
 //! - o pull só grava o cache (rápido, limitado pelo timeout do HTTP). A
 //!   aplicação (clone, que pode demorar) roda à parte, numa thread
 //!   disparada depois do pull, uma por vez: nem o pull seguinte nem o envio
@@ -431,8 +433,20 @@ impl HubSender {
         let secrets = match &reply.secrets {
             Some(b64) => {
                 let s = ct_secrets::decode_delivery(b64)
-                    .and_then(|blob| self.env_cache.store(&blob))
+                    .and_then(|blob| {
+                        // A máscara das sessões vivas ganha os valores da
+                        // entrega antes de o cache trocar (#320): o `ctower
+                        // secret get` lê o cache, e o valor novo não pode
+                        // sair legível e ainda sem máscara. O
+                        // `refresh_masks` do `pull_config` vem depois.
+                        let incoming =
+                            ct_secrets::EnvSecrets::open(&blob, &self.env_cache.ensure_key()?)?;
+                        self.sessions.premask(&incoming);
+                        self.env_cache.store(&blob)
+                    })
                     .map_err(|e| format!("cache de secrets: {e}"))?;
+                #[cfg(test)]
+                tests::after_secrets_store();
                 tracing::info!(
                     "hub: secrets entregues ({} entrada(s), configuração {})",
                     s.entries().len(),
@@ -718,12 +732,39 @@ pub fn spawn_puller(sender: Arc<HubSender>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::hub_sync::{HubSyncResult, HubTarget};
     use crate::test_util::{serve_hub, Srv};
     use ct_hub_store::{AssignmentFilter, AssignmentState, Hub, HubProjectPatch, SharedHub};
     use ct_sessions::test_support::{git_in, FakeClaude};
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// Gancho entre a gravação do cache de secrets e o resto do pull
+        /// (#320), só na thread que o registrou.
+        static AFTER_SECRETS_STORE: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+    }
+
+    /// Roda `f` no pull desta thread logo depois de gravar o cache de
+    /// secrets, até o fim de `body`.
+    pub(crate) fn with_after_secrets_store<T>(
+        f: impl Fn() + 'static,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        AFTER_SECRETS_STORE.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+        let out = body();
+        AFTER_SECRETS_STORE.with(|h| *h.borrow_mut() = None);
+        out
+    }
+
+    pub(super) fn after_secrets_store() {
+        AFTER_SECRETS_STORE.with(|h| {
+            if let Some(f) = h.borrow().as_ref() {
+                f();
+            }
+        });
+    }
 
     const DEMO: (&str, &str) = ("deep-ion-ai", "demo");
 

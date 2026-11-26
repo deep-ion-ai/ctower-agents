@@ -771,6 +771,7 @@ impl Sessions {
             .lock()
             .unwrap()
             .insert(session.id.clone(), pty.clone());
+        self.sync_pty_mask(&session.id, &pty);
         if remote_name.is_some() {
             // Confirmação inicial e link na saída (§6.4, §6.6).
             self.watch_remote_control(&session.id, &pty, true);

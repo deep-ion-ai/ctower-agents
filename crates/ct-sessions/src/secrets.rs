@@ -69,6 +69,11 @@
 //!   mantendo os anteriores. O mesmo vale quando o sync resolve o token de
 //!   uma conexão (Jira, GitLab): o spawn só mascara os tokens já em cache e
 //!   não roda comando de credencial (#266);
+//! - o valor novo nunca fica legível antes de entrar no conjunto (#320): o
+//!   pull soma a entrega ao conjunto das sessões vivas
+//!   ([`Sessions::premask`]) antes de trocar o cache, e o `ctower secret
+//!   get` soma o secret que devolve ao conjunto da sessão (cobre a sessão
+//!   que ainda subia durante o pull);
 //! - o system prompt da sessão com secrets ([`agent_instruction`]) orienta a
 //!   usar `$(ctower secret get NOME)` e a nunca imprimir o valor.
 //!
@@ -388,6 +393,14 @@ impl Sessions {
         let key = scope_of(&project);
         let resolved = secrets.resolve(key.as_deref());
         let entry = resolved.get(name).ok_or_else(not_found)?;
+        // O valor só sai já no conjunto mascarado da sessão (#320). O pull
+        // soma a entrega nova antes de trocar o cache ([`Sessions::premask`]),
+        // mas não alcança a sessão que ainda está subindo (fora das vivas).
+        if entry.kind == Kind::Secret {
+            let pty = self.inner.live.lock().unwrap().get(&session_id).cloned();
+            let mask = SessionMask::new(&[(name, entry.value.expose())]);
+            self.add_mask(&session_id, pty.as_ref(), &mask);
+        }
         tracing::info!("secrets: {name} lido pela sessão {session_id}");
         Ok(entry.value.expose().to_string())
     }
@@ -399,14 +412,7 @@ impl Sessions {
     /// velho), e o aplica ao PTY no ar. Cache de secrets ausente ou
     /// ilegível: só os tokens das conexões.
     pub fn refresh_masks(&self) {
-        let live: Vec<(String, ct_pty::PtySession)> = self
-            .inner
-            .live
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let live = self.live_ptys();
         if live.is_empty() {
             return;
         }
@@ -419,6 +425,35 @@ impl Sessions {
                 None
             }
         };
+        self.merge_masks(live, secrets.as_ref());
+    }
+
+    /// Entrega nova do hub, ainda não gravada no cache (#320): soma os
+    /// secrets dela ao conjunto mascarado de cada sessão viva, como
+    /// [`Sessions::refresh_masks`], antes de o valor novo ficar legível
+    /// (`ctower secret get` lê o cache). Chame antes de trocar o cache e
+    /// `refresh_masks` depois. Enquanto isso, o conjunto tem o valor antigo
+    /// e o novo; mascarar a mais é inofensivo.
+    pub fn premask(&self, incoming: &EnvSecrets) {
+        let live = self.live_ptys();
+        if !live.is_empty() {
+            self.merge_masks(live, Some(incoming));
+        }
+    }
+
+    fn live_ptys(&self) -> Vec<(String, ct_pty::PtySession)> {
+        self.inner
+            .live
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Soma a cada sessão de `live` os secrets de `secrets` do projeto dela
+    /// e os tokens das conexões em cache.
+    fn merge_masks(&self, live: Vec<(String, ct_pty::PtySession)>, secrets: Option<&EnvSecrets>) {
         for (sid, pty) in live {
             let project = {
                 let l = self.ledger();
@@ -430,19 +465,39 @@ impl Sessions {
                 continue;
             };
             let conn = self.connection_mask(&project);
-            let fresh = match &secrets {
+            let fresh = match secrets {
                 Some(secrets) => mask_of(secrets, &project).union(&conn),
                 None => conn,
             };
-            let merged = {
-                let mut masks = self.inner.masks.lock().unwrap();
-                let merged = masks.get(&sid).cloned().unwrap_or_default().union(&fresh);
-                if !merged.pty.is_empty() {
-                    masks.insert(sid.clone(), merged.clone());
-                }
-                merged
-            };
-            pty.set_mask(merged.pty);
+            self.add_mask(&sid, Some(&pty), &fresh);
+        }
+    }
+
+    /// Soma `extra` ao conjunto guardado da sessão e aplica o resultado ao
+    /// PTY dela, se houver. O PTY recebe o conjunto com o lock dos conjuntos
+    /// preso: duas somas ao mesmo tempo nunca deixam no PTY o conjunto menor.
+    fn add_mask(&self, session_id: &str, pty: Option<&ct_pty::PtySession>, extra: &SessionMask) {
+        let mut masks = self.inner.masks.lock().unwrap();
+        let merged = masks
+            .get(session_id)
+            .cloned()
+            .unwrap_or_default()
+            .union(extra);
+        if let Some(pty) = pty {
+            pty.set_mask(merged.pty.clone());
+        }
+        if !merged.pty.is_empty() {
+            masks.insert(session_id.to_string(), merged);
+        }
+    }
+
+    /// Sessão que acabou de entrar nas vivas: o PTY recebe o conjunto
+    /// guardado, que pode ter crescido depois do spawn (#320: um `ctower
+    /// secret get` antes de a sessão estar entre as vivas).
+    pub(crate) fn sync_pty_mask(&self, session_id: &str, pty: &ct_pty::PtySession) {
+        let masks = self.inner.masks.lock().unwrap();
+        if let Some(m) = masks.get(session_id) {
+            pty.set_mask(m.pty.clone());
         }
     }
 
@@ -804,6 +859,53 @@ mod tests {
             t.apply(b"jwt-renovado-cccccccc jwt-do-projeto-bbbbbbbb"),
             b"***API_JWT*** ***API_JWT***"
         );
+        env.sessions.kill(&s.id).unwrap();
+    }
+
+    /// #320: o `ctower secret get` só devolve um secret que já está no
+    /// conjunto mascarado da sessão, mesmo que ninguém tenha atualizado o
+    /// conjunto depois de o cache mudar (a sessão que subia durante o pull).
+    #[test]
+    fn secret_get_soma_o_valor_ao_mascaramento_da_sessao() {
+        let env = TestEnv::new(FakeClaude::script(
+            "while read l; do echo \"saida=$l\"; done",
+        ));
+        cache_acme(&env);
+        let s = env.sessions.start(env.request(36, "Get")).unwrap();
+        let tok = token_of(&env, &s.id);
+        // Cache trocado sem `premask` nem `refresh_masks`.
+        env.write_secrets_cache_kinds(&[
+            (
+                Some("deep-ion-ai/demo"),
+                "API_JWT",
+                Kind::Secret,
+                "jwt-renovado-cccccccc",
+            ),
+            (
+                Some("deep-ion-ai/demo"),
+                "API_URL",
+                Kind::Variable,
+                "https://api-nova.example.com",
+            ),
+        ]);
+        assert_eq!(
+            env.sessions.session_secret(&tok, "API_JWT").unwrap(),
+            "jwt-renovado-cccccccc"
+        );
+        // Variável não é mascarada.
+        env.sessions.session_secret(&tok, "API_URL").unwrap();
+        let pty = env.sessions.pty(&s.id).unwrap();
+        pty.write(b"jwt-renovado-cccccccc https://api-nova.example.com\n")
+            .unwrap();
+        let out = wait_output(
+            &env,
+            &s.id,
+            "saida=***API_JWT*** https://api-nova.example.com",
+        );
+        assert!(!out.contains("jwt-renovado"), "{out}");
+        let sess = env.sessions.ledger().get_session(&s.id).unwrap();
+        let t = env.sessions.transcript_mask(&sess);
+        assert_eq!(t.apply(b"jwt-renovado-cccccccc"), b"***API_JWT***");
         env.sessions.kill(&s.id).unwrap();
     }
 
