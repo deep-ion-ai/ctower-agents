@@ -66,7 +66,6 @@ import { AddIssueDialog } from "./AddIssueDialog";
 import { ADD_ISSUE_LABEL, addIssue, addIssueState, takeAddIssueRequest, useAddIssueRequest } from "./add-issue";
 import { docsFilesState, docsFolderState, type DocsCandidate } from "./docs";
 import { DocsFilesDialog } from "../files/DocsFilesDialog";
-import type { DocsDir } from "../protocol/gen";
 import { useViewChoice } from "./view-choice";
 import { PlayIcon, WorkItemPanel, type LiveRef, type PanelNode } from "./WorkItemPanel";
 
@@ -241,7 +240,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     if (!docs?.enabled) return;
     setDocsError(null);
     void api
-      .call<DocsDir>(docs.env, "docs.dir", { project_id: docs.projectId, ...(epic !== undefined ? { epic } : {}) })
+      .call(docs.env, "docs.dir", { project_id: docs.projectId, ...(epic !== undefined ? { epic } : {}) })
       .then((d) => api.openFolder(docs.env, d.path))
       .catch((e) => setDocsError(`Não foi possível abrir a pasta de docs: ${e instanceof Error ? e.message : String(e)}`));
   };

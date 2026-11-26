@@ -17,6 +17,103 @@ pub const ENV_ID_HEADER: &str = "x-ctower-env-id";
 /// antigo), o hub não entrega secrets.
 pub const ENV_PUBKEY_HEADER: &str = "x-ctower-env-pubkey";
 
+/// Versão do contrato de sync (`protocol`): sobe quando o que o hub e o
+/// ambiente trocam em `/sync/channel`, `/sync/push` e `/sync/config` muda.
+pub const SYNC_PROTOCOL_VERSION: &str = "1.0";
+
+/// Cabeçalhos com a versão de quem chama (#227): `protocol` e `version` vão
+/// ao abrir `/sync/channel` e em cada `/sync/push` e `/sync/config`. Hub e
+/// ambiente precisam ter a mesma versão: diferente (ou ausente) é recusado.
+pub const PROTOCOL_HEADER: &str = "x-ctower-protocol";
+pub const VERSION_HEADER: &str = "x-ctower-version";
+
+/// Código de erro da recusa por versão diferente (`error` do corpo de
+/// [`VersionRefusal`]). A resposta usa o status `426 Upgrade Required`.
+pub const VERSION_MISMATCH: &str = "version_mismatch";
+
+/// Capacidade `version-handshake` em `capabilities` de `env.info` e `hub.info`
+/// (gating futuro por recurso).
+pub const CAPABILITY_VERSION_HANDSHAKE: &str = "version-handshake";
+
+/// Versão de um lado do sync: o contrato (`protocol`) e o build (`version`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionInfo {
+    pub protocol: String,
+    pub version: String,
+}
+
+impl VersionInfo {
+    /// A versão deste build.
+    pub fn local() -> Self {
+        VersionInfo {
+            protocol: SYNC_PROTOCOL_VERSION.into(),
+            version: ct_core::VERSION.into(),
+        }
+    }
+
+    /// Lê `protocol` e `version` dos cabeçalhos; `None` se faltar um deles.
+    pub fn from_headers(headers: &axum::http::HeaderMap) -> Option<Self> {
+        let get = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        Some(VersionInfo {
+            protocol: get(PROTOCOL_HEADER)?,
+            version: get(VERSION_HEADER)?,
+        })
+    }
+
+    /// Mesma versão do contrato e do build.
+    pub fn same_as(&self, other: &VersionInfo) -> bool {
+        self.protocol == other.protocol && self.version == other.version
+    }
+
+    /// `versão X (protocolo P)`, para as mensagens.
+    pub fn describe(&self) -> String {
+        format!("{} (protocolo {})", self.version, self.protocol)
+    }
+}
+
+/// Corpo da recusa por versão diferente (HTTP 426): diz as duas versões. `env`
+/// é `None` quando o ambiente não mandou a versão (ambiente anterior ao
+/// handshake).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionRefusal {
+    pub error: String,
+    pub message: String,
+    pub hub: VersionInfo,
+    pub env: Option<VersionInfo>,
+}
+
+impl VersionRefusal {
+    /// A recusa de `env` (ou de um ambiente sem versão) frente a `hub`.
+    pub fn new(hub: VersionInfo, env: Option<VersionInfo>) -> Self {
+        let message = match &env {
+            Some(e) => format!(
+                "versão diferente: hub {} × ambiente {}; hub e ambiente precisam ter a mesma \
+                 versão, atualize o que estiver atrás",
+                hub.describe(),
+                e.describe()
+            ),
+            None => format!(
+                "o ambiente não informou a versão: hub {}; hub e ambiente precisam ter a mesma \
+                 versão, atualize o ambiente",
+                hub.describe()
+            ),
+        };
+        VersionRefusal {
+            error: VERSION_MISMATCH.into(),
+            message,
+            hub,
+            env,
+        }
+    }
+}
+
 /// Resposta de `GET /sync/config`: a configuração ([`ConfigResponse`]) e,
 /// quando ela mudou (ou a chave pública do ambiente mudou desde a última
 /// entrega), os secrets e variáveis globais e dos projetos atribuídos.
@@ -88,62 +185,7 @@ pub const CHANNEL_PATH: &str = "/sync/channel";
 /// despachar. Fora: terminal (`session.attach|detach|input|resize|peek`),
 /// o shell livre (`shell.*`, #428), `session.permission.*`, `env.update|rollback|check_update`,
 /// `env.config.*`, `cleanup.*`, `github.*` e `sync.now`.
-pub const CHANNEL_METHODS: &[&str] = &[
-    "env.info",
-    "projects.list",
-    "dashboard.get",
-    "tree.get",
-    "review.get",
-    "events.list",
-    "review.mark_reviewed",
-    "recovery.list",
-    "recovery.archived",
-    "transcript.tail",
-    "session.context",
-    // Uso da sessão pelo statusline (#106), só leitura. O plano da conta
-    // vem de `hub.plan.accounts` (o `account.get` traz o e-mail).
-    "session.usage",
-    "session.get",
-    "session.start",
-    "session.start_project",
-    "session.start_gestor",
-    // Sessão de release (#204): só a UI inicia.
-    "session.start_release",
-    "session.resume",
-    // Retomada da sessão parada pelo limite do plano (#183): só um texto
-    // fixo no PTY, para o agendador do piloto automático.
-    "session.continue",
-    "session.kill",
-    "session.archive",
-    "session.remote_control.enable",
-    "hub.sync.now",
-    // Aviso do hub de que a configuração mudou (#165: um secret renovado):
-    // só acorda o pull, que segue com o token de sync e o `since` de
-    // sempre. Sem parâmetros e sem nada na resposta.
-    "hub.config.changed",
-    // "Ver issue" de projeto Jira (#434): o hub não alcança o Jira e lê a
-    // descrição pelo ambiente de sync, sem gravar.
-    "tracker.issue_body",
-    // "Adicionar issue pelo ID" (#148): o hub pede ao ambiente de sync do
-    // projeto Jira; só traz ao espelho uma issue que o Jira já mostra (sai
-    // na próxima poda se não ganhar work item).
-    "tracker.add_issue",
-    // Tela Logs na web (#65): só as últimas linhas, já mascaradas; o modo
-    // seguir é por conexão e fica no app desktop.
-    "logs.tail",
-    // Visualizador de markdown (#167): só leitura de `.md` dentro das pastas
-    // da sessão ou da pasta de docs do projeto, validado no ambiente.
-    "file.read",
-    "files.shared",
-    "docs.list",
-    // Visualizador de diff (#168): só leitura da worktree do work item.
-    "git.diff",
-    "git.diff_file",
-    "git.commits",
-    // Modo autônomo (#181): alinhar a branch de integração com a base
-    // (o agendador da #183 e o "Verificar agora" da tela do projeto).
-    "autonomy.align",
-];
+pub const CHANNEL_METHODS: &[&str] = crate::methods::CHANNEL_METHODS;
 
 /// Pushes do ambiente repassados pelo canal (spec da PWA §5.3). Fora:
 /// `permission_request` (traz o `tool_input`), `update.status`,

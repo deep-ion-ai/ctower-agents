@@ -20,7 +20,6 @@ import { DESKTOP_ONLY_NOTE } from "../web/mode";
 import { ProposalItem, ProposalNote, useHubProposals, useProposalBatch } from "../hub/HubProposals";
 import { CARD_WIDTH_TEXT, CARD_WIDTHS, useCardWidth, type CardWidth } from "./ui-store";
 import { pendingInOrder } from "../hub/proposalOrder";
-import type { Review } from "../protocol/gen";
 import { changeLabel, changeRef, forgeLabel } from "../util/item";
 import type { Clone } from "./clones";
 import { entryName, markPr, markReviewed, openPr, projectEntries, useReviewEntries, type ReviewEntry } from "../review/entries";
@@ -481,7 +480,7 @@ export function ProjectReviewsCard({ clones }: { clones: readonly Clone[] }) {
     setNote(null);
     try {
       // As pendentes e o PR de agora (o dashboard pode estar atrasado).
-      const r = await api.call<Review>(e.env, "review.get", { work_item_id: e.workItemId });
+      const r = await api.call(e.env, "review.get", { work_item_id: e.workItemId });
       const pr = markPr(r);
       let marked = 0;
       if (r.decisions.length > 0) {
@@ -494,7 +493,7 @@ export function ProjectReviewsCard({ clones }: { clones: readonly Clone[] }) {
         // Nada pendente (só em revisão): a confirmação de que revisou, sem gravar nada.
         noteReviewed(reviewKey(e.env, e.workItemId));
       }
-      putReview(reviewKey(e.env, e.workItemId), await api.call<Review>(e.env, "review.get", { work_item_id: e.workItemId }));
+      putReview(reviewKey(e.env, e.workItemId), await api.call(e.env, "review.get", { work_item_id: e.workItemId }));
       setNote({
         text: `${name} revisado${marked > 0 ? `: ${plural(marked, "decisão marcada", "decisões marcadas")} como revisada${marked === 1 ? "" : "s"}` : ""}.`,
         error: false,

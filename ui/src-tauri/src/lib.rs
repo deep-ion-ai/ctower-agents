@@ -5,6 +5,7 @@
 pub mod bridge;
 pub mod envs;
 pub mod folder;
+pub mod gate;
 pub mod hub;
 pub mod notify;
 pub mod uilog;
@@ -12,7 +13,7 @@ pub mod updater;
 pub mod window;
 pub mod wsl;
 
-use bridge::{Bridge, EnvStatus, Resolver, Sink, TermSink};
+use bridge::{Bridge, BridgeError, EnvStatus, Resolver, Sink, TermSink};
 use envs::{EnvEntry, EnvInput, EnvKind, EnvView, NotifyPrefs, Store, UiConfig};
 use hub::{HubEntry, HubInput, HubSink, HubView, HUB_ID};
 use serde_json::Value;
@@ -91,14 +92,127 @@ fn env_statuses(st: State<'_, AppState>) -> Vec<EnvStatus> {
     st.bridge.statuses()
 }
 
+/// O "call genérico" do ambiente: só os métodos da allowlist (`gate`).
 #[tauri::command]
 async fn daemon_call(
     st: State<'_, AppState>,
     env: String,
     method: String,
     params: Value,
-) -> Result<Value, String> {
-    st.bridge.call(&env, &method, params).await
+) -> Result<Value, BridgeError> {
+    gate::env_generic(&st.bridge, &env, &method, params).await
+}
+
+// Métodos sensíveis (`gate::SENSITIVE_ENV`): cada um tem um comando próprio,
+// com o nome do método fixo aqui. O `daemon_call` os recusa.
+#[tauri::command]
+async fn github_set_token(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "github.set_token", params).await
+}
+
+#[tauri::command]
+async fn github_clear_token(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "github.clear_token", params).await
+}
+
+#[tauri::command]
+async fn github_pr_comment(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "github.pr.comment", params).await
+}
+
+#[tauri::command]
+async fn env_update(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "env.update", params).await
+}
+
+#[tauri::command]
+async fn env_rollback(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "env.rollback", params).await
+}
+
+#[tauri::command]
+async fn env_config_set(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "env.config.set", params).await
+}
+
+#[tauri::command]
+async fn env_credentials_set(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "env.credentials.set", params).await
+}
+
+#[tauri::command]
+async fn shell_open(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "shell.open", params).await
+}
+
+#[tauri::command]
+async fn shell_close(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "shell.close", params).await
+}
+
+#[tauri::command]
+async fn session_input(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "session.input", params).await
+}
+
+#[tauri::command]
+async fn session_permission_respond(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge
+        .call(&env, "session.permission.respond", params)
+        .await
+}
+
+#[tauri::command]
+async fn cleanup_run(
+    st: State<'_, AppState>,
+    env: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    st.bridge.call(&env, "cleanup.run", params).await
 }
 
 #[tauri::command]
@@ -133,8 +247,12 @@ fn hub_status(st: State<'_, AppState>) -> Option<EnvStatus> {
 }
 
 #[tauri::command]
-async fn hub_call(st: State<'_, AppState>, method: String, params: Value) -> Result<Value, String> {
-    st.hub_bridge.call(HUB_ID, &method, params).await
+async fn hub_call(
+    st: State<'_, AppState>,
+    method: String,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    gate::hub_generic(&st.hub_bridge, HUB_ID, &method, params).await
 }
 
 #[tauri::command]
@@ -387,6 +505,18 @@ pub fn run() {
             envs_save,
             env_statuses,
             daemon_call,
+            github_set_token,
+            github_clear_token,
+            github_pr_comment,
+            env_update,
+            env_rollback,
+            env_config_set,
+            env_credentials_set,
+            shell_open,
+            shell_close,
+            session_input,
+            session_permission_respond,
+            cleanup_run,
             hub_get,
             hub_save,
             hub_status,

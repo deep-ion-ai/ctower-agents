@@ -53,7 +53,7 @@ export function ProjectScreen(props: {
     if (!env || projectId === undefined) return;
     const id = ++seq.current;
     try {
-      const t = withSummaries(await api.call<ProjectTree>(env, "tree.get", { project_id: projectId }));
+      const t = withSummaries(await api.call(env, "tree.get", { project_id: projectId }));
       if (id !== seq.current) return;
       cacheTree(projectKey({ env, projectId }), t);
       setTree(t);

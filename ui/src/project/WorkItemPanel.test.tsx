@@ -13,6 +13,7 @@ const H = 3600_000;
 function info(env_id: string, p: Partial<EnvInfo> = {}): EnvInfo {
   return {
     protocol: "2.0",
+    capabilities: ["version-handshake"],
     version: "0.1.0",
     hostname: env_id,
     worktrees_root: `/home/${env_id}/worktrees`,

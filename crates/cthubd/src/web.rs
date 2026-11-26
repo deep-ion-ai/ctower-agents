@@ -1,7 +1,8 @@
 //! UI web servida pelo hub (#199; spec da PWA §3, §4 e §8): o bundle
 //! embutido (`/`, `/assets/*`, fallback SPA), o login (`/web/login`,
 //! `/web/logout`, `/web/me`, #200) e o `/web/ws`, o mesmo JSON-RPC do `/ws`
-//! com a lista de permissões [`WEB_METHODS`] aplicada antes do despacho.
+//! com a lista de permissões do registro [`crate::methods`] (escopo `Web`)
+//! aplicada antes do despacho.
 //!
 //! Só existe com `[web] enabled = true`; desligado, essas rotas respondem
 //! `404`. A sessão web (cookie `ct_web`, validade, bloqueio, proxy) fica em
@@ -29,127 +30,6 @@ pub fn bundle_present() -> bool {
     env!("CTHUB_WEB_BUNDLE") == "1"
 }
 
-/// Métodos do `/ws` atendidos pelo `/web/ws` (spec da PWA §4.1). Método
-/// novo de leitura entra quando a UI web o usa; método que escreve só com
-/// decisão registrada.
-pub const WEB_METHODS: &[&str] = &[
-    "hub.info",
-    "hub.status",
-    "hub.projects.list",
-    "hub.assignments.list",
-    "hub.quarantine.list",
-    "hub.tree.get",
-    "hub.workitem.history",
-    // "Ver issue" (#434): só leitura, de passagem, sem gravar.
-    "hub.workitem.body",
-    // Prévia do "Criar release" (#204): só leitura, com o token do hub.
-    "hub.release.status",
-    // "Adicionar issue pelo ID" (#148): escreve só no espelho do Jira (a
-    // issue que o Jira já mostra, que sai na poda sem work item), pelo
-    // ambiente de sync.
-    "hub.tracker.add_issue",
-    "hub.workitem.set_status",
-    "hub.workitem.set_priority",
-    // Modelo e esforço do agente na issue (#182): a mesma classe de escrita
-    // da prioridade, que a tela da issue da web também muda.
-    "hub.workitem.set_model",
-    "hub.ranking.get",
-    "hub.health.get",
-    "hub.proposals.list",
-    "hub.proposals.decide",
-    "hub.dashboard.get",
-    "hub.envs.list",
-    // Plano das contas (#106): na web, sem e-mail nem organização.
-    "hub.plan.accounts",
-    // Regras do agente (épico #353): só a leitura, que a UI web mostra no
-    // projeto e no épico; editar, importar e decidir propostas ficam fora.
-    "hub.rules.get",
-    "hub.rules.history",
-    "hub.rules.proposals.list",
-    // Revogar só reduz acesso (spec §3.1 e §4.2).
-    "hub.web.sessions.list",
-    "hub.web.sessions.revoke",
-    // Web Push (#203, spec §4.2): inscrever e escolher os eventos do próprio
-    // dispositivo; listar, testar e remover não abrem nada além disso.
-    "hub.push.vapid_key",
-    "hub.push.subscribe",
-    "hub.push.list",
-    "hub.push.update",
-    "hub.push.remove",
-    "hub.push.test",
-    // Fase 2 (#343, spec §2.2 e §5.4): ações do ambiente pelo canal reverso,
-    // só com os métodos de `ct_http::sync::CHANNEL_METHODS` (sem terminal,
-    // permissões, atualização, limpeza nem token do GitHub).
-    "hub.env.call",
-    // Atualização do hub (#421): só o estado; verificar, disparar e voltar
-    // ficam no app desktop, como as demais ações de manutenção.
-    "hub.update.get",
-    // Tela Logs (#65): só leitura do log do hub, já mascarado; o modo seguir
-    // vale só para a própria conexão.
-    "hub.logs.tail",
-    "hub.logs.follow",
-    "hub.logs.unfollow",
-    // Piloto automático (#183, painel na PWA #185): o estado e os eventos
-    // (sem as chaves de conta) e o "pausar tudo", que só reduz o que o
-    // agendador faz; retomar volta ao que a política já permitia.
-    "hub.autopilot.status",
-    "hub.autopilot.events",
-    "hub.autopilot.pause",
-    "hub.autopilot.resume",
-    // Resumo da manhã e branch de integração (#185): só leitura, sem a
-    // chave da conta.
-    "hub.autopilot.digest",
-    "hub.autopilot.wip",
-    // Dependências entre issues (#215): a correção manual de uma aresta,
-    // como o pausar, só muda o que o agendador inicia.
-    "hub.autopilot.deps.set",
-];
-
-/// Sensíveis da decisão do épico #205: nunca na web, mesmo com sessão válida.
-pub const WEB_SENSITIVE: &[&str] = &[
-    "hub.projects.delete",
-    "hub.secrets.set",
-    "hub.secrets.delete",
-    "hub.recovery.generate",
-    "hub.recovery.verify",
-    "github.set_token",
-    "github.clear_token",
-];
-
-/// Os demais métodos do `/ws` fora da web (escolhas da spec, §13 item 2).
-pub const WEB_REFUSED: &[&str] = &[
-    "hub.projects.add",
-    "hub.projects.update",
-    "hub.projects.impact",
-    "hub.projects.move",
-    "hub.assignments.add",
-    "hub.assignments.remove",
-    // Marca de ambiente autônomo (#181): configuração, só no desktop.
-    "hub.envs.set_autonomous",
-    // Sessões autônomas por ambiente (#183): configuração, só no desktop.
-    "hub.autopilot.set",
-    "hub.quarantine.discard",
-    "hub.workitem.move",
-    // Feedback de review dos PRs do item (#130): leitura, entra na web
-    // quando a tela da revisão (#131) o usar.
-    "hub.workitem.pr_feedback",
-    "hub.rules.set",
-    "hub.rules.import",
-    "hub.rules.proposals.decide",
-    "hub.secrets.list",
-    "hub.secrets.rotate_pending_dismiss",
-    "hub.recovery.status",
-    "hub.backup.get",
-    "hub.backup.set",
-    "hub.backup.test",
-    "hub.backup.run",
-    "hub.backup.remote.list",
-    "github.status",
-    "hub.update.check",
-    "hub.update.start",
-    "hub.update.rollback",
-];
-
 /// Pushes do hub repassados ao navegador (spec da PWA §4.3). `env.push` já
 /// chega filtrado pela lista do canal (`ct_http::sync::CHANNEL_PUSHES`).
 pub const WEB_PUSHES: &[&str] = &[
@@ -165,8 +45,9 @@ pub const WEB_PUSHES: &[&str] = &[
 /// Erro de método fora da lista do `/web/ws`.
 pub const WEB_METHOD_UNAVAILABLE: i64 = -32601;
 
+/// O método vale na web? Responde pelo registro (`crate::methods`, escopo `Web`).
 pub fn web_allowed(method: &str) -> bool {
-    WEB_METHODS.contains(&method)
+    crate::methods::allowed_in(method, crate::methods::Scope::Web)
 }
 
 pub(crate) fn web_push(v: &Value) -> bool {
@@ -1024,70 +905,20 @@ mod tests {
         assert!(!web_push(&json!({})));
     }
 
-    #[test]
-    fn listas_sem_sobreposicao() {
-        for m in WEB_METHODS {
-            assert!(
-                !WEB_SENSITIVE.contains(m) && !WEB_REFUSED.contains(m),
-                "{m}"
-            );
-        }
-        for m in WEB_SENSITIVE {
-            assert!(!WEB_REFUSED.contains(m), "{m}");
-            assert!(!web_allowed(m), "{m}");
-        }
-    }
-
-    /// Todo método atendido pelo `call` do `/ws` (os braços `"hub.…" =>` e
-    /// `"github.…" =>` de `ws.rs`) está classificado aqui, e nada além
-    /// deles: método novo sem classificação quebra este teste.
-    #[test]
-    fn todo_metodo_do_ws_esta_classificado() {
-        let src = include_str!("ws.rs");
-        let code = &src[..src.find("#[cfg(test)]").unwrap()];
-        let mut found = std::collections::BTreeSet::new();
-        for prefix in ["\"hub.", "\"github."] {
-            for (i, _) in code.match_indices(prefix) {
-                let lit = &code[i + 1..];
-                let Some(j) = lit.find('"') else { continue };
-                let (lit, after) = (&lit[..j], lit[j + 1..].trim_start());
-                if !lit.ends_with('.') && (after.starts_with("=>") || after.starts_with('|')) {
-                    found.insert(lit.to_string());
-                }
-            }
-        }
-        assert!(found.contains("hub.dashboard.get"), "{found:?}");
-        assert!(found.contains("github.clear_token"), "{found:?}");
-        let classified: std::collections::BTreeSet<String> = WEB_METHODS
-            .iter()
-            .chain(WEB_SENSITIVE)
-            .chain(WEB_REFUSED)
-            .map(|m| m.to_string())
-            .collect();
-        let missing: Vec<_> = found.difference(&classified).collect();
-        assert!(missing.is_empty(), "sem classificação na web: {missing:?}");
-        let stale: Vec<_> = classified.difference(&found).collect();
-        assert!(
-            stale.is_empty(),
-            "classificados sem método no /ws: {stale:?}"
-        );
-    }
-
-    /// A `WebDaemonApi` (`ui/src/api/web.ts`, `ENV_METHODS`) recusa sem ir
-    /// ao hub o que está fora da lista do canal: as duas listas são iguais.
+    /// A `WebDaemonApi` (`ui/src/api/web.ts`, `ENV_METHODS`) usa o escopo
+    /// `web` gerado do registro do ambiente (`METHOD_SCOPES.web` em
+    /// `protocol/gen/methods.ts`): é a mesma lista do canal reverso, e o
+    /// hub recusa sem ir ao ambiente o que não estiver nela.
     #[test]
     fn lista_de_metodos_do_ambiente_da_ui_web_e_a_do_canal() {
-        let src = include_str!("../../../ui/src/api/web.ts");
-        let start = src.find("ENV_METHODS").expect("ENV_METHODS na web.ts");
+        let src = include_str!("../../../ui/src/protocol/gen/methods.ts");
+        let start = src.find("  web: [").expect("escopo web em methods.ts");
         let body = &src[start..];
-        let body = &body[body.find('[').unwrap() + 1..body.find(']').unwrap()];
-        let ui: std::collections::BTreeSet<&str> = body
-            .split(',')
-            .map(|m| m.trim().trim_matches('"'))
-            .filter(|m| !m.is_empty())
-            .collect();
+        let body = &body[..body.find("  ],").unwrap()];
+        let ui: std::collections::BTreeSet<&str> = body.split('"').skip(1).step_by(2).collect();
         let hub: std::collections::BTreeSet<&str> =
             ct_http::sync::CHANNEL_METHODS.iter().copied().collect();
+        assert!(!hub.is_empty());
         assert_eq!(ui, hub);
     }
 }

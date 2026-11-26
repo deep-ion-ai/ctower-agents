@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ct-proc.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 ts-rs = { workspace = true, optional = true }

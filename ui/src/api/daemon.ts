@@ -1,5 +1,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { toApiError } from "./errors";
+import type { DaemonMethods } from "../protocol/gen/methods";
+import type { HubMethods } from "../protocol/hub-gen/methods";
 import type {
   EnvInput,
   EnvStatus,
@@ -14,6 +17,19 @@ import type {
   Unsubscribe,
 } from "./types";
 
+/**
+ * Argumentos de `call` para `M`: com `null` no registro (sem parâmetros), o
+ * objeto é opcional; sem `null`, é obrigatório.
+ */
+export type MethodArgs<M extends keyof DaemonMethods> = null extends DaemonMethods[M]["params"]
+  ? [params?: DaemonMethods[M]["params"]]
+  : [params: DaemonMethods[M]["params"]];
+
+/** Mesma regra de `MethodArgs`, para os métodos do hub (`HubMethods`). */
+export type HubMethodArgs<M extends keyof HubMethods> = null extends HubMethods[M]["params"]
+  ? [params?: HubMethods[M]["params"]]
+  : [params: HubMethods[M]["params"]];
+
 /** Tudo que a UI faz com os daemons passa por aqui (fácil de trocar nos testes). */
 export interface DaemonApi {
   /**
@@ -25,7 +41,16 @@ export interface DaemonApi {
   listEnvs(): Promise<EnvView[]>;
   saveEnvs(envs: EnvInput[]): Promise<EnvView[]>;
   statuses(): Promise<EnvStatus[]>;
-  /** Requisição ao daemon do ambiente; rejeita com a mensagem de erro. */
+  /**
+   * Requisição tipada ao daemon do ambiente: `method` é um método do registro
+   * (`DaemonMethods`, gerado de `ct_http::methods`). Rejeita com a mensagem de erro.
+   */
+  call<M extends keyof DaemonMethods>(
+    env: string,
+    method: M,
+    ...args: MethodArgs<M>
+  ): Promise<DaemonMethods[M]["result"]>;
+  /** Requisição sem tipo ao daemon do ambiente; rejeita com a mensagem de erro. */
   call<T = unknown>(env: string, method: string, params?: object): Promise<T>;
   /** Conexão com o hub (`null` = não configurada). */
   getHub(): Promise<HubConnView | null>;
@@ -33,7 +58,18 @@ export interface DaemonApi {
   saveHub(hub: HubConnInput | null): Promise<HubConnView | null>;
   /** Estado da conexão com o hub (`null` = não configurada ou ainda conectando). */
   hubStatus(): Promise<EnvStatus | null>;
-  /** Requisição ao `/ws` do hub; rejeita com a mensagem de erro. */
+  /**
+   * Requisição tipada ao `/ws` do hub: `method` é um método do registro do hub
+   * (`HubMethods`, gerado de `crates/cthubd/src/methods.rs`). Rejeita com a mensagem de erro.
+   */
+  hubCall<M extends keyof HubMethods>(
+    method: M,
+    ...args: HubMethodArgs<M>
+  ): Promise<HubMethods[M]["result"]>;
+  /**
+   * Requisição sem tipo ao `/ws` do hub (método fora do registro, ou com o tipo
+   * dado por quem chama); rejeita com a mensagem de erro.
+   */
   hubCall<T = unknown>(method: string, params?: object): Promise<T>;
   onHubStatus(cb: (s: EnvStatus) => void): Unsubscribe;
   onHubPush(cb: (e: PushEvent) => void): Unsubscribe;
@@ -88,31 +124,60 @@ function subscribe<T>(event: string, cb: (payload: T) => void): Unsubscribe {
   };
 }
 
+/**
+ * Métodos sensíveis do ambiente (#231) e o comando Tauri dedicado de cada
+ * um. Espelho de `SENSITIVE_ENV` em `ui/src-tauri/src/gate.rs`; o teste
+ * `sensitive.test.ts` confere os dois. Um `Map`, não um objeto: `method`
+ * vem de fora e não pode achar `constructor` e afins.
+ */
+export const SENSITIVE_COMMANDS: ReadonlyMap<string, string> = new Map([
+  ["github.set_token", "github_set_token"],
+  ["github.clear_token", "github_clear_token"],
+  ["github.pr.comment", "github_pr_comment"],
+  ["env.update", "env_update"],
+  ["env.rollback", "env_rollback"],
+  ["env.config.set", "env_config_set"],
+  ["env.credentials.set", "env_credentials_set"],
+  ["shell.open", "shell_open"],
+  ["shell.close", "shell_close"],
+  ["session.input", "session_input"],
+  ["session.permission.respond", "session_permission_respond"],
+  ["cleanup.run", "cleanup_run"],
+]);
+
+/** `invoke` com a rejeição convertida em `ApiError`, igual à da web. */
+function invokeApi<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  return invoke<T>(cmd, args).catch((e: unknown) => Promise.reject(toApiError(e)));
+}
+
 /** Implementação real: comandos e eventos do lado Rust (src-tauri/src/main.rs). */
 export class TauriDaemonApi implements DaemonApi {
   listEnvs() {
-    return invoke<EnvView[]>("envs_list");
+    return invokeApi<EnvView[]>("envs_list");
   }
   saveEnvs(envs: EnvInput[]) {
-    return invoke<EnvView[]>("envs_save", { envs });
+    return invokeApi<EnvView[]>("envs_save", { envs });
   }
   statuses() {
-    return invoke<EnvStatus[]>("env_statuses");
+    return invokeApi<EnvStatus[]>("env_statuses");
   }
   call<T>(env: string, method: string, params: object = {}) {
-    return invoke<T>("daemon_call", { env, method, params });
+    // Sensível (#231): só pelo comando dedicado; o genérico o recusa.
+    const dedicated = SENSITIVE_COMMANDS.get(method);
+    if (dedicated) return invokeApi<T>(dedicated, { env, params });
+    return invokeApi<T>("daemon_call", { env, method, params });
   }
   getHub() {
-    return invoke<HubConnView | null>("hub_get");
+    return invokeApi<HubConnView | null>("hub_get");
   }
   saveHub(hub: HubConnInput | null) {
-    return invoke<HubConnView | null>("hub_save", { hub });
+    return invokeApi<HubConnView | null>("hub_save", { hub });
   }
   hubStatus() {
-    return invoke<EnvStatus | null>("hub_status");
+    return invokeApi<EnvStatus | null>("hub_status");
   }
   hubCall<T>(method: string, params: object = {}) {
-    return invoke<T>("hub_call", { method, params });
+    return invokeApi<T>("hub_call", { method, params });
   }
   onHubStatus(cb: (s: EnvStatus) => void) {
     return subscribe<EnvStatus>("hub://status", cb);
@@ -127,37 +192,37 @@ export class TauriDaemonApi implements DaemonApi {
       const all = new Uint8Array(buf);
       onChunk({ snapshot: all[0] === 1, bytes: all.subarray(1) });
     };
-    return invoke<void>("term_attach", { env, session, channel });
+    return invokeApi<void>("term_attach", { env, session, channel });
   }
   detach(env: string, session: string) {
-    return invoke<void>("term_detach", { env, session });
+    return invokeApi<void>("term_detach", { env, session });
   }
   input(env: string, session: string, data: string) {
-    return invoke<void>("term_input", { env, session, data });
+    return invokeApi<void>("term_input", { env, session, data });
   }
   resize(env: string, session: string, cols: number, rows: number) {
-    return invoke<void>("term_resize", { env, session, cols, rows });
+    return invokeApi<void>("term_resize", { env, session, cols, rows });
   }
   openUrl(url: string) {
-    return invoke<void>("open_url", { url });
+    return invokeApi<void>("open_url", { url });
   }
   openVsCode(env: string, path: string) {
-    return invoke<void>("open_vscode", { env, path });
+    return invokeApi<void>("open_vscode", { env, path });
   }
   openFolder(env: string, path: string) {
-    return invoke<void>("open_folder", { env, path });
+    return invokeApi<void>("open_folder", { env, path });
   }
   readClipboard() {
-    return invoke<string>("clipboard_read");
+    return invokeApi<string>("clipboard_read");
   }
   writeClipboard(text: string) {
-    return invoke<void>("clipboard_write", { text });
+    return invokeApi<void>("clipboard_write", { text });
   }
   getUiConfig() {
-    return invoke<UiConfig>("ui_config_get");
+    return invokeApi<UiConfig>("ui_config_get");
   }
   saveUiConfig(cfg: UiConfig) {
-    return invoke<void>("ui_config_save", { cfg });
+    return invokeApi<void>("ui_config_save", { cfg });
   }
   onPush(cb: (e: PushEvent) => void) {
     return subscribe<PushEvent>("daemon://push", cb);
@@ -166,24 +231,24 @@ export class TauriDaemonApi implements DaemonApi {
     return subscribe<EnvStatus>("daemon://status", cb);
   }
   uiUpdateCheck() {
-    return invoke<UiUpdate>("ui_update_check");
+    return invokeApi<UiUpdate>("ui_update_check");
   }
   uiUpdateInstall() {
-    return invoke<void>("ui_update_install");
+    return invokeApi<void>("ui_update_install");
   }
   onUiUpdateProgress(cb: (p: UiUpdateProgress) => void) {
     return subscribe<UiUpdateProgress>("ui://update-progress", cb);
   }
   saveFile(name: string, content: string) {
-    return invoke<string>("save_download", { name, content });
+    return invokeApi<string>("save_download", { name, content });
   }
   uiLogAppend(lines: string[]) {
-    return invoke<void>("ui_log_append", { lines });
+    return invokeApi<void>("ui_log_append", { lines });
   }
   notify(title: string, body: string) {
-    return invoke<void>("notify_send", { title, body });
+    return invokeApi<void>("notify_send", { title, body });
   }
   uiLogRead() {
-    return invoke<string[]>("ui_log_read");
+    return invokeApi<string[]>("ui_log_read");
   }
 }

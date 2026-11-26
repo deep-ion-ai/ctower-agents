@@ -14,6 +14,8 @@ pub struct EnvInfo {
     /// Versão do protocolo (`major.minor`); a UI recusa major diferente.
     pub protocol: String,
     pub version: String,
+    /// Capacidades do ambiente, para gating por recurso (#227).
+    pub capabilities: Vec<String>,
     /// Commit do build; vazio se compilado fora do git.
     pub commit: String,
     pub hostname: String,
@@ -204,5 +206,65 @@ mod export {
             format!("// Gerado por `cargo test -p ct-server --features ts export_ts`.\n{index}"),
         )
         .unwrap();
+        write_methods(&dir, &names);
+    }
+
+    /// `methods.ts`: `DaemonMethods` (parâmetros e resultado por método) e
+    /// `METHOD_SCOPES`, do registro `ct_http::methods` (#228). Os nomes de
+    /// tipo usados nas expressões têm de ser tipos exportados acima: um nome
+    /// sem arquivo quebra o teste. Fora do `index.ts`, que só lista tipos.
+    fn write_methods(dir: &Path, names: &[(String, String)]) {
+        use ct_http::methods::{Scope, METHODS};
+        use std::collections::BTreeSet;
+        let known: std::collections::BTreeMap<&str, &str> = names
+            .iter()
+            .map(|(n, p)| (n.as_str(), p.as_str()))
+            .collect();
+        let mut imports: BTreeSet<(&str, &str)> = BTreeSet::new();
+        for m in METHODS {
+            for expr in [m.params, m.result] {
+                for word in expr.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+                    if !word.starts_with(|c: char| c.is_ascii_uppercase()) {
+                        continue;
+                    }
+                    let path: &str = known
+                        .get(word)
+                        .copied()
+                        .unwrap_or_else(|| panic!("tipo sem export em {}: {word}", m.name));
+                    imports.insert((word, path));
+                }
+            }
+        }
+        let mut ts = String::from(
+            "// Gerado por `cargo test -p ct-server --features ts export_ts` a partir de\n\
+             // `ct_http::methods`. Não editar à mão.\n",
+        );
+        for (word, path) in &imports {
+            ts += &format!("import type {{ {word} }} from \"./{path}\";\n");
+        }
+        let scope_list = |scope: Scope| -> String {
+            let mut out = String::new();
+            for m in METHODS.iter().filter(|m| m.scopes.contains(&scope)) {
+                out += &format!("    \"{}\",\n", m.name);
+            }
+            out
+        };
+        ts += "\n/** Métodos por escopo: `ui` (o /ws), `web` e `channel` (o canal do hub). */\n";
+        ts += "export const METHOD_SCOPES = {\n";
+        ts += &format!("  ui: [\n{}  ],\n", scope_list(Scope::Ui));
+        ts += &format!("  web: [\n{}  ],\n", scope_list(Scope::Web));
+        ts += &format!("  channel: [\n{}  ],\n", scope_list(Scope::Channel));
+        ts += "} as const;\n\n";
+        ts += "/** Parâmetros (`null`: nenhum) e resultado de cada método do ambiente. */\n";
+        ts += "export interface DaemonMethods {\n";
+        for m in METHODS {
+            ts += &format!(
+                "  \"{}\": {{ params: {}; result: {} }};\n",
+                m.name, m.params, m.result
+            );
+        }
+        ts += "}\n\n";
+        ts += "export type DaemonMethod = keyof DaemonMethods;\n";
+        fs::write(dir.join("methods.ts"), ts).unwrap();
     }
 }

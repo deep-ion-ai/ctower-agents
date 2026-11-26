@@ -68,6 +68,8 @@ pub struct HubInfo {
     /// Versão do protocolo do hub (`major.minor`).
     pub protocol: String,
     pub version: String,
+    /// Capacidades do hub, para gating por recurso (#227).
+    pub capabilities: Vec<String>,
     /// Commit do build; vazio se compilado fora do git.
     pub commit: String,
     pub name: String,
@@ -185,7 +187,8 @@ pub(crate) async fn upgrade(
 }
 
 /// Por onde a conexão chegou: o `/ws` (token de UI, tudo) ou o `/web/ws`
-/// (sessão web `id`, só `crate::web::WEB_METHODS` e `WEB_PUSHES`).
+/// (sessão web `id`, só os métodos de escopo `Web` do registro
+/// `crate::methods` e `WEB_PUSHES`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Channel {
     Ui,
@@ -754,6 +757,15 @@ fn push_call(st: &HubState, method: &str, p: &Value, current: Option<&str>) -> R
 }
 
 async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) -> RpcResult {
+    // Registro dos métodos do hub (#229): o que não está nele não é despachado.
+    let scope = if web_session.is_some() {
+        crate::methods::Scope::Web
+    } else {
+        crate::methods::Scope::Ui
+    };
+    if !crate::methods::allowed_in(method, scope) {
+        return Err((-32601, format!("método desconhecido: {method}")));
+    }
     match method {
         m if m.starts_with("hub.web.") => {
             let (st, method) = (st.clone(), method.to_string());
@@ -920,6 +932,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
         "hub.info" => Ok(json!(HubInfo {
             protocol: crate::PROTOCOL_VERSION.into(),
             version: ct_core::VERSION.into(),
+            capabilities: vec![ct_http::sync::CAPABILITY_VERSION_HANDSHAKE.into()],
             commit: ct_core::BUILD_COMMIT.into(),
             name: st.name.to_string(),
             config_rev: h.config_rev().map_err(e)?,
@@ -2258,6 +2271,71 @@ mod export {
             format!("// Gerado por `cargo test -p cthubd --features ts export_ts`.\n{index}"),
         )
         .unwrap();
+        write_methods(&dir, &names);
+    }
+
+    /// `methods.ts`: `HubMethods` (parâmetros e resultado por método) e
+    /// `HUB_METHOD_SCOPES`, do registro `crate::methods` (#229), no mesmo
+    /// formato do `methods.ts` do ambiente (`ct-server`, #228). Cada nome de
+    /// tipo nas expressões tem de ser um tipo exportado acima: um nome sem
+    /// arquivo quebra o teste. Fica fora do `index.ts`, que só lista tipos.
+    fn write_methods(dir: &Path, names: &[(String, String)]) {
+        use crate::methods::{Scope, METHODS};
+        use std::collections::BTreeSet;
+        let known: std::collections::BTreeMap<&str, &str> = names
+            .iter()
+            .map(|(n, p)| (n.as_str(), p.as_str()))
+            .collect();
+        let mut imports: BTreeSet<(&str, &str)> = BTreeSet::new();
+        for m in METHODS {
+            for expr in [m.params, m.result] {
+                // Só o que está fora de aspas: "P0" e "global" são literais.
+                let fora_de_aspas = expr
+                    .split('"')
+                    .step_by(2)
+                    .flat_map(|t| t.split(|c: char| !(c.is_alphanumeric() || c == '_')));
+                for word in fora_de_aspas {
+                    if !word.starts_with(|c: char| c.is_ascii_uppercase()) {
+                        continue;
+                    }
+                    let path: &str = known
+                        .get(word)
+                        .copied()
+                        .unwrap_or_else(|| panic!("tipo sem export em {}: {word}", m.name));
+                    imports.insert((word, path));
+                }
+            }
+        }
+        let mut ts = String::from(
+            "// Gerado por `cargo test -p cthubd --features ts export_ts` a partir de\n\
+             // `crates/cthubd/src/methods.rs`. Não editar à mão.\n",
+        );
+        for (word, path) in &imports {
+            ts += &format!("import type {{ {word} }} from \"./{path}\";\n");
+        }
+        let scope_list = |scope: Scope| -> String {
+            let mut out = String::new();
+            for m in METHODS.iter().filter(|m| m.scopes.contains(&scope)) {
+                out += &format!("    \"{}\",\n", m.name);
+            }
+            out
+        };
+        ts += "\n/** Métodos por escopo: `ui` (o app desktop, o /ws) e `web` (o /web/ws). */\n";
+        ts += "export const HUB_METHOD_SCOPES = {\n";
+        ts += &format!("  ui: [\n{}  ],\n", scope_list(Scope::Ui));
+        ts += &format!("  web: [\n{}  ],\n", scope_list(Scope::Web));
+        ts += "} as const;\n\n";
+        ts += "/** Parâmetros (`null`: nenhum) e resultado de cada método do hub. */\n";
+        ts += "export interface HubMethods {\n";
+        for m in METHODS {
+            ts += &format!(
+                "  \"{}\": {{ params: {}; result: {} }};\n",
+                m.name, m.params, m.result
+            );
+        }
+        ts += "}\n\n";
+        ts += "export type HubMethod = keyof HubMethods;\n";
+        fs::write(dir.join("methods.ts"), ts).unwrap();
     }
 }
 
@@ -2410,6 +2488,20 @@ pub(crate) mod tests {
         }
         let v = ui.call("github.status", json!({})).await;
         assert_eq!(v["error"]["code"], -32000);
+    }
+
+    /// Método fora do registro (`crate::methods`) não é despachado: a recusa
+    /// vem antes dos braços, no `/ws` e na web (que não o tem no escopo).
+    #[tokio::test]
+    async fn metodo_fora_do_registro_nao_despacha() {
+        let st = hub_com_dados();
+        let r = call(&st, "hub.inventado", json!({}), None).await;
+        assert_eq!(r.unwrap_err().0, -32601);
+        let r = call(&st, "hub.projects.add", json!({}), Some("web-1")).await;
+        assert_eq!(r.unwrap_err().0, -32601);
+        // Dentro do registro, o despacho segue: o projeto de teste existe.
+        let r = call(&st, "hub.projects.list", json!({}), None).await;
+        assert!(r.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4545,6 +4637,7 @@ pub(crate) mod tests {
         assert!(v["result"]["envs"].is_array(), "{v}");
         let v = web.call("hub.info", json!({})).await;
         assert_eq!(v["result"]["protocol"], crate::PROTOCOL_VERSION);
+        assert_eq!(v["result"]["capabilities"], json!(["version-handshake"]));
         let v = web.call("hub.projects.list", json!({})).await;
         assert_eq!(v["result"][0]["project"]["gh_repo"], "demo");
         // Ação da fase 1 que escreve: mudar status.
@@ -4569,10 +4662,14 @@ pub(crate) mod tests {
         let mut ui = Ui::new(&url).await;
         let params = json!({ "owner": "deep-ion-ai", "repo": "demo", "token": "t",
                              "scope": "global", "name": "X", "value": "v", "key": "k" });
-        for m in crate::web::WEB_SENSITIVE
+        // Tudo que o registro não dá à web (escopo só `Ui`) é recusado aqui.
+        let so_ui: Vec<&str> = crate::methods::METHODS
             .iter()
-            .chain(crate::web::WEB_REFUSED)
-        {
+            .filter(|m| !m.scopes.contains(&crate::methods::Scope::Web))
+            .map(|m| m.name)
+            .collect();
+        assert!(so_ui.contains(&"hub.projects.delete"), "{so_ui:?}");
+        for m in &so_ui {
             let v = web.call(m, params.clone()).await;
             assert_eq!(v["error"]["code"], -32601, "{m}: {v}");
             assert_eq!(v["error"]["message"], "método indisponível na web", "{m}");
@@ -4582,7 +4679,16 @@ pub(crate) mod tests {
         assert_eq!(v["result"].as_array().unwrap().len(), 1);
         // No /ws, com o token de UI, os sensíveis chegam ao despacho (podem
         // falhar por outro motivo, como o store fechado, mas não pela lista).
-        for m in crate::web::WEB_SENSITIVE {
+        let sensiveis = [
+            "hub.projects.delete",
+            "hub.secrets.set",
+            "hub.secrets.delete",
+            "hub.recovery.generate",
+            "hub.recovery.verify",
+            "github.set_token",
+            "github.clear_token",
+        ];
+        for m in sensiveis {
             let v = ui.call(m, params.clone()).await;
             assert_ne!(v["error"]["code"], -32601, "{m}: {v}");
         }
@@ -4685,6 +4791,14 @@ pub(crate) mod tests {
         let h = req.headers_mut();
         h.insert("authorization", format!("Bearer {tok}").parse().unwrap());
         h.insert(ct_http::sync::ENV_ID_HEADER, env_id.parse().unwrap());
+        h.insert(
+            ct_http::sync::PROTOCOL_HEADER,
+            ct_http::sync::SYNC_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        h.insert(
+            ct_http::sync::VERSION_HEADER,
+            ct_core::VERSION.parse().unwrap(),
+        );
         let (ws, _) = connect_async(req).await.unwrap();
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let log = std::sync::Arc::clone(&seen);
@@ -4805,6 +4919,14 @@ pub(crate) mod tests {
         let h = req.headers_mut();
         h.insert("authorization", format!("Bearer {tok}").parse().unwrap());
         h.insert(ct_http::sync::ENV_ID_HEADER, env_id.parse().unwrap());
+        h.insert(
+            ct_http::sync::PROTOCOL_HEADER,
+            ct_http::sync::SYNC_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        h.insert(
+            ct_http::sync::VERSION_HEADER,
+            ct_core::VERSION.parse().unwrap(),
+        );
         let (ws, _) = connect_async(req).await.unwrap();
         let task = tokio::spawn(async move {
             let (mut tx, mut rx) = ws.split();

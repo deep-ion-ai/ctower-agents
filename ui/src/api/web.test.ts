@@ -261,6 +261,8 @@ describe("WebDaemonApi (#201)", () => {
     const req2 = JSON.parse(s.sent[s.sent.length - 1]);
     s.hub({ id: req2.id, error: { code: -32030, message: "ambiente offline: mac está sem canal com o hub agora" } });
     await expect(off).rejects.toThrow("ambiente offline: mac");
+    // O código chega junto (o desktop recebe o mesmo pela ponte).
+    await expect(off).rejects.toMatchObject({ code: -32030, message: "ambiente offline: mac está sem canal com o hub agora" });
 
     // Fora da lista: recusa sem ir ao hub.
     const before = s.sent.length;

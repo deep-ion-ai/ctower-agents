@@ -6,7 +6,7 @@
 //! uma sessão do projeto): o alinhamento roda num worktree temporário,
 //! destacado, removido no fim mesmo em caso de erro.
 
-use crate::{ref_exists, run, run_env, valid_branch, GitError};
+use crate::{ref_exists, run, run_env, run_net, valid_branch, GitError};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,7 +34,7 @@ const REMOTE: &str = "origin";
 /// Busca `base` e `branch` do `origin` para `refs/remotes/origin/*`. A
 /// branch pode não existir no remoto (não é erro).
 fn fetch(repo: &Path, branch: &str, base: &str) -> Result<(), GitError> {
-    run(
+    run_net(
         repo,
         [
             "fetch",
@@ -43,8 +43,9 @@ fn fetch(repo: &Path, branch: &str, base: &str) -> Result<(), GitError> {
             &format!("+refs/heads/{base}:refs/remotes/{REMOTE}/{base}"),
         ],
     )?;
-    // Sem a branch no remoto o fetch falha: só some a referência local.
-    if run(
+    // Sem a branch no remoto o fetch falha: só some a referência local. Um
+    // estouro de prazo não quer dizer isso: sai como erro.
+    match run_net(
         repo,
         [
             "fetch",
@@ -52,17 +53,19 @@ fn fetch(repo: &Path, branch: &str, base: &str) -> Result<(), GitError> {
             REMOTE,
             &format!("+refs/heads/{branch}:refs/remotes/{REMOTE}/{branch}"),
         ],
-    )
-    .is_err()
-    {
-        let _ = run(
-            repo,
-            [
-                "update-ref",
-                "-d",
-                &format!("refs/remotes/{REMOTE}/{branch}"),
-            ],
-        );
+    ) {
+        Ok(_) => {}
+        Err(e @ GitError::Timeout { .. }) => return Err(e),
+        Err(_) => {
+            let _ = run(
+                repo,
+                [
+                    "update-ref",
+                    "-d",
+                    &format!("refs/remotes/{REMOTE}/{branch}"),
+                ],
+            );
+        }
     }
     Ok(())
 }
@@ -76,7 +79,7 @@ pub fn ensure_remote_branch(repo: &Path, branch: &str, base: &str) -> Result<boo
     if ref_exists(repo, &format!("refs/remotes/{REMOTE}/{branch}"))? {
         return Ok(false);
     }
-    run(
+    run_net(
         repo,
         [
             "push",
@@ -225,8 +228,8 @@ pub fn align_branch(
     }
     let target = format!("HEAD:refs/heads/{branch}");
     match strategy {
-        Strategy::Merge => run(&wt.path, ["push", "--quiet", REMOTE, &target])?,
-        Strategy::Rebase => run(
+        Strategy::Merge => run_net(&wt.path, ["push", "--quiet", REMOTE, &target])?,
+        Strategy::Rebase => run_net(
             &wt.path,
             [
                 "push",

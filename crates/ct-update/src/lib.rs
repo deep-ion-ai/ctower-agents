@@ -4,6 +4,7 @@
 //! ([`runner::Runner`]), usados pelo `ctower update` (ctowerd + ctower) e
 //! pelo `cthubd update` (cthubd).
 
+pub mod download;
 pub mod launch;
 pub mod runner;
 
