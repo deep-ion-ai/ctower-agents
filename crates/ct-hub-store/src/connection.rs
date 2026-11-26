@@ -71,9 +71,22 @@ fn check_name(name: &str) -> Result<()> {
     }
 }
 
-/// Confere o cadastro: nome e o que o descritor do tipo exige.
+/// Confere o cadastro: nome, o que o descritor do tipo exige e a forma de
+/// credencial que o ambiente sabe entregar. O ambiente só materializa o
+/// comando de credencial do Jira e do GitLab (`materialize_connections`); o
+/// secret, o arquivo e a CLI ainda não chegam à sessão, então o hub recusa
+/// (senão o cadastro salvaria uma conexão que sobe sem token).
 fn validate(c: &Connection) -> Result<()> {
     check_name(&c.name)?;
+    if matches!(c.kind, ProviderKind::Jira | ProviderKind::Gitlab)
+        && !matches!(c.credential, CredentialSource::Command { .. })
+    {
+        return Err(LedgerError::Invalid(format!(
+            "{}: a credencial precisa ser um comando que imprime o token; secret, arquivo e CLI \
+             ainda não chegam ao ambiente",
+            provider::descriptor(c.kind).label()
+        )));
+    }
     provider::descriptor(c.kind)
         .validate(c)
         .map_err(LedgerError::Invalid)
@@ -337,8 +350,8 @@ mod tests {
             name: name.into(),
             kind: ProviderKind::Gitlab,
             endpoint: "gitlab.example.com".into(),
-            credential: CredentialSource::Secret {
-                name: "gitlab-acme".into(),
+            credential: CredentialSource::Command {
+                cmd: "pass show gitlab/token | head -1".into(),
             },
             options: json!({}),
         }
@@ -397,8 +410,8 @@ mod tests {
                 c.id,
                 &ConnectionPatch {
                     endpoint: Some("https://jira2.example.com".into()),
-                    credential: Some(CredentialSource::Secret {
-                        name: "jira-acme".into(),
+                    credential: Some(CredentialSource::Command {
+                        cmd: "pass show jira/token | head -1".into(),
                     }),
                     ..Default::default()
                 },
@@ -445,6 +458,71 @@ mod tests {
             hub.connection(c.id),
             Err(LedgerError::NotFound(..))
         ));
+    }
+
+    /// Jira e GitLab só aceitam comando de credencial: secret, arquivo e CLI
+    /// são recusados no cadastro e na edição, com mensagem clara. O GitHub
+    /// segue com a CLI, o arquivo e o secret.
+    #[test]
+    fn jira_e_gitlab_so_aceitam_comando_de_credencial() {
+        let hub = Hub::open_in_memory().unwrap();
+        for cred in [
+            CredentialSource::Secret {
+                name: "jira-acme".into(),
+            },
+            CredentialSource::File {
+                path: "/etc/acme/token".into(),
+            },
+            CredentialSource::Cli,
+            CredentialSource::None,
+        ] {
+            let mut j = jira("jira-acme", "https://jira.example.com");
+            j.credential = cred.clone();
+            let err = hub.add_connection(&j).unwrap_err();
+            assert!(matches!(err, LedgerError::Invalid(_)), "{cred:?}: {err}");
+            assert!(
+                err.to_string().contains("comando que imprime o token"),
+                "{err}"
+            );
+
+            let mut g = gitlab("gitlab-acme");
+            g.credential = cred.clone();
+            assert!(matches!(
+                hub.add_connection(&g),
+                Err(LedgerError::Invalid(_))
+            ));
+        }
+        assert!(hub.list_connections().unwrap().is_empty());
+
+        let c = hub
+            .add_connection(&jira("jira-acme", "https://jira.example.com"))
+            .unwrap();
+        let err = hub
+            .update_connection(
+                c.id,
+                &ConnectionPatch {
+                    credential: Some(CredentialSource::Secret {
+                        name: "jira-acme".into(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, LedgerError::Invalid(_)), "{err}");
+        assert!(matches!(
+            hub.connection(c.id).unwrap().credential,
+            CredentialSource::Command { .. }
+        ));
+
+        let gh = hub
+            .add_connection(&NewConnection {
+                credential: CredentialSource::Secret {
+                    name: "github-acme".into(),
+                },
+                ..github("github-acme")
+            })
+            .unwrap();
+        assert_eq!(gh.kind, ProviderKind::Github);
     }
 
     #[test]

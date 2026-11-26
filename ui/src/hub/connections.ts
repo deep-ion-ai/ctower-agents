@@ -16,10 +16,14 @@ export const CONNECTION_KINDS: ProviderKind[] = ["jira", "gitlab", "github"];
 
 export type CredKind = CredentialSource["kind"];
 
-/** Formas de credencial que cada tipo aceita (`ProviderDescriptor::validate`). */
+/**
+ * Formas de credencial que cada tipo aceita. Jira e GitLab só o comando: o
+ * ambiente ainda não entrega secret, arquivo ou CLI à sessão (o hub recusa
+ * os outros, `ct-hub-store`).
+ */
 export const CRED_KINDS: Record<ProviderKind, CredKind[]> = {
-  jira: ["command", "secret"],
-  gitlab: ["command", "secret"],
+  jira: ["command"],
+  gitlab: ["command"],
   github: ["cli", "file", "command", "secret", "none"],
 };
 
@@ -75,6 +79,11 @@ export function connectionFormOf(c: Connection): ConnectionForm {
 
 /** A credencial do formulário, ou o erro de quem falta. */
 export function credentialOf(f: ConnectionForm): { credential: CredentialSource } | { error: string } {
+  if (!CRED_KINDS[f.kind].includes(f.cred)) {
+    return {
+      error: `${KIND_LABEL[f.kind]}: a credencial precisa ser um comando que imprime o token; secret, arquivo e CLI ainda não chegam ao ambiente`,
+    };
+  }
   const v = f.cred_value.trim();
   switch (f.cred) {
     case "command":

@@ -1,5 +1,6 @@
 import type { Connection } from "../protocol/gen";
 import {
+  CRED_KINDS,
   EMPTY_CONNECTION_FORM,
   connectionFormOf,
   connectionLabel,
@@ -62,20 +63,35 @@ test("ida e volta do formulário com a credencial de cada forma", () => {
     cred_value: "pass show jira | head -1",
     config_file: "~/.config/.jira/acme.yml",
   });
+  // Secret do Jira (cadastro antigo): o formulário mostra a forma, e a
+  // gravação diz o que falta, sem mandar ao hub.
   const secret = { ...JIRA, credential: { kind: "secret" as const, name: "JIRA_TOKEN" } };
   expect(connectionFormOf(secret)).toMatchObject({ cred: "secret", cred_value: "JIRA_TOKEN" });
-  expect(connectionParams(connectionFormOf(secret), 7)).toMatchObject({
-    params: { credential: { kind: "secret", name: "JIRA_TOKEN" } },
+  expect(connectionParams(connectionFormOf(secret), 7)).toEqual({
+    error:
+      "Jira: a credencial precisa ser um comando que imprime o token; secret, arquivo e CLI ainda não chegam ao ambiente",
   });
+});
+
+test("Jira e GitLab só aceitam comando de credencial; GitHub aceita as formas", () => {
+  expect(CRED_KINDS.jira).toEqual(["command"]);
+  expect(CRED_KINDS.gitlab).toEqual(["command"]);
+  expect(CRED_KINDS.github).toContain("cli");
+  expect(
+    connectionParams({ ...EMPTY_CONNECTION_FORM, name: "gitlab-acme", kind: "gitlab", cred: "file", cred_value: "/t" }),
+  ).toMatchObject({ error: expect.stringContaining("GitLab: a credencial precisa ser um comando que imprime o token") });
 });
 
 test("credencial que falta: o erro diz o que informar", () => {
   expect(connectionParams({ ...EMPTY_CONNECTION_FORM, name: "jira-acme" })).toEqual({
     error: "informe o comando que imprime o token",
   });
-  expect(connectionParams({ ...EMPTY_CONNECTION_FORM, cred: "secret", cred_value: " ", name: "jira-acme" })).toEqual({
-    error: "informe o nome do secret do hub",
-  });
+  expect(
+    connectionParams({ ...EMPTY_CONNECTION_FORM, cred: "secret", cred_value: "JIRA_TOKEN", name: "jira-acme" }),
+  ).toMatchObject({ error: expect.stringContaining("Jira:") });
+  expect(
+    connectionParams({ ...EMPTY_CONNECTION_FORM, kind: "github", cred: "secret", cred_value: " ", name: "github-acme" }),
+  ).toEqual({ error: "informe o nome do secret do hub" });
   expect(connectionParams({ ...EMPTY_CONNECTION_FORM, cred_value: "x" })).toEqual({
     error: "informe o nome da conexão (ex.: jira-empresa)",
   });
