@@ -111,6 +111,9 @@ pub struct DaemonConfig {
     /// Comandos de credencial do Jira e do GitLab só deste ambiente
     /// (`[credentials."owner/repo"]`, #143), no lugar dos do cadastro.
     pub credentials: ct_core::CredentialOverrides,
+    /// Conexões do hub com comando de credencial só deste ambiente
+    /// (`[connections."nome"]`, #237), depois da conversão de `[credentials]`.
+    pub connections: ct_core::ConnectionOverrides,
 }
 
 /// `[cleanup]` do `config.toml` (épico #284): o job de verificação das
@@ -195,6 +198,7 @@ impl Default for DaemonConfig {
             cleanup: CleanupConfig::default(),
             logs: Default::default(),
             credentials: Default::default(),
+            connections: Default::default(),
         }
     }
 }

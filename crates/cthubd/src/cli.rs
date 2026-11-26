@@ -787,7 +787,23 @@ pub async fn serve(dirs: Dirs) -> Result<(), Box<dyn std::error::Error>> {
     let name = cfg.name();
     let db = dirs.hub_db();
     tracing::info!("hub {name} ({hub_id}): {}", db.display());
-    let hub = SharedHub::new(Hub::open(&db)?);
+    let raw = Hub::open(&db)?;
+    // Cadastros para conexões (#237): cópia antes de gravar, só se há o que
+    // migrar; depois, a conexão padrão do GitHub.
+    let mig = raw.migrate_legacy_connections(&cfg.backup_dir(&dirs), ct_core::now_ms())?;
+    if let Some(b) = &mig.backup {
+        tracing::info!(
+            "conexões: {} conexão(ões) criada(s), {} projeto(s) migrado(s); cópia em {}",
+            mig.created.len(),
+            mig.projects.len(),
+            b.display()
+        );
+    }
+    for w in &mig.warnings {
+        tracing::warn!("conexões: {w}");
+    }
+    raw.ensure_default_github_connection(&cfg.gh_api_url, Some(&dirs.github_token_file()))?;
+    let hub = SharedHub::new(raw);
 
     let mut state = HubState::new(hub.clone(), &ui_token, &name, &hub_id);
     state.health = Arc::new(cfg.health.clone());

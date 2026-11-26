@@ -19,8 +19,6 @@ describe("registro de métodos do hub (gerado de crates/cthubd/src/methods.rs)",
       "hub.projects.add",
       "hub.secrets.set",
       "hub.secrets.delete",
-      "github.set_token",
-      "github.clear_token",
     ]) {
       expect(web.has(m), m).toBe(false);
     }

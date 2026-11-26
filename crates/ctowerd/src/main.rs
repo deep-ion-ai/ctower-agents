@@ -179,6 +179,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         repos_root: cfg.repos_root(),
         pull_every: Duration::from_secs(cfg.config_pull_interval_secs.max(1)),
         github: Some(Arc::clone(&github)),
+        config_file: Some(dirs.config.join("config.toml")),
     };
     if cfg.retention_days == 0 {
         tracing::info!("poda dos work items inativos desligada (retention_days = 0)");

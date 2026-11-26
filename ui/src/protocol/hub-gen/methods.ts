@@ -49,7 +49,6 @@ import type { RecoveryGenerated } from "./RecoveryGenerated";
 import type { RecoveryStatus } from "./RecoveryStatus";
 import type { SecretChanged } from "./SecretChanged";
 import type { SecretsList } from "./SecretsList";
-import type { TokenStatus } from "./TokenStatus";
 import type { TrackerIssueAdded } from "./TrackerIssueAdded";
 import type { WebSessionsRevoked } from "./WebSessionsRevoked";
 
@@ -135,9 +134,6 @@ export const HUB_METHOD_SCOPES = {
     "hub.secrets.set",
     "hub.secrets.delete",
     "hub.secrets.rotate_pending_dismiss",
-    "github.status",
-    "github.set_token",
-    "github.clear_token",
     "hub.tracker.add_issue",
     "hub.release.status",
   ],
@@ -269,9 +265,6 @@ export interface HubMethods {
   "hub.secrets.set": { params: { scope: "global" | { project: string }; name: string; kind: "secret" | "variable"; value: string }; result: SecretChanged };
   "hub.secrets.delete": { params: { scope: "global" | { project: string }; name: string }; result: SecretChanged | {} };
   "hub.secrets.rotate_pending_dismiss": { params: null; result: {} };
-  "github.status": { params: null; result: TokenStatus };
-  "github.set_token": { params: { token: string }; result: TokenStatus };
-  "github.clear_token": { params: null; result: TokenStatus };
   "hub.tracker.add_issue": { params: { owner: string; repo: string; key: string | number }; result: TrackerIssueAdded };
   "hub.release.status": { params: { owner: string; repo: string }; result: HubReleaseStatus };
 }

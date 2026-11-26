@@ -553,6 +553,83 @@ impl Ledger {
     }
 }
 
+/// Preenche, na configuração que chegou do hub, os campos de cadastro antigo
+/// (`url`, `host`, `credential_cmd`, `config_file`) dos projetos que referenciam
+/// uma conexão (#237). Assim o ambiente segue lendo o que sempre leu. O
+/// comando de credencial é o deste ambiente, se houver em `[connections]`,
+/// senão o da conexão (quando é um comando). Devolve os avisos.
+pub fn materialize_connections(
+    cfg: &mut ConfigResponse,
+    overrides: &ct_core::ConnectionOverrides,
+) -> Vec<String> {
+    use ct_core::provider::{Connection, CredentialSource, ProviderKind};
+    fn cmd_of(c: &Connection, overrides: &ct_core::ConnectionOverrides) -> String {
+        if let Some(cmd) = overrides.credential_cmd(&c.name) {
+            return cmd.to_string();
+        }
+        match &c.credential {
+            CredentialSource::Command { cmd } => cmd.clone(),
+            _ => String::new(),
+        }
+    }
+    let conns = cfg.connections.clone().unwrap_or_default();
+    let mut warnings = Vec::new();
+    for p in cfg.projects.iter_mut().flatten() {
+        let key = format!("{}/{}", p.owner, p.repo);
+        if let TrackerConfig::Jira(j) = &mut p.tracker {
+            if let Some(id) = j.connection {
+                match conns
+                    .iter()
+                    .find(|c| c.id == id && c.kind == ProviderKind::Jira)
+                {
+                    Some(c) => {
+                        j.url = c.endpoint.clone();
+                        j.config_file = c
+                            .options
+                            .get("config_file")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        j.credential_cmd = cmd_of(c, overrides);
+                        if j.credential_cmd.is_empty() {
+                            warnings.push(format!(
+                                "{key}: a conexão {} não tem comando de credencial neste ambiente",
+                                c.name
+                            ));
+                        }
+                    }
+                    None => warnings.push(format!(
+                        "{key}: conexão {id} do Jira ausente na configuração do hub"
+                    )),
+                }
+            }
+        }
+        if let ForgeConfig::Gitlab(g) = &mut p.forge {
+            if let Some(id) = g.connection {
+                match conns
+                    .iter()
+                    .find(|c| c.id == id && c.kind == ProviderKind::Gitlab)
+                {
+                    Some(c) => {
+                        g.host = c.endpoint.clone();
+                        g.credential_cmd = cmd_of(c, overrides);
+                        if g.credential_cmd.is_empty() {
+                            warnings.push(format!(
+                                "{key}: a conexão {} não tem comando de credencial neste ambiente",
+                                c.name
+                            ));
+                        }
+                    }
+                    None => warnings.push(format!(
+                        "{key}: conexão {id} do GitLab ausente na configuração do hub"
+                    )),
+                }
+            }
+        }
+    }
+    warnings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1131,5 +1208,65 @@ mod tests {
         assert_eq!(r.updated.len(), 1);
         assert!(!l.get_project(pid).unwrap().release.enabled);
         assert!(serde_json::to_value(&p2).unwrap().get("release").is_none());
+    }
+}
+
+#[cfg(test)]
+mod conexoes_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn campos_antigos_vem_da_conexao_e_a_sobrescrita_vence() {
+        let mut cfg: ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 7,
+            "changed": true,
+            "projects": [{
+                "owner": "acme", "repo": "acme-web", "name": "Acme Web",
+                "base_branch": "main", "protected_branches": ["main"],
+                "repo_path": "", "rev": 7,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1 },
+                "forge": { "kind": "gitlab", "path": "acme/web", "connection": 2 }
+            }],
+            "connections": [
+                { "id": 1, "name": "jira-acme", "kind": "jira",
+                  "endpoint": "https://jira.example.com",
+                  "credential": { "kind": "command", "cmd": "pass show a/jira | head -1" },
+                  "options": { "config_file": "jira-acme.yml" },
+                  "created_at": 0, "updated_at": 0 },
+                { "id": 2, "name": "gitlab-acme", "kind": "gitlab",
+                  "endpoint": "gitlab.example.com",
+                  "credential": { "kind": "command", "cmd": "pass show a/gl | head -1" },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ]
+        }))
+        .unwrap();
+        let mut ov = ct_core::ConnectionOverrides::default();
+        ov.0.insert(
+            "gitlab-acme".into(),
+            ct_core::ConnectionOverride {
+                credential_cmd: "/usr/bin/pass show a/gl".into(),
+            },
+        );
+        let avisos = materialize_connections(&mut cfg, &ov);
+        assert!(avisos.is_empty(), "{avisos:?}");
+        let p = &cfg.projects.as_ref().unwrap()[0];
+        match &p.tracker {
+            TrackerConfig::Jira(j) => {
+                assert_eq!(j.url, "https://jira.example.com");
+                assert_eq!(j.credential_cmd, "pass show a/jira | head -1");
+                assert_eq!(j.config_file, "jira-acme.yml");
+            }
+            _ => panic!("rastreador"),
+        }
+        match &p.forge {
+            ForgeConfig::Gitlab(g) => {
+                assert_eq!(g.host, "gitlab.example.com");
+                // A sobrescrita do ambiente vence o comando da conexão.
+                assert_eq!(g.credential_cmd, "/usr/bin/pass show a/gl");
+            }
+            _ => panic!("forja"),
+        }
     }
 }
