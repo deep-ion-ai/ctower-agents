@@ -457,6 +457,7 @@ mod tests {
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
                     connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,
@@ -482,6 +483,7 @@ mod tests {
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
                     connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,

@@ -430,6 +430,12 @@ CREATE TABLE hub_connection_cache (
   json TEXT NOT NULL
 );
 "#,
+    // 27: nomes de todas as conexões do hub (#270), como vieram no último
+    // pull com mudança (JSON de `Vec<String>`). `NULL` = cache anterior: o
+    // próximo pull pede o conjunto completo, que os traz.
+    r#"
+ALTER TABLE hub_connection_cache ADD COLUMN names TEXT;
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo
