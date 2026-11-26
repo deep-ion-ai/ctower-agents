@@ -1,0 +1,5 @@
+//! Execução de épico (épico #295): o plano por sub-issue, aprovado pelo
+//! desenvolvedor, executado por um motor determinístico no hub. O estado
+//! fica no `ct-hub-store` (`epic_run`); a decisão, pura, em [`plan`].
+
+pub mod plan;

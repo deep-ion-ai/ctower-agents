@@ -184,12 +184,22 @@ pub fn merge_text(n: i64, branch: &str) -> String {
 /// de `ct_core::autonomy::CONTINUE_TEXT_MAX_BYTES`, vai só a instrução e o
 /// aviso para ler pelo `pr_feedback`.
 pub fn feedback_text(pr: &PrRow, checks: Option<&PrChecks>, fb: Option<&PrFeedback>) -> String {
+    feedback_text_with(FEEDBACK_REQUEST, pr, checks, fb)
+}
+
+/// [`feedback_text`] com outra instrução fixa (a da execução de épico).
+pub fn feedback_text_with(
+    request: &str,
+    pr: &PrRow,
+    checks: Option<&PrChecks>,
+    fb: Option<&PrFeedback>,
+) -> String {
     let full = pr_feedback_text(
         pr,
         checks,
         fb,
         &FeedbackTextOptions {
-            request: Some(FEEDBACK_REQUEST),
+            request: Some(request),
             include_external_bodies: false,
             logs: &[],
         },
@@ -198,10 +208,62 @@ pub fn feedback_text(pr: &PrRow, checks: Option<&PrChecks>, fb: Option<&PrFeedba
         return full;
     }
     format!(
-        "{FEEDBACK_REQUEST}\n\nO feedback do PR #{} passou do tamanho que cabe aqui: leia com \
-         a ferramenta pr_feedback.",
+        "{request}\n\nO feedback do PR #{} passou do tamanho que cabe aqui: leia com a \
+         ferramenta pr_feedback.",
         pr.number
     )
+}
+
+/// Os textos que o fechamento manda ao agente: a instrução do pedido de
+/// correção e o pedido de merge (PR, base).
+#[derive(Debug, Clone, Copy)]
+pub struct CloseTexts {
+    pub request: &'static str,
+    pub merge: fn(i64, &str) -> String,
+}
+
+/// Os textos do piloto automático.
+pub const AUTOPILOT_TEXTS: CloseTexts = CloseTexts {
+    request: FEEDBACK_REQUEST,
+    merge: merge_text,
+};
+
+/// O que o fechamento de um PR pede agora ([`close_decision`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CloseStep {
+    /// Nada a fazer.
+    Wait,
+    /// Grava o estado sem enviar (head novo lido).
+    Track(CloseState),
+    /// Manda o texto ao agente e grava `close`.
+    Send {
+        kind: SendKind,
+        close: CloseState,
+        text: String,
+        message: String,
+    },
+    /// Tentativas esgotadas ([`BLOCK_ATTEMPTS`]) ou parada sem progresso
+    /// ([`BLOCK_STALLED`]).
+    Block {
+        reason: &'static str,
+        status_reason: String,
+        message: String,
+    },
+}
+
+/// Os parâmetros do fechamento de um PR.
+#[derive(Debug, Clone, Copy)]
+pub struct CloseInput<'a> {
+    pub now: i64,
+    pub max_ci_attempts: u32,
+    /// Prazo sem progresso (min); 0 = nunca.
+    pub idle_timeout_min: u32,
+    /// Desde quando a sessão está ociosa.
+    pub idle_since: i64,
+    pub closing: &'a Closing,
+    /// `owner/repo#n`, nas mensagens.
+    pub slug: &'a str,
+    pub texts: CloseTexts,
 }
 
 /// `major.minor` do protocolo do ambiente (`env.info.protocol`).
@@ -657,16 +719,13 @@ fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
-/// O fechamento de uma sessão autônoma ociosa com o PR na branch de
-/// integração (veja o módulo).
-fn close_step(
-    s: &Snapshot,
-    x: &AutopilotSession,
-    i: &IdleSession,
-    c: &Closing,
-    slug: &str,
-) -> Vec<Action> {
-    let now = s.now;
+/// O fechamento de um PR na branch de integração com a sessão ociosa
+/// (veja o módulo): o piloto automático (#184) e a execução de épico
+/// (#297).
+pub fn close_decision(p: &CloseInput) -> CloseStep {
+    let now = p.now;
+    let c = p.closing;
+    let slug = p.slug;
     let n = c.pr.number;
     let mut st = CloseState {
         work_item_id: c.work_item_id,
@@ -674,20 +733,20 @@ fn close_step(
     };
     // Checks ainda não lidos para o head atual: espera.
     let Some(head) = c.pr.head_sha.clone() else {
-        return Vec::new();
+        return CloseStep::Wait;
     };
     let Some(checks) = c.checks.as_ref().filter(|k| k.head_sha == head) else {
-        return Vec::new();
+        return CloseStep::Wait;
     };
     if st.head_sha.as_deref() != Some(head.as_str()) {
         st.head_sha = Some(head.clone());
         st.head_seen_at = Some(now);
     }
-    let track = |st: CloseState| -> Vec<Action> {
+    let track = |st: CloseState| -> CloseStep {
         if st != c.state {
-            vec![Action::Track(st)]
+            CloseStep::Track(st)
         } else {
-            Vec::new()
+            CloseStep::Wait
         }
     };
     let seen_at = st.head_seen_at.unwrap_or(now);
@@ -702,7 +761,7 @@ fn close_step(
     }
     let collab = collaborator_items(c.feedback.as_ref());
     let new_items = collab.iter().any(|id| !st.threads_sent.contains(id));
-    let max = s.settings.max_ci_attempts;
+    let max = p.max_ci_attempts;
     if failed && st.feedback_head.as_deref() != Some(head.as_str()) {
         if st.attempts >= max {
             let tries = if max == 0 {
@@ -717,9 +776,7 @@ fn close_step(
                     }
                 )
             };
-            return vec![Action::Block {
-                session: x.clone(),
-                work_item_id: c.work_item_id,
+            return CloseStep::Block {
                 reason: BLOCK_ATTEMPTS,
                 status_reason: format!(
                     "piloto automático: o CI do PR #{n} falhou {tries} (head {})",
@@ -730,7 +787,7 @@ fn close_step(
                      e a issue ficou bloqueada",
                     short(&head)
                 ),
-            }];
+            };
         }
         st.attempts += 1;
         st.feedback_head = Some(head.clone());
@@ -742,30 +799,28 @@ fn close_step(
             short(&head),
             st.attempts
         );
-        return vec![Action::Send {
-            session: x.clone(),
+        return CloseStep::Send {
             kind: SendKind::Feedback(FEEDBACK_CI),
             close: st,
-            text: feedback_text(&c.pr, Some(checks), c.feedback.as_ref()),
+            text: feedback_text_with(p.texts.request, &c.pr, Some(checks), c.feedback.as_ref()),
             message,
-        }];
+        };
     }
     if new_items {
         let k = collab.len();
         st.threads_sent = collab;
         st.last_sent_at = Some(now);
-        return vec![Action::Send {
-            session: x.clone(),
+        return CloseStep::Send {
             kind: SendKind::Feedback(FEEDBACK_REVIEW),
             close: st,
-            text: feedback_text(&c.pr, Some(checks), c.feedback.as_ref()),
+            text: feedback_text_with(p.texts.request, &c.pr, Some(checks), c.feedback.as_ref()),
             message: format!(
                 "{slug}: o PR #{n} tem {k} {} de colaborador pendente(s); o pedido de \
                  correção foi enviado ao agente (head {})",
                 if k == 1 { "review" } else { "reviews" },
                 short(&head)
             ),
-        }];
+        };
     }
     let reviews_fresh = c
         .feedback
@@ -779,21 +834,20 @@ fn close_step(
         st.merge_head = Some(head.clone());
         st.last_sent_at = Some(now);
         let sem = if no_checks { " (sem checks)" } else { "" };
-        return vec![Action::Send {
-            session: x.clone(),
+        return CloseStep::Send {
             kind: SendKind::Merge,
             close: st,
-            text: merge_text(n, &c.integration),
+            text: (p.texts.merge)(n, &c.integration),
             message: format!(
                 "{slug}: CI verde no PR #{n}{sem} (head {}); o merge na {} foi pedido ao agente",
                 short(&head),
                 c.integration
             ),
-        }];
+        };
     }
     // Nada novo a enviar: parada sem progresso depois do prazo.
-    let timeout_ms = i64::from(s.settings.idle_timeout_min) * 60_000;
-    let since = i.since.max(st.last_sent_at.unwrap_or(i64::MIN));
+    let timeout_ms = i64::from(p.idle_timeout_min) * 60_000;
+    let since = p.idle_since.max(st.last_sent_at.unwrap_or(i64::MIN));
     if timeout_ms > 0 && now - since >= timeout_ms {
         let why = if failed {
             "o CI segue falhando e o agente não mandou correção"
@@ -804,10 +858,8 @@ fn close_step(
         } else {
             "o PR não avançou"
         };
-        let min = s.settings.idle_timeout_min;
-        return vec![Action::Block {
-            session: x.clone(),
-            work_item_id: c.work_item_id,
+        let min = p.idle_timeout_min;
+        return CloseStep::Block {
             reason: BLOCK_STALLED,
             status_reason: format!(
                 "piloto automático: PR #{n} parado há mais de {min} min ({why})"
@@ -816,9 +868,56 @@ fn close_step(
                 "{slug}: a sessão autônoma ficou ociosa por mais de {min} min com o PR #{n} \
                  parado ({why}); foi encerrada e a issue ficou bloqueada"
             ),
-        }];
+        };
     }
     track(st)
+}
+
+/// O fechamento de uma sessão autônoma ociosa com o PR na branch de
+/// integração (veja o módulo): [`close_decision`] com os textos do piloto.
+fn close_step(
+    s: &Snapshot,
+    x: &AutopilotSession,
+    i: &IdleSession,
+    c: &Closing,
+    slug: &str,
+) -> Vec<Action> {
+    let step = close_decision(&CloseInput {
+        now: s.now,
+        max_ci_attempts: s.settings.max_ci_attempts,
+        idle_timeout_min: s.settings.idle_timeout_min,
+        idle_since: i.since,
+        closing: c,
+        slug,
+        texts: AUTOPILOT_TEXTS,
+    });
+    match step {
+        CloseStep::Wait => Vec::new(),
+        CloseStep::Track(st) => vec![Action::Track(st)],
+        CloseStep::Send {
+            kind,
+            close,
+            text,
+            message,
+        } => vec![Action::Send {
+            session: x.clone(),
+            kind,
+            close,
+            text,
+            message,
+        }],
+        CloseStep::Block {
+            reason,
+            status_reason,
+            message,
+        } => vec![Action::Block {
+            session: x.clone(),
+            work_item_id: c.work_item_id,
+            reason,
+            status_reason,
+            message,
+        }],
+    }
 }
 
 /// Decide o ciclo.

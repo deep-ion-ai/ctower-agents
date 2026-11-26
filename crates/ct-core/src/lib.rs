@@ -30,8 +30,8 @@ pub use credentials::{
 };
 pub use docs::DocsConfig;
 pub use epic_run::{
-    normalize_area, normalize_areas, EPIC_AREAS_MAX, EPIC_AREA_MAX_CHARS,
-    EPIC_RUN_PARALLEL_CEILING, EPIC_RUN_PARALLEL_DEFAULT,
+    area_overlaps, areas_overlap, normalize_area, normalize_areas, EPIC_AREAS_MAX,
+    EPIC_AREA_MAX_CHARS, EPIC_RUN_PARALLEL_CEILING, EPIC_RUN_PARALLEL_DEFAULT,
 };
 pub use logs::LogsConfig;
 pub use model::*;
