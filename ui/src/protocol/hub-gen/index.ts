@@ -55,6 +55,7 @@ export type { EpicProposal } from "./EpicProposal";
 export type { EpicRun } from "./EpicRun";
 export type { EpicRunEvent } from "./EpicRunEvent";
 export type { EpicRunStatus } from "./EpicRunStatus";
+export type { EpicRunView } from "./EpicRunView";
 export type { ForgeConfig } from "./ForgeConfig";
 export type { ForgeKind } from "./ForgeKind";
 export type { GitlabConfig } from "./GitlabConfig";

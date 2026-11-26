@@ -11,6 +11,11 @@ import type { BudgetDecision } from "./BudgetDecision";
 import type { BudgetPolicy } from "./BudgetPolicy";
 import type { DeleteImpact } from "./DeleteImpact";
 import type { DependencyEdge } from "./DependencyEdge";
+import type { EpicDecision } from "./EpicDecision";
+import type { EpicNode } from "./EpicNode";
+import type { EpicRun } from "./EpicRun";
+import type { EpicRunEvent } from "./EpicRunEvent";
+import type { EpicRunView } from "./EpicRunView";
 import type { HubAssignment } from "./HubAssignment";
 import type { HubDashboard } from "./HubDashboard";
 import type { HubEnv } from "./HubEnv";
@@ -119,6 +124,19 @@ export const HUB_METHOD_SCOPES = {
     "hub.autopilot.wip",
     "hub.autopilot.deps.set",
     "hub.autopilot.set",
+    "hub.epic_run.list",
+    "hub.epic_run.status",
+    "hub.epic_run.events",
+    "hub.epic_run.start",
+    "hub.epic_run.approve",
+    "hub.epic_run.replan",
+    "hub.epic_run.pause",
+    "hub.epic_run.interrupt",
+    "hub.epic_run.resume",
+    "hub.epic_run.cancel",
+    "hub.epic_run.set_parallel",
+    "hub.epic_run.decide",
+    "hub.epic_run.handback",
     "hub.autopilot.policy.get",
     "hub.autopilot.policy.set",
     "hub.autopilot.policy.preview",
@@ -179,6 +197,19 @@ export const HUB_METHOD_SCOPES = {
     "hub.autopilot.digest",
     "hub.autopilot.wip",
     "hub.autopilot.deps.set",
+    "hub.epic_run.list",
+    "hub.epic_run.status",
+    "hub.epic_run.events",
+    "hub.epic_run.start",
+    "hub.epic_run.approve",
+    "hub.epic_run.replan",
+    "hub.epic_run.pause",
+    "hub.epic_run.interrupt",
+    "hub.epic_run.resume",
+    "hub.epic_run.cancel",
+    "hub.epic_run.set_parallel",
+    "hub.epic_run.decide",
+    "hub.epic_run.handback",
     "hub.tracker.add_issue",
     "hub.release.status",
   ],
@@ -250,6 +281,19 @@ export interface HubMethods {
   "hub.autopilot.wip": { params: { owner?: string | null; repo?: string | null } | null; result: AutonomyWip[] };
   "hub.autopilot.deps.set": { params: { owner: string; repo: string; action: string; [key: string]: unknown }; result: { dependencies: DependencyEdge[] } };
   "hub.autopilot.set": { params: { [key: string]: unknown }; result: unknown };
+  "hub.epic_run.list": { params: { owner?: string | null; repo?: string | null; epic?: number | null } | null; result: EpicRun[] };
+  "hub.epic_run.status": { params: { run_id: number }; result: EpicRunView };
+  "hub.epic_run.events": { params: { run_id: number; after?: number | null; limit?: number | null }; result: EpicRunEvent[] };
+  "hub.epic_run.start": { params: { owner: string; repo: string; epic: number; env_id: string; max_parallel?: number | null; plan_model?: string | null; plan_effort?: string | null }; result: EpicRun };
+  "hub.epic_run.approve": { params: { run_id: number; version: number; max_parallel?: number | null; code_review?: boolean | null }; result: EpicRun };
+  "hub.epic_run.replan": { params: { run_id: number; reason?: string | null }; result: EpicRun };
+  "hub.epic_run.pause": { params: { run_id: number; reason?: string | null }; result: EpicRun };
+  "hub.epic_run.interrupt": { params: { run_id: number }; result: EpicRun };
+  "hub.epic_run.resume": { params: { run_id: number }; result: EpicRun };
+  "hub.epic_run.cancel": { params: { run_id: number }; result: EpicRun };
+  "hub.epic_run.set_parallel": { params: { run_id: number; max_parallel: number }; result: EpicRun };
+  "hub.epic_run.decide": { params: { decision_id: number; answer: string }; result: EpicDecision };
+  "hub.epic_run.handback": { params: { run_id: number; number: number }; result: EpicNode };
   "hub.autopilot.policy.get": { params: { account: string }; result: AutopilotPolicyView };
   "hub.autopilot.policy.set": { params: { account: string; policy?: BudgetPolicy | null }; result: AutopilotPolicyView };
   "hub.autopilot.policy.preview": { params: { account: string; policy: BudgetPolicy }; result: BudgetDecision };

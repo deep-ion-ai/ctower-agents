@@ -790,6 +790,10 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         | "hub.autopilot.deps.set" => {
             crate::autopilot::runner::call(st, method, p, web_session.is_some()).await
         }
+        // Execução de épico (#298).
+        m if m.starts_with("hub.epic_run.") => {
+            crate::epic_run::rpc::call(st, method, p, web_session.is_some()).await
+        }
         // Política de orçamento do piloto automático por conta (#180).
         m if m.starts_with("hub.autopilot.") => {
             let (st, method) = (st.clone(), method.to_string());
@@ -2216,6 +2220,7 @@ mod export {
         ct_hub_store::EpicNode::export_all_to(&dir).unwrap();
         ct_hub_store::EpicDecision::export_all_to(&dir).unwrap();
         ct_hub_store::EpicRunEvent::export_all_to(&dir).unwrap();
+        crate::epic_run::rpc::EpicRunView::export_all_to(&dir).unwrap();
         ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
@@ -5736,7 +5741,7 @@ pub(crate) mod tests {
         let v = subscribe(&mut web, &format!("{base}/abc"), &b).await;
         let dev = &v["result"];
         assert_eq!(dev["current"], true, "{v}");
-        assert_eq!(dev["events"].as_array().unwrap().len(), 5, "{v}");
+        assert_eq!(dev["events"].as_array().unwrap().len(), 6, "{v}");
         assert!(dev.get("endpoint").is_none() && dev.get("p256dh").is_none());
         let id = dev["id"].as_i64().unwrap();
 

@@ -1191,6 +1191,8 @@ mod tests {
                         env_id: f.env_id.clone(),
                         started_by: "fulano".into(),
                         max_parallel: None,
+                        plan_model: None,
+                        plan_effort: None,
                     },
                     1,
                 )

@@ -35,6 +35,10 @@ started_by: string,
  */
 plan_session: string | null, 
 /**
+ * Modelo e esforço da sessão de plano; `None` = o padrão do hub.
+ */
+plan_model: string | null, plan_effort: string | null, 
+/**
  * Motivo da pausa ou do estacionamento.
  */
 paused_reason: string | null, 

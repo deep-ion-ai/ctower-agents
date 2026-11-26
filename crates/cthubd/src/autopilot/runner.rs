@@ -100,7 +100,7 @@ pub trait EnvPort: Send + Sync {
 
 /// O canal de verdade, pelo `call_env` do `/ws` (limite de trabalho em
 /// andamento e modelo da issue aplicados lá).
-struct HubPort(HubState);
+pub(crate) struct HubPort(pub(crate) HubState);
 
 impl EnvPort for HubPort {
     fn online(&self, env_id: &str) -> bool {
@@ -451,7 +451,7 @@ fn set_protocol(e: &mut plan::EnvSnap, protocol: Option<(u32, u32)>) {
 
 /// O protocolo do ambiente, pelo `env.info`; `None` = não respondeu agora.
 /// Sem o campo (ou ilegível) conta como `0.0`: anterior a tudo.
-async fn env_protocol(port: &dyn EnvPort, env_id: &str) -> Option<(u32, u32)> {
+pub(crate) async fn env_protocol(port: &dyn EnvPort, env_id: &str) -> Option<(u32, u32)> {
     let v = port
         .call(env_id.to_string(), "env.info", json!({}))
         .await

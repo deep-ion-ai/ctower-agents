@@ -978,6 +978,9 @@ pub async fn serve(dirs: Dirs) -> Result<(), Box<dyn std::error::Error>> {
     // depender da UI. Sem política de orçamento em nenhuma conta, não
     // inicia nada.
     crate::autopilot::spawn(state.clone());
+    // Motor da execução de épico (#298): disparo manual pela UI; sem
+    // execução ativa, o ciclo não faz nada.
+    crate::epic_run::spawn(state.clone());
 
     ct_http::serve(crate::router(state), &cfg.bind, cfg.port, "cthubd").await?;
     tracing::info!("cthubd encerrado");

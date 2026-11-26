@@ -6,3 +6,7 @@
 
 pub mod plan;
 pub mod prompt;
+pub mod rpc;
+pub mod runner;
+
+pub use runner::{spawn, Engine};

@@ -21,6 +21,8 @@ fn run(status: EpicRunStatus) -> EpicRun {
         code_review: false,
         started_by: "fulano".into(),
         plan_session: None,
+        plan_model: None,
+        plan_effort: None,
         paused_reason: None,
         resume_at: None,
         created_at: 0,
