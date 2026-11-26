@@ -145,8 +145,12 @@ for _ in $(seq 50); do
   curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && break
   sleep 0.2
 done
+# Handshake de versão (#227): a versão do hub vem do /healthz; o protocolo é o
+# SYNC_PROTOCOL_VERSION do sync.
+VER="$(curl -fsS "http://127.0.0.1:$PORT/healthz" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
 code="$(curl -s -o "$T/config.json" -w '%{http_code}' \
   -H "Authorization: Bearer $TOKEN1" -H "X-Ctower-Env-Id: $HUB_ENV_ID" \
+  -H "X-Ctower-Protocol: 1.0" -H "X-Ctower-Version: $VER" \
   "http://127.0.0.1:$PORT/sync/config")"
 [[ $code == 200 ]] || fail "hub recusou o token gravado ($code): $(cat "$T/config.json") $(cat "$T/hub.log")"
 # #195: o mesmo token com outro env_id é recusado já no primeiro uso.
