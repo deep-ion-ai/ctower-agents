@@ -36,14 +36,14 @@
 //! supor o nome `wip/<n>-…`). O que fica aparece como
 //! "<branch> não removida: <motivo>".
 //!
-//! [`GithubSync`]: crate::github::GithubSync
-//! [`GitlabRemote`]: crate::gitlab::GitlabRemote
+//! [`GithubSync`]: ct_sync::github::GithubSync
+//! [`GitlabRemote`]: ct_sync::gitlab::GitlabRemote
 
-use crate::cleanup::{CleanupStep, CleanupTarget, StepContext, StepKind, StepOutcome, StepPlan};
-use crate::github::GithubSync;
-use crate::{Result, SessionsError};
+use crate::{CleanupStep, CleanupTarget, StepContext, StepKind, StepOutcome, StepPlan};
 use ct_core::{change_label, change_ref, ForgeKind, PrState};
 use ct_ledger::{Ledger, PrRow, Project};
+use ct_sessions::{Result, SessionsError};
+use ct_sync::github::GithubSync;
 use std::path::Path;
 
 /// A branch remota e o head do PR (MR) na forja, para a etapa "branch
@@ -444,15 +444,15 @@ impl CleanupStep for BranchRemoteStep {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cleanup::{Cleaner, CleanupPlan, CleanupRun, CleanupScope, StepResult, StepState};
-    use crate::config::CleanupConfig;
-    use crate::github::GithubSync;
-    use crate::test_support::{git_in, FakeClaude, TestEnv};
+    use crate::{Cleaner, CleanupPlan, CleanupRun, CleanupScope, StepResult, StepState};
     use ct_core::{WorkItemKind, WorkItemStatus};
     use ct_gh::fake::{fake_gh, FakeGitHub};
     use ct_gh::refs::{branch_ref_path, branch_refs_path, pull_path};
     use ct_gh::{GhClient, GhConfig};
     use ct_ledger::{GithubSnapshot, IssueRow};
+    use ct_sessions::config::CleanupConfig;
+    use ct_sessions::test_support::{git_in, FakeClaude, TestEnv};
+    use ct_sync::github::GithubSync;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -488,7 +488,7 @@ mod tests {
             GhConfig::new(&gh.url(), bin.to_str().unwrap())
                 .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
         );
-        let github = Arc::new(GithubSync::new(env.sessions.clone(), client));
+        let github = Arc::new(GithubSync::new(env.sessions.sync_handle(), client));
         Env {
             env,
             gh,
@@ -1039,7 +1039,7 @@ mod tests {
             false,
             1,
         );
-        e.env.connect(vec![crate::test_support::connection(
+        e.env.connect(vec![ct_sessions::test_support::connection(
             8,
             ct_core::provider::ProviderKind::Gitlab,
             GL_HOST,
@@ -1053,7 +1053,7 @@ mod tests {
     impl Gitlab {
         fn cleaner(&self) -> Cleaner {
             // Host e token vêm da conexão do GitLab em uso no ambiente (#277).
-            let remote = crate::gitlab::GitlabRemote::new(self.glab.bin().to_str().unwrap())
+            let remote = ct_sync::gitlab::GitlabRemote::new(self.glab.bin().to_str().unwrap())
                 .with_credentials(self.e.env.cfg.credentials.clone());
             Cleaner::standard(cfg())
                 .with_github(Some(Arc::clone(&self.e.github)))

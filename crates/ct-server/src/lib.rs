@@ -27,7 +27,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use ct_sessions::{GithubSync, JiraGitlabSync, Notifier, Sessions};
+use ct_sessions::{Notifier, Sessions};
+use ct_sync::{GithubSync, JiraGitlabSync};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -364,7 +365,10 @@ pub(crate) mod test_util {
                 ),
                 json!([]),
             );
-            srv.state.github = Some(Arc::new(GithubSync::new(srv.env.sessions.clone(), client)));
+            srv.state.github = Some(Arc::new(GithubSync::new(
+                srv.env.sessions.sync_handle(),
+                client,
+            )));
             (srv, gh)
         }
 

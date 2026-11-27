@@ -9,6 +9,7 @@ mod events;
 mod feedback_text;
 #[doc(hidden)]
 pub mod github;
+mod handle;
 mod hub_config;
 mod pr_review;
 #[doc(hidden)]
@@ -42,6 +43,7 @@ pub use github::{
     GithubSnapshot, GoneIssue, IssueMeta, IssueRow, PrRow, SyncState, GH_ISSUE_GONE_CAUSE,
     GH_ISSUE_GONE_REASON,
 };
+pub use handle::LedgerHandle;
 pub use hub_config::{
     connection_warnings, ConfigApplied, ConfigDone, ConfigProject, ConfigRemoved, ConfigResponse,
     DoneResponse,

@@ -13,6 +13,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
+use ct_cleanup::EpicWorktree;
 use ct_core::{DecisionOrigin, SessionMode, WorkItemKind, CLAUDE_EFFORTS, CLAUDE_MODELS};
 use ct_http::rpc::{i64_param, invalid, str_param, RpcResult};
 use ct_ledger::{Decision, Ledger, Project};
@@ -2969,9 +2970,9 @@ mod tests {
             api_issue("PROJ-1", "Épico", "new"),
             api_issue("PROJ-2", "Tarefa", "done"),
         ]);
-        srv.state.tracker = Some(Arc::new(ct_sessions::JiraGitlabSync::new(
-            srv.env.sessions.clone(),
-            ct_sessions::TrackerSyncConfig::new(fake.bin().to_str().unwrap()),
+        srv.state.tracker = Some(Arc::new(ct_sync::JiraGitlabSync::new(
+            srv.env.sessions.sync_handle(),
+            ct_sync::TrackerSyncConfig::new(fake.bin().to_str().unwrap()),
         )));
         let url = spawn_server(&srv).await;
         let mut ui = Ui::new(&url).await;

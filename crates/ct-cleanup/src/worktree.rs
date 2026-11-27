@@ -16,7 +16,7 @@
 //! o código, quando o worktree está inativo há `cleanup.target_idle_days`
 //! (`0` desliga). Vale para dois casos:
 //! - work item concluído cujo worktree não pode sair (ex.: mudança não
-//!   commitada): o [`crate::cleanup::Cleaner`] não segura esta etapa por
+//!   commitada): o [`crate::Cleaner`] não segura esta etapa por
 //!   causa do bloqueio do worktree, porque apagar o `target/` não perde
 //!   trabalho. Se o worktree pode sair, o `target/` vai junto e a etapa fica
 //!   `feita`;
@@ -31,13 +31,13 @@
 //! que rodaram no worktree, e o `mtime` do worktree, do índice do git e das
 //! pastas do `target/` (um `cargo build` à mão conta).
 
-use crate::cleanup::{
+use crate::sessions::dir_size;
+use crate::{
     agent_transcript_dirs, human_bytes, remove_agent_transcripts, CleanupStep, CleanupTarget,
     StepContext, StepKind, StepOutcome, StepPlan, StepState,
 };
-use crate::cleanup_sessions::dir_size;
-use crate::{Result, Sessions, SessionsError};
 use ct_ledger::Session;
+use ct_sessions::{Result, Sessions, SessionsError};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -421,11 +421,11 @@ pub(crate) fn inactive_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cleanup::{Cleaner, CleanupPlan, CleanupRun, CleanupScope, StepResult};
-    use crate::config::CleanupConfig;
-    use crate::test_support::{git_in, FakeClaude, TestEnv};
+    use crate::{Cleaner, CleanupPlan, CleanupRun, CleanupScope, StepResult};
     use ct_core::{PrState, SessionMode, Tool, WorkItemKind, WorkItemStatus};
     use ct_ledger::{GithubSnapshot, NewSession, PrRow};
+    use ct_sessions::config::CleanupConfig;
+    use ct_sessions::test_support::{git_in, FakeClaude, TestEnv};
 
     fn cfg() -> CleanupConfig {
         CleanupConfig {

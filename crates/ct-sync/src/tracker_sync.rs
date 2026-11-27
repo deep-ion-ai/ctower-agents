@@ -47,8 +47,6 @@
 
 use crate::github::ProjectSync;
 use crate::gitlab::{project_path, GitlabRemote};
-use crate::resolver::{gitlab_key, jira_key, Ask, CredentialResolver};
-use crate::{Result, Sessions, SessionsError};
 use ct_core::provider::CredentialSource;
 use ct_core::{
     now_ms, GitlabConfig, GitlabReadiness, JiraConfig, JiraReadiness, PrState, ResolvedConnections,
@@ -60,6 +58,8 @@ use ct_jira::{
     CREDENTIAL_DEADLINE, DEADLINE, LIST_DEADLINE, LIST_RETRY_WAITS, PAGE_SIZE,
 };
 use ct_ledger::{project_key, GithubSnapshot, IssueRow, Ledger, PrRow, Project};
+use ct_sessions::resolver::{gitlab_key, jira_key, Ask, CredentialResolver};
+use ct_sessions::{Result, SessionsError, SyncHandle};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -470,7 +470,7 @@ type CycleError = String;
 type Tokens = (Arc<Secret>, Option<Arc<Secret>>);
 
 pub struct JiraGitlabSync {
-    sessions: Sessions,
+    handle: SyncHandle,
     cfg: TrackerSyncConfig,
     /// Uma sincronização por vez (laço periódico × `sync.now`).
     running: Mutex<()>,
@@ -479,9 +479,9 @@ pub struct JiraGitlabSync {
 }
 
 impl JiraGitlabSync {
-    pub fn new(sessions: Sessions, cfg: TrackerSyncConfig) -> Self {
+    pub fn new(handle: SyncHandle, cfg: TrackerSyncConfig) -> Self {
         JiraGitlabSync {
-            sessions,
+            handle,
             cfg,
             running: Mutex::new(()),
             readiness: Mutex::new(BTreeMap::new()),
@@ -490,7 +490,7 @@ impl JiraGitlabSync {
 
     /// O projeto é deste laço (rastreador Jira).
     pub fn handles(&self, project_id: i64) -> bool {
-        self.sessions
+        self.handle
             .ledger()
             .get_project(project_id)
             .is_ok_and(|p| p.tracker.kind() == TrackerKind::Jira)
@@ -532,7 +532,7 @@ impl JiraGitlabSync {
     fn sync_all_with(&self, fresh: bool) -> Result<Vec<ProjectSync>> {
         let _one = self.running.lock().unwrap_or_else(|e| e.into_inner());
         let ids: Vec<i64> = self
-            .sessions
+            .handle
             .ledger()
             .list_projects()?
             .iter()
@@ -551,7 +551,7 @@ impl JiraGitlabSync {
     /// o Jira a manda (wiki markup ou ADF; o hub converte). Nada é gravado.
     /// Síncrono: chame fora do runtime.
     pub fn issue_description(&self, project_id: i64, number: i64) -> Result<serde_json::Value> {
-        let project = self.sessions.ledger().get_project(project_id)?;
+        let project = self.handle.ledger().get_project(project_id)?;
         let (_, conns) = self.jira_of(&project)?;
         let key = ct_core::item_key(&project.tracker_ref(), number);
         let cli = JiraCli::new(&self.cfg.jira_bin, &conns.jira_config_file())
@@ -573,10 +573,10 @@ impl JiraGitlabSync {
     /// respondeu, mas a issue é de um tipo ignorado ou de outro projeto.
     /// Síncrono: chame fora do runtime.
     pub fn fetch_issue(&self, project_id: i64, number: i64) -> Result<Option<IssueRow>> {
-        if let Some(i) = self.sessions.ledger().get_issue(project_id, number)? {
+        if let Some(i) = self.handle.ledger().get_issue(project_id, number)? {
             return Ok(Some(i));
         }
-        let project = self.sessions.ledger().get_project(project_id)?;
+        let project = self.handle.ledger().get_project(project_id)?;
         let (jira, conns) = self.jira_of(&project)?;
         let key = ct_core::item_key(&project.tracker_ref(), number);
         let cli = JiraCli::new(&self.cfg.jira_bin, &conns.jira_config_file())
@@ -588,14 +588,12 @@ impl JiraGitlabSync {
         let Some(row) = issue_row(&v, &jira, &conns.jira_url()) else {
             return Ok(None);
         };
-        self.sessions
-            .ledger()
-            .apply_tracker_batch(&GithubSnapshot {
-                project_id,
-                issues: vec![row.clone()],
-                synced_at: now_ms(),
-                ..GithubSnapshot::default()
-            })?;
+        self.handle.ledger().apply_tracker_batch(&GithubSnapshot {
+            project_id,
+            issues: vec![row.clone()],
+            synced_at: now_ms(),
+            ..GithubSnapshot::default()
+        })?;
         tracing::info!("jira: {key} lida direto no Jira (fora do espelho) para a sessão");
         Ok(Some(row))
     }
@@ -616,14 +614,14 @@ impl JiraGitlabSync {
     /// ou senha recusada, e as demais falhas do jira-cli. Síncrono: chame
     /// fora do runtime.
     pub fn add_issue(&self, project_id: i64, key: &str) -> Result<TrackerIssueAdded> {
-        let project = self.sessions.ledger().get_project(project_id)?;
+        let project = self.handle.ledger().get_project(project_id)?;
         let (jira, conns) = self.jira_of(&project)?;
         let url = conns.jira_url();
         let (key, number) = normalize_issue_key(&jira, key).map_err(SessionsError::Invalid)?;
         let work_item =
             |l: &Ledger| -> Result<bool> { Ok(l.find_work_item(project_id, number)?.is_some()) };
         {
-            let l = self.sessions.ledger();
+            let l = self.handle.ledger();
             if let Some(i) = l.get_issue(project_id, number)? {
                 return Ok(TrackerIssueAdded {
                     key,
@@ -655,7 +653,7 @@ impl JiraGitlabSync {
         while let Some(p) = parent.filter(|_| ancestors.len() < ADD_MAX_ANCESTORS) {
             if p == number
                 || ancestors.contains(&p)
-                || self.sessions.ledger().get_issue(project_id, p)?.is_some()
+                || self.handle.ledger().get_issue(project_id, p)?.is_some()
             {
                 break;
             }
@@ -678,7 +676,7 @@ impl JiraGitlabSync {
             }
         }
 
-        let l = self.sessions.ledger();
+        let l = self.handle.ledger();
         l.apply_tracker_batch(&GithubSnapshot {
             project_id,
             issues: rows,
@@ -707,7 +705,7 @@ impl JiraGitlabSync {
         let Some(jira) = project.tracker.jira().cloned() else {
             return Err(SessionsError::Invalid("projeto sem rastreador Jira".into()));
         };
-        let conns = self.sessions.project_connections(project);
+        let conns = self.handle.connections.project_connections(project);
         if conns.tracker.is_none() {
             return Err(SessionsError::Invalid(no_connection(project, "Jira")));
         }
@@ -732,9 +730,10 @@ impl JiraGitlabSync {
         source: Option<ct_core::EnvSource>,
     ) -> std::result::Result<(Arc<Secret>, bool), String> {
         let source = source.map_or(CredentialSource::None, |s| s.source);
-        let lookup = self.sessions.secret_lookup(project);
-        self.sessions
-            .credentials()
+        let lookup = self.handle.connections.secret_lookup(project);
+        self.handle
+            .connections
+            .resolver()
             .token_and_origin(Ask {
                 key,
                 what,
@@ -748,13 +747,13 @@ impl JiraGitlabSync {
 
     /// Token do Jira do projeto ([`Self::side_token`]).
     fn jira_token(&self, project: &Project) -> std::result::Result<(Arc<Secret>, bool), String> {
-        let source = self.sessions.jira_source(project);
+        let source = self.handle.connections.jira_source(project);
         self.side_token(project, &jira_key(project.id), "Jira", source)
     }
 
     /// Token do GitLab do projeto ([`Self::side_token`]).
     fn gitlab_token(&self, project: &Project) -> std::result::Result<(Arc<Secret>, bool), String> {
-        let source = self.sessions.gitlab_source(project);
+        let source = self.handle.connections.gitlab_source(project);
         self.side_token(project, &gitlab_key(project.id), "GitLab", source)
     }
 
@@ -767,11 +766,12 @@ impl JiraGitlabSync {
         op: impl Fn(&Secret) -> std::result::Result<T, JiraError>,
     ) -> std::result::Result<T, JiraError> {
         let source = self
-            .sessions
+            .handle
+            .connections
             .jira_source(project)
             .map_or(CredentialSource::None, |s| s.source);
-        let lookup = self.sessions.secret_lookup(project);
-        self.sessions.credentials().with_refresh(
+        let lookup = self.handle.connections.secret_lookup(project);
+        self.handle.connections.resolver().with_refresh(
             Ask {
                 key: &jira_key(project.id),
                 what: "Jira",
@@ -789,11 +789,13 @@ impl JiraGitlabSync {
     /// prontidão, e o comando de credencial roda de novo (#268).
     fn sync_one(&self, project_id: i64, fresh: bool) -> Result<ProjectSync> {
         if fresh {
-            self.sessions
-                .credentials()
+            self.handle
+                .connections
+                .resolver()
                 .invalidate(&jira_key(project_id));
-            self.sessions
-                .credentials()
+            self.handle
+                .connections
+                .resolver()
                 .invalidate(&gitlab_key(project_id));
         }
         let failed = |error: &str| ProjectSync {
@@ -805,7 +807,7 @@ impl JiraGitlabSync {
             status_changes: 0,
         };
         let project = {
-            let l = self.sessions.ledger();
+            let l = self.handle.ledger();
             if !l.project_active(project_id)? {
                 return Ok(failed("projeto não atribuído a este ambiente"));
             }
@@ -813,13 +815,13 @@ impl JiraGitlabSync {
         };
         // A credencial vem de `[credentials]` deste ambiente (#143)?
         let from_env = |s: Option<ct_core::EnvSource>| s.is_some_and(|s| s.from_env);
-        let jira_from_env = from_env(self.sessions.jira_source(&project));
-        let gitlab_from_env = from_env(self.sessions.gitlab_source(&project));
+        let jira_from_env = from_env(self.handle.connections.jira_source(&project));
+        let gitlab_from_env = from_env(self.handle.connections.gitlab_source(&project));
         let Some(jira) = project.tracker.jira().cloned() else {
             return Ok(failed("projeto sem rastreador Jira"));
         };
         // URL, `config_file`, host e fontes vêm das conexões (#277).
-        let conns = self.sessions.project_connections(&project);
+        let conns = self.handle.connections.project_connections(&project);
         let now = now_ms();
         let cli = JiraCli::new(&self.cfg.jira_bin, &conns.jira_config_file())
             .with_deadline(self.cfg.view_deadline)
@@ -839,13 +841,13 @@ impl JiraGitlabSync {
             Ok((token, gl_token)) => {
                 // Lock curto para ler; o jira-cli e o glab rodam sem ele, e
                 // cada lote toma o lock só para gravar.
-                let input = TrackerInput::load(&self.sessions.ledger(), &project)?;
+                let input = TrackerInput::load(&self.handle.ledger(), &project)?;
                 let batch_size = self.cfg.batch_size.max(1);
                 let mut last_sent = None;
                 let mut on_batch = |rows: Vec<IssueRow>, done: usize, total: usize| {
                     if !rows.is_empty() {
                         let a = self
-                            .sessions
+                            .handle
                             .ledger()
                             .apply_tracker_batch(&GithubSnapshot {
                                 project_id,
@@ -913,20 +915,22 @@ impl JiraGitlabSync {
         // mantêm o cache (#265).
         if let Err(e) = &fetched {
             if e.contains("recusou") {
-                self.sessions
-                    .credentials()
+                self.handle
+                    .connections
+                    .resolver()
                     .invalidate(&jira_key(project.id));
-                self.sessions
-                    .credentials()
+                self.handle
+                    .connections
+                    .resolver()
                     .invalidate(&gitlab_key(project.id));
             }
         }
         let result = match fetched {
             Ok((snap, failed, pruned)) => {
-                let applied = self.sessions.ledger().apply_github(&snap)?;
+                let applied = self.handle.ledger().apply_github(&snap)?;
                 if let Some(p) = pruned.filter(|p| !p.removed.is_empty() || !p.kept.is_empty()) {
                     let n = self
-                        .sessions
+                        .handle
                         .ledger()
                         .remove_tracker_issues(project_id, &p.removed)?;
                     tracing::info!(
@@ -936,7 +940,7 @@ impl JiraGitlabSync {
                     );
                 }
                 for (wi, status) in &applied.status_changes {
-                    self.sessions.notify(
+                    self.handle.notify(
                         "work_item_status",
                         json!({ "work_item_id": wi, "status": status }),
                     );
@@ -946,7 +950,7 @@ impl JiraGitlabSync {
                 let warning = failed_warning(&failed);
                 if let Some(w) = &warning {
                     tracing::warn!("jira: {slug}: {w}");
-                    self.sessions.ledger().record_sync_warning(project_id, w)?;
+                    self.handle.ledger().record_sync_warning(project_id, w)?;
                 }
                 ProjectSync {
                     project_id,
@@ -958,13 +962,13 @@ impl JiraGitlabSync {
                 }
             }
             Err(msg) => {
-                self.sessions.ledger().record_sync_error(project_id, &msg)?;
+                self.handle.ledger().record_sync_error(project_id, &msg)?;
                 failed(&msg)
             }
         };
 
         let last_ok_at = {
-            let l = self.sessions.ledger();
+            let l = self.handle.ledger();
             // Só no ambiente de sync (o ledger confere `sync_role`).
             l.enqueue_tracker_status(project_id, &readiness)?;
             l.sync_state(project_id)?.and_then(|s| s.last_ok_at)
@@ -973,7 +977,7 @@ impl JiraGitlabSync {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(project_id, readiness);
-        self.sessions.notify(
+        self.handle.notify(
             "sync_status",
             json!({ "project_id": project_id, "ok": result.ok,
                     "last_ok_at": last_ok_at, "error": result.error }),
@@ -997,7 +1001,7 @@ impl JiraGitlabSync {
         };
         let t = now_ms();
         if last_sent.is_none_or(|s| t - s >= PROGRESS_EVERY_MS) {
-            self.sessions
+            self.handle
                 .ledger()
                 .enqueue_tracker_status(project_id, &r)
                 .map_err(|e| e.to_string())?;
@@ -1558,10 +1562,10 @@ fn view_all(cli: &JiraCli, token: &Secret, keys: &[String], in_a_row: &AtomicUsi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{FakeClaude, TestEnv};
     use ct_core::{default_type_map, ForgeConfig, TrackerConfig, WorkItemKind};
     use ct_jira::fake::{api_issue, FakeJira, FAKE_SERVER};
     use ct_ledger::SyncChange;
+    use ct_sessions::test_support::{FakeClaude, TestEnv};
     use serde_json::Value;
 
     const SENHA: &str = "senha-de-teste";
@@ -1674,7 +1678,7 @@ mod tests {
         let mut cfg = TrackerSyncConfig::new(fake.bin().to_str().unwrap());
         edit(&mut jira, &mut cfg);
         assign(&env, jira, sync, 1);
-        let sync = JiraGitlabSync::new(env.sessions.clone(), cfg);
+        let sync = JiraGitlabSync::new(env.sessions.sync_handle(), cfg);
         Jira { env, fake, sync }
     }
 
@@ -2075,7 +2079,7 @@ mod tests {
         j.fake.fail_401(false);
         j.fake.set_sleep(Some(5));
         let s = JiraGitlabSync::new(
-            j.env.sessions.clone(),
+            j.env.sessions.sync_handle(),
             TrackerSyncConfig {
                 view_deadline: Duration::from_millis(300),
                 ..TrackerSyncConfig::new(j.fake.bin().to_str().unwrap())
@@ -2364,7 +2368,7 @@ mod tests {
         let env = TestEnv::new(FakeClaude::exit(0));
         let fake = FakeJira::new(env.tmp.path(), SENHA);
         let sync = JiraGitlabSync::new(
-            env.sessions.clone(),
+            env.sessions.sync_handle(),
             TrackerSyncConfig::new(fake.bin().to_str().unwrap()),
         );
         assert!(!sync.handles(env.project_id));
@@ -2821,7 +2825,7 @@ mod tests {
         );
         let cfg = TrackerSyncConfig::new(fake.bin().to_str().unwrap())
             .with_glab_bin(glab.bin().to_str().unwrap());
-        let sync = JiraGitlabSync::new(env.sessions.clone(), cfg);
+        let sync = JiraGitlabSync::new(env.sessions.sync_handle(), cfg);
         fake.set_issues(&arvore());
         Gitlab {
             j: Jira { env, fake, sync },
@@ -2861,11 +2865,11 @@ mod tests {
                 .status
         }
 
-        fn completion(&self, wi: i64) -> Option<crate::cleanup::Completion> {
+        fn completion(&self, wi: i64) -> Option<ct_sessions::completion::Completion> {
             let l = self.j.env.sessions.ledger();
             let p = l.get_project(self.j.env.project_id).unwrap();
             let w = l.get_work_item(wi).unwrap();
-            crate::cleanup::completion(&l, &p, &w).unwrap()
+            ct_sessions::completion::completion(&l, &p, &w).unwrap()
         }
     }
 
@@ -2896,7 +2900,7 @@ mod tests {
         let c = g.completion(wi).unwrap();
         assert_eq!(
             c.signal,
-            crate::cleanup::CompletionSignal::WorkItemConcluido
+            ct_sessions::completion::CompletionSignal::WorkItemConcluido
         );
         let events = g.j.env.sessions.ledger().list_events(wi, 50).unwrap();
         assert!(
@@ -2906,7 +2910,8 @@ mod tests {
             "{events:?}"
         );
         assert_eq!(
-            crate::cleanup::CompletionSignal::PrMesclado.label_for(ct_core::ForgeKind::Gitlab),
+            ct_sessions::completion::CompletionSignal::PrMesclado
+                .label_for(ct_core::ForgeKind::Gitlab),
             "MR mesclado"
         );
 
@@ -2932,7 +2937,10 @@ mod tests {
         let c = g.completion(wi).unwrap();
         assert_eq!(
             (c.signal, c.pr),
-            (crate::cleanup::CompletionSignal::PrFechado, Some(7))
+            (
+                ct_sessions::completion::CompletionSignal::PrFechado,
+                Some(7)
+            )
         );
         assert_eq!(c.signal.label_for(ct_core::ForgeKind::Gitlab), "MR fechado");
     }
@@ -3058,7 +3066,7 @@ mod tests {
 
         let g = setup_gitlab(false, |_| {});
         let s = JiraGitlabSync::new(
-            g.j.env.sessions.clone(),
+            g.j.env.sessions.sync_handle(),
             TrackerSyncConfig::new(g.j.fake.bin().to_str().unwrap())
                 .with_glab_bin("/nao/existe/glab"),
         );

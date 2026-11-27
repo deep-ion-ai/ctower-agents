@@ -1,19 +1,19 @@
 //! Ciclo de vida das sessões: lançamento, hooks, backup de transcripts e
 //! recuperação. Síncrono; o servidor chama daqui via `spawn_blocking`.
+//!
+//! O sync com a forja e o rastreador fica no `ct-sync` (que recebe só o
+//! [`SyncHandle`]), a limpeza do ambiente no `ct-cleanup` e o updater no
+//! `ct-update` (#242).
 
 pub mod autonomy;
-pub mod cleanup;
-pub mod cleanup_branches;
-pub mod cleanup_sessions;
-pub mod cleanup_worktree;
+pub mod completion;
 pub mod config;
+mod connections;
 pub mod diff;
 pub mod docs;
 pub mod epic_plan;
 pub mod epic_run;
 pub mod files;
-pub mod github;
-pub mod gitlab;
 mod hooks;
 mod launch;
 pub mod paths;
@@ -21,16 +21,14 @@ mod prune;
 mod recovery;
 pub mod release;
 pub mod remote;
-mod resolver;
+pub mod resolver;
 mod secrets;
 pub mod shell;
-pub mod tracker_sync;
 pub mod transcript_view;
 pub mod transcripts;
 pub mod usage;
 
-pub use github::{GithubSync, ProjectSync};
-pub use gitlab::GitlabRemote;
+pub use connections::Connections;
 pub use hooks::{HookEnvelope, HookOutcome};
 pub use launch::{
     gestor_scopes, AgentOptions, GestorScope, PtySize, StartRequest, GESTOR_LIMITS,
@@ -42,9 +40,8 @@ pub use recovery::{
     recoverable_sessions, work_item_concluded, ArchivedItem, RecoveryItem, RESUME_PROMPT,
 };
 pub use remote::{RemoteControlEnable, RemoteControlStatus};
-pub use secrets::{SecretGetError, SESSION_TOKEN_ENV};
+pub use secrets::{cached_secret, SecretGetError, SessionMask, SESSION_TOKEN_ENV};
 pub use shell::{Shell, SHELL_LIMIT};
-pub use tracker_sync::{JiraGitlabSync, TrackerSyncConfig};
 pub use transcript_view::{ContextUsage, TranscriptEntry, TranscriptSource, TranscriptTail};
 pub use transcripts::TranscriptIntegrity;
 pub use usage::{SessionUsage, StatuslineInstall};
@@ -52,7 +49,7 @@ pub use usage::{SessionUsage, StatuslineInstall};
 pub use ct_agent::AgentHome;
 use ct_agent::AgentRuntime;
 use ct_core::Tool;
-use ct_ledger::Ledger;
+use ct_ledger::{Ledger, LedgerHandle};
 use ct_pty::PtySession;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -108,7 +105,7 @@ pub fn agent_home_from_env(pre_trust: bool) -> AgentHome {
 
 /// Runtime registrado para a ferramenta (#240); ferramenta sem runtime vira
 /// erro.
-pub(crate) fn agent_runtime(tool: Tool) -> Result<&'static dyn AgentRuntime> {
+pub fn agent_runtime(tool: Tool) -> Result<&'static dyn AgentRuntime> {
     ct_agent::runtime(tool)
         .ok_or_else(|| SessionsError::Invalid(format!("agente sem runtime: {}", tool.as_str())))
 }
@@ -119,7 +116,7 @@ pub(crate) fn agent_runtime(tool: Tool) -> Result<&'static dyn AgentRuntime> {
 /// essa folga, inclusive numa máquina carregada, sem deixar a sessão viva
 /// quando o agente ignora o sinal. Menor que o prazo da limpeza para a
 /// sessão encerrada sair do estado vivo (`cleanup_sessions::END_TIMEOUT`).
-pub(crate) const KILL_GRACE: Duration = Duration::from_secs(5);
+pub const KILL_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct SessionsConfig {
@@ -161,9 +158,31 @@ pub struct SessionsConfig {
 /// nome do evento e dados.
 pub type Notifier = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
+/// O que o sync usa do ambiente (#242): o ledger, o aviso à UI e as
+/// credenciais das conexões, sem o ciclo de vida das sessões
+/// ([`Sessions::sync_handle`]).
+#[derive(Clone)]
+pub struct SyncHandle {
+    pub ledger: LedgerHandle,
+    pub notify: Notifier,
+    pub connections: Connections,
+}
+
+impl SyncHandle {
+    /// Acesso ao ledger ([`LedgerHandle::lock`]).
+    pub fn ledger(&self) -> MutexGuard<'_, Ledger> {
+        self.ledger.lock()
+    }
+
+    /// Push para as UIs conectadas (`{ "event": ..., "data": ... }`).
+    pub fn notify(&self, event: &str, data: Value) {
+        (self.notify)(event, data);
+    }
+}
+
 struct Inner {
     cfg: SessionsConfig,
-    ledger: Mutex<Ledger>,
+    ledger: LedgerHandle,
     live: Mutex<HashMap<String, PtySession>>,
     /// Sessões encerradas por `kill` (pedido humano): a saída é limpa.
     killed: Mutex<HashSet<String>>,
@@ -173,9 +192,9 @@ struct Inner {
     session_tokens: Mutex<HashMap<String, String>>,
     /// Shells livres vivos (#428), só em memória.
     shells: Mutex<HashMap<String, shell::LiveShell>>,
-    /// Token de cada conexão (Jira, GitLab, GitHub), em cache: o comando de
-    /// credencial não roda a cada ciclo (#236, #275).
-    credentials: Arc<resolver::CredentialResolver>,
+    /// Fontes e token de cada conexão (Jira, GitLab, GitHub), em cache: o
+    /// comando de credencial não roda a cada ciclo (#236, #275).
+    connections: Connections,
     /// Serializa a conferência "uma sessão de release viva por projeto" com
     /// a criação da sessão (#204).
     release_start: Mutex<()>,
@@ -219,16 +238,20 @@ impl Sessions {
     pub fn new(cfg: SessionsConfig, ledger: Ledger, notify: Notifier) -> Self {
         Sessions {
             inner: Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| Inner {
+                connections: Connections::new(
+                    cfg.credentials.clone(),
+                    cfg.dirs.clone(),
+                    Arc::new(resolver::CredentialResolver::with_on_new(mask_refresher(
+                        weak.clone(),
+                    ))),
+                ),
                 cfg,
-                ledger: Mutex::new(ledger),
+                ledger: LedgerHandle::new(ledger),
                 live: Mutex::new(HashMap::new()),
                 killed: Mutex::new(HashSet::new()),
                 masks: Mutex::new(HashMap::new()),
                 session_tokens: Mutex::new(HashMap::new()),
                 shells: Mutex::new(HashMap::new()),
-                credentials: Arc::new(resolver::CredentialResolver::with_on_new(mask_refresher(
-                    weak.clone(),
-                ))),
                 release_start: Mutex::new(()),
                 human_input: Mutex::new(HashMap::new()),
                 notify,
@@ -242,111 +265,78 @@ impl Sessions {
         &self.inner.cfg
     }
 
-    /// Resolvedor de credencial do ambiente (#236).
-    pub(crate) fn credentials(&self) -> &resolver::CredentialResolver {
-        &self.inner.credentials
+    /// Credenciais das conexões do ambiente: fontes, resolvedor e cache de
+    /// secrets (#242). O sync recebe uma cópia em [`SyncHandle`].
+    pub fn connections(&self) -> &Connections {
+        &self.inner.connections
     }
 
-    /// Fonte do token do tipo `kind` do projeto neste ambiente (#274,
-    /// #275): o comando de `[credentials]` que sobrou da conversão (#143),
-    /// senão a da conexão do hub (a referenciada ou a padrão do tipo) com a
-    /// sobrescrita `[connections]`, senão a de reserva do descritor
-    /// ([`ct_core::SharedCredentials::source`]). `None` = nenhum lado do
-    /// projeto é do tipo. Só para resolver aqui: o que vai ao hub sai do
-    /// ledger, sem a sobrescrita.
+    /// O que o sync usa do ambiente, sem o ciclo de vida das sessões (#242):
+    /// o ledger, o aviso à UI e as credenciais das conexões.
+    pub fn sync_handle(&self) -> SyncHandle {
+        SyncHandle {
+            ledger: self.inner.ledger.clone(),
+            notify: Arc::clone(&self.inner.notify),
+            connections: self.inner.connections.clone(),
+        }
+    }
+
+    /// Resolvedor de credencial do ambiente (#236).
+    pub fn credentials(&self) -> &resolver::CredentialResolver {
+        self.inner.connections.resolver()
+    }
+
+    /// Fonte do token do tipo `kind` do projeto neste ambiente
+    /// ([`Connections::source`]).
     pub fn source(
         &self,
         project: &ct_ledger::Project,
         kind: ct_core::provider::ProviderKind,
     ) -> Option<ct_core::EnvSource> {
-        self.inner.cfg.credentials.source(
-            &project.gh_owner,
-            &project.gh_repo,
-            &project.tracker,
-            &project.forge,
-            kind,
-        )
+        self.inner.connections.source(project, kind)
     }
 
-    /// As fontes de todos os tipos que o projeto usa, sem repetir o tipo
-    /// (o GitHub nos dois lados conta uma vez).
+    /// As fontes de todos os tipos que o projeto usa
+    /// ([`Connections::sources`]).
     pub fn sources(
         &self,
         project: &ct_ledger::Project,
     ) -> Vec<(ct_core::provider::ProviderKind, ct_core::EnvSource)> {
-        let mut out: Vec<(ct_core::provider::ProviderKind, ct_core::EnvSource)> = Vec::new();
-        for side in ct_core::provider::project_sides(&project.tracker, &project.forge) {
-            if out.iter().any(|(k, _)| *k == side.kind) {
-                continue;
-            }
-            out.extend(self.source(project, side.kind).map(|s| (side.kind, s)));
-        }
-        out
+        self.inner.connections.sources(project)
     }
 
-    /// Fonte do token do Jira do projeto ([`Self::source`]). `None` = o
-    /// rastreador não é Jira.
+    /// Fonte do token do Jira do projeto ([`Connections::jira_source`]).
     pub fn jira_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        self.source(project, ct_core::provider::ProviderKind::Jira)
+        self.inner.connections.jira_source(project)
     }
 
-    /// Fonte do token do GitLab do projeto ([`Self::source`]). `None` = a
-    /// forja não é GitLab.
+    /// Fonte do token do GitLab do projeto ([`Connections::gitlab_source`]).
     pub fn gitlab_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        self.source(project, ct_core::provider::ProviderKind::Gitlab)
+        self.inner.connections.gitlab_source(project)
     }
 
-    /// Token da conexão do tipo `kind` do projeto pelo resolvedor do
-    /// ambiente (cache, sobrescrita `[connections]`, secret do cache): o
-    /// mesmo do sync, e por isso no mascaramento das sessões. Usado no
-    /// clone do GitLab por HTTPS (#281). Pode rodar o comando de credencial.
+    /// Token da conexão do tipo `kind` do projeto
+    /// ([`Connections::connection_token`]).
     pub fn connection_token(
         &self,
         project: &ct_ledger::Project,
         kind: ct_core::provider::ProviderKind,
     ) -> std::result::Result<String, String> {
-        let source = self
-            .source(project, kind)
-            .map_or(ct_core::provider::CredentialSource::None, |s| s.source);
-        let lookup = self.secret_lookup(project);
-        self.credentials()
-            .token(resolver::Ask {
-                key: &resolver::cache_key(kind, project.id),
-                what: ct_core::provider::descriptor(kind).label(),
-                source: &source,
-                lookup: &lookup,
-                deadline: ct_proc::CREDENTIAL_DEADLINE,
-                cli: None,
-            })
-            .map(|t| t.expose().to_string())
-            .map_err(|e| e.to_string())
+        self.inner.connections.connection_token(project, kind)
     }
 
-    /// Fonte do token do GitHub do projeto ([`Self::source`]): sem a
-    /// conexão no pull, o `gh auth token`. `None` = o projeto não usa o
-    /// GitHub.
+    /// Fonte do token do GitHub do projeto ([`Connections::github_source`]).
     pub fn github_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        self.source(project, ct_core::provider::ProviderKind::Github)
+        self.inner.connections.github_source(project)
     }
 
-    /// As conexões do projeto neste ambiente (#277): as do último pull, com
-    /// a fonte efetiva daqui ([`ct_core::SharedCredentials::resolve`]). É
-    /// daqui que o sync, as sessões, os templates e os links leem a URL do
-    /// Jira, o host do GitLab, o `config_file` do jira-cli e os prefixos.
+    /// As conexões do projeto neste ambiente
+    /// ([`Connections::project_connections`]).
     pub fn project_connections(
         &self,
         project: &ct_ledger::Project,
     ) -> ct_core::ResolvedConnections {
-        self.inner
-            .cfg
-            .credentials
-            .resolve(
-                &project.gh_owner,
-                &project.gh_repo,
-                &project.tracker,
-                &project.forge,
-            )
-            .0
+        self.inner.connections.project_connections(project)
     }
 
     /// O projeto com os endereços e prefixos das conexões deste ambiente
@@ -376,7 +366,7 @@ impl Sessions {
 
     /// Acesso direto ao ledger (consultas do servidor).
     pub fn ledger(&self) -> MutexGuard<'_, Ledger> {
-        self.inner.ledger.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner.ledger.lock()
     }
 
     /// PTY de uma sessão viva neste processo do daemon.

@@ -488,9 +488,9 @@ mod tests {
         sete["fields"]["customfield_10601"] = "PROJ-8".into();
         fake.set_view(&sete);
         fake.set_view(&api_issue("PROJ-8", "Épico", "new"));
-        srv.state.tracker = Some(Arc::new(ct_sessions::JiraGitlabSync::new(
-            srv.env.sessions.clone(),
-            ct_sessions::TrackerSyncConfig::new(fake.bin().to_str().unwrap()),
+        srv.state.tracker = Some(Arc::new(ct_sync::JiraGitlabSync::new(
+            srv.env.sessions.sync_handle(),
+            ct_sync::TrackerSyncConfig::new(fake.bin().to_str().unwrap()),
         )));
         let task = spawn(srv.state.clone(), fast()).unwrap();
         let ch = Arc::clone(&hub.channels);
