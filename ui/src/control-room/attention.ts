@@ -7,7 +7,7 @@ import type { HubUpdateStatus, Warning } from "../protocol/hub-gen";
 import { isBackupWarning, type MaintenanceSection } from "../maintenance/sections";
 import { askKey, type Alert, type Ask } from "../state/tower";
 import { duration } from "../util/time";
-import { isJiraProject, itemShort, trackerLabel, itemRef, noIssue } from "../util/item";
+import { isJiraProject, itemShort, trackerLabel, itemRef, itemTitle, noIssue } from "../util/item";
 import { permissionText } from "../terminal/permission";
 import { rcOn, rcUrl } from "../terminal/remote";
 import { DOCS_HELP_URL } from "../project/docs";
@@ -50,6 +50,13 @@ export interface AttentionItem {
   /** Rótulo do tipo, escrito (não só cor). */
   label: string;
   title: string;
+  /**
+   * Projeto do item, quando há um (sessão, sync, alerta de sessão): a coluna
+   * própria na lista compacta (#357). Os itens do hub e dos ambientes não têm.
+   */
+  project?: string;
+  /** O título sem o projeto, para a lista compacta; ausente = `title`. */
+  item?: string;
   detail: string;
   /** Desde quando (ms). */
   since: number;
@@ -107,7 +114,7 @@ const ORDER: AttentionKind[] = [
 ];
 
 /** Título de cada aviso de `hub.status` (`kind` estável do `cthubd`). */
-const HUB_WARNING_TITLE: Record<string, string> = {
+export const HUB_WARNING_TITLE: Record<string, string> = {
   backup_disabled: "Snapshots do hub desligados",
   backup_same_device: "Backup no mesmo disco do hub",
   backup_failed: "Snapshot do hub falhou",
@@ -172,6 +179,18 @@ export function itemLabel(project?: Project, wi?: DashboardWorkItem, gestor = fa
   if (noIssue(wi.gh_number)) return `${project ? project.name + " · " : ""}${itemRef(wi.gh_number)}`;
   const t = wi.title ? ` ${wi.title}` : "";
   return `${project ? project.name + " " : ""}${itemShort(project, wi.gh_number)}${t}`;
+}
+
+/** O item de uma sessão sem o projeto: "#31 Título", "Sessão do projeto" ou o gestor. */
+export function sessionItem(project?: Project, wi?: DashboardWorkItem, gestor = false, scope?: GestorScope): string {
+  if (gestor) return gestorLabel(scope);
+  if (!wi) return "sessão sem work item";
+  return itemTitle(wi, project);
+}
+
+/** Projeto e item de uma sessão, para a lista compacta (#357). */
+function sessionWhere(project?: Project, wi?: DashboardWorkItem, gestor = false, scope?: GestorScope) {
+  return { ...(project ? { project: project.name } : {}), item: sessionItem(project, wi, gestor, scope) };
 }
 
 /** Issue no hub de uma sessão (`owner`/`repo`/número); `null` no gestor e no planejamento do projeto. */
@@ -283,6 +302,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
         env: env.id,
         label: req ? "Permissão" : "Aguardando você",
         title: itemLabel(project, wi, gestor, scope),
+        ...sessionWhere(project, wi, gestor, scope),
         detail: req ? permissionText(req) : asks?.[askKey(env.id, s.id)]?.message || ASK_FALLBACK,
         since: req?.created_at ?? s.last_event_at,
         // O pedido se responde no terminal (faixa logo abaixo do console);
@@ -302,6 +322,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
         env: env.id,
         label: "Interrompida",
         title,
+        ...sessionWhere(project, wi, gestor, scope),
         detail:
           s.exit_code === null
             ? "A sessão parou no meio do trabalho"
@@ -324,6 +345,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
         env: env.id,
         label: "Saiu com erro",
         title: itemLabel(project, wi, gestor, scope),
+        ...sessionWhere(project, wi, gestor, scope),
         detail: `Processo terminou com código ${s.exit_code}`,
         since: ended,
         actionLabel: "Ver projeto",
@@ -347,6 +369,8 @@ export function attention(input: AttentionInput): AttentionItem[] {
           env: env.id,
           label: "Sync falhando",
           title: `${project.name}: sync falhando há ${failures} ciclos`,
+          project: project.name,
+          item: `Sync falhando há ${failures} ciclos`,
           detail:
             sync.last_error ??
             `${trackerLabel(project)} sem sincronizar${ref === null ? "" : `; último sucesso há ${duration(now - ref)}`}`,
@@ -365,6 +389,8 @@ export function attention(input: AttentionInput): AttentionItem[] {
         env: env.id,
         label: "Sync atrasado",
         title: `${trackerLabel(project)} de ${project.name} sem sincronizar`,
+        project: project.name,
+        item: `${trackerLabel(project)} sem sincronizar`,
         detail:
           sync.last_error ??
           (ref === null ? "Ainda não sincronizou" : `Último sucesso há ${duration(now - ref)}`),
@@ -376,13 +402,16 @@ export function attention(input: AttentionInput): AttentionItem[] {
   }
 
   for (const a of alerts) {
-    const live = dashboards[a.env]?.live_sessions.find((s) => s.id === a.session_id);
+    const d = dashboards[a.env];
+    const live = d?.live_sessions.find((s) => s.id === a.session_id);
+    const project = live ? lookup(d, live).project : undefined;
     out.push({
       key: `alert:${a.env}:${a.kind}:${a.session_id}:${a.at}`,
       kind: "alert",
       env: a.env,
       label: "Alerta",
       title: ALERT_TEXT[a.kind] ?? a.kind,
+      ...(project ? { project: project.name } : {}),
       detail: a.detail,
       since: a.at,
       actionLabel: live ? "Ver terminal" : "Configurações",

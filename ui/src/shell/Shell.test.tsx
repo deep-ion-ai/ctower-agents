@@ -8,6 +8,7 @@ import { TowerProvider } from "../state/tower";
 import { dashboard as base, hubStatus, MIN, session, sync, workItem } from "../test/fixtures";
 import { Shell } from "./Shell";
 import { SideContent, SideGroup, SidePanel, SideRow } from "./SidePanel";
+import { showSessions } from "../test/control-room";
 
 const NOW = Date.now();
 const WAIT = session({ id: "aaaaaaaa-0000-0000-0000-000000000001", work_item_id: 31, last_event_at: NOW - MIN });
@@ -89,6 +90,7 @@ test("projects_changed do ambiente relê o dashboard dele (#281)", async () => {
 
 test("abas ficam abertas ao trocar de tela; fechar ativa a vizinha", async () => {
   const { user, nav } = setup(live());
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));
   expect(within(nav).getByRole("button", { name: "Terminal" })).toHaveAttribute("aria-current", "page");
   await user.click(within(nav).getByRole("button", { name: "Configurações" }));
@@ -111,6 +113,7 @@ test("abas ficam abertas ao trocar de tela; fechar ativa a vizinha", async () =>
 
 test("voltar a uma tela pela barra de atividades reabre a aba dela com o mesmo endereço", async () => {
   const { user, nav } = setup(live());
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));
   await user.click(within(nav).getByRole("button", { name: "Hub" }));
   await user.click(within(nav).getByRole("button", { name: "Terminal" }));
