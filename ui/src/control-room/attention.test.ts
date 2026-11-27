@@ -1,6 +1,7 @@
-import { attention, SYNC_INTERVAL_MS, type AttentionInput } from "./attention";
+import { attention, SYNC_INTERVAL_MS, type AttentionInput, type HubRoom } from "./attention";
+import type { ControlRoomPr, ControlRoomProject } from "../protocol/hub-gen";
 import { FakeDaemonApi } from "../api/fake";
-import { dashboard, envInfo, MIN, NOW, session, sync, workItem } from "../test/fixtures";
+import { dashboard, envInfo, MIN, NOW, project, session, sync, workItem } from "../test/fixtures";
 import { DOCS_HELP_URL } from "../project/docs";
 import { warnings } from "../shell/summary";
 
@@ -380,5 +381,122 @@ describe("sync falhando (#90)", () => {
   test("some na primeira rodada bem-sucedida", () => {
     const ok1 = dashboard({ sync: [sync({ last_ok_at: NOW - MIN, failures: 0 })] });
     expect(attention(input({ dashboards: { wsl: ok1 } }))).toEqual([]);
+  });
+});
+
+// #360: check vermelho e bloqueada pelo piloto (dados fictícios).
+describe("hub: check vermelho e bloqueada pelo piloto (#360)", () => {
+  const hub = { status: { env: "hub", connected: true, error: null, since: 0 }, warnings: [] };
+  const pr = (over: Partial<ControlRoomPr["checks"]> = {}, issue = 31): ControlRoomPr => ({
+    number: 7,
+    title: "Item 31",
+    issue,
+    issue_ref: `acme/acme-web#${issue}`,
+    url: "https://git.example.com/acme/acme-web/pull/7",
+    head: "feat/x",
+    base: "develop",
+    updated_at: NOW - 10 * MIN,
+    checks: {
+      state: "failure",
+      total: 3,
+      failed: 1,
+      pending: 0,
+      text: "3 checks, 1 falhou",
+      failed_names: ["build"],
+      head_sha: "abc",
+      synced_at: NOW - 5 * MIN,
+      ...over,
+    },
+  });
+  const proj = (prs: ControlRoomPr[]): ControlRoomProject => ({
+    project_id: 1,
+    owner: "acme",
+    repo: "acme-web",
+    name: "acme-web",
+    tracker: "github",
+    forge: "github",
+    prs,
+    epic_runs: [],
+  });
+  const room = (over: Partial<HubRoom> = {}): HubRoom => ({
+    projects: [proj([pr()])],
+    pilotSessions: [],
+    blocked: [],
+    blockedAt: NOW - 60 * MIN,
+    ...over,
+  });
+  const run = (r: HubRoom | undefined, extra: Partial<AttentionInput> = {}) =>
+    attention(input({ hub, room: r, ...extra }));
+
+  test("PR com check falho aparece uma vez, com o nome do check e a ação de abrir", () => {
+    const items = run(room());
+    expect(items).toEqual([
+      expect.objectContaining({
+        kind: "ci_failed",
+        label: "Check vermelho",
+        project: "acme-web",
+        detail: "build falhou no último push",
+        since: NOW - 5 * MIN,
+        actionLabel: "Abrir o check",
+        action: { to: "url", url: "https://git.example.com/acme/acme-web/pull/7" },
+      }),
+    ]);
+  });
+
+  test("some quando o check fica verde ou o PR fecha", () => {
+    expect(run(room({ projects: [proj([pr({ state: "success", failed: 0, failed_names: [] })])] }))).toEqual([]);
+    expect(run(room({ projects: [proj([pr({ state: "pending" })])] }))).toEqual([]);
+    expect(run(room({ projects: [proj([])] }))).toEqual([]);
+  });
+
+  test("PR que o piloto ainda corrige fica de fora", () => {
+    const piloting = room({ pilotSessions: [{ owner: "acme", repo: "acme-web", gh_number: 31 }] });
+    expect(run(piloting)).toEqual([]);
+    // Sessão do piloto em outra issue não esconde este PR.
+    expect(run(room({ pilotSessions: [{ owner: "acme", repo: "acme-web", gh_number: 99 }] }))).toHaveLength(1);
+  });
+
+  const blockedRoom = (reason: string | null = "CI falhou 3 vezes") =>
+    room({
+      projects: [proj([])],
+      blocked: [{ owner: "acme", repo: "acme-web", name: "acme-web", blocked: [{ number: 31, title: "Item 31", reason }] }],
+    });
+
+  test("issue bloqueada pelo piloto aparece com o motivo e abre a issue", () => {
+    expect(run(blockedRoom())).toEqual([
+      expect.objectContaining({
+        kind: "pilot_blocked",
+        label: "Bloqueada pelo piloto",
+        project: "acme-web",
+        item: "#31 Item 31",
+        detail: "CI falhou 3 vezes",
+        since: NOW - 60 * MIN,
+        actionLabel: "Abrir a issue",
+        action: { to: "url", url: "https://github.com/acme/acme-web/issues/31" },
+      }),
+    ]);
+    expect(run(blockedRoom(null))[0].detail).toBe("Sem motivo registrado");
+  });
+
+  test("some quando a issue sai de bloqueada no ambiente", () => {
+    const acme = (status: "em_execucao" | "bloqueado") =>
+      dashboard({ projects: [{ project: project({ gh_owner: "acme", gh_repo: "acme-web" }), work_items: [workItem({ status })] }] });
+    expect(run(blockedRoom(), { dashboards: { wsl: acme("em_execucao") } })).toEqual([]);
+    expect(run(blockedRoom(), { dashboards: { wsl: acme("bloqueado") } })).toHaveLength(1);
+  });
+
+  test("sem hub (ou sem a leitura), os dois tipos não aparecem", () => {
+    expect(attention(input({ room: room() }))).toEqual([]);
+    expect(attention(input({ room: blockedRoom() }))).toEqual([]);
+    expect(run(undefined)).toEqual([]);
+  });
+
+  test("ordem: depois das interrompidas e antes do ambiente caído", () => {
+    const d = dashboard({ interrupted_sessions: [session({ id: "c", state: "interrupted" })] }, [workItem()]);
+    const items = run(room(), {
+      dashboards: { wsl: d },
+      status: { wsl: { env: "wsl", connected: false, error: "x", since: NOW } },
+    });
+    expect(items.map((i) => i.kind)).toEqual(["interrupted", "ci_failed", "env_down"]);
   });
 });
