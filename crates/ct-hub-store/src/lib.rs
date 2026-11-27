@@ -32,6 +32,7 @@ mod config;
 mod connection;
 mod digest;
 mod env_keys;
+mod epic_run;
 mod github_sync;
 mod health;
 mod legacy;
@@ -81,6 +82,12 @@ pub use digest::{
     digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
 };
 pub use env_keys::{EnvAssignmentRev, EnvPubkey, EnvSecretsInput};
+pub use epic_run::{
+    EpicApproval, EpicDecision, EpicNode, EpicNodePatch, EpicPlan, EpicPlanDraft, EpicPlanEdge,
+    EpicPlanNode, EpicPlanNodeInput, EpicPlanSessionInput, EpicPlanSessionNode, EpicProposal,
+    EpicRun, EpicRunEvent, EpicSessionInfo, NewEpicRun, EPIC_PLAN_MAX_NODES,
+    EPIC_PLAN_MAX_PROPOSALS,
+};
 pub use health::{
     HealthCounts, HealthFilter, HealthKind, HealthSignal, HealthThresholds, HubHealth, Severity,
 };
@@ -938,6 +945,122 @@ CREATE TABLE connection (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+"#,
+    // 46: execução de épico (#296, épico #295): a execução (uma ativa por
+    // épico, várias por ambiente), as versões do plano (o rascunho lê as
+    // arestas vivas de `autopilot_dependency`; a aprovação as congela em
+    // `epic_plan_edge`), os nós do plano (modelo, esforço, áreas em JSON), o
+    // estado de cada sub-issue na execução, a fila de pedidos de decisão e
+    // os eventos do motor. `plan_session` é a sessão de plano viva (a única
+    // que grava o rascunho). A impressão digital de cada sub-issue é a da
+    // aprovação (sub-issue alterada depois do plano); `rebase_head` é o
+    // head do PR quando o motor pediu o rebase (`rebase_at` = enviado).
+    r#"
+CREATE TABLE epic_run (
+  id            INTEGER PRIMARY KEY,
+  project_id    INTEGER NOT NULL REFERENCES project(id),
+  epic          INTEGER NOT NULL,
+  env_id        TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  plan_version  INTEGER,
+  max_parallel  INTEGER NOT NULL DEFAULT 2,
+  code_review   INTEGER NOT NULL DEFAULT 0,
+  started_by    TEXT NOT NULL,
+  plan_session  TEXT,
+  paused_reason TEXT,
+  resume_at     INTEGER,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  ended_at      INTEGER
+);
+CREATE UNIQUE INDEX epic_run_active ON epic_run (project_id, epic)
+  WHERE status NOT IN ('concluido', 'cancelado');
+CREATE INDEX epic_run_env ON epic_run (env_id);
+CREATE TABLE epic_plan (
+  run_id      INTEGER NOT NULL REFERENCES epic_run(id) ON DELETE CASCADE,
+  version     INTEGER NOT NULL,
+  state       TEXT NOT NULL,
+  summary     TEXT NOT NULL DEFAULT '',
+  proposals   TEXT NOT NULL DEFAULT '[]',
+  session_id  TEXT,
+  created_at  INTEGER NOT NULL,
+  approved_at INTEGER,
+  approved_by TEXT,
+  PRIMARY KEY (run_id, version)
+);
+CREATE TABLE epic_plan_node (
+  run_id   INTEGER NOT NULL,
+  version  INTEGER NOT NULL,
+  number   INTEGER NOT NULL,
+  position INTEGER NOT NULL,
+  model    TEXT,
+  effort   TEXT,
+  areas       TEXT NOT NULL DEFAULT '[]',
+  reason      TEXT NOT NULL DEFAULT '',
+  fingerprint TEXT,
+  PRIMARY KEY (run_id, version, number),
+  FOREIGN KEY (run_id, version) REFERENCES epic_plan(run_id, version) ON DELETE CASCADE
+);
+CREATE TABLE epic_plan_edge (
+  run_id  INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  number  INTEGER NOT NULL,
+  blocker INTEGER NOT NULL,
+  reason  TEXT NOT NULL DEFAULT '',
+  source  TEXT NOT NULL,
+  PRIMARY KEY (run_id, version, number, blocker),
+  FOREIGN KEY (run_id, version) REFERENCES epic_plan(run_id, version) ON DELETE CASCADE
+);
+CREATE TABLE epic_node (
+  run_id        INTEGER NOT NULL REFERENCES epic_run(id) ON DELETE CASCADE,
+  number        INTEGER NOT NULL,
+  state         TEXT NOT NULL,
+  prev_state    TEXT,
+  session_id    TEXT,
+  worktree      TEXT,
+  pr            INTEGER,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  assumed_since INTEGER,
+  reason        TEXT,
+  rebase_head   TEXT,
+  rebase_at     INTEGER,
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (run_id, number)
+);
+CREATE TABLE epic_decision (
+  id          INTEGER PRIMARY KEY,
+  run_id      INTEGER NOT NULL REFERENCES epic_run(id) ON DELETE CASCADE,
+  number      INTEGER,
+  origin      TEXT NOT NULL,
+  text        TEXT NOT NULL,
+  options     TEXT NOT NULL DEFAULT '[]',
+  answer      TEXT,
+  created_at  INTEGER NOT NULL,
+  answered_at INTEGER,
+  answered_by TEXT
+);
+CREATE INDEX epic_decision_run ON epic_decision (run_id, answer);
+CREATE TABLE epic_run_event (
+  id      INTEGER PRIMARY KEY,
+  run_id  INTEGER NOT NULL REFERENCES epic_run(id) ON DELETE CASCADE,
+  at      INTEGER NOT NULL,
+  kind    TEXT NOT NULL,
+  number  INTEGER,
+  reason  TEXT,
+  message TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX epic_run_event_run ON epic_run_event (run_id, id);
+"#,
+    // 47: modelo e esforço da sessão de plano da execução de épico (#298),
+    // escolhidos no disparo; nulos = o padrão do hub (forte).
+    r#"
+ALTER TABLE epic_run ADD COLUMN plan_model TEXT;
+ALTER TABLE epic_run ADD COLUMN plan_effort TEXT;
+"#,
+    // 48: sessão de integração da execução de épico (#302): a sessão do
+    // épico que valida a `wip` e abre o PR para a base.
+    r#"
+ALTER TABLE epic_run ADD COLUMN integration_session TEXT;
 "#,
 ];
 
@@ -5372,7 +5495,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 45);
+        assert_eq!(v, 48);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

@@ -23,6 +23,7 @@ pub mod channel;
 pub mod cli;
 pub mod config;
 pub mod docs_backup;
+pub mod epic_run;
 pub mod github;
 pub mod methods;
 pub mod migrate;
@@ -109,7 +110,11 @@ use tokio::sync::broadcast;
 /// bloqueio `analysis`, `hub.autopilot.deps.set` (também na web), os eventos
 /// `analysis_*`, `dependency_*` e `dependency_edited`, `waiting_blocker` em
 /// `DigestProject` e `analysis` em `SessionTemplates`.
-pub const PROTOCOL_VERSION: &str = "1.25";
+/// 1.26 (#298): execução de épico — `hub.epic_run.list|status|events|start|
+/// approve|replan|pause|interrupt|resume|cancel|set_parallel|decide|handback`
+/// (também na web), o push `hub.epic_run.changed` e o skip `epic_run` do
+/// piloto (#303).
+pub const PROTOCOL_VERSION: &str = "1.26";
 
 #[derive(Clone)]
 pub struct HubState {
@@ -145,6 +150,9 @@ pub struct HubState {
     /// Agendador do piloto automático (#183): o aviso de ciclo já e o
     /// último ciclo. O laço só sobe com [`autopilot::spawn`].
     pub autopilot: Arc<autopilot::Scheduler>,
+    /// Motor da execução de épico (#298): o aviso de ciclo já e o último
+    /// ciclo. O laço só sobe com [`epic_run::spawn`].
+    pub epic_runs: Arc<epic_run::Engine>,
 }
 
 impl HubState {
@@ -174,6 +182,7 @@ impl HubState {
             docs_dir: None,
             test_mode: false,
             autopilot: Arc::default(),
+            epic_runs: Arc::default(),
         }
     }
 }
@@ -201,6 +210,14 @@ impl HubState {
         let _ = self
             .events
             .send(json!({ "event": "hub.autopilot.changed", "data": {} }));
+    }
+
+    /// Avisa as UIs que uma execução de épico mudou (`hub.epic_run.changed`,
+    /// sem dados: a UI relê `hub.epic_run.status`).
+    pub(crate) fn epic_runs_changed(&self) {
+        let _ = self
+            .events
+            .send(json!({ "event": "hub.epic_run.changed", "data": {} }));
     }
 
     /// Avisa as UIs que regras do agente ou propostas de regras mudaram
@@ -246,6 +263,14 @@ pub fn router(state: HubState) -> Router {
         .route(
             "/agent/v1/autopilot/dependencies",
             axum::routing::post(agent::set_dependencies),
+        )
+        .route(
+            "/agent/v1/epic/plan",
+            axum::routing::post(agent::set_epic_plan),
+        )
+        .route(
+            "/agent/v1/epic/blocker",
+            axum::routing::post(agent::report_epic_blocker),
         );
     // Desligada, `/`, `/assets/*` e `/web/*` caem no 404 padrão.
     let r = if web {

@@ -39,6 +39,7 @@ import type { TokenStatus } from "./TokenStatus";
 import type { TrackerIssueAdded } from "./TrackerIssueAdded";
 import type { TranscriptTail } from "./TranscriptTail";
 import type { UpdateStatus } from "./UpdateStatus";
+import type { WorktreeRemoval } from "./WorktreeRemoval";
 
 /** Métodos por escopo: `ui` (o /ws), `web` e `channel` (o canal do hub). */
 export const METHOD_SCOPES = {
@@ -101,6 +102,7 @@ export const METHOD_SCOPES = {
     "session.input",
     "session.resize",
     "cleanup.status",
+    "worktree.remove",
     "cleanup.plan",
     "cleanup.run",
     "logs.tail",
@@ -141,6 +143,7 @@ export const METHOD_SCOPES = {
     "session.get",
     "session.archive",
     "session.kill",
+    "worktree.remove",
     "logs.tail",
     "hub.config.changed",
     "hub.sync.now",
@@ -177,6 +180,7 @@ export const METHOD_SCOPES = {
     "session.get",
     "session.archive",
     "session.kill",
+    "worktree.remove",
     "logs.tail",
     "hub.config.changed",
     "hub.sync.now",
@@ -202,8 +206,8 @@ export interface DaemonMethods {
   "transcript.tail": { params: { session_id: string; entries?: number | null }; result: TranscriptTail };
   "session.usage": { params: { session_id: string }; result: SessionUsage | null };
   "session.context": { params: { session_id: string }; result: ContextUsage };
-  "session.start": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number; kind?: "epic" | "issue" | null; title?: string | null; labels?: string[] | null; prompt?: string | null; autonomous?: boolean | null; override_approval?: boolean | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: "native" | "subagents" | null; remote_control?: boolean | null }; result: Session };
-  "session.start_project": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; prompt: string; analysis?: boolean | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: "native" | "subagents" | null; remote_control?: boolean | null }; result: Session };
+  "session.start": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number; kind?: "epic" | "issue" | null; title?: string | null; labels?: string[] | null; prompt?: string | null; autonomous?: boolean | null; override_approval?: boolean | null; epic_run?: { base: string } | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: "native" | "subagents" | null; remote_control?: boolean | null }; result: Session };
+  "session.start_project": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; prompt: string; analysis?: boolean | null; epic_plan?: number | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: "native" | "subagents" | null; remote_control?: boolean | null }; result: Session };
   "session.start_release": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; prompt: string; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: "native" | "subagents" | null; remote_control?: boolean | null }; result: Session };
   "session.start_gestor": { params: { scope: GestorScope; prompt?: string | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: "native" | "subagents" | null; remote_control?: boolean | null }; result: Session };
   "autonomy.align": { params: { project_id?: number | null; owner?: string | null; repo?: string | null }; result: AutonomyReport };
@@ -243,6 +247,7 @@ export interface DaemonMethods {
   "session.input": { params: { session_id: string; data: string }; result: {} };
   "session.resize": { params: { session_id: string; cols: number; rows: number }; result: {} };
   "cleanup.status": { params: null; result: CleanupStatus };
+  "worktree.remove": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number }; result: WorktreeRemoval };
   "cleanup.plan": { params: null; result: CleanupPlan };
   "cleanup.run": { params: { work_item_id?: number | null; step?: string | null; dry_run?: boolean | null } | null; result: CleanupRun };
   "logs.tail": { params: { level?: string | null; q?: string | null; since?: number | null; until?: number | null; limit?: number | null; before?: number | null }; result: unknown };

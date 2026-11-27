@@ -77,13 +77,13 @@ pub const METHODS: &[MethodSpec] = &[
     MethodSpec { name: "session.context", params: "{ session_id: string }", result: "ContextUsage", scopes: UI_WEB_CHANNEL },
     MethodSpec {
         name: "session.start",
-        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number; kind?: \"epic\" | \"issue\" | null; title?: string | null; labels?: string[] | null; prompt?: string | null; autonomous?: boolean | null; override_approval?: boolean | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: \"native\" | \"subagents\" | null; remote_control?: boolean | null }",
+        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number; kind?: \"epic\" | \"issue\" | null; title?: string | null; labels?: string[] | null; prompt?: string | null; autonomous?: boolean | null; override_approval?: boolean | null; epic_run?: { base: string } | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: \"native\" | \"subagents\" | null; remote_control?: boolean | null }",
         result: "Session",
         scopes: UI_WEB_CHANNEL,
     },
     MethodSpec {
         name: "session.start_project",
-        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; prompt: string; analysis?: boolean | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: \"native\" | \"subagents\" | null; remote_control?: boolean | null }",
+        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; prompt: string; analysis?: boolean | null; epic_plan?: number | null; cols?: number | null; rows?: number | null; model?: string | null; effort?: string | null; mode?: \"native\" | \"subagents\" | null; remote_control?: boolean | null }",
         result: "Session",
         scopes: UI_WEB_CHANNEL,
     },
@@ -201,6 +201,12 @@ pub const METHODS: &[MethodSpec] = &[
     MethodSpec { name: "session.input", params: "{ session_id: string; data: string }", result: "{}", scopes: UI },
     MethodSpec { name: "session.resize", params: "{ session_id: string; cols: number; rows: number }", result: "{}", scopes: UI },
     MethodSpec { name: "cleanup.status", params: "null", result: "CleanupStatus", scopes: UI },
+    MethodSpec {
+        name: "worktree.remove",
+        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number }",
+        result: "WorktreeRemoval",
+        scopes: UI_WEB_CHANNEL,
+    },
     MethodSpec { name: "cleanup.plan", params: "null", result: "CleanupPlan", scopes: UI },
     MethodSpec {
         name: "cleanup.run",

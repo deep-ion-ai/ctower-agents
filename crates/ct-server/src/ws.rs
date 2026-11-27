@@ -627,6 +627,17 @@ impl Conn {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(invalid("override_approval deve ser true ou false")),
                 };
+                // Sub-issue da execução de épico (#298): sai da `wip` do épico.
+                let epic_base = match p.get("epic_run") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => match v.get("base").and_then(Value::as_str).map(str::trim) {
+                        Some(b) if !b.is_empty() => Some(b.to_string()),
+                        _ => return Err(invalid("epic_run deve ser { base: <branch do épico> }")),
+                    },
+                };
+                if autonomous && epic_base.is_some() {
+                    return Err(invalid("autonomous e epic_run não vão juntos"));
+                }
                 // Sessão autônoma sem `prompt` (#191): o ambiente monta com o
                 // template do projeto, depois de decidir a branch.
                 let prompt = if autonomous && matches!(p.get("prompt"), None | Some(Value::Null)) {
@@ -698,7 +709,9 @@ impl Conn {
                 };
                 // Sessão autônoma (#181): alinha a branch de integração e sai
                 // dela; conflito = `AUTONOMY_CONFLICT`, e a issue não começa.
-                let v = if autonomous {
+                let v = if let Some(base) = epic_base {
+                    blocking(&sessions, move |s| s.start_epic_run(req, &base)).await?
+                } else if autonomous {
                     let gh = self.st.github.clone();
                     blocking(&sessions, move |s| {
                         let pr = gh
@@ -738,8 +751,22 @@ impl Conn {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(invalid("analysis deve ser true ou false")),
                 };
+                // Sessão de plano da execução de épico (#299): o número do
+                // épico; só ela vê `epic_set_plan`.
+                let epic_plan = match p.get("epic_plan") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => match v.as_i64().filter(|n| *n > 0) {
+                        Some(n) => Some(n),
+                        None => return Err(invalid("epic_plan deve ser o número do épico")),
+                    },
+                };
+                if analysis && epic_plan.is_some() {
+                    return Err(invalid("analysis e epic_plan não vão juntos"));
+                }
                 let v = blocking(&sessions, move |s| {
-                    if analysis {
+                    if let Some(epic) = epic_plan {
+                        s.start_epic_plan(project_id, epic, &prompt, size, &agent)
+                    } else if analysis {
                         s.start_analysis(project_id, &prompt, size, &agent)
                     } else {
                         s.start_project(project_id, &prompt, size, &agent)
@@ -1169,6 +1196,7 @@ impl Conn {
                     .ok_or_else(|| invalid("sessão não está rodando"))?;
                 pty.write(data.as_bytes())
                     .map_err(|e| (-32000, e.to_string()))?;
+                note_human_input(&sessions, id);
                 Ok(json!({}))
             }
             "session.resize" => {
@@ -1180,6 +1208,29 @@ impl Conn {
                 pty.resize(cols, rows)
                     .map_err(|e| (-32000, e.to_string()))?;
                 Ok(json!({}))
+            }
+            // Remoção do worktree da sub-issue da execução de épico já
+            // mesclada na `wip` (#298), pedida pelo hub.
+            "worktree.remove" => {
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let n = i64_param(p, "gh_number")?;
+                let id = blocking(&sessions, move |s| {
+                    Ok(s.ledger().find_work_item(project_id, n)?)
+                })
+                .await?
+                .ok_or_else(|| invalid(format!("work item #{n} não está neste ambiente")))?
+                .id;
+                let cfg = self
+                    .st
+                    .cleanup
+                    .as_ref()
+                    .map(|c| c.config().clone())
+                    .unwrap_or_default();
+                let v = blocking(&sessions, move |s| {
+                    s.remove_epic_worktree(id, &cfg, ct_core::now_ms())
+                })
+                .await?;
+                Ok(json!(v))
             }
             // Limpeza após a conclusão do work item (issue #287).
             "cleanup.status" | "cleanup.plan" | "cleanup.run" => {
@@ -1263,10 +1314,23 @@ impl Conn {
         let Some((CHANNEL_INPUT, id, data)) = parse_frame(bytes) else {
             return;
         };
-        if let Some(pty) = self.st.sessions.terminal(&id.to_string()) {
+        let id = id.to_string();
+        if let Some(pty) = self.st.sessions.terminal(&id) {
             let _ = pty.write(data);
+            note_human_input(&self.st.sessions, &id);
         }
     }
+}
+
+/// Teclado da UI numa sessão (#301): a da execução de épico fica assumida
+/// no hub. Em segundo plano, sem atrasar a digitação.
+fn note_human_input(sessions: &Sessions, id: &str) {
+    let (s, id) = (sessions.clone(), id.to_string());
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = s.note_human_input(&id, ct_core::now_ms()) {
+            tracing::debug!("entrada humana na sessão {id}: {e}");
+        }
+    });
 }
 
 fn dashboard(s: &Sessions, linked: bool) -> Result<Value, SessionsError> {

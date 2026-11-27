@@ -92,7 +92,19 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// de dependências do piloto automático, só no ambiente do modo autônomo), o
 /// texto do `session.continue` também nela e a ferramenta MCP
 /// `autopilot_set_dependencies`.
-pub const PROTOCOL_VERSION: &str = "2.24";
+/// 2.25 (#299): `epic_plan` (número do épico) no `session.start_project`
+/// (a sessão de plano da execução de épico) e a ferramenta MCP
+/// `epic_set_plan`, só nela.
+/// 2.26 (#298): `epic_run: { base }` no `session.start` (sub-issue da
+/// execução de épico, que sai da `wip` do épico e aceita texto no
+/// `session.continue`) e `worktree.remove { owner, repo, gh_number }` (também
+/// pelo canal do hub).
+/// 2.27 (#301): o evento `human_input` (teclado da UI numa sessão da
+/// execução de épico, no máximo um por minuto), que o hub usa para marcar a
+/// sub-issue como assumida.
+/// 2.28 (#300): a ferramenta MCP `epic_report_blocker`, só na sessão de
+/// sub-issue da execução de épico.
+pub const PROTOCOL_VERSION: &str = "2.28";
 
 #[derive(Clone)]
 pub struct AppState {

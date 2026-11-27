@@ -116,6 +116,44 @@ str_enum!(SessionState, "session_state", {
 
 str_enum!(Tool, "tool", { Claude => "claude", Codex => "codex" });
 
+// Execução de épico (épico #295, #296): estados da execução, do nó (uma
+// sub-issue), da versão do plano e a origem de um pedido de decisão. As
+// transições ficam em `epic_run.rs`.
+str_enum!(EpicRunStatus, "epic_run_status", {
+    Planejando => "planejando",
+    AguardandoAprovacao => "aguardando_aprovacao",
+    Executando => "executando",
+    Pausado => "pausado",
+    Estacionado => "estacionado",
+    Replanejando => "replanejando",
+    Integrando => "integrando",
+    AguardandoMerge => "aguardando_merge",
+    Concluido => "concluido",
+    Cancelado => "cancelado",
+});
+str_enum!(EpicNodeState, "epic_node_state", {
+    Pendente => "pendente",
+    Pronta => "pronta",
+    EmExecucao => "em_execucao",
+    EmPr => "em_pr",
+    Mesclada => "mesclada",
+    Assumida => "assumida",
+    Estacionada => "estacionada",
+    Bloqueada => "bloqueada",
+});
+str_enum!(EpicPlanState, "epic_plan_state", {
+    Rascunho => "rascunho",
+    Aprovado => "aprovado",
+    Substituido => "substituido",
+});
+str_enum!(EpicDecisionOrigin, "epic_decision_origin", {
+    PlanoErrado => "plano_errado",
+    CiEsgotado => "ci_esgotado",
+    SemProgresso => "sem_progresso",
+    ConflitoRebase => "conflito_rebase",
+    IssueAlterada => "issue_alterada",
+});
+
 // Como o agente executa o trabalho: direto na sessão (`native`) ou delegando
 // cada tarefa a subagentes (`subagents`).
 str_enum!(SessionMode, "session_mode", { Native => "native", Subagents => "subagents" });

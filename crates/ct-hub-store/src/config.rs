@@ -661,6 +661,8 @@ impl Hub {
             "DELETE FROM proposal WHERE project_id = ?1".to_string(),
             "DELETE FROM agent_rules WHERE project_id = ?1".to_string(),
             "DELETE FROM agent_rules_proposal WHERE project_id = ?1".to_string(),
+            // Execuções de épico (#296): o resto sai em cascata.
+            "DELETE FROM epic_run WHERE project_id = ?1".to_string(),
             "DELETE FROM purging WHERE project_id = ?1".to_string(),
         ] {
             self.conn.execute(&sql, [p.id])?;
