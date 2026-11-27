@@ -6,7 +6,8 @@ use crate::{Result, Sessions, SessionsError};
 use ct_agent::Conversation;
 use ct_core::branch::{branch_from_pattern, worktree_dir_name};
 use ct_core::{
-    ProjectKind, SessionState, Tool, WorkItemKind, WorkItemTrigger, CLAUDE_EFFORTS, CLAUDE_MODELS,
+    ProjectKind, SessionMode, SessionState, Tool, WorkItemKind, WorkItemTrigger, CLAUDE_EFFORTS,
+    CLAUDE_MODELS,
 };
 use ct_git::{ensure_worktree, WorktreeSpec};
 use ct_ledger::{Ledger, NewEvent, NewSession, Project, Session, WorkItem};
@@ -950,7 +951,10 @@ fn provider_env(
 mod tests {
     use super::*;
     use crate::test_support::*;
-    use ct_agent::claude::{hook_settings, session_settings, PERMISSION_HOOK_TIMEOUT_SECS};
+    use ct_agent::claude::{
+        effort_from_argv, hook_settings, session_settings, PERMISSION_HOOK_TIMEOUT_SECS,
+        SUBAGENTS_PROMPT,
+    };
     use ct_core::{SessionState, WorkItemStatus};
     use serde_json::Value;
     use std::os::unix::fs::PermissionsExt;
