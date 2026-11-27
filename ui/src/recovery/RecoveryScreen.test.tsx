@@ -87,7 +87,7 @@ test("painel lateral: item, ambiente, motivo e há quanto tempo; a primeira vem 
 /** Volta à Sala de controle e clica em Recuperar no cartão da sessão. */
 async function recoverFromStrip(user: ReturnType<typeof userEvent.setup>, title: RegExp) {
   await user.click(screen.getByRole("button", { name: "Sala de controle" }));
-  const faixa = (await screen.findByText(/Precisa de você ·/)).closest("section")!;
+  const faixa = await screen.findByRole("region", { name: "Precisa de você" });
   const card = within(faixa).getByText(title).closest("li")!;
   await user.click(within(card).getByRole("button", { name: "Recuperar" }));
 }

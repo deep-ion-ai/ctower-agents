@@ -28,6 +28,7 @@ import {
   sync,
   workItem,
 } from "./test/fixtures";
+import { showSessions } from "./test/control-room";
 
 const NOW = Date.now();
 const H = 3_600_000;
@@ -293,10 +294,13 @@ describe("projeto Jira + GitLab", () => {
     const api = envApi({ pr: null });
     render(<App api={api} />);
     const user = userEvent.setup();
+    // O fim do dia fica na visão "Concluídas hoje", e a grade, na "Rodando" (#357).
+    await user.click(await screen.findByRole("button", { name: /concluídas? hoje$/ }));
+    const footer = (await screen.findByRole("region", { name: /Em revisão/ })).closest("footer")!;
+    await waitFor(() => expect(footer).toHaveTextContent("app PROJ-5450"));
+    await showSessions(user);
     const tile = (await screen.findAllByRole("button", { name: /Portar o plugin/ })).find((b) => b.classList.contains("tile"))!;
     expect(tile).toHaveTextContent("app PROJ-5450");
-    const footer = screen.getByRole("region", { name: /Em revisão/ }).closest("footer")!;
-    expect(footer).toHaveTextContent("app PROJ-5450");
     // Título e status do sync dizem Jira.
     expect(screen.getByRole("button", { name: "Buscar issues agora" })).toHaveAttribute("title", "Buscar agora as issues do Jira em todos os ambientes conectados");
     expect(screen.getByRole("contentinfo", { name: "Barra de status" })).toHaveTextContent(/Jira sincronizado/);
@@ -320,7 +324,8 @@ describe("projeto Jira + GitLab", () => {
 
   test("Sala de controle: sync atrasado do Jira", async () => {
     render(<App api={envApi({ syncError: true })} />);
-    expect(await screen.findByText("Jira de app sem sincronizar")).toBeInTheDocument();
+    const row = (await screen.findByText("Jira sem sincronizar")).closest("li")!;
+    expect(row).toHaveTextContent("app");
     expectNeutral();
   });
 
@@ -385,6 +390,7 @@ describe("projeto Jira + GitLab", () => {
     const api = envApi();
     render(<App api={api} />);
     const user = userEvent.setup();
+    await showSessions(user);
     await screen.findAllByRole("button", { name: /Portar o plugin/ });
     await user.click(screen.getByRole("button", { name: "Abrir paleta de comandos" }));
     const dialog = screen.getByRole("dialog", { name: "Paleta de comandos" });

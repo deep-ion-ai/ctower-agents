@@ -69,7 +69,7 @@ function setup({ hub = false, interrupted = [S1] }: { hub?: boolean; interrupted
 const strip = async () => {
   await screen.findByRole("complementary", { name: "Sessões interrompidas" });
   await userEvent.click(screen.getByRole("button", { name: "Sala de controle" }));
-  return (await screen.findByText(/Precisa de você ·/)).closest("section")!;
+  return await screen.findByRole("region", { name: "Precisa de você" });
 };
 const confirm = () => screen.findByRole("alertdialog", { name: /Descartar/ });
 
@@ -77,7 +77,9 @@ test("Sala de controle: Descartar ao lado de Recuperar arquiva sem mexer no item
   const { api, user } = setup();
   render(<App api={api} />);
   const faixa = await strip();
-  expect(within(faixa).getByText("acme-web #12 Tela de login")).toBeInTheDocument();
+  // Lista compacta (#357): o projeto numa coluna, o item na outra.
+  const linha = within(faixa).getByText("#12 Tela de login").closest("li")!;
+  expect(within(linha).getByText("acme-web")).toBeInTheDocument();
   expect(within(faixa).getByRole("button", { name: "Recuperar" })).toBeInTheDocument();
   await user.click(within(faixa).getByRole("button", { name: "Descartar: acme-web #12 Tela de login" }));
 
@@ -96,7 +98,7 @@ test("Sala de controle: Descartar ao lado de Recuperar arquiva sem mexer no item
 
   // O push `session_archived` relê o dashboard: sai da faixa.
   api.push("wsl", "session_archived", { session_id: "s-1" });
-  await waitFor(() => expect(screen.queryByText("acme-web #12 Tela de login")).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByText("#12 Tela de login")).not.toBeInTheDocument());
 });
 
 test("Cancelar não arquiva", async () => {

@@ -155,7 +155,6 @@ button.cr-item-main {
   color: var(--attention);
 }
 
-.attention-grid,
 .tile-grid {
   list-style: none;
   margin: 0;
@@ -164,41 +163,8 @@ button.cr-item-main {
   gap: 12px;
 }
 
-.attention-grid {
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-}
-
 .tile-grid {
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-}
-
-.attention-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px;
-  border-radius: 8px;
-  background: var(--attention-card);
-  border: 1px solid var(--attention-border);
-}
-
-.attention-card[data-tone="error"] {
-  border-color: var(--error-border);
-}
-
-.attention-card[data-tone="neutral"] {
-  border-color: var(--border-strong);
-}
-
-.attention-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.attention-head .muted {
-  margin-left: auto;
 }
 
 .attention-kind {
@@ -206,14 +172,6 @@ button.cr-item-main {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--attention);
-}
-
-.attention-card[data-tone="error"] .attention-kind {
-  color: var(--error);
-}
-
-.attention-card[data-tone="neutral"] .attention-kind {
-  color: var(--text-2);
 }
 
 .attention-item-title {
@@ -522,4 +480,259 @@ button.cr-item-main {
     content: attr(data-label) ": ";
     color: var(--text-2);
   }
+}
+
+/* Topo da Sala de controle (issue 357): título e data, chips de contagem e o botão de saúde. */
+.control-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.control-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.cr-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cr-link:hover {
+  text-decoration: underline;
+}
+
+.cr-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cr-chip {
+  min-height: 28px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cr-chip:hover {
+  border-color: var(--border-strong);
+}
+
+.cr-chip[data-tone="attention"] {
+  color: var(--attention);
+}
+
+.cr-chip[data-tone="running"] {
+  color: var(--running);
+}
+
+.cr-chip[data-tone="done"] {
+  color: var(--done);
+}
+
+.cr-chip[aria-pressed="true"] {
+  background: var(--selected);
+  border-color: var(--accent);
+}
+
+.cr-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cr-health-warn {
+  color: var(--attention);
+}
+
+/* Detalhes da saúde: abaixo do topo, na largura toda. */
+.cr-health-panel {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.cr-health-panel[hidden] {
+  display: none;
+}
+
+.cr-health-list,
+.cr-health-warnings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.cr-health-list .cr-item {
+  padding-left: 0;
+}
+
+.cr-health-warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cr-health-warnings li:last-child {
+  border-bottom: 0;
+}
+
+.cr-health-warnings .cr-item-text {
+  flex: 1;
+}
+
+/* "Precisa de você" compacta: uma linha por item. */
+.attention-bar {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.attention-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--attention-border);
+  border-radius: 8px;
+  background: var(--attention-card);
+}
+
+.attention-rows[hidden] {
+  display: none;
+}
+
+.attention-row {
+  display: grid;
+  grid-template-columns: 9rem 9rem minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.attention-row:first-child {
+  border-top: 0;
+}
+
+.attention-row .attention-kind {
+  font-size: 11px;
+}
+
+.attention-row[data-tone="error"] .attention-kind {
+  color: var(--error);
+}
+
+.attention-row[data-tone="neutral"] .attention-kind {
+  color: var(--text-2);
+}
+
+.attention-project {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.attention-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.attention-row .attention-item-title {
+  font-size: 13px;
+}
+
+.attention-row .attention-detail {
+  font-size: 12px;
+}
+
+.attention-since {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.attention-row .attention-actions {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
+@media (max-width: 700px) {
+  .attention-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .attention-row .attention-kind,
+  .attention-project {
+    grid-column: 1;
+  }
+
+  .attention-since {
+    grid-column: 2;
+    grid-row: 1;
+    text-align: right;
+  }
+
+  .attention-text,
+  .attention-row .attention-actions {
+    grid-column: 1 / -1;
+  }
+
+  .attention-row .attention-actions {
+    justify-content: flex-start;
+  }
+
+  .attention-row .attention-actions .btn {
+    min-height: var(--touch);
+  }
+}
+
+/* Rodapé "Infraestrutura": hub, ambientes e backup numa linha. */
+.cr-infra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.cr-infra-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cr-infra [data-warn="true"] {
+  color: var(--attention);
 }

@@ -49,7 +49,8 @@ export function useGridPrefs(): [GridPrefs, (p: Partial<GridPrefs>) => void] {
 }
 
 /**
- * Visões do painel lateral; `null` = tudo (faixa, grade e o fim do dia).
+ * Visões abertas pelos chips do topo (#357); `null` = a tela inicial (topo,
+ * "Precisa de você" e Infraestrutura, sem a grade nem o fim do dia).
  * `usage`: a visão por sessão, agrupada por conta (#109).
  */
 export type ControlView = "attention" | "running" | "done" | "usage";

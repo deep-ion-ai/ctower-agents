@@ -6,7 +6,7 @@ import "./env.css";
 import { useId, type ReactNode } from "react";
 import { useNow } from "../App";
 import type { EnvView } from "../api/types";
-import { HubSyncButton } from "../control-room/Sidebar";
+import { HubSyncButton } from "../control-room/Health";
 import { hubTab } from "../hub/sections";
 import { logsTab, maintenanceTab } from "../maintenance/sections";
 import { EnvUpdates } from "../maintenance/Updates";

@@ -37,6 +37,7 @@ test.each([
     },
     kind: "waiting",
     title: "ctower-agents #31 ui: Sala de controle",
+    where: { project: "ctower-agents", item: "#31 ui: Sala de controle" },
     action: { to: "terminal", env: "wsl", session: session().id },
   },
   {
@@ -44,6 +45,7 @@ test.each([
     p: { dashboards: { wsl: dashboard({ interrupted_sessions: [session({ state: "interrupted" })] }, [workItem()]) } },
     kind: "interrupted",
     title: "ctower-agents #31 Item 31",
+    where: { project: "ctower-agents", item: "#31 Item 31" },
     action: { to: "recovery", env: "wsl", session: session().id },
   },
   {
@@ -58,6 +60,7 @@ test.each([
     },
     kind: "failed",
     title: "ctower-agents #31 Item 31",
+    where: { project: "ctower-agents", item: "#31 Item 31" },
     action: { to: "project", env: "wsl", projectId: 1 },
   },
   {
@@ -65,6 +68,7 @@ test.each([
     p: { status: { wsl: { env: "wsl", connected: false, error: "daemon inacessível", since: NOW - 3 * MIN } } },
     kind: "env_down",
     title: "ctower-agents (WSL) desconectado",
+    where: { project: undefined, item: undefined },
     action: { to: "settings" },
   },
   {
@@ -72,6 +76,7 @@ test.each([
     p: { dashboards: { wsl: dashboard({ sync: [sync({ last_ok_at: NOW - 4 * SYNC_INTERVAL_MS })] }) } },
     kind: "sync_late",
     title: "GitHub de ctower-agents sem sincronizar",
+    where: { project: "ctower-agents", item: "GitHub sem sincronizar" },
     action: { to: "project", env: "wsl", projectId: 1 },
   },
   {
@@ -79,6 +84,7 @@ test.each([
     p: { dashboards: { wsl: dashboard({ sync: [sync({ last_ok_at: null, last_error: "401" })] }) } },
     kind: "sync_late",
     title: "GitHub de ctower-agents sem sincronizar",
+    where: { project: "ctower-agents", item: "GitHub sem sincronizar" },
     action: { to: "project", env: "wsl", projectId: 1 },
   },
   {
@@ -89,6 +95,7 @@ test.each([
     },
     kind: "alert",
     title: "Transcript em local volátil: pode se perder se o ambiente cair",
+    where: { project: "ctower-agents", item: undefined },
     action: { to: "terminal", env: "wsl", session: session().id },
   },
   {
@@ -123,11 +130,47 @@ test.each([
     title: "Sessão iniciada sem saber o épico da issue: as regras do épico podem estar faltando",
     action: { to: "terminal", env: "wsl", session: session().id },
   },
-])("$caso", ({ p, kind, title, action }) => {
+])("$caso", ({ p, kind, title, action, ...rest }) => {
   const items = attention(input(p as Partial<AttentionInput>));
   expect(items).toHaveLength(1);
   expect(items[0]).toMatchObject({ kind, title, action });
   expect(items[0].label).not.toBe("");
+  // Lista compacta (#357): o projeto numa coluna e o item sem ele.
+  const where = (rest as { where?: { project?: string; item?: string } }).where;
+  if (where) {
+    expect(items[0].project).toBe(where.project);
+    expect(items[0].item).toBe(where.item);
+  }
+});
+
+test("lista compacta (#357): gestor, sessão do projeto e sync falhando têm projeto e item à parte", () => {
+  const d = dashboard(
+    {
+      live_sessions: [
+        session({ id: "g", work_item_id: 900, state: "idle" }),
+        session({ id: "p", work_item_id: 40, state: "idle" }),
+      ],
+      gestor_work_item_id: 900,
+    },
+    [workItem({ id: 40, gh_number: 0, status: "aguardando_voce" })],
+  );
+  const perms = {
+    wsl: [
+      { session_id: "g", tool_name: "Bash", tool_input: { command: "ls" }, created_at: NOW } as never,
+      { session_id: "p", tool_name: "Bash", tool_input: { command: "ls" }, created_at: NOW } as never,
+    ],
+  };
+  const items = attention(input({ dashboards: { wsl: d }, permissions: perms }));
+  const gestor = items.find((i) => i.key.endsWith(":g"))!;
+  expect(gestor.project).toBeUndefined();
+  expect(gestor.item).toBe("Gestor de projetos");
+  const projeto = items.find((i) => i.key.endsWith(":p"))!;
+  expect(projeto).toMatchObject({ project: "ctower-agents", item: "Sessão do projeto" });
+
+  const falhando = attention(
+    input({ dashboards: { wsl: dashboard({ sync: [sync({ last_ok_at: NOW, failures: 3, last_error: "HTTP 410" })] }) } }),
+  );
+  expect(falhando[0]).toMatchObject({ kind: "sync_failing", project: "ctower-agents", item: "Sync falhando há 3 ciclos" });
 });
 
 test("interrompidas em ambientes diferentes: cada ação leva o ambiente e a sessão dela (#160)", () => {

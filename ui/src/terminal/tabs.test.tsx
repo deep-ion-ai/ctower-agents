@@ -7,6 +7,7 @@ import { terms } from "../test/fakeXterm";
 import { dashboard, MIN, project, session, sync, workItem } from "../test/fixtures";
 import { groupSessions } from "./SessionTree";
 import { resetShellStore } from "./shells";
+import { showSessions } from "../test/control-room";
 
 // Muitas abas e a sessão do projeto (#427; spec da #87, §5 e §6).
 
@@ -56,6 +57,7 @@ async function setup(shells: Shell[] = []) {
   terms.length = 0;
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));
   await waitFor(() => expect(api.attached.has(S.id)).toBe(true));
   const open = async (name: RegExp, id: string) => {

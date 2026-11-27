@@ -10,6 +10,7 @@ import { matches } from "./SessionTree";
 import { terms } from "../test/fakeXterm";
 import { RESUMED_PROMPT } from "./actions";
 import { RESUME_PROMPT } from "../recovery/RecoveryScreen";
+import { showSessions } from "../test/control-room";
 
 // O xterm é trocado pelo fake de ../test/fakeXterm (setup dos testes).
 
@@ -39,6 +40,7 @@ async function openTab(api = new FakeDaemonApi()) {
   terms.length = 0;
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));
   await waitFor(() => expect(api.attached.has(S.id)).toBe(true));
   return { api, user };
@@ -245,6 +247,7 @@ async function openTree() {
   const user = userEvent.setup();
   // Com sessão interrompida, o app abre na Recuperação.
   await user.click(await screen.findByRole("button", { name: "Sala de controle" }));
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));
   await waitFor(() => expect(api.attached.has(S.id)).toBe(true));
   return { api, user, tree: screen.getByRole("tree", { name: "Projetos" }), side: screen.getByRole("complementary", { name: "Sessões por projeto" }) };
@@ -586,6 +589,7 @@ test("árvore põe as sessões das sub-issues sob o épico pai, com a do épico 
   terms.length = 0;
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));
   const ep = await screen.findByRole("treeitem", { name: "#50 épico grande, épico, 2 sessões" });
   expect(ep).toHaveAttribute("aria-level", "2");
@@ -628,6 +632,7 @@ async function openSplit() {
   terms.length = 0;
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));
   await user.click(await screen.findByRole("treeitem", { name: /#40 revisar guia/ }));
   await waitFor(() => expect(api.attached.has(RS2.id)).toBe(true));
@@ -780,6 +785,7 @@ test("sessão do projeto (#0): Abrir repositório no GitHub, sem PR nem item; Re
   terms.length = 0;
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /sessão do projeto/ }));
   await waitFor(() => expect(api.attached.has(S0.id)).toBe(true));
   const barra = screen.getByRole("region", { name: "Sessão" });
@@ -830,6 +836,7 @@ test("gestor: sem Abrir issue; Reiniciar abre a modal do gestor e chama start_ge
   terms.length = 0;
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /Gestor de projetos/ }));
   await waitFor(() => expect(api.attached.has(G.id)).toBe(true));
   const barra = screen.getByRole("region", { name: "Sessão" });
