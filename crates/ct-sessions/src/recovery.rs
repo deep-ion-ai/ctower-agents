@@ -1,8 +1,9 @@
 //! Boot do daemon, tela de recuperação, retomada e arquivamento (spec §6, §7.4).
 
-use crate::launch::{AgentOptions, LaunchMode, LaunchSpec, PtySize};
+use crate::launch::{AgentOptions, LaunchSpec, PtySize};
 use crate::transcripts::{integrity, TranscriptIntegrity};
 use crate::{Result, Sessions, SessionsError};
+use ct_agent::Conversation;
 use ct_core::{now_ms, SessionState};
 use ct_ledger::{Event, Ledger, NewEvent, Session, WorkItem};
 use serde::Serialize;
@@ -217,14 +218,14 @@ impl Sessions {
             &wi,
             LaunchSpec {
                 cwd: &old.cwd,
-                mode: LaunchMode::Resume(&tool_id),
+                mode: Conversation::Resume(&tool_id),
                 prompt: prompt.unwrap_or(RESUME_PROMPT),
                 size: PtySize::DEFAULT,
                 // A retomada segue com o modelo, o esforço (lido do argv,
                 // #182) e o modo da sessão original.
                 agent: &AgentOptions {
                     model: old.model.clone(),
-                    effort: crate::launch::effort_from_argv(&old.launch_cmd),
+                    effort: ct_agent::claude::effort_from_argv(&old.launch_cmd),
                     mode: old.mode,
                     remote_control,
                 },
