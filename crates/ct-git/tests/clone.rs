@@ -122,18 +122,60 @@ fn clona_pela_url_do_cadastro() {
     let d = TempDir::new().unwrap();
     let dest = d.path().join("projetos/app");
     let url = src.path().to_str().unwrap();
-    ct_git::clone_url(url, &dest).unwrap();
+    ct_git::clone_url(url, &dest, None).unwrap();
     assert_eq!(origin_url(&dest).unwrap().as_deref(), Some(url));
 
     // URL que o git não alcança: erro com o motivo, sem pedir senha.
-    let err = ct_git::clone_url("https://127.0.0.1:9/g/r.git", &d.path().join("x")).unwrap_err();
+    let err =
+        ct_git::clone_url("https://127.0.0.1:9/g/r.git", &d.path().join("x"), None).unwrap_err();
     assert!(
         matches!(&err, GitError::Failed { args, .. } if args == "clone https://127.0.0.1:9/g/r.git"),
         "{err}"
     );
     // Opção no lugar da URL é recusada antes do git.
     assert!(matches!(
-        ct_git::clone_url("--upload-pack=x", &d.path().join("y")),
+        ct_git::clone_url("--upload-pack=x", &d.path().join("y"), None),
         Err(GitError::InvalidRef { .. })
     ));
+}
+
+/// #281: o token da conexão do GitLab vai ao git como cabeçalho do host
+/// da URL, por variável de ambiente; SSH não leva token.
+#[test]
+fn token_do_gitlab_vira_cabecalho_do_host() {
+    use std::ffi::OsString;
+    let envs =
+        ct_git::token_auth_envs("https://usuario@gitlab.example.com/g/r.git", "tok-ficticio")
+            .unwrap();
+    let get = |k: &str| {
+        envs.iter()
+            .find(|(n, _)| n == &OsString::from(k))
+            .map(|(_, v)| v.to_string_lossy().into_owned())
+    };
+    assert_eq!(get("GIT_CONFIG_COUNT").as_deref(), Some("1"));
+    assert_eq!(
+        get("GIT_CONFIG_KEY_0").as_deref(),
+        Some("http.https://gitlab.example.com/.extraHeader")
+    );
+    // base64("oauth2:tok-ficticio")
+    assert_eq!(
+        get("GIT_CONFIG_VALUE_0").as_deref(),
+        Some("Authorization: Basic b2F1dGgyOnRvay1maWN0aWNpbw==")
+    );
+    assert!(ct_git::token_auth_envs("git@gitlab.example.com:g/r.git", "t").is_none());
+    assert!(ct_git::token_auth_envs("http://gitlab.example.com/g/r.git", "t").is_none());
+
+    // O erro do clone com token não leva o token.
+    let d = TempDir::new().unwrap();
+    let err = ct_git::clone_url(
+        "https://127.0.0.1:9/g/r.git",
+        &d.path().join("z"),
+        Some("tok-ficticio"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        !err.contains("tok-ficticio") && !err.contains("b2F1dGgy"),
+        "{err}"
+    );
 }

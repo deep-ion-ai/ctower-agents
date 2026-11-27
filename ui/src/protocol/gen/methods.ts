@@ -14,7 +14,7 @@ import type { DiffSummary } from "./DiffSummary";
 import type { DocsDir } from "./DocsDir";
 import type { DocsFiles } from "./DocsFiles";
 import type { EnvAccount } from "./EnvAccount";
-import type { EnvCredential } from "./EnvCredential";
+import type { EnvConnection } from "./EnvConnection";
 import type { EnvInfo } from "./EnvInfo";
 import type { Event } from "./Event";
 import type { GestorScope } from "./GestorScope";
@@ -35,7 +35,6 @@ import type { SessionUsage } from "./SessionUsage";
 import type { SharedFile } from "./SharedFile";
 import type { Shell } from "./Shell";
 import type { StatuslineInstall } from "./StatuslineInstall";
-import type { TokenStatus } from "./TokenStatus";
 import type { TrackerIssueAdded } from "./TrackerIssueAdded";
 import type { TranscriptTail } from "./TranscriptTail";
 import type { UpdateStatus } from "./UpdateStatus";
@@ -50,8 +49,8 @@ export const METHOD_SCOPES = {
     "env.check_update",
     "env.config.get",
     "env.config.set",
-    "env.credentials.get",
-    "env.credentials.set",
+    "env.connections.get",
+    "env.connections.set",
     "env.statusline.install",
     "account.get",
     "projects.list",
@@ -69,9 +68,6 @@ export const METHOD_SCOPES = {
     "sync.now",
     "tracker.issue_body",
     "tracker.add_issue",
-    "github.status",
-    "github.set_token",
-    "github.clear_token",
     "github.pr.comment",
     "tree.get",
     "docs.dir",
@@ -195,8 +191,8 @@ export interface DaemonMethods {
   "env.check_update": { params: null; result: UpdateStatus };
   "env.config.get": { params: null; result: ConfigItem[] };
   "env.config.set": { params: { key: string; value: unknown }; result: ConfigItem };
-  "env.credentials.get": { params: null; result: EnvCredential[] };
-  "env.credentials.set": { params: { owner: string; repo: string; tracker_cmd?: string | null; forge_cmd?: string | null }; result: EnvCredential[] };
+  "env.connections.get": { params: null; result: EnvConnection[] };
+  "env.connections.set": { params: { name: string; credential_cmd?: string | null }; result: EnvConnection[] };
   "env.statusline.install": { params: null; result: StatuslineInstall };
   "account.get": { params: null; result: EnvAccount };
   "projects.list": { params: { unassigned?: boolean | null } | null; result: Project[] };
@@ -214,9 +210,6 @@ export interface DaemonMethods {
   "sync.now": { params: { project_id?: number | null } | null; result: ProjectSync[] };
   "tracker.issue_body": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; number: number }; result: unknown };
   "tracker.add_issue": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; key: string | number }; result: TrackerIssueAdded };
-  "github.status": { params: null; result: TokenStatus };
-  "github.set_token": { params: { token: string }; result: TokenStatus };
-  "github.clear_token": { params: null; result: TokenStatus };
   "github.pr.comment": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; pr: number; body: string }; result: PrComment };
   "tree.get": { params: { project_id: number }; result: ProjectTree };
   "docs.dir": { params: { project_id: number; epic?: number | null }; result: DocsDir };

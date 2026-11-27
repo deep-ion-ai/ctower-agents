@@ -1,8 +1,9 @@
 //! Clone do repositório de um projeto na aplicação das atribuições vindas
 //! do hub (#177), o fluxo que era o do antigo cadastro por URL (#40). No
 //! GitHub, pelo `gh repo clone`; no GitLab (spec do Jira e GitLab §7.1), pelo
-//! `git clone` da URL do cadastro, HTTPS ou SSH, com a credencial do git do
-//! ambiente. Nos dois, o `origin` é conferido pelo host e pelo caminho
+//! `git clone` da URL do cadastro: por HTTPS, com o token da conexão do
+//! GitLab (#281); por SSH, com a chave do ambiente. Nos dois, o `origin` é
+//! conferido pelo host e pelo caminho
 //! ([`ct_core::repo_from_url`]), e HTTPS e SSH do mesmo repositório valem.
 
 use ct_core::{repo_from_url, ForgeConfig, RepoRef};
@@ -36,16 +37,22 @@ pub fn expand_home(s: &str) -> String {
     }
 }
 
-/// O repositório que o `origin` precisa ser: `github.com/<owner>/<repo>` ou
-/// o host e o caminho do cadastro do GitLab.
-fn expected(owner: &str, repo: &str, forge: &ForgeConfig) -> RepoRef {
+/// O repositório que o `origin` precisa ser: `github.com/<owner>/<repo>` ou,
+/// no GitLab, o host da conexão do GitLab (`gitlab_host`, #277; vazio = o da
+/// URL de clone do cadastro) e o caminho do cadastro.
+fn expected(owner: &str, repo: &str, forge: &ForgeConfig, gitlab_host: &str) -> RepoRef {
     match forge {
-        ForgeConfig::Github => RepoRef {
+        ForgeConfig::Github(_) => RepoRef {
             host: "github.com".into(),
             path: format!("{owner}/{repo}"),
         },
         ForgeConfig::Gitlab(g) => RepoRef {
-            host: g.host.trim().to_ascii_lowercase(),
+            host: match gitlab_host.trim() {
+                "" => repo_from_url(g.clone_url.trim())
+                    .map(|r| r.host)
+                    .unwrap_or_default(),
+                h => h.to_ascii_lowercase(),
+            },
             path: match g.path.trim_matches('/') {
                 "" => format!("{owner}/{repo}"),
                 p => p.to_string(),
@@ -55,12 +62,17 @@ fn expected(owner: &str, repo: &str, forge: &ForgeConfig) -> RepoRef {
 }
 
 /// Pasta existente precisa ser um clone do repositório do projeto; ausente
-/// é clonada: no GitHub com o `gh` (e o token do GitHub do ambiente, se
-/// houver), no GitLab com o `git clone` da URL do cadastro.
+/// é clonada: no GitHub com o `gh`, no GitLab com o `git clone` da URL do
+/// cadastro. `token` é o da conexão da forja do projeto (GitHub ou GitLab),
+/// se houver; sem ele, vale a credencial do `gh` ou do git do ambiente.
+/// `gitlab_host` é o host da conexão do GitLab do projeto (ignorado no
+/// GitHub).
+#[allow(clippy::too_many_arguments)]
 pub fn ensure_checkout(
     owner: &str,
     repo: &str,
     forge: &ForgeConfig,
+    gitlab_host: &str,
     repo_path: &str,
     gh_bin: &str,
     token: Option<&str>,
@@ -70,11 +82,11 @@ pub fn ensure_checkout(
             "caminho deve ser absoluto: {repo_path}"
         )));
     }
-    let want = expected(owner, repo, forge);
+    let want = expected(owner, repo, forge, gitlab_host);
     let path = Path::new(repo_path);
     if !path.exists() {
         match forge {
-            ForgeConfig::Github => {
+            ForgeConfig::Github(_) => {
                 ct_git::gh_clone(gh_bin, owner, repo, path, token).map_err(|e| {
                     CheckoutError::Clone(format!(
                         "clone de {owner}/{repo} em {repo_path} falhou: {e}"
@@ -89,13 +101,20 @@ pub fn ensure_checkout(
                         want.path
                     )));
                 }
-                // O credential helper (`osxkeychain` no macOS) pode não
+                // Por HTTPS, o token da conexão do GitLab (#281). Sem ele (ou
+                // por SSH), a credencial do git do ambiente, que pode não
                 // responder ao daemon no launchd: a saída é o clone à mão.
-                ct_git::clone_url(url, path).map_err(|e| {
+                ct_git::clone_url(url, path, token).map_err(|e| {
+                    let hint = if token.is_some() && url.starts_with("https://") {
+                        "confira a credencial da conexão do GitLab (Hub › Conexões) ou a \
+                         sobrescrita dela no ambiente"
+                    } else {
+                        "configure a credencial da conexão do GitLab (Hub › Conexões) ou a \
+                         do git do ambiente"
+                    };
                     CheckoutError::Clone(format!(
-                        "clone de {url} em {repo_path} falhou: {e}. Se a credencial do git \
-                         não responde a partir do ctowerd, clone à mão num terminal do \
-                         ambiente: git clone {url} {repo_path}"
+                        "clone de {url} em {repo_path} falhou: {e}. {hint}; ou clone à mão \
+                         num terminal do ambiente: git clone {url} {repo_path}"
                     ))
                 })?
             }
@@ -115,7 +134,7 @@ pub fn ensure_checkout(
             "{repo_path} é um clone de {}, não de {}",
             origin.unwrap_or_else(|| "(sem origin)".into()),
             match forge {
-                ForgeConfig::Github => format!("{owner}/{repo}"),
+                ForgeConfig::Github(_) => format!("{owner}/{repo}"),
                 ForgeConfig::Gitlab(_) => format!("{}/{}", want.host, want.path),
             }
         )));
@@ -130,15 +149,16 @@ mod tests {
 
     /// `gh` que falha: nenhum caso aqui pode clonar.
     const NO_GH: &str = "/bin/false";
-    const GH: ForgeConfig = ForgeConfig::Github;
+    const GH: ForgeConfig = ForgeConfig::Github(ct_core::GithubConfig { connection: None });
+
+    /// Host da conexão do GitLab do projeto (#277).
+    const HOST: &str = "gitlab.example.com";
 
     fn gitlab(clone_url: &str) -> ForgeConfig {
         ForgeConfig::Gitlab(ct_core::GitlabConfig {
-            connection: None,
-            host: "gitlab.example.com".into(),
+            connection: Some(8),
             path: "grupo/projeto/app".into(),
             clone_url: clone_url.into(),
-            credential_cmd: String::new(),
         })
     }
 
@@ -165,6 +185,7 @@ mod tests {
                     "grupo/projeto",
                     "app",
                     &forge,
+                    HOST,
                     dir.to_str().unwrap(),
                     NO_GH,
                     None
@@ -187,6 +208,7 @@ mod tests {
                 "grupo/projeto",
                 "app",
                 &forge,
+                HOST,
                 dir.to_str().unwrap(),
                 NO_GH,
                 None,
@@ -220,6 +242,7 @@ mod tests {
             "grupo/projeto",
             "app",
             &forge,
+            HOST,
             dest.to_str().unwrap(),
             NO_GH,
             None,
@@ -244,6 +267,7 @@ mod tests {
                 "grupo/projeto",
                 "app",
                 &forge,
+                HOST,
                 dest.to_str().unwrap(),
                 NO_GH,
                 None
@@ -256,6 +280,7 @@ mod tests {
             "grupo/projeto",
             "app",
             &gitlab("https://127.0.0.1:9/grupo/projeto/app.git"),
+            HOST,
             longe.to_str().unwrap(),
             NO_GH,
             None,
@@ -273,6 +298,7 @@ mod tests {
             "grupo/projeto",
             "app",
             &gitlab(""),
+            HOST,
             longe.to_str().unwrap(),
             NO_GH,
             None,
@@ -309,6 +335,7 @@ mod tests {
                     "deep-ion-ai",
                     "demo",
                     &GH,
+                    "",
                     dir.to_str().unwrap(),
                     NO_GH,
                     None
@@ -328,6 +355,7 @@ mod tests {
             "deep-ion-ai",
             "demo",
             &GH,
+            "",
             dir.to_str().unwrap(),
             NO_GH,
             None,
@@ -348,6 +376,7 @@ mod tests {
             "deep-ion-ai",
             "demo",
             &GH,
+            "",
             outro.to_str().unwrap(),
             NO_GH,
             None,
@@ -364,6 +393,7 @@ mod tests {
             "deep-ion-ai",
             "demo",
             &GH,
+            "",
             sem.to_str().unwrap(),
             NO_GH,
             None,
@@ -377,7 +407,7 @@ mod tests {
 
     #[test]
     fn caminho_relativo_e_recusado() {
-        let err = ensure_checkout("o", "r", &GH, "projetos/r", NO_GH, None).unwrap_err();
+        let err = ensure_checkout("o", "r", &GH, "", "projetos/r", NO_GH, None).unwrap_err();
         assert!(matches!(err, CheckoutError::Invalid(_)), "{err:?}");
     }
 }

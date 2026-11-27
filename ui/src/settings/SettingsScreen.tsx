@@ -23,12 +23,7 @@ import {
   useEnvConfig,
 } from "./EnvConfigSettings";
 import { EnvsSettings } from "./EnvsSettings";
-import {
-  TrackerCredentialsControl,
-  credentialsChanged,
-  useTrackerCredentials,
-} from "./TrackerCredentialsSettings";
-import { ENV_TOKEN_HINT, GithubSettings } from "./GithubSettings";
+import { ConnectionOverridesControl, connectionsChanged, useEnvConnections } from "./ConnectionOverridesSettings";
 import { HubSettings } from "./HubSettings";
 import {
   PlanAccountsControl,
@@ -745,7 +740,7 @@ function useEnvItems(env: string | undefined): Item[] {
   const nav = useNav();
   const [syncing, setSyncing] = useState(false);
   const cfg = useEnvConfig(env);
-  const creds = useTrackerCredentials(env);
+  const conns = useEnvConnections(env);
   if (!env) return [];
   const info = infos[env];
   const on = !!status[env]?.connected;
@@ -764,18 +759,6 @@ function useEnvItems(env: string | undefined): Item[] {
     });
 
   return [
-    {
-      id: "gh-token",
-      section: "github",
-      category: "GitHub",
-      name: "Token do ambiente",
-      description:
-        "Usado pelo daemon para sincronizar e clonar. Fica em ~/.config/ctower/github.token na distro; sem ele, o daemon usa gh auth token.",
-      desc: ENV_TOKEN_HINT,
-      keys: ["github.token"],
-      keywords: "gh auth token pat personal access login conta",
-      control: <GithubSettings env={env} />,
-    },
     {
       id: "gh-sync",
       section: "github",
@@ -813,17 +796,17 @@ function useEnvItems(env: string | undefined): Item[] {
       ),
     },
     {
-      id: "tracker-credentials",
-      section: "tracker-credentials",
-      category: "Credenciais do Jira e GitLab",
-      name: "Comandos de credencial deste ambiente",
-      shownKey: "credentials",
-      keys: ["credentials"],
-      keywords: "jira gitlab glab credencial senha token pass comando credential_cmd ambiente",
+      id: "env-connections",
+      section: "env-connections",
+      category: "Credenciais das conexões",
+      name: "Comando de credencial deste ambiente",
+      shownKey: "connections",
+      keys: ["connections", "credential_cmd", "github.token"],
+      keywords: "jira gitlab glab github gh credencial senha token pass comando credential_cmd ambiente conexão sobrescrita",
       description:
-        "Comando que imprime a senha do Jira ou o token do GitLab de cada projeto, só neste ambiente (caminho do pass, outro gerenciador de senhas). Vazio = o comando do cadastro do projeto. Grava em [credentials] do config.toml e vale na hora, sem reiniciar; os outros ambientes e o cadastro do hub não mudam.",
-      modified: credentialsChanged(creds),
-      control: <TrackerCredentialsControl creds={creds} connected={on} />,
+        "Comando que imprime o token de cada conexão do hub (Jira, GitLab, GitHub), só neste ambiente: caminho do pass, outro gerenciador de senhas, gh auth token, ou um arquivo que fica em outro lugar aqui. Vazio = a fonte da conexão no hub. Grava em [connections] do config.toml e vale no próximo uso, sem reiniciar; os outros ambientes e o hub não mudam. O token do GitHub do ambiente também vem daqui.",
+      modified: connectionsChanged(conns),
+      control: <ConnectionOverridesControl conns={conns} connected={on} />,
     },
     {
       id: "update-ref",
@@ -986,7 +969,7 @@ function TemplateEditor({ k }: { k: TemplateKey }) {
           <>
             Variáveis: <span className="mono">{"{{kind}} {{key}} {{number}} {{title}} {{branch}} {{base}} {{protected}}"}</span>,{" "}
             <span className="mono">{"{{jira_url}} {{jira_project}} {{forge_path}}"}</span> e{" "}
-            <span className="mono">{"{{jira}} {{glab}}"}</span> (o jira-cli e o glab com o comando de credencial do projeto,
+            <span className="mono">{"{{jira}} {{glab}}"}</span> (o jira-cli e o glab com o comando de credencial da conexão do projeto,
             nunca a senha). Usado nos projetos Jira + GitLab; as convenções de cada projeto vão nas regras do agente.
           </>
         ) : (

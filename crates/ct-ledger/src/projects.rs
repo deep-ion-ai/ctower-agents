@@ -89,6 +89,13 @@ pub struct Project {
     /// Configuração de release, como veio do hub (#204); desligada no
     /// projeto local legado e num hub anterior.
     pub release: ct_core::ReleaseConfig,
+    /// Endereços e prefixos das conexões do projeto (#277), derivados por
+    /// quem responde à UI (`projects.list`, `dashboard.get`) com as conexões
+    /// e as sobrescritas deste ambiente. Não é cadastro: `None` no que sai
+    /// do banco.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub endpoints: Option<ct_core::ProjectEndpoints>,
 }
 
 impl Default for Project {
@@ -120,6 +127,7 @@ impl Default for Project {
             autonomy_report: None,
             approval: ct_core::ApprovalConfig::default(),
             release: ct_core::ReleaseConfig::default(),
+            endpoints: None,
         }
     }
 }
@@ -197,6 +205,7 @@ pub(crate) fn row_to_project(r: &Row) -> rusqlite::Result<Project> {
             .and_then(|s| serde_json::from_str(&s).ok()),
         approval: json_col(r, 26)?,
         release: json_col(r, 27)?,
+        endpoints: None,
     })
 }
 
@@ -483,6 +492,7 @@ mod gestor_tests {
         // O pull do hub (sem o sentinela) não o desatribui.
         let cfg = ConfigResponse {
             connections: None,
+            connection_names: None,
             config_rev: 1,
             config_epoch: 1,
             changed: true,

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
 ct-proc.workspace = true
 serde.workspace = true
 thiserror.workspace = true

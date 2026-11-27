@@ -37,7 +37,6 @@ function setup(project: HubProject) {
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
     .onHub("hub.proposals.list", NO_PROPOSALS)
     .onHub("hub.health.get", NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.projects.update", () => project);
   render(
     <App

@@ -299,13 +299,39 @@ pub fn gh_clone(
     Ok(())
 }
 
+/// Cabeçalho de autenticação do token do GitLab no `git` por HTTPS, só para
+/// o host da URL e só neste processo (`GIT_CONFIG_COUNT`, sem `argv` nem
+/// `.git/config`): `Authorization: Basic base64(oauth2:<token>)`, a forma
+/// que o GitLab aceita para token pessoal, de projeto ou de grupo. `None` =
+/// URL que não é HTTPS (SSH usa a chave) ou sem host.
+pub fn token_auth_envs(url: &str, token: &str) -> Option<Vec<(OsString, OsString)>> {
+    use base64::Engine;
+    let rest = url.trim().strip_prefix("https://")?;
+    let host = rest.split('/').next().filter(|h| !h.is_empty())?;
+    // Usuário na URL (`https://usuario@host/...`) não entra na chave.
+    let host = host.rsplit('@').next()?;
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!("oauth2:{token}"));
+    Some(vec![
+        (OsString::from("GIT_CONFIG_COUNT"), OsString::from("1")),
+        (
+            OsString::from("GIT_CONFIG_KEY_0"),
+            OsString::from(format!("http.https://{host}/.extraHeader")),
+        ),
+        (
+            OsString::from("GIT_CONFIG_VALUE_0"),
+            OsString::from(format!("Authorization: Basic {basic}")),
+        ),
+    ])
+}
+
 /// Clona `url` em `dest` com o `git` (HTTPS ou SSH, de qualquer host: o
-/// GitLab self-hosted, spec do Jira e GitLab §7.1). A credencial é a do git
-/// do ambiente (credential helper, como o `osxkeychain`, ou a chave SSH);
-/// o git falha em vez de pedir senha (`GIT_TERMINAL_PROMPT=0`, `stdin`
-/// nulo), para o daemon não travar. O `ssh` do ambiente fica como está
-/// (`core.sshCommand`, chave do agente).
-pub fn clone_url(url: &str, dest: &Path) -> Result<(), GitError> {
+/// GitLab self-hosted, spec do Jira e GitLab §7.1). Com `token` e URL HTTPS,
+/// o git leva o token da conexão do GitLab ([`token_auth_envs`], #281);
+/// senão, a credencial é a do git do ambiente (credential helper, como o
+/// `osxkeychain`, ou a chave SSH). O git falha em vez de pedir senha
+/// (`GIT_TERMINAL_PROMPT=0`, `stdin` nulo), para o daemon não travar. O
+/// `ssh` do ambiente fica como está (`core.sshCommand`, chave do agente).
+pub fn clone_url(url: &str, dest: &Path, token: Option<&str>) -> Result<(), GitError> {
     if url.trim().is_empty() || url.trim_start().starts_with('-') {
         return Err(GitError::InvalidRef {
             reference: url.to_string(),
@@ -334,7 +360,16 @@ pub fn clone_url(url: &str, dest: &Path) -> Result<(), GitError> {
         dir,
         &args,
         Job {
-            envs: network_envs(dir),
+            envs: {
+                let mut envs = network_envs(dir);
+                envs.extend(
+                    token
+                        .filter(|t| !t.trim().is_empty())
+                        .and_then(|t| token_auth_envs(url, t.trim()))
+                        .unwrap_or_default(),
+                );
+                envs
+            },
             ..Default::default()
         },
         limit,

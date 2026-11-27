@@ -308,7 +308,7 @@ mod tests {
         let (l, p) = ledger_with_project();
         set_role(&l, p.id, true, true);
         l.apply_github(&snap(p.id, vec![])).unwrap();
-        l.record_sync_error(p.id, "o Jira recusou a senha (401)")
+        l.record_sync_error(p.id, "o Jira recusou a credencial (401)")
             .unwrap();
         l.outbox_ack(i64::MAX).unwrap();
         let r = TrackerReadiness {
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(t.last_ok_at, Some(100));
         assert_eq!(
             t.last_error.as_deref(),
-            Some("o Jira recusou a senha (401)")
+            Some("o Jira recusou a credencial (401)")
         );
         assert!(t.last_attempt_at >= 100);
         assert_eq!(t.readiness, r);

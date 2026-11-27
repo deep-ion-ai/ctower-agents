@@ -10,6 +10,7 @@ import type {
   JiraTypeRole,
   TrackerReadiness,
 } from "../protocol/hub-gen";
+import { projectRef, providerOf } from "./providers";
 
 /** Tipo do projeto no cadastro: GitHub, ou issues no Jira e repositório no GitLab. */
 export type ProjectKindForm = "github" | "jira";
@@ -128,6 +129,24 @@ export function jiraOf(p: Pick<HubProject, "tracker">): JiraConfig | null {
 
 export function gitlabOf(p: Pick<HubProject, "forge">): GitlabConfig | null {
   return p.forge?.kind === "gitlab" ? (p.forge as GitlabConfig & { kind: "gitlab" }) : null;
+}
+
+/** Nome da conexão GitHub padrão (`ct_core::provider::DEFAULT_GITHUB_CONNECTION`, #275), do descritor. */
+export const DEFAULT_GITHUB_CONNECTION = providerOf("github").default_connection ?? "github";
+
+/**
+ * Conexão GitHub do projeto (#275): a do rastreador ou, sem ela, a da forja
+ * (`ct_core::github_connection`, `projectRef`). `null` = nenhuma: vale a
+ * conexão `github` padrão.
+ */
+export function githubConnOf(p: Provider): number | null {
+  return projectRef(p, "github") ?? null;
+}
+
+/** `tracker` e `forge` do projeto GitHub (#275): a conexão escolhida nos dois; vazio = a padrão. */
+export function githubParams(conn: string): { tracker: object; forge: object } {
+  const connection = connectionId(conn);
+  return { tracker: { kind: "github", connection }, forge: { kind: "github", connection } };
 }
 
 /**
@@ -313,14 +332,11 @@ export function providerParams(f: JiraForm): { tracker: object; forge: object } 
   return {
     tracker: {
       kind: "jira",
-      url: "",
       project_key: f.jira_key.trim(),
       active_sprint_only: f.active_sprint_only,
       // Com a sprint ativa, o JQL e o limite são ignorados pelo sync; vão como estão.
       jql: f.jql.trim(),
       max_issues: Number.isInteger(max) && max >= 1 && max <= MAX_ISSUES_CEILING ? max : DEFAULT_MAX_ISSUES,
-      credential_cmd: "",
-      config_file: "",
       connection: jiraConn,
       epic_link_field: f.epic_link_field.trim(),
       epic_name_field: f.epic_name_field.trim(),
@@ -328,7 +344,7 @@ export function providerParams(f: JiraForm): { tracker: object; forge: object } 
       type_map: tm.map,
       extra_fields: extra.fields,
     },
-    forge: { kind: "gitlab", clone_url: f.gitlab_url.trim(), credential_cmd: "", connection: gitlabConn },
+    forge: { kind: "gitlab", clone_url: f.gitlab_url.trim(), connection: gitlabConn },
   };
 }
 
@@ -372,9 +388,14 @@ export interface ReadinessCheck {
  * impede a seguinte, com a instrução de configuração de cada item que falta.
  */
 export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; gitlab: ReadinessCheck[] } {
-  // Credencial e URL vêm da conexão (#238): a instrução fala dela, não do cadastro.
-  const jiraCmd = "o comando de credencial da conexão do Jira";
-  const gitlabCmd = "o comando de credencial da conexão do GitLab";
+  // Credencial e URL vêm da conexão (#238), de qualquer fonte (secret,
+  // comando ou arquivo, #274): a instrução fala da conexão, não do comando.
+  const credFix = (kind: string) =>
+    `confira a credencial da conexão do ${kind} (Hub › Conexões) ou a sobrescrita dela no ambiente; ` +
+    "se for um comando, rode-o num terminal do ambiente (o cache do gpg-agent pode ter expirado)";
+  // O laço usa o token em cache sem resolver de novo (#236); "Buscar issues
+  // agora" resolve de novo (#268).
+  const cached = (c: boolean | undefined) => (c ? 'token em cache; "Buscar issues agora" resolve de novo' : undefined);
   return {
     jira: [
       {
@@ -394,15 +415,16 @@ export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; 
         fix: 'rode "jira init" de novo com o servidor da conexão do Jira',
       },
       {
-        label: "comando de credencial do Jira ok",
+        label: "credencial do Jira ok",
         ok: r.jira.credential_ok,
-        fix: `rode "${jiraCmd}" num terminal do ambiente: o cache do gpg-agent pode ter expirado`,
+        value: cached(r.jira.credential_cached),
+        fix: credFix("Jira"),
       },
       {
         label: "jira me ok",
         ok: r.jira.me_ok,
         value: r.jira.server_version ? `Jira ${r.jira.server_version}` : undefined,
-        fix: "confira o usuário do .config.yml e a senha que o comando de credencial imprime",
+        fix: "confira o usuário do .config.yml e o token da credencial da conexão do Jira",
       },
     ],
     gitlab: [
@@ -413,14 +435,15 @@ export function readinessChecks(r: TrackerReadiness): { jira: ReadinessCheck[]; 
         fix: "instale o glab no ambiente (ou aponte glab_bin no config.toml do ctowerd)",
       },
       {
-        label: "comando de credencial do GitLab ok",
+        label: "credencial do GitLab ok",
         ok: r.gitlab.credential_ok,
-        fix: `rode "${gitlabCmd}" num terminal do ambiente: o cache do gpg-agent pode ter expirado`,
+        value: cached(r.gitlab.credential_cached),
+        fix: credFix("GitLab"),
       },
       {
         label: "API do GitLab ok",
         ok: r.gitlab.api_ok,
-        fix: "confira o token de acesso que o comando de credencial imprime e o host do GitLab",
+        fix: "confira o token da credencial da conexão do GitLab e o host da conexão",
       },
     ],
   };

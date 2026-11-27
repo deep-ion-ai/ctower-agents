@@ -707,6 +707,7 @@ mod tests {
         l.apply_hub_config(
             &ConfigResponse {
                 connections: None,
+                connection_names: None,
                 config_rev: 1,
                 config_epoch: 1,
                 changed: true,

@@ -758,87 +758,208 @@ mod tests {
         }
     }
 
-    /// Critério da #165, ponta a ponta com o `cthubd` de verdade: com a
-    /// sessão aberta, trocar o secret no hub faz o valor novo chegar ao
-    /// `POST /session/secret` em poucos segundos (o hub avisa pelo canal e
-    /// o pull roda na hora, sem esperar o intervalo de 1 h do teste), e o
-    /// valor novo sai mascarado no PTY, junto com o antigo.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn secret_renovado_no_hub_chega_a_sessao_aberta() {
-        let d = tempfile::tempdir().unwrap();
-        let hub_dirs = cthubd::config::Dirs {
-            config: d.path().join("config"),
-            data: d.path().join("data"),
-        };
-        hub_dirs.ensure().unwrap();
-        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
-        hub.lock()
-            .add_project(&ct_hub_store::NewHubProject {
-                owner: "deep-ion-ai".into(),
-                repo: "demo".into(),
-                name: "demo".into(),
-                base_branch: "develop".into(),
-                protected_branches: vec![],
-            })
+    /// Hub (`cthubd` de verdade) com o secret `API_JWT` do projeto no valor
+    /// antigo e um ambiente atribuído, com o cache já puxado e uma sessão
+    /// aberta que ecoa cada linha recebida (`saida=<linha>`).
+    struct Renovacao {
+        _dir: tempfile::TempDir,
+        url: String,
+        secrets: Arc<cthubd::secrets::HubSecrets>,
+        channels: Arc<cthubd::channel::EnvChannels>,
+        env_id: String,
+        a: Srv,
+        up: Arc<HubSender>,
+        sess: ct_ledger::Session,
+        token: String,
+    }
+
+    /// Prazo das esperas: folgado, para a máquina carregada. Nenhuma espera
+    /// decide o resultado, só limita o teste que travou.
+    const PRAZO: Duration = Duration::from_secs(30);
+
+    impl Renovacao {
+        async fn new() -> Self {
+            let d = tempfile::tempdir().unwrap();
+            let hub_dirs = cthubd::config::Dirs {
+                config: d.path().join("config"),
+                data: d.path().join("data"),
+            };
+            hub_dirs.ensure().unwrap();
+            let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+            hub.lock()
+                .add_project(&ct_hub_store::NewHubProject {
+                    owner: "deep-ion-ai".into(),
+                    repo: "demo".into(),
+                    name: "demo".into(),
+                    base_branch: "develop".into(),
+                    protected_branches: vec![],
+                })
+                .unwrap();
+            let secrets =
+                Arc::new(cthubd::secrets::HubSecrets::open(&hub_dirs, hub.clone()).unwrap());
+            secrets
+                .set(
+                    Scope::parse_project(DEMO).unwrap(),
+                    "API_JWT",
+                    Kind::Secret,
+                    SecretValue::new("jwt-antigo-aaaaaaaa"),
+                )
+                .unwrap();
+            let mut st = cthubd::HubState::new(hub.clone(), "ui-do-hub", "hub", "hub-id");
+            st.secrets = Some(Arc::clone(&secrets));
+            let channels = Arc::clone(&st.channels);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            serve_hub_state(st, listener).await;
+
+            let mut a = Srv::new(FakeClaude::script(
+                "while read l; do echo \"saida=$l\"; done",
+            ));
+            let env_id = a.env.sessions.ledger().env_id().to_string();
+            let tok = hub
+                .lock()
+                .issue_env_token_with_env_id("a", &env_id)
+                .unwrap()
+                .token;
+            hub.lock()
+                .add_assignment(
+                    "deep-ion-ai",
+                    "demo",
+                    &env_id,
+                    Some(&a.env.repo.display().to_string()),
+                )
+                .unwrap();
+            let up = Arc::new(
+                HubSender::new(
+                    a.env.sessions.clone(),
+                    HubTarget {
+                        url: url.clone(),
+                        token: tok,
+                    },
+                    Duration::from_secs(5),
+                )
+                .with_config(crate::hub_config::ConfigOptions {
+                    pull_every: Duration::from_secs(3600),
+                    ..Default::default()
+                }),
+            );
+            a.state.hub_sender = Some(Arc::clone(&up));
+            // Primeiro pull feito à mão: cache com o valor antigo.
+            let s = Arc::clone(&up);
+            assert_eq!(blocking(move || s.pull_config()).await.secrets, Some(1));
+            let sess = a.env.sessions.start(a.env.request(42, "JWT")).unwrap();
+            let token = token_of(&a, &sess.id);
+            let (s, b) = get_secret(&a, Some(&token), None, &name("API_JWT")).await;
+            assert_eq!((s, b.as_str()), (StatusCode::OK, "jwt-antigo-aaaaaaaa"));
+            Renovacao {
+                _dir: d,
+                url,
+                secrets,
+                channels,
+                env_id,
+                a,
+                up,
+                sess,
+                token,
+            }
+        }
+    }
+
+    /// Escreve `<marca> <linha> fim` no PTY da sessão e espera o eco do
+    /// `claude` falso (`saida=...`, já mascarado). Devolve o trecho ecoado
+    /// entre a marca e o `fim`, e o scrollback inteiro. Síncrono: também
+    /// roda dentro do pull.
+    fn ecoa(
+        sessions: &ct_sessions::Sessions,
+        sid: &str,
+        marca: &str,
+        linha: &str,
+    ) -> (String, String) {
+        let pty = sessions.pty(sid).expect("sessão viva");
+        pty.write(format!("{marca} {linha} fim\n").as_bytes())
             .unwrap();
-        let secrets = cthubd::secrets::HubSecrets::open(&hub_dirs, hub.clone()).unwrap();
-        secrets
+        let t0 = std::time::Instant::now();
+        loop {
+            let out = String::from_utf8_lossy(&pty.snapshot()).to_string();
+            let eco = out
+                .split(&format!("saida={marca} "))
+                .nth(1)
+                .and_then(|r| r.split_once(" fim").map(|(l, _)| l.to_string()));
+            if let Some(eco) = eco {
+                return (eco, out);
+            }
+            assert!(t0.elapsed() < PRAZO, "sem eco: {out}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// #320: o valor novo de um secret só fica legível (`ctower secret get`
+    /// lê o cache) depois de entrar na máscara das sessões vivas. O gancho
+    /// roda logo depois de o pull gravar o cache, antes do resto do pull e
+    /// do `refresh_masks`: nesse ponto, o valor novo já sai mascarado.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mascara_cobre_o_valor_novo_antes_de_ele_ficar_legivel() {
+        let r = Renovacao::new().await;
+        r.secrets
             .set(
                 Scope::parse_project(DEMO).unwrap(),
                 "API_JWT",
                 Kind::Secret,
-                SecretValue::new("jwt-antigo-aaaaaaaa"),
+                SecretValue::new("jwt-renovado-bbbbbbbb"),
             )
             .unwrap();
-        let mut st = cthubd::HubState::new(hub.clone(), "ui-do-hub", "hub", "hub-id");
-        st.secrets = Some(Arc::new(secrets));
-        let channels = Arc::clone(&st.channels);
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        serve_hub_state(st, listener).await;
-
-        let mut a = Srv::new(FakeClaude::script(
-            "while read l; do echo \"saida=$l\"; done",
-        ));
-        let env_a = a.env.sessions.ledger().env_id().to_string();
-        let tok = hub
-            .lock()
-            .issue_env_token_with_env_id("a", &env_a)
-            .unwrap()
-            .token;
-        hub.lock()
-            .add_assignment(
-                "deep-ion-ai",
-                "demo",
-                &env_a,
-                Some(&a.env.repo.display().to_string()),
-            )
-            .unwrap();
-        let up = Arc::new(
-            HubSender::new(
-                a.env.sessions.clone(),
-                HubTarget {
-                    url: url.clone(),
-                    token: tok,
+        let (sessions, sid) = (r.a.env.sessions.clone(), r.sess.id.clone());
+        let (dirs, up) = (sessions.config().dirs.clone(), Arc::clone(&r.up));
+        let (pull, visto) = blocking(move || {
+            let visto = Arc::new(std::sync::Mutex::new(None));
+            let v = Arc::clone(&visto);
+            let pull = crate::hub_config::tests::with_after_secrets_store(
+                move || {
+                    // O cache já tem o valor novo: é o que o `secret get`
+                    // devolveria agora.
+                    let novo = load(&dirs).unwrap().unwrap().entries().iter().any(|e| {
+                        e.name == "API_JWT" && e.value.expose() == "jwt-renovado-bbbbbbbb"
+                    });
+                    let eco = ecoa(
+                        &sessions,
+                        &sid,
+                        "gancho",
+                        "jwt-renovado-bbbbbbbb jwt-antigo-aaaaaaaa",
+                    );
+                    *v.lock().unwrap() = Some((novo, eco));
                 },
-                Duration::from_secs(5),
-            )
-            .with_config(crate::hub_config::ConfigOptions {
-                pull_every: Duration::from_secs(3600),
-                ..Default::default()
-            }),
+                || up.pull_config(),
+            );
+            let visto = visto.lock().unwrap().take();
+            (pull, visto)
+        })
+        .await;
+        assert_eq!(pull.secrets, Some(1), "{:?}", pull.error);
+        let (novo, (eco, out)) = visto.expect("o gancho não rodou");
+        assert!(novo, "o gancho rodou antes de gravar o cache");
+        assert_eq!(eco, "***API_JWT*** ***API_JWT***", "{out}");
+        assert!(
+            !out.contains("jwt-renovado") && !out.contains("jwt-antigo"),
+            "{out}"
         );
-        a.state.hub_sender = Some(Arc::clone(&up));
-        // Primeiro pull feito à mão: cache com o valor antigo.
-        let s = Arc::clone(&up);
-        assert_eq!(blocking(move || s.pull_config()).await.secrets, Some(1));
-        let sess = a.env.sessions.start(a.env.request(42, "JWT")).unwrap();
-        let token = token_of(&a, &sess.id);
-        let (s, b) = get_secret(&a, Some(&token), None, &name("API_JWT")).await;
-        assert_eq!((s, b.as_str()), (StatusCode::OK, "jwt-antigo-aaaaaaaa"));
+        r.a.env.sessions.kill(&r.sess.id).unwrap();
+    }
+
+    /// Critério da #165, ponta a ponta com o `cthubd` de verdade: com a
+    /// sessão aberta, trocar o secret no hub faz o valor novo chegar ao
+    /// `POST /session/secret` (o hub avisa pelo canal e o pull roda na hora,
+    /// sem esperar o intervalo de 1 h do teste), e o valor novo sai
+    /// mascarado no PTY, junto com o antigo. Nenhuma espera por tempo
+    /// decide o resultado: o valor novo só fica legível já na máscara (#320).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn secret_renovado_no_hub_chega_a_sessao_aberta() {
+        let r = Renovacao::new().await;
+        let (a, token) = (&r.a, &r.token);
 
         // Laço do pull (o do boot já passou: o próximo seria em 1 h) e canal.
-        crate::hub_config::spawn_puller(Arc::clone(&up));
+        // Um aviso do hub que chegue durante um pull não se perde: o laço
+        // puxa de novo logo depois (`Notify` guarda o aviso).
+        crate::hub_config::spawn_puller(Arc::clone(&r.up));
         let canal = crate::hub_channel::spawn(
             a.state.clone(),
             crate::hub_channel::ChannelOptions {
@@ -848,54 +969,48 @@ mod tests {
             },
         )
         .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !channels.is_online(&env_a) {
-            assert!(std::time::Instant::now() < deadline, "canal não abriu");
+        let t0 = std::time::Instant::now();
+        while !r.channels.is_online(&r.env_id) {
+            assert!(t0.elapsed() < PRAZO, "canal não abriu");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        // Deixa o pull do boot do laço terminar antes de trocar o valor.
-        tokio::time::sleep(Duration::from_millis(300)).await;
 
-        let r = hub_ws_call(
-            &url,
+        let resp = hub_ws_call(
+            &r.url,
             "hub.secrets.set",
             serde_json::json!({ "scope": { "project": DEMO }, "name": "API_JWT",
                                 "kind": "secret", "value": "jwt-renovado-bbbbbbbb" }),
         )
         .await;
-        assert!(r["result"]["rev"].is_i64(), "{r}");
+        assert!(resp["result"]["rev"].is_i64(), "{resp}");
         let t0 = std::time::Instant::now();
         loop {
-            let (s, b) = get_secret(&a, Some(&token), None, &name("API_JWT")).await;
+            let (s, b) = get_secret(a, Some(token), None, &name("API_JWT")).await;
             assert_eq!(s, StatusCode::OK, "{b}");
             if b == "jwt-renovado-bbbbbbbb" {
                 break;
             }
-            assert!(
-                t0.elapsed() < Duration::from_secs(5),
-                "valor novo não chegou"
-            );
+            assert!(t0.elapsed() < PRAZO, "valor novo não chegou");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         // O valor novo e o antigo saem mascarados na saída do PTY.
-        let pty = a.env.sessions.pty(&sess.id).unwrap();
-        pty.write(b"jwt-renovado-bbbbbbbb jwt-antigo-aaaaaaaa\n")
-            .unwrap();
-        let t0 = std::time::Instant::now();
-        let out = loop {
-            let out = String::from_utf8_lossy(&pty.snapshot()).to_string();
-            if out.contains("saida=***API_JWT*** ***API_JWT***") {
-                break out;
-            }
-            assert!(t0.elapsed() < Duration::from_secs(5), "{out}");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        };
+        let (sessions, sid) = (a.env.sessions.clone(), r.sess.id.clone());
+        let (eco, out) = blocking(move || {
+            ecoa(
+                &sessions,
+                &sid,
+                "depois",
+                "jwt-renovado-bbbbbbbb jwt-antigo-aaaaaaaa",
+            )
+        })
+        .await;
+        assert_eq!(eco, "***API_JWT*** ***API_JWT***", "{out}");
         assert!(
             !out.contains("jwt-renovado") && !out.contains("jwt-antigo"),
             "{out}"
         );
         canal.abort();
-        a.env.sessions.kill(&sess.id).unwrap();
+        a.env.sessions.kill(&r.sess.id).unwrap();
     }
 
     /// `POST /secrets/rotate-env-key`: token de UI; sem hub, só local.

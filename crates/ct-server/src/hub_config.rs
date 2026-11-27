@@ -13,7 +13,9 @@
 //!   hub também avisa pelo canal (`hub.config.changed`, #165) quando um
 //!   secret ou variável muda, e o laço puxa na hora;
 //! - quando a entrega de secrets regrava o cache, o mascaramento das sessões
-//!   vivas ganha os valores novos (`Sessions::refresh_masks`, #165);
+//!   vivas ganha os valores novos antes da troca (`Sessions::premask`, #320:
+//!   o valor novo nunca fica legível sem máscara) e é refeito depois
+//!   (`Sessions::refresh_masks`, #165);
 //! - o pull só grava o cache (rápido, limitado pelo timeout do HTTP). A
 //!   aplicação (clone, que pode demorar) roda à parte, numa thread
 //!   disparada depois do pull, uma por vez: nem o pull seguinte nem o envio
@@ -54,6 +56,9 @@ pub struct ConfigOptions {
     /// `config.toml` do ambiente: o `[credentials]` vira `[connections]` no
     /// primeiro pull com conexões (#237). `None` = sem conversão.
     pub config_file: Option<PathBuf>,
+    /// `[credentials]` em uso no daemon: depois da conversão, fica só o que
+    /// sobrou no arquivo (#267). `None` = nada em memória a acompanhar.
+    pub credentials: Option<ct_core::SharedCredentials>,
 }
 
 impl Default for ConfigOptions {
@@ -63,19 +68,26 @@ impl Default for ConfigOptions {
             pull_every: PULL_EVERY,
             github: None,
             config_file: None,
+            credentials: None,
         }
     }
 }
 
 /// Liga as conexões (#237) à configuração que chegou: converte o
-/// `[credentials]` (se o hub mandou conexões) e preenche os campos de
-/// cadastro antigo dos projetos a partir delas, com as sobrescritas do
-/// ambiente. Devolve as sobrescritas (o pull as reaplica ao cache em todo
-/// pull, inclusive o sem mudança). Falha de leitura ou conversão só registra
-/// aviso: o pull segue.
+/// `[credentials]` (se o hub mandou conexões) e avisa o que falta nas
+/// conexões dos projetos, com as sobrescritas do ambiente. O cadastro não
+/// muda: o runtime lê a conexão (`SharedCredentials::resolve`, #277).
+/// Devolve as sobrescritas (o pull as põe em uso em todo pull, inclusive o
+/// sem mudança). Falha de leitura ou conversão só registra aviso: o pull
+/// segue.
+///
+/// Depois da conversão, `credentials` (as sobrescritas por projeto em uso no
+/// daemon) passa a ser o que sobrou em `[credentials]` (#267): o que foi
+/// para `[connections]` não volta por cima da sobrescrita da conexão.
 fn apply_connections(
-    cfg: &mut ConfigResponse,
+    cfg: &ConfigResponse,
     config_file: Option<&Path>,
+    credentials: Option<&ct_core::SharedCredentials>,
 ) -> ct_core::ConnectionOverrides {
     use ct_core::provider::Connection;
     let overrides = match (config_file, &cfg.connections) {
@@ -107,9 +119,14 @@ fn apply_connections(
                 })
                 .collect();
             match crate::env_config::convert_credentials_file(path, &links) {
-                Ok((o, warnings)) => {
+                Ok((o, left, warnings)) => {
                     for w in warnings {
                         tracing::warn!("conexões: {w}");
+                    }
+                    if let Some(c) = credentials {
+                        if c.snapshot() != left {
+                            c.replace(left);
+                        }
                     }
                     o
                 }
@@ -122,14 +139,77 @@ fn apply_connections(
         (Some(path), None) => crate::env_config::read_connection_overrides(path),
         (None, _) => Default::default(),
     };
-    // Sem mudança, `cfg` não traz projetos: o cache é reaplicado depois da
-    // gravação (`Ledger::refresh_connection_overrides`).
+    // Sem mudança, `cfg` não traz projetos: os avisos saem do cache depois
+    // da gravação (`Ledger::connection_warnings`).
     if cfg.changed {
-        for w in ct_ledger::materialize_connections(cfg, &overrides) {
+        for w in ct_ledger::connection_warnings(cfg, &overrides) {
             tracing::warn!("conexões: {w}");
         }
     }
     overrides
+}
+
+/// Migração do `github.token` do ambiente (#276), no boot e a cada pull: as
+/// conexões GitHub que os projetos atribuídos usam (a referenciada ou a
+/// `github` padrão, das conexões do último pull) ganham a sobrescrita que lê
+/// o token ([`crate::env_config::migrate_github_token`]). Devolve as
+/// sobrescritas novas; `None` = nada mudou (ou falhou, com aviso no log).
+pub fn migrate_github_token(
+    ledger: &ct_ledger::Ledger,
+    config_file: &Path,
+    dirs: &ct_sessions::Dirs,
+) -> Option<ct_core::ConnectionOverrides> {
+    let token = dirs.github_token_file();
+    if !token.exists() {
+        return None;
+    }
+    let names = match github_connection_names(ledger) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!("conexões: migração do github.token sem os projetos: {e}");
+            return None;
+        }
+    };
+    match crate::env_config::migrate_github_token(
+        config_file,
+        &token,
+        &dirs.github_env_token_file(),
+        &names,
+    ) {
+        Ok(Some(o)) => {
+            tracing::info!(
+                "conexões: github.token do ambiente migrado para a sobrescrita de {}",
+                names.join(", ")
+            );
+            Some(o)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!("conexões: migração do github.token falhou: {e}");
+            None
+        }
+    }
+}
+
+/// Nomes das conexões GitHub em uso pelos projetos atribuídos, sem repetir.
+fn github_connection_names(ledger: &ct_ledger::Ledger) -> ct_ledger::Result<Vec<String>> {
+    let (conns, _) = ledger.hub_connections()?;
+    let mut names: Vec<String> = ledger
+        .list_projects()?
+        .iter()
+        .filter_map(|p| {
+            ct_core::provider::project_connection(
+                &p.tracker,
+                &p.forge,
+                ct_core::provider::ProviderKind::Github,
+                &conns,
+            )
+        })
+        .map(|c| c.name.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 /// Estado do pull para `env.info` (`hub_config`).
@@ -353,8 +433,20 @@ impl HubSender {
         let secrets = match &reply.secrets {
             Some(b64) => {
                 let s = ct_secrets::decode_delivery(b64)
-                    .and_then(|blob| self.env_cache.store(&blob))
+                    .and_then(|blob| {
+                        // A máscara das sessões vivas ganha os valores da
+                        // entrega antes de o cache trocar (#320): o `ctower
+                        // secret get` lê o cache, e o valor novo não pode
+                        // sair legível e ainda sem máscara. O
+                        // `refresh_masks` do `pull_config` vem depois.
+                        let incoming =
+                            ct_secrets::EnvSecrets::open(&blob, &self.env_cache.ensure_key()?)?;
+                        self.sessions.premask(&incoming);
+                        self.env_cache.store(&blob)
+                    })
                     .map_err(|e| format!("cache de secrets: {e}"))?;
+                #[cfg(test)]
+                tests::after_secrets_store();
                 tracing::info!(
                     "hub: secrets entregues ({} entrada(s), configuração {})",
                     s.entries().len(),
@@ -364,23 +456,44 @@ impl HubSender {
             }
             None => None,
         };
-        let mut cfg = reply.config;
-        let overrides = apply_connections(&mut cfg, self.config.config_file.as_deref());
+        let cfg = reply.config;
+        let overrides = apply_connections(
+            &cfg,
+            self.config.config_file.as_deref(),
+            self.config.credentials.as_ref(),
+        );
         let root = self.config.repos_root.clone();
         let ledger = self.sessions.ledger();
         let applied = ledger
             .apply_hub_config(&cfg, |p| resolve_repo_path(&root, p))
             .map_err(|e| e.to_string())?;
+        // O `github.token` do ambiente vira sobrescrita da conexão GitHub
+        // (#276), com os projetos e as conexões já gravados.
+        let overrides = match self.config.config_file.as_deref() {
+            Some(path) => migrate_github_token(&ledger, path, &self.sessions.config().dirs)
+                .unwrap_or(overrides),
+            None => overrides,
+        };
         // Em todo pull: a sobrescrita editada no config.toml vale sem mudança
         // no hub. Com mudança, os avisos já saíram acima.
-        match ledger.refresh_connection_overrides(&overrides) {
+        match ledger.connection_warnings(&overrides) {
             Ok(avisos) if !cfg.changed => {
                 for w in avisos {
                     tracing::warn!("conexões: {w}");
                 }
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!("conexões: cache não reaplicado: {e}"),
+            Err(e) => tracing::warn!("conexões: avisos do cache indisponíveis: {e}"),
+        }
+        // As conexões e a sobrescrita em uso no daemon: delas sai a fonte de
+        // credencial de cada projeto no sync e nas sessões (#274).
+        match ledger.hub_connections() {
+            Ok((conns, _)) => self
+                .sessions
+                .config()
+                .credentials
+                .set_connections(conns, overrides),
+            Err(e) => tracing::warn!("conexões: cache não lido: {e}"),
         }
         if !applied.is_empty() {
             tracing::info!(
@@ -475,16 +588,49 @@ impl HubSender {
                 return 0;
             }
         };
-        let (gh_bin, token) = match &self.config.github {
-            Some(g) => (
-                g.client().config().gh_bin.clone(),
-                g.client().configured_token(),
-            ),
-            None => ("gh".to_string(), None),
+        let gh_bin = match &self.config.github {
+            Some(g) => g.client().config().gh_bin.clone(),
+            None => "gh".to_string(),
         };
         let mut reports = 0;
         for p in pending {
             let Some(rev) = p.config_rev else { continue };
+            // O `gh repo clone` leva o token da conexão `github` do projeto
+            // (#275); sem ele, o `gh` usa o próprio login.
+            let token = match (&self.config.github, &p.forge) {
+                (Some(g), ct_core::ForgeConfig::Github(_)) if !Path::new(&p.repo_path).exists() => {
+                    g.client_for(&p)
+                        .token()
+                        .map_err(|e| {
+                            tracing::warn!(
+                                "hub: token do GitHub de {}/{} indisponível para o clone ({e}); \
+                                 o gh usa o próprio login",
+                                p.gh_owner,
+                                p.gh_repo
+                            )
+                        })
+                        .ok()
+                }
+                // No GitLab por HTTPS, o token da conexão do GitLab (#281);
+                // sem ele, o git usa a credencial do ambiente.
+                (_, ct_core::ForgeConfig::Gitlab(g))
+                    if !Path::new(&p.repo_path).exists()
+                        && g.clone_url.trim().starts_with("https://") =>
+                {
+                    self.sessions
+                        .connection_token(&p, ct_core::provider::ProviderKind::Gitlab)
+                        .map_err(|e| {
+                            tracing::warn!(
+                                "hub: token do GitLab de {}/{} indisponível para o clone ({e}); \
+                                 o git usa a credencial do ambiente",
+                                p.gh_owner,
+                                p.gh_repo
+                            )
+                        })
+                        .ok()
+                }
+                _ => None,
+            };
             // `_projeto/` nasce ao aplicar a atribuição (#440). Sem
             // `docs_root`, com docs desligados ou inacessível, nada (aviso).
             self.sessions.ensure_project_docs(&p);
@@ -492,6 +638,7 @@ impl HubSender {
                 &p.gh_owner,
                 &p.gh_repo,
                 &p.forge,
+                &self.sessions.project_connections(&p).gitlab_host(),
                 &p.repo_path,
                 &gh_bin,
                 token.as_deref(),
@@ -603,12 +750,39 @@ pub fn spawn_puller(sender: Arc<HubSender>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::hub_sync::{HubSyncResult, HubTarget};
     use crate::test_util::{serve_hub, Srv};
     use ct_hub_store::{AssignmentFilter, AssignmentState, Hub, HubProjectPatch, SharedHub};
     use ct_sessions::test_support::{git_in, FakeClaude};
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// Gancho entre a gravação do cache de secrets e o resto do pull
+        /// (#320), só na thread que o registrou.
+        static AFTER_SECRETS_STORE: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+    }
+
+    /// Roda `f` no pull desta thread logo depois de gravar o cache de
+    /// secrets, até o fim de `body`.
+    pub(crate) fn with_after_secrets_store<T>(
+        f: impl Fn() + 'static,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        AFTER_SECRETS_STORE.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+        let out = body();
+        AFTER_SECRETS_STORE.with(|h| *h.borrow_mut() = None);
+        out
+    }
+
+    pub(super) fn after_secrets_store() {
+        AFTER_SECRETS_STORE.with(|h| {
+            if let Some(f) = h.borrow().as_ref() {
+                f();
+            }
+        });
+    }
 
     const DEMO: (&str, &str) = ("deep-ion-ai", "demo");
 
@@ -665,8 +839,7 @@ mod tests {
         }
         let client = ct_gh::GhClient::new(
             ct_gh::GhConfig::new("http://127.0.0.1:1", bin.to_str().unwrap())
-                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT)
-                .with_token_file(srv.env.tmp.path().join("github.token")),
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
         );
         let github = Arc::new(GithubSync::new(srv.env.sessions.clone(), client));
         Arc::new(
@@ -683,6 +856,7 @@ mod tests {
                 pull_every: Duration::from_secs(60),
                 github: Some(github),
                 config_file: None,
+                credentials: None,
             }),
         )
     }
@@ -779,6 +953,99 @@ mod tests {
             std::fs::read_to_string(base.join("analises/nota.md")).unwrap(),
             "minha"
         );
+    }
+
+    /// A fonte de credencial do projeto vem da conexão do hub (#274): o
+    /// pull atualiza as conexões em uso no daemon, e o sync e as sessões
+    /// passam a ver o secret da conexão; o cadastro só a referencia (#277).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pull_leva_a_fonte_da_conexao_ao_ambiente() {
+        use ct_core::provider::{CredentialSource, ProviderKind};
+        let hub = new_hub();
+        let secret = CredentialSource::Secret {
+            name: "JIRA_TOKEN_ACME".into(),
+        };
+        let conn = hub
+            .lock()
+            .add_connection(&ct_hub_store::NewConnection {
+                name: "jira-acme".into(),
+                kind: ProviderKind::Jira,
+                endpoint: "https://jira.example.com".into(),
+                credential: secret.clone(),
+                options: serde_json::json!({}),
+            })
+            .unwrap();
+        let arquivo = CredentialSource::File {
+            path: "~/.config/acme/gitlab.token".into(),
+        };
+        let gl = hub
+            .lock()
+            .add_connection(&ct_hub_store::NewConnection {
+                name: "gitlab-acme".into(),
+                kind: ProviderKind::Gitlab,
+                endpoint: "gitlab.example.com".into(),
+                credential: arquivo.clone(),
+                options: serde_json::json!({}),
+            })
+            .unwrap();
+        hub.lock()
+            .add_project_with(
+                &ct_hub_store::NewHubProject {
+                    owner: "acme".into(),
+                    repo: "acme-web".into(),
+                    name: "acme-web".into(),
+                    base_branch: "main".into(),
+                    protected_branches: vec!["main".into()],
+                },
+                &ct_hub_store::ProjectProvider {
+                    tracker: ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
+                        connection: Some(conn.id),
+                        project_key: "ACME".into(),
+                        active_sprint_only: true,
+                        ..Default::default()
+                    }),
+                    forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                        connection: Some(gl.id),
+                        path: "acme/acme-web".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let tok = hub.lock().add_legacy_env_token("a").unwrap();
+        let url = hub_up(&hub).await;
+        let a = env();
+        let env_a = a.env.sessions.ledger().env_id().to_string();
+        let sa = sender(&a, &url, &tok);
+        assert!(sync_now(&sa).await.error.is_none());
+        let repo_a = a.env.tmp.path().join("acme-web").display().to_string();
+        hub.lock()
+            .add_assignment("acme", "acme-web", &env_a, Some(&repo_a))
+            .unwrap();
+        assert!(pull(&sa).await.ok);
+        let p = a
+            .env
+            .sessions
+            .ledger()
+            .list_projects()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.gh_repo == "acme-web")
+            .expect("projeto do hub no cache");
+        // O cadastro só referencia a conexão; o prefixo da sessão sai dela
+        // (#277)...
+        assert_eq!(p.tracker.jira().unwrap().connection, Some(conn.id));
+        let conns = a.env.sessions.project_connections(&p);
+        assert_eq!(
+            conns.jira_prefix(),
+            r#"JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira"#
+        );
+        assert_eq!(conns.gitlab_host(), "gitlab.example.com");
+        // ...e o resolvedor do ambiente, a fonte da conexão.
+        let s = a.env.sessions.jira_source(&p).unwrap();
+        assert_eq!((s.source, s.from_env), (secret, false));
+        assert_eq!(a.env.sessions.gitlab_source(&p).unwrap().source, arquivo);
     }
 
     /// O pull só traz os projetos atribuídos, a atribuição aplicada continua
@@ -1183,5 +1450,129 @@ mod tests {
             ..p
         };
         assert!(!resolve_repo_path(Path::new("/src"), &home).starts_with('~'));
+    }
+}
+
+#[cfg(test)]
+mod credenciais_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn cfg_com_jira() -> ConfigResponse {
+        serde_json::from_value(json!({
+            "config_rev": 7,
+            "changed": true,
+            "projects": [{
+                "owner": "acme", "repo": "acme-web", "name": "Acme Web",
+                "base_branch": "main", "protected_branches": ["main"],
+                "repo_path": "", "rev": 7,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1 }
+            }],
+            "connections": [
+                { "id": 1, "name": "jira-acme", "kind": "jira",
+                  "endpoint": "https://jira.example.com",
+                  "credential": { "kind": "command", "cmd": "pass show hub" },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ]
+        }))
+        .unwrap()
+    }
+
+    /// O comando do Jira que o ambiente usa com as conexões do pull e as
+    /// sobrescritas `o` (#277: o runtime lê a conexão).
+    fn jira_cmd(
+        cfg: &ConfigResponse,
+        shared: &ct_core::SharedCredentials,
+        o: ct_core::ConnectionOverrides,
+    ) -> String {
+        shared.set_connections(cfg.connections.clone().unwrap(), o);
+        let p = &cfg.projects.as_ref().unwrap()[0];
+        let (r, _) = shared.resolve(&p.owner, &p.repo, &p.tracker, &p.forge);
+        ct_core::provider::source_cmd(&r.tracker.unwrap().credential).unwrap()
+    }
+
+    /// #267: o `[credentials]` convertido sai também da memória. Antes, o
+    /// `SharedCredentials` carregado no início do `ctowerd` continuava
+    /// trocando o comando da conexão pelo antigo, por projeto.
+    #[test]
+    fn conversao_troca_as_credenciais_em_memoria() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[credentials.\"acme/acme-web\"]\ntracker_cmd = \"pass show a\"\n",
+        )
+        .unwrap();
+        // Como o `ctowerd` carrega no início.
+        let inicial: ct_core::CredentialOverrides =
+            toml::from_str::<toml::Table>(&std::fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .remove("credentials")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let shared = ct_core::SharedCredentials::new(inicial);
+
+        let cfg = cfg_com_jira();
+        let o = apply_connections(&cfg, Some(&path), Some(&shared));
+        assert_eq!(jira_cmd(&cfg, &shared, o), "pass show a");
+        assert!(shared.snapshot().is_empty(), "{:?}", shared.snapshot());
+
+        // O usuário edita a conexão; o pull seguinte usa o novo, sem a
+        // credencial antiga por cima.
+        std::fs::write(
+            &path,
+            "[connections.jira-acme]\ncredential_cmd = \"pass show b\"\n",
+        )
+        .unwrap();
+        let cfg = cfg_com_jira();
+        let o = apply_connections(&cfg, Some(&path), Some(&shared));
+        assert_eq!(jira_cmd(&cfg, &shared, o), "pass show b");
+    }
+
+    /// #276: o `github.token` do ambiente vira a sobrescrita da conexão
+    /// GitHub que os projetos atribuídos usam (a padrão, aqui), e não a de
+    /// uma conexão GitHub sem projeto neste ambiente.
+    #[test]
+    fn github_token_migra_para_a_conexao_dos_projetos() {
+        let d = tempfile::tempdir().unwrap();
+        let dirs = ct_sessions::Dirs {
+            config: d.path().join("config"),
+            data: d.path().join("data"),
+        };
+        std::fs::create_dir_all(&dirs.config).unwrap();
+        let path = dirs.config.join("config.toml");
+        let l = Ledger::open_in_memory().unwrap();
+        let cfg: ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 3,
+            "changed": true,
+            "projects": [{
+                "owner": "acme", "repo": "acme-web", "name": "acme-web",
+                "base_branch": "main", "protected_branches": [],
+                "repo_path": "/x", "rev": 3
+            }],
+            "connections": [
+                { "id": 1, "name": "github", "kind": "github", "endpoint": "",
+                  "credential": { "kind": "file", "path": "~/.config/cthub/github.token" },
+                  "options": {}, "created_at": 0, "updated_at": 0 },
+                { "id": 2, "name": "github-acme", "kind": "github", "endpoint": "",
+                  "credential": { "kind": "cli" },
+                  "options": {}, "created_at": 0, "updated_at": 0 }
+            ],
+            "connection_names": ["github", "github-acme"]
+        }))
+        .unwrap();
+        l.apply_hub_config(&cfg, |p| p.repo_path.clone()).unwrap();
+        assert_eq!(migrate_github_token(&l, &path, &dirs), None, "sem token");
+
+        std::fs::write(dirs.github_token_file(), "ghp_ficticio_123\n").unwrap();
+        let o = migrate_github_token(&l, &path, &dirs).unwrap();
+        assert!(o.credential_cmd("github").is_some(), "{o:?}");
+        assert_eq!(o.credential_cmd("github-acme"), None);
+        assert!(!dirs.github_token_file().exists());
+        assert!(dirs.github_env_token_file().exists());
+        assert_eq!(crate::env_config::read_connection_overrides(&path), o);
+        assert_eq!(migrate_github_token(&l, &path, &dirs), None);
     }
 }

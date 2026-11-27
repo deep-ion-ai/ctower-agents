@@ -59,7 +59,6 @@ function setup(initial?: Screen, p: Partial<EnvInfo> = {}) {
     .on("dashboard.get", dashboard({ projects: [] }))
     .on("env.info", info(p))
     .on("env.config.get", [])
-    .on("github.status", { source: "gh", login: "x", error: null })
     .withHub()
     .onHub("hub.info", hubInfo())
     .onHub("hub.status", hubStatus())
@@ -143,7 +142,7 @@ test("atalhos: Configurações › Conexões e Manutenção › Atualizações l
 
   await user.click(screen.getByRole("button", { name: "Configuração do daemon" }));
   expect(await screen.findByRole("tab", { name: "wsl · Configuração do daemon", selected: true })).toBeInTheDocument();
-  expect(within(body("Configuração do daemon")).getByText("Token do ambiente", { selector: "b" })).toBeInTheDocument();
+  expect(within(body("Configuração do daemon")).getByText("Comando de credencial deste ambiente", { selector: "b" })).toBeInTheDocument();
 });
 
 test("Hub › Ambientes: o nome leva ao detalhe, na seção Hub", async () => {

@@ -98,7 +98,6 @@ function setup(opts: { projects?: HubProjectView[]; at?: Screen; protocol?: stri
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
     .onHub("hub.proposals.list", NO_PROPOSALS)
     .onHub("hub.health.get", NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 0, recovery_configured: true }, items: [], delivery: [] })
     .onHub("hub.connections.list", CONNECTIONS);
   const at = opts.at ?? (projects.length === 0 ? { name: "project" } : settingsAt("general"));
@@ -157,13 +156,10 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
   expect(api.hubCallsTo("hub.projects.add")[0].params).toEqual({
     tracker: {
       kind: "jira",
-      url: "",
       project_key: "PROJ",
       active_sprint_only: false,
       jql: "component = web",
       max_issues: 250,
-      credential_cmd: "",
-      config_file: "",
       connection: 7,
       epic_link_field: "",
       epic_name_field: "",
@@ -174,7 +170,6 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
     forge: {
       kind: "gitlab",
       clone_url: "https://gitlab.example.com/grupo/projeto/app.git",
-      credential_cmd: "",
       connection: 8,
     },
     branch_pattern: "{key}",
@@ -474,7 +469,7 @@ test("prontidão do ambiente de sync: o que falta, com a instrução", async () 
   const r = within(g).getByLabelText("Prontidão de wsl-pc");
   expect(r).toHaveTextContent(/2 item\(ns\) a configurar/);
   expect(within(r).getByRole("list", { name: "Jira" })).toHaveTextContent(
-    'rode "o comando de credencial da conexão do Jira" num terminal do ambiente',
+    "confira a credencial da conexão do Jira (Hub › Conexões) ou a sobrescrita dela no ambiente",
   );
   expect(within(r).getByRole("list", { name: "Jira" })).toHaveTextContent("1.7.0");
   expect(within(r).getByRole("list", { name: "GitLab" })).not.toHaveTextContent(/falta/);

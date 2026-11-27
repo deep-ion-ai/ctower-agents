@@ -91,3 +91,20 @@ test("exceção ao renderizar uma tela mostra o erro, não a janela em branco", 
   expect(screen.getByRole("button", { name: "Sala de controle" })).toBeInTheDocument();
   log.mockRestore();
 });
+
+test("primeiro uso: sem ambiente nem hub, a faixa diz por onde começar (#281)", async () => {
+  const api = new FakeDaemonApi([]).on("sync.now", []);
+  render(<App api={api} />);
+  const user = userEvent.setup();
+  const faixa = await screen.findByRole("status", { name: "Primeiros passos" });
+  expect(faixa).toHaveTextContent(/cadastre o ambiente .* e a conexão com o hub/);
+  await user.click(within(faixa).getByRole("button", { name: "Configurar ambiente e hub" }));
+  expect(screen.getByRole("heading", { name: "Configurações" })).toBeInTheDocument();
+});
+
+test("com um ambiente cadastrado, a faixa de primeiros passos não aparece", async () => {
+  const api = setup();
+  // A lista de ambientes já foi lida quando o dashboard do ambiente é pedido.
+  await waitFor(() => expect(api.callsTo("dashboard.get").length).toBeGreaterThan(0));
+  expect(screen.queryByRole("status", { name: "Primeiros passos" })).not.toBeInTheDocument();
+});

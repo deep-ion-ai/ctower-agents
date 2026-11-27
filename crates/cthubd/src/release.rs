@@ -65,8 +65,9 @@ pub(crate) async fn status(st: &HubState, p: Value) -> RpcResult {
                 project.gh_repo.clone(),
                 cfg.clone(),
             );
+            let client = gh.client_for(&project);
             let res = tokio::task::spawn_blocking(move || {
-                ct_gh::release::Release::new(gh.client(), &o, &r, &c).status()
+                ct_gh::release::Release::new(&client, &o, &r, &c).status()
             })
             .await
             .map_err(|e| (-32603, e.to_string()))?;

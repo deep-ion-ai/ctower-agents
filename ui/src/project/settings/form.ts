@@ -14,6 +14,8 @@ export interface ProjectForm {
   /** Separadas por vírgula. */
   protected: string;
   jira: JiraForm;
+  /** Conexão do GitHub (#275), o id do seletor; vazio = a conexão `github` padrão. */
+  github_conn: string;
   /**
    * Docs do projeto (#444), só na edição; `null` = cadastro novo ou hub
    * anterior à #440 (sem `docs`).
@@ -28,6 +30,7 @@ export const EMPTY_PROJECT_FORM: ProjectForm = {
   base_branch: "",
   protected: "",
   jira: EMPTY_JIRA,
+  github_conn: "",
   docs: null,
 };
 

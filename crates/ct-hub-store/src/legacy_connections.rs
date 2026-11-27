@@ -20,7 +20,10 @@
 
 use crate::connection::NewConnection;
 use crate::{Hub, LedgerError, Result};
-use ct_core::provider::{Connection, CredentialSource, ProviderKind};
+use ct_core::provider::{
+    Connection, CredentialSource, ProviderDescriptor, ProviderKind, DEFAULT_GITHUB_CONNECTION,
+    GITHUB,
+};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -249,11 +252,15 @@ impl Hub {
         endpoint: &str,
         token_file: Option<&Path>,
     ) -> Result<Option<Connection>> {
-        if self.connection_by_name("github")?.is_some() {
+        if self
+            .connection_by_name(DEFAULT_GITHUB_CONNECTION)?
+            .is_some()
+        {
             return Ok(None);
         }
+        // A API padrão do tipo fica vazia na conexão (vazio = a padrão).
         let endpoint = match endpoint.trim().trim_end_matches('/') {
-            "" | "https://api.github.com" => String::new(),
+            e if e.is_empty() || Some(e) == GITHUB.default_endpoint() => String::new(),
             e => e.to_string(),
         };
         let credential = match token_file {
@@ -263,7 +270,7 @@ impl Hub {
             _ => CredentialSource::Cli,
         };
         self.add_connection(&NewConnection {
-            name: "github".into(),
+            name: DEFAULT_GITHUB_CONNECTION.into(),
             kind: ProviderKind::Github,
             endpoint,
             credential,
@@ -371,32 +378,17 @@ fn strip_gitlab(v: &mut Value, connection: i64) {
 mod tests {
     use super::*;
     use crate::{NewHubProject, ProjectProvider};
-    use ct_core::{ForgeConfig, GitlabConfig, JiraConfig, TrackerConfig};
+    use ct_core::{ForgeConfig, GitlabConfig};
 
     const JIRA_URL: &str = "https://jira.example.com/";
     const JIRA_CMD: &str = "pass show acme/jira | head -1";
     const GITLAB_CMD: &str = "pass show acme/gitlab | head -1";
     const MIL: i64 = 1_792_158_300_000;
 
-    /// Projeto `acme-*` com Jira e GitLab de cadastro antigo (sem conexão).
+    /// Projeto `acme-*` com Jira e GitLab de cadastro antigo (sem conexão),
+    /// gravado direto no JSON: os campos antigos não existem mais nos
+    /// structs (#277), só no `hub.db` de antes da migração.
     fn cadastra(hub: &Hub, repo: &str, url: &str, config_file: &str) {
-        let provider = ProjectProvider {
-            tracker: TrackerConfig::Jira(JiraConfig {
-                url: url.into(),
-                project_key: "ACME".into(),
-                jql: format!("labels = {repo}"),
-                credential_cmd: JIRA_CMD.into(),
-                config_file: config_file.into(),
-                ..Default::default()
-            }),
-            forge: ForgeConfig::Gitlab(GitlabConfig {
-                host: "gitlab.example.com".into(),
-                path: format!("acme/{}", repo.trim_start_matches("acme-")),
-                credential_cmd: GITLAB_CMD.into(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
         hub.add_project_with(
             &NewHubProject {
                 owner: "acme".into(),
@@ -405,9 +397,33 @@ mod tests {
                 base_branch: "main".into(),
                 protected_branches: vec!["main".into()],
             },
-            &provider,
+            &ProjectProvider::default(),
         )
         .unwrap();
+        let tracker = json!({
+            "url": url,
+            "project_key": "ACME",
+            "jql": format!("labels = {repo}"),
+            "credential_cmd": JIRA_CMD,
+            "config_file": config_file,
+        });
+        let forge = json!({
+            "host": "gitlab.example.com",
+            "path": format!("acme/{}", repo.trim_start_matches("acme-")),
+            "clone_url": "",
+            "credential_cmd": GITLAB_CMD,
+        });
+        hub.conn()
+            .execute(
+                "UPDATE project SET tracker_kind = 'jira', tracker_config = ?2,
+                        forge_kind = 'gitlab', forge_config = ?3
+                 WHERE gh_owner = 'acme' AND gh_repo = ?1",
+                rusqlite::params![repo, tracker.to_string(), forge.to_string()],
+            )
+            .unwrap();
+        // O cadastro antigo carrega (os campos antigos são ignorados).
+        let p = hub.find_project("acme", repo).unwrap().unwrap();
+        assert_eq!(p.tracker.jira().unwrap().connection, None);
     }
 
     fn nomes(hub: &Hub) -> Vec<String> {
@@ -433,6 +449,114 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap()
+    }
+
+    /// Projeto migrado (#264, #277): o cadastro fica sem URL, host e
+    /// credencial, e o hub lê a conexão. O `issue_view` do gestor leva o
+    /// prefixo com a credencial, e os links de issue e de MR saem com o
+    /// endereço da conexão (`endpoints`).
+    #[test]
+    fn projeto_migrado_le_a_conexao_no_hub() {
+        let hub = Hub::open_in_memory().unwrap();
+        cadastra(&hub, "acme-web", JIRA_URL, "jira-acme.yml");
+        let dir = tempfile::tempdir().unwrap();
+        hub.migrate_legacy_connections(dir.path(), MIL).unwrap();
+        assert_eq!(vinculo(&hub, "acme-web").1, None);
+        assert_eq!(vinculo(&hub, "acme-web").2, None);
+
+        let view = format!(
+            "JIRA_CONFIG_FILE=jira-acme.yml JIRA_API_TOKEN=\"$({JIRA_CMD})\" jira \
+             issue view ACME-<n> --plain"
+        );
+        let overview = hub
+            .agent_overview(&crate::HealthThresholds::default(), 0, MIL)
+            .unwrap();
+        assert_eq!(overview.projects[0].issue_view, view);
+        let project = hub
+            .agent_project("acme", "acme-web", true, 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(project.issue_view, view);
+
+        // As três leituras que a UI usa entregam os endereços das conexões.
+        let links = |p: &crate::HubProject| {
+            let e = p.endpoints.clone().unwrap();
+            (
+                ct_core::item_url(&p.tracker_ref(), &e.jira_url, 12),
+                ct_core::change_url(&p.gh_owner, &p.gh_repo, &p.forge, &e.gitlab_host, 3),
+            )
+        };
+        let esperado = (
+            "https://jira.example.com/browse/ACME-12".to_string(),
+            "https://gitlab.example.com/acme/web/-/merge_requests/3".to_string(),
+        );
+        assert_eq!(links(&hub.project_views().unwrap()[0].project), esperado);
+        assert_eq!(
+            links(&hub.dashboard().unwrap().projects[0].project),
+            esperado
+        );
+        let tree = hub.tree("acme", "acme-web").unwrap().unwrap();
+        assert_eq!(links(&tree.project), esperado);
+        let e = tree.project.endpoints.clone().unwrap();
+        assert_eq!(
+            e.glab_cli,
+            format!("GITLAB_HOST=gitlab.example.com GITLAB_TOKEN=\"$({GITLAB_CMD})\" glab")
+        );
+
+        // Só na resposta: o cadastro continua sem os campos antigos.
+        assert_eq!(vinculo(&hub, "acme-web").1, None);
+        assert_eq!(vinculo(&hub, "acme-web").2, None);
+    }
+
+    /// Editar a forja de um projeto migrado (#264): o repositório é o host
+    /// da conexão e o caminho (#277). Com a mesma conexão (ou outra do mesmo
+    /// host), a edição passa; com uma de outro host, é outro repositório.
+    #[test]
+    fn projeto_migrado_aceita_edicao_da_forja() {
+        let hub = Hub::open_in_memory().unwrap();
+        cadastra(&hub, "acme-web", JIRA_URL, "");
+        let dir = tempfile::tempdir().unwrap();
+        hub.migrate_legacy_connections(dir.path(), MIL).unwrap();
+        let conn = hub
+            .find_project("acme", "acme-web")
+            .unwrap()
+            .unwrap()
+            .forge
+            .gitlab()
+            .unwrap()
+            .connection;
+        let gitlab = |name: &str, host: &str| {
+            hub.add_connection(&NewConnection {
+                name: name.into(),
+                kind: ProviderKind::Gitlab,
+                endpoint: host.into(),
+                credential: CredentialSource::Command {
+                    cmd: GITLAB_CMD.into(),
+                },
+                options: json!({}),
+            })
+            .unwrap()
+            .id
+        };
+        let mesmo_host = gitlab("gitlab-acme-2", "gitlab.example.com");
+        let outro_host = gitlab("gitlab-outro", "gitlab2.example.com");
+        let patch = |connection: Option<i64>| crate::HubProjectPatch {
+            forge: Some(ForgeConfig::Gitlab(GitlabConfig {
+                path: "acme/web".into(),
+                clone_url: "https://gitlab.example.com/acme/web.git".into(),
+                connection,
+            })),
+            ..Default::default()
+        };
+        hub.update_project("acme", "acme-web", &patch(conn))
+            .unwrap();
+        hub.update_project("acme", "acme-web", &patch(Some(mesmo_host)))
+            .unwrap();
+        // Outro host continua sendo outro repositório.
+        let err = hub
+            .update_project("acme", "acme-web", &patch(Some(outro_host)))
+            .unwrap_err();
+        assert!(err.to_string().contains("não muda"), "{err}");
     }
 
     #[test]

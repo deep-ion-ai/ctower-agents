@@ -1,7 +1,8 @@
 //! Chamadas ao glab (spec §7.2, §7.3), conferidas com as flags do glab
 //! 1.124.0 (`glab mr list --help`, `glab api --help`).
 
-use ct_proc::process::{cite, describe_status, run, RunError};
+use ct_core::provider::{ProviderDescriptor, GITLAB};
+use ct_proc::process::{cite, describe_status, has_token, run, RunError};
 use ct_proc::Secret;
 use serde_json::Value;
 use std::process::Command;
@@ -30,6 +31,10 @@ pub enum GitlabError {
     NotFound(String),
     #[error("o GitLab recusou o token (401)")]
     Unauthorized,
+    /// 403: o token vale, mas não pode fazer isto (apagar uma branch
+    /// protegida, por exemplo). Falha da operação, não do token (#265).
+    #[error("o GitLab negou a operação (403): {0}")]
+    Forbidden(String),
     #[error("glab não respondeu em {0} s")]
     Timeout(u64),
     #[error("GitLab fora do ar: {0}")]
@@ -103,7 +108,7 @@ impl Glab {
             c.env("GITLAB_HOST", &self.host);
         }
         if let Some(t) = token {
-            c.env("GITLAB_TOKEN", t.expose());
+            c.env(GITLAB.token_env(), t.expose());
         }
         let out = match run(c, self.deadline) {
             Ok(o) => o,
@@ -246,14 +251,13 @@ fn parse_json(out: &str) -> Result<Value, GitlabError> {
     serde_json::from_str(out.trim()).map_err(|e| GitlabError::Parse(e.to_string()))
 }
 
-/// Classifica a saída de erro do glab (já citável).
+/// Classifica a saída de erro do glab (já citável). Os códigos HTTP só
+/// contam como palavra solta (`(HTTP 403)`), nunca dentro de outra (o
+/// caminho `branches/feat%2F404-x`); 401 é o token recusado e 403, a
+/// operação negada (#265).
 fn classify(msg: &str, status: &str) -> GitlabError {
     let lower = msg.to_lowercase();
-    if lower.contains("401")
-        || lower.contains("unauthorized")
-        || lower.contains("403")
-        || lower.contains("forbidden")
-    {
+    if has_token(msg, "401") || has_token(msg, "unauthorized") {
         return GitlabError::Unauthorized;
     }
     let msg = if msg.is_empty() {
@@ -261,7 +265,10 @@ fn classify(msg: &str, status: &str) -> GitlabError {
     } else {
         msg.to_string()
     };
-    if lower.contains("404") {
+    if has_token(&msg, "403") || has_token(&msg, "forbidden") {
+        return GitlabError::Forbidden(msg);
+    }
+    if has_token(&msg, "404") {
         return GitlabError::Missing(msg);
     }
     let down = [
@@ -270,13 +277,13 @@ fn classify(msg: &str, status: &str) -> GitlabError {
         "no such host",
         "i/o timeout",
         "timeout",
-        "502 ",
-        "503 ",
-        "504 ",
         "tls:",
         "x509",
     ];
-    if down.iter().any(|d| lower.contains(d)) || msg.contains("EOF") {
+    if down.iter().any(|d| lower.contains(d))
+        || ["502", "503", "504"].iter().any(|c| has_token(&msg, c))
+        || msg.contains("EOF")
+    {
         GitlabError::Unavailable(msg)
     } else {
         GitlabError::Failed(msg)
@@ -343,6 +350,48 @@ mod tests {
             GitlabError::Unavailable(_)
         ));
         assert!(matches!(classify("", "saída 1"), GitlabError::Failed(m) if m == "saída 1"));
+    }
+
+    /// 403 é a operação negada, não o token recusado; e o código só conta
+    /// como palavra solta (#265).
+    #[test]
+    fn operacao_negada_nao_e_token_recusado() {
+        let m = "glab: 403 Forbidden (HTTP 403)";
+        let e = classify(m, "");
+        assert_eq!(e, GitlabError::Forbidden(m.into()));
+        assert!(!e.to_string().contains("recusou"), "{e}");
+        for m in [
+            "glab: projects/grupo%2Fapp/repository/branches/feat%2F403-x: 500 erro",
+            "glab: MR !401 sem \"sha\"",
+            "ACME-403 falhou",
+        ] {
+            assert!(matches!(classify(m, ""), GitlabError::Failed(_)), "{m}");
+        }
+        // 404 também só como palavra solta: a branch `feat/404-x` não some.
+        assert!(matches!(
+            classify("glab: branches/feat%2F404-x: 500 erro", ""),
+            GitlabError::Failed(_)
+        ));
+    }
+
+    /// Apagar uma branch protegida dá 403: erro da operação, com o texto
+    /// do GitLab, e não "recusou o token".
+    #[test]
+    fn branch_protegida_nao_e_token_recusado() {
+        let d = tempfile::tempdir().unwrap();
+        let f = FakeGlab::new(d.path(), HOST, "tok");
+        let g = Glab::new(f.bin().to_str().unwrap(), HOST);
+        let t = Secret::new("tok");
+        f.set_branch("develop", "aaa");
+        f.protect_branch("develop");
+        let e = g.delete_branch(&t, PATH, "develop").unwrap_err();
+        assert!(matches!(e, GitlabError::Forbidden(_)), "{e:?}");
+        assert!(e.to_string().contains("403"), "{e}");
+        assert!(f.deletes().is_empty());
+        assert_eq!(
+            g.branch_sha(&t, PATH, "develop").unwrap().as_deref(),
+            Some("aaa")
+        );
     }
 
     #[test]

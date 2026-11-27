@@ -5,20 +5,20 @@ import { useTower } from "../state/tower";
 import type { Connection } from "../protocol/gen";
 import { errText } from "./calls";
 import {
-  CMD_HINT,
-  CONNECTION_KINDS,
-  CRED_KINDS,
-  ENDPOINT_HINT,
+  CRED_HINT,
   EMPTY_CONNECTION_FORM,
-  KIND_LABEL,
   connectionFormOf,
   connectionParams,
+  connectionUsers,
   credentialText,
   readinessText,
+  deleteLockedText,
+  renameLockedText,
   type ConnectionForm,
   type ConnectionTest,
   type CredKind,
 } from "./connections";
+import { CRED_TEXT, PROVIDERS, providerOf } from "./providers";
 import { useHubConnections } from "./useConnections";
 
 interface Editing {
@@ -27,39 +27,35 @@ interface Editing {
   form: ConnectionForm;
 }
 
-const CRED_TEXT: Record<CredKind, string> = {
-  command: "Comando que imprime o token",
-  secret: "Nome do secret do hub",
-  cli: "Login da CLI",
-  file: "Caminho do arquivo com o token",
-  none: "Sem autenticação",
-};
-
 /**
  * Conexões do hub (#238): lista, criação, edição, teste e remoção
  * (`hub.connections.*`, desktop). O teste confere só o cadastro, sem rede; a
  * identidade na rede ("quem sou eu") fica com o ambiente, que tem a credencial.
  * Os projetos escolhem a conexão no cadastro, em vez de digitar URL e credencial.
+ * O nome de uma conexão em uso não muda (#271): é a chave das sobrescritas
+ * `[connections."nome"]` dos ambientes.
  */
 export function HubConnections() {
-  const { api } = useTower();
+  const { api, hub } = useTower();
   const { connections, error: loadError, reload } = useHubConnections();
   const [editing, setEditing] = useState<Editing | null>(null);
   const [tests, setTests] = useState<Record<number, ConnectionTest | string>>({});
   const [confirm, setConfirm] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Erro ao salvar o formulário: aparece junto dele, onde o usuário está. */
+  const [formError, setFormError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
   const save = async () => {
     if (!editing) return;
     const p = connectionParams(editing.form, editing.id);
     if ("error" in p) {
-      setError(p.error);
+      setFormError(p.error);
       return;
     }
     setBusy(true);
-    setError(null);
+    setFormError(null);
     try {
       const method = editing.id === undefined ? "hub.connections.add" : "hub.connections.update";
       await api.hubCall(method, p.params);
@@ -67,7 +63,8 @@ export function HubConnections() {
       setEditing(null);
       await reload();
     } catch (e) {
-      setError(errText(e));
+      // Ex.: o hub recusa renomear conexão em uso e diz quais projetos a usam.
+      setFormError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -100,6 +97,10 @@ export function HubConnections() {
     }
   };
 
+  // A conexão em edição, como está no hub: o nome e o tipo dizem se é a GitHub padrão (#275).
+  const editingSaved = editing?.id === undefined ? undefined : connections?.find((c) => c.id === editing.id);
+  const editingUsers = editingSaved ? connectionUsers(editingSaved, hub.projects) : [];
+
   return (
     <section aria-labelledby="hub-conexoes" className="panel settings-section">
       <h2 id="hub-conexoes">Conexões</h2>
@@ -107,6 +108,10 @@ export function HubConnections() {
         Conexões com GitHub, GitLab e Jira, usadas pelos projetos. O hub guarda só como obter o token (nome de secret,
         comando ou caminho de arquivo): o valor nunca aparece aqui. Os ambientes recebem as conexões dos projetos
         atribuídos a eles.
+      </p>
+      <p className="muted hint">
+        O token do GitHub do hub (sincronização, validação dos repositórios e release) vem da conexão GitHub do projeto
+        ou, sem ela, da conexão <span className="mono">github</span>: para trocá-lo, edite a credencial dela aqui.
       </p>
       <p className="muted hint">
         Quem sou eu (a conta na rede) não entra no teste: o teste confere só o cadastro, sem rede. A conferência na
@@ -137,11 +142,12 @@ export function HubConnections() {
           {connections.map((c) => {
             const t = tests[c.id];
             const r = t && typeof t !== "string" ? readinessText(t.readiness) : null;
+            const users = connectionUsers(c, hub.projects);
             return (
               <li key={c.id} className="hub-card">
                 <div className="hub-card-head">
                   <h3>{c.name}</h3>
-                  <span className="muted">{KIND_LABEL[c.kind]}</span>
+                  <span className="muted">{providerOf(c.kind).label}</span>
                 </div>
                 <dl className="hub-kv">
                   <div>
@@ -152,12 +158,19 @@ export function HubConnections() {
                     <dt>Credencial</dt>
                     <dd>{credentialText(c.credential)}</dd>
                   </div>
-                  {typeof c.options?.config_file === "string" && c.options.config_file && (
-                    <div>
-                      <dt>Configuração do jira-cli</dt>
-                      <dd className="mono">{c.options.config_file}</dd>
-                    </div>
-                  )}
+                  <div>
+                    <dt>Usada por</dt>
+                    <dd>{users.length > 0 ? users.join(", ") : "nenhum projeto"}</dd>
+                  </div>
+                  {providerOf(c.kind).options.map(({ key, label }) => {
+                    const v = c.options?.[key];
+                    return typeof v === "string" && v ? (
+                      <div key={key}>
+                        <dt>{label}</dt>
+                        <dd className="mono">{v}</dd>
+                      </div>
+                    ) : null;
+                  })}
                 </dl>
                 <div className="form-actions">
                   <button type="button" className="btn" disabled={busy} onClick={() => void test(c)}>
@@ -167,7 +180,10 @@ export function HubConnections() {
                     type="button"
                     className="btn"
                     disabled={busy}
-                    onClick={() => setEditing({ id: c.id, form: connectionFormOf(c) })}
+                    onClick={() => {
+                      setFormError(null);
+                      setEditing({ id: c.id, form: connectionFormOf(c) });
+                    }}
                   >
                     Editar
                   </button>
@@ -176,9 +192,21 @@ export function HubConnections() {
                       Confirmar exclusão de {c.name}
                     </button>
                   ) : (
-                    <button type="button" className="btn" disabled={busy} onClick={() => setConfirm(c.id)}>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy || users.length > 0}
+                      title={users.length > 0 ? deleteLockedText(users) : undefined}
+                      aria-describedby={users.length > 0 ? `conn-del-${c.id}` : undefined}
+                      onClick={() => setConfirm(c.id)}
+                    >
                       Excluir
                     </button>
+                  )}
+                  {users.length > 0 && (
+                    <span id={`conn-del-${c.id}`} className="sr-only">
+                      {deleteLockedText(users)}
+                    </span>
                   )}
                 </div>
                 {r && (
@@ -201,10 +229,12 @@ export function HubConnections() {
         <ConnectionFormView
           editing={editing}
           busy={busy}
+          error={formError}
+          users={editingUsers}
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);
-            setError(null);
+            setFormError(null);
           }}
           onSave={() => void save()}
         />
@@ -214,7 +244,10 @@ export function HubConnections() {
             type="button"
             className="btn btn-primary"
             disabled={busy}
-            onClick={() => setEditing({ form: { ...EMPTY_CONNECTION_FORM } })}
+            onClick={() => {
+              setFormError(null);
+              setEditing({ form: { ...EMPTY_CONNECTION_FORM } });
+            }}
           >
             Nova conexão
           </button>
@@ -227,21 +260,28 @@ export function HubConnections() {
 function ConnectionFormView({
   editing,
   busy,
+  error,
+  users,
   onChange,
   onCancel,
   onSave,
 }: {
   editing: Editing;
   busy: boolean;
+  error: string | null;
+  /** Projetos que usam a conexão editada: com algum, o nome não muda (#271). */
+  users: string[];
   onChange: (e: Editing) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
   const { id, form: f } = editing;
   const prefix = id === undefined ? "conn-new" : `conn-${id}`;
+  const nameLocked = id !== undefined && users.length > 0;
   const set = (patch: Partial<ConnectionForm>) => onChange({ ...editing, form: { ...f, ...patch } });
   // Trocar o tipo troca a forma de credencial que ele aceita.
-  const kinds = CRED_KINDS[f.kind];
+  const provider = providerOf(f.kind);
+  const kinds = provider.credential_kinds;
   const credKind = kinds.includes(f.cred) ? f.cred : kinds[0];
   const valueLabel =
     credKind === "secret"
@@ -267,11 +307,14 @@ function ConnectionFormView({
           <select
             id={`${prefix}-kind`}
             value={f.kind}
-            onChange={(e) => set({ kind: e.target.value as ConnectionForm["kind"], cred: CRED_KINDS[e.target.value as ConnectionForm["kind"]][0] })}
+            onChange={(e) => {
+              const kind = e.target.value as ConnectionForm["kind"];
+              set({ kind, cred: providerOf(kind).credential_kinds[0] });
+            }}
           >
-            {CONNECTION_KINDS.map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABEL[k]}
+            {PROVIDERS.map((p) => (
+              <option key={p.kind} value={p.kind}>
+                {p.label}
               </option>
             ))}
           </select>
@@ -279,7 +322,7 @@ function ConnectionFormView({
       ) : (
         <div className="field">
           <span className="label">Tipo (não muda)</span>
-          <span>{KIND_LABEL[f.kind]}</span>
+          <span>{provider.label}</span>
         </div>
       )}
       <div className="field">
@@ -289,16 +332,20 @@ function ConnectionFormView({
           type="text"
           placeholder={`${f.kind}-empresa`}
           value={f.name}
+          disabled={nameLocked}
+          aria-describedby={`${prefix}-name-hint`}
           onChange={(e) => set({ name: e.target.value })}
         />
-        <span className="hint muted">Único no hub: minúsculas, dígitos, `-`, `_` ou `.`.</span>
+        <span id={`${prefix}-name-hint`} className="hint muted">
+          {nameLocked ? renameLockedText(f.name, users) : "Único no hub: minúsculas, dígitos, `-`, `_` ou `.`."}
+        </span>
       </div>
       <div className="field">
-        <label htmlFor={`${prefix}-endpoint`}>{f.kind === "gitlab" ? "Host" : f.kind === "jira" ? "URL" : "API"}</label>
+        <label htmlFor={`${prefix}-endpoint`}>{provider.endpointLabel}</label>
         <input
           id={`${prefix}-endpoint`}
           type="text"
-          placeholder={ENDPOINT_HINT[f.kind]}
+          placeholder={provider.endpointHint}
           value={f.endpoint}
           onChange={(e) => set({ endpoint: e.target.value })}
         />
@@ -320,24 +367,29 @@ function ConnectionFormView({
             id={`${prefix}-value`}
             type="text"
             autoComplete="off"
-            placeholder={credKind === "command" ? CMD_HINT[f.kind] : credKind === "file" ? "~/.config/…/token" : "NOME_DO_SECRET"}
+            placeholder={credKind === "command" ? provider.cmdHint : credKind === "file" ? "~/.config/…/token" : "NOME_DO_SECRET"}
             value={f.cred_value}
             onChange={(e) => set({ cred_value: e.target.value })}
           />
-          <span className="hint muted">O comando roda no ambiente: a senha e o token nunca passam pelo hub.</span>
+          {CRED_HINT[credKind] && <span className="hint muted">{CRED_HINT[credKind]}</span>}
         </div>
       )}
-      {f.kind === "jira" && (
-        <div className="field hub-wide">
-          <label htmlFor={`${prefix}-config`}>Configuração do jira-cli (opcional)</label>
+      {provider.options.map(({ key, label, placeholder }) => (
+        <div key={key} className="field hub-wide">
+          <label htmlFor={`${prefix}-opt-${key}`}>{label} (opcional)</label>
           <input
-            id={`${prefix}-config`}
+            id={`${prefix}-opt-${key}`}
             type="text"
-            placeholder="vazio = ~/.config/.jira/.config.yml"
-            value={f.config_file}
-            onChange={(e) => set({ config_file: e.target.value })}
+            placeholder={placeholder}
+            value={f.options[key] ?? ""}
+            onChange={(e) => set({ options: { ...f.options, [key]: e.target.value } })}
           />
         </div>
+      ))}
+      {error && (
+        <p role="alert" className="start-error hub-wide">
+          {error}
+        </p>
       )}
       <div className="form-actions">
         <button type="button" className="btn" onClick={onCancel}>

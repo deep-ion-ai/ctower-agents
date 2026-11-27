@@ -166,11 +166,12 @@ pub struct EpicDocs {
 }
 
 /// `README.md` do épico, gerado uma vez: título, link da issue e
-/// sub-issues (as do espelho no momento da criação).
-pub fn epic_readme(t: &TrackerRef, epic: &EpicDocs) -> String {
+/// sub-issues (as do espelho no momento da criação). `jira_url` é a URL da
+/// conexão do Jira, para os links ([`item_url`]; ignorada no GitHub).
+pub fn epic_readme(t: &TrackerRef, jira_url: &str, epic: &EpicDocs) -> String {
     let reference = item_ref(t, epic.number);
     let url = match epic.url.trim() {
-        "" => item_url(t, epic.number),
+        "" => item_url(t, jira_url, epic.number),
         u => u.to_string(),
     };
     let title = match epic.title.trim() {
@@ -185,7 +186,7 @@ pub fn epic_readme(t: &TrackerRef, epic: &EpicDocs) -> String {
         out.push_str(&format!(
             "- [{}]({}) {}\n",
             item_short(t, s.number),
-            item_url(t, s.number),
+            item_url(t, jira_url, s.number),
             s.title.trim()
         ));
     }
@@ -264,9 +265,11 @@ mod tests {
 
     #[test]
     fn readme_do_epico() {
-        let t = TrackerRef::new("o", "r", &TrackerConfig::Github);
+        let github = TrackerConfig::default();
+        let t = TrackerRef::new("o", "r", &github);
         let r = epic_readme(
             &t,
+            "",
             &EpicDocs {
                 number: 9,
                 title: "Docs".into(),

@@ -245,23 +245,59 @@ mod tests {
             session_templates: Default::default(),
             approval: Default::default(),
             tracker: TrackerConfig::Jira(JiraConfig {
-                url: "https://jira.example.com".into(),
                 project_key: "PROJ".into(),
-                credential_cmd: "pass show jira | head -1".into(),
                 type_map: ct_core::default_type_map(),
                 active_sprint_only: true,
+                connection: Some(JIRA_CONN),
                 ..Default::default()
             }),
             forge: ForgeConfig::Gitlab(GitlabConfig {
-                connection: None,
-                host: "gitlab.example.com".into(),
+                connection: Some(GITLAB_CONN),
                 path: "grupo/projeto/app".into(),
                 clone_url: "https://gitlab.example.com/grupo/projeto/app.git".into(),
-                credential_cmd: "pass show gitlab | head -1".into(),
             }),
             branch_pattern: Some("{key}".into()),
             attribution: false,
         }
+    }
+
+    /// Conexões do Jira e do GitLab que o projeto do exemplo referencia.
+    const JIRA_CONN: i64 = 1;
+    const GITLAB_CONN: i64 = 2;
+
+    /// Hub vazio com as duas conexões do exemplo (#277).
+    fn hub_com_conexoes() -> Hub {
+        use crate::connection::NewConnection;
+        use ct_core::provider::{CredentialSource, ProviderKind};
+        let hub = Hub::open_in_memory().unwrap();
+        for (id, name, kind, endpoint) in [
+            (
+                JIRA_CONN,
+                "jira-acme",
+                ProviderKind::Jira,
+                "https://jira.example.com",
+            ),
+            (
+                GITLAB_CONN,
+                "gitlab-acme",
+                ProviderKind::Gitlab,
+                "gitlab.example.com",
+            ),
+        ] {
+            let c = hub
+                .add_connection(&NewConnection {
+                    name: name.into(),
+                    kind,
+                    endpoint: endpoint.into(),
+                    credential: CredentialSource::Command {
+                        cmd: format!("pass show {kind} | head -1"),
+                    },
+                    options: serde_json::json!({}),
+                })
+                .unwrap();
+            assert_eq!(c.id, id);
+        }
+        hub
     }
 
     fn novo() -> NewHubProject {
@@ -277,7 +313,7 @@ mod tests {
     /// Hub com o projeto Jira cadastrado e os ambientes `a` e `b` conhecidos
     /// (já falaram com o hub).
     fn hub_jira() -> Hub {
-        let hub = Hub::open_in_memory().unwrap();
+        let hub = hub_com_conexoes();
         hub.add_project_with(&novo(), &jira()).unwrap();
         for e in ["a", "b"] {
             hub.ingest(e, e, &[]).unwrap();
@@ -365,7 +401,7 @@ mod tests {
 
     #[test]
     fn cadastro_jira_gitlab_guarda_rastreador_forja_e_padrao() {
-        let hub = Hub::open_in_memory().unwrap();
+        let hub = hub_com_conexoes();
         let added = hub.add_project_with(&novo(), &jira()).unwrap();
         let p = added.project;
         assert_eq!(p.tracker, jira().tracker);
@@ -374,7 +410,7 @@ mod tests {
         assert!(!p.attribution);
         assert_eq!(p.sync_env_id, None);
         assert_eq!(p.item_ref(5450), "PROJ-5450");
-        // Credenciais: só os comandos, como texto do cadastro.
+        // Endereço e credencial ficam na conexão, não no cadastro (#277).
         let cfg: String = hub
             .conn
             .query_row(
@@ -383,18 +419,22 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(cfg.contains("pass show jira"), "{cfg}");
+        let cfg: serde_json::Value = serde_json::from_str(&cfg).unwrap();
+        assert_eq!(cfg["connection"], JIRA_CONN);
+        for k in ["url", "credential_cmd", "config_file"] {
+            assert!(cfg.get(k).is_none(), "{cfg}");
+        }
     }
 
     #[test]
     fn cadastro_recusa_combinacao_e_padrao_invalidos() {
-        let hub = Hub::open_in_memory().unwrap();
+        let hub = hub_com_conexoes();
         let github_gitlab = ProjectProvider {
-            tracker: TrackerConfig::Github,
+            tracker: TrackerConfig::Github(Default::default()),
             ..jira()
         };
         let jira_github = ProjectProvider {
-            forge: ForgeConfig::Github,
+            forge: ForgeConfig::Github(Default::default()),
             ..jira()
         };
         for pv in [github_gitlab, jira_github] {
@@ -411,15 +451,25 @@ mod tests {
             };
             assert!(hub.add_project_with(&novo(), &pv).is_err(), "{pat}");
         }
-        let mut sem_cmd = jira();
-        if let TrackerConfig::Jira(j) = &mut sem_cmd.tracker {
-            j.credential_cmd = " ".into();
+        // Sem conexão do Jira ou do GitLab: recusado (#277).
+        let mut sem_jira = jira();
+        if let TrackerConfig::Jira(j) = &mut sem_jira.tracker {
+            j.connection = None;
         }
         let err = hub
-            .add_project_with(&novo(), &sem_cmd)
+            .add_project_with(&novo(), &sem_jira)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("comando de credencial do Jira"), "{err}");
+        assert!(err.contains("escolha a conexão do Jira"), "{err}");
+        let mut sem_gitlab = jira();
+        if let ForgeConfig::Gitlab(g) = &mut sem_gitlab.forge {
+            g.connection = None;
+        }
+        let err = hub
+            .add_project_with(&novo(), &sem_gitlab)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("escolha a conexão do GitLab"), "{err}");
         // Fora do modo sprint ativa: JQL obrigatório e limite de 1 a 5000.
         let filtro = |jql: &str, max: u32| {
             let mut pv = jira();
@@ -581,7 +631,7 @@ mod tests {
                 OWNER,
                 REPO,
                 &HubProjectPatch {
-                    tracker: Some(TrackerConfig::Github),
+                    tracker: Some(TrackerConfig::Github(Default::default())),
                     ..Default::default()
                 },
             )
@@ -685,14 +735,17 @@ mod tests {
         hub.ingest(
             "a",
             "a",
-            &[entry(4, status(None, Some("o Jira recusou a senha (401)")))],
+            &[entry(
+                4,
+                status(None, Some("o Jira recusou a credencial (401)")),
+            )],
         )
         .unwrap();
         let st = hub.sync_state(p.id).unwrap().unwrap();
         assert_eq!(st.last_ok_at, Some(30));
         assert_eq!(
             st.last_error.as_deref(),
-            Some("o Jira recusou a senha (401)")
+            Some("o Jira recusou a credencial (401)")
         );
         // A sequência de falhas vem do ambiente de sync (issue #90).
         assert_eq!((st.failures, st.failing_since), (1, Some(30)));
@@ -867,7 +920,7 @@ mod tests {
 
     #[test]
     fn espelho_de_projeto_github_e_descartado() {
-        let hub = Hub::open_in_memory().unwrap();
+        let hub = hub_com_conexoes();
         hub.add_project(&novo()).unwrap();
         hub.ingest("a", "a", &[]).unwrap();
         hub.add_assignment(OWNER, REPO, "a", None).unwrap();
@@ -893,7 +946,7 @@ mod tests {
         assert_eq!(sync, None);
         // Recadastro como GitHub não herda o Jira.
         let p = hub.add_project(&novo()).unwrap().project;
-        assert_eq!(p.tracker, TrackerConfig::Github);
+        assert_eq!(p.tracker, TrackerConfig::Github(Default::default()));
     }
 
     fn sinais(hub: &Hub, now: i64) -> Vec<crate::HealthSignal> {

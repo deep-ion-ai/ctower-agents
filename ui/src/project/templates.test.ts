@@ -34,24 +34,30 @@ test("variável desconhecida fica intacta; espaços nas chaves são aceitos", ()
   expect(renderTemplate("{{ number }} {{nada}}", vars)).toBe("33 {{nada}}");
 });
 
-// Projetos Jira + GitLab (#351, spec do Jira e GitLab §9).
+// Projetos Jira + GitLab (#351, spec do Jira e GitLab §9). URL e prefixos
+// vêm das conexões, montados no Rust (`endpoints`, #277).
 const jira = {
   kind: "jira" as const,
-  url: "https://jira.example.com/",
   project_key: "PROJ",
   jql: "",
-  credential_cmd: "pass show jira | head -1",
-  config_file: "",
   epic_link_field: "customfield_10601",
   epic_name_field: "customfield_10604",
   type_map: {},
+  connection: 7,
 };
 const gitlab = {
   kind: "gitlab" as const,
-  host: "gitlab.example.com",
   path: "grupo/projeto/app",
   clone_url: "https://gitlab.example.com/grupo/projeto/app.git",
-  credential_cmd: "pass show gitlab | head -1",
+  connection: 8,
+};
+const JIRA = 'JIRA_API_TOKEN="$(pass show jira | head -1)" jira';
+const GLAB = 'GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab';
+const endpoints = {
+  jira_url: "https://jira.example.com/",
+  gitlab_host: "gitlab.example.com",
+  jira_cli: JIRA,
+  glab_cli: GLAB,
 };
 const exemplo = {
   kind: "issue" as const,
@@ -64,9 +70,8 @@ const exemplo = {
   base: "develop",
   tracker: jira,
   forge: gitlab,
+  endpoints,
 };
-const JIRA = 'JIRA_API_TOKEN="$(pass show jira | head -1)" jira';
-const GLAB = 'GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab';
 
 test("template escolhido pelo rastreador; GitHub com os de sempre", () => {
   const t = DEFAULT_UI_CONFIG.templates;
@@ -105,12 +110,18 @@ test("épico e planejamento do Jira: lista do épico e criação com Epic Link",
   for (const t of [e, p]) expect(t).not.toMatch(/\{\{|GitHub|gh issue|Closes|\bPR\b/);
 });
 
-test("variáveis novas: chave neutra e prefixos com JIRA_CONFIG_FILE e caminho com espaço", () => {
+test("variáveis novas: chave neutra e prefixos como vieram das conexões", () => {
   expect(renderTemplate("{{key}} {{title}} {{base}}", { ...vars, title: "T", base: "develop" })).toBe("#33 T develop");
   expect(renderTemplate("{{forge_path}}", vars)).toBe("deep-ion-ai/ctower-agents");
-  const cfg = { ...exemplo, tracker: { ...jira, config_file: "/home/u/meu jira.yml" } };
-  expect(renderTemplate("{{jira}}", cfg)).toBe(`JIRA_CONFIG_FILE='/home/u/meu jira.yml' ${JIRA}`);
+  // O prefixo é o do Rust (`session_prefix`, com o `config_file` e a fonte da conexão).
+  const cli = `JIRA_CONFIG_FILE='/etc/acme/meu jira.yml' JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira`;
+  const cfg = { ...exemplo, endpoints: { ...endpoints, jira_cli: cli } };
+  expect(renderTemplate("{{jira}}", cfg)).toBe(cli);
   expect(renderTemplate("{{jira_url}} {{jira_project}}", exemplo)).toBe("https://jira.example.com PROJ");
+  // Sem os endereços (fora das respostas que os derivam), os comandos puros.
+  expect(renderTemplate("{{jira}} {{glab}} [{{jira_url}}]", { ...exemplo, endpoints: undefined })).toBe("jira glab []");
+  // Projeto GitHub: `{{jira}}`/`{{glab}}` puros mesmo com endereços.
+  expect(renderTemplate("{{jira}} {{glab}}", { ...vars, endpoints })).toBe("jira glab");
 });
 
 // Templates por projeto (#166): projeto > global do rastreador > padrão de fábrica.

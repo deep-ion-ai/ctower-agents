@@ -48,11 +48,11 @@ describe("modo web: seções exclusivas do desktop ocultas ou desabilitadas", ()
     await waitFor(() => expect(within(side).getByText("Sessões web")).toBeInTheDocument());
     // O grupo não some: cada linha avisa que é do desktop e abre a explicação.
     expect(within(side).getByText("Segurança")).toBeInTheDocument();
-    for (const s of ["Secrets e variáveis", "Chave de recuperação", "Token do GitHub"]) {
+    for (const s of ["Secrets e variáveis", "Chave de recuperação"]) {
       const row = within(side).getByText(s).closest("button")!;
       expect(row).toHaveTextContent("Só no app desktop");
     }
-    await user.click(within(side).getByText("Token do GitHub"));
+    await user.click(within(side).getByText("Chave de recuperação"));
     expect(await screen.findByText(/fica só no app desktop/)).toBeInTheDocument();
     expect(api.hubCallsTo("hub.secrets.list")).toEqual([]);
     // Projetos e atribuições saiu do Hub (#18).

@@ -562,6 +562,7 @@ dependencies = [
 name = "ct-git"
 version = "1.10.0"
 dependencies = [
+ "base64",
  "ct-proc",
  "serde",
  "tempfile",
@@ -646,7 +647,9 @@ dependencies = [
 name = "ct-proc"
 version = "1.10.0"
 dependencies = [
+ "ct-core",
  "libc",
+ "tempfile",
  "thiserror 2.0.21",
  "zeroize",
 ]
@@ -655,6 +658,7 @@ dependencies = [
 name = "ct-pty"
 version = "1.10.0"
 dependencies = [
+ "libc",
  "portable-pty",
  "tempfile",
  "zeroize",
@@ -763,6 +767,7 @@ dependencies = [
  "ct-hub-store",
  "ct-jira",
  "ct-ledger",
+ "ct-proc",
  "ct-secrets",
  "ct-update",
  "futures-util",

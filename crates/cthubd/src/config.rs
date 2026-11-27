@@ -2,6 +2,7 @@
 //! `~/.config/cthub/config.toml` e `~/.local/share/cthub/`, separados do
 //! `ctowerd`.
 
+use ct_core::provider::{ProviderDescriptor, GITHUB};
 use serde::Deserialize;
 use std::io;
 use std::path::PathBuf;
@@ -137,7 +138,8 @@ pub struct HubConfig {
     pub gh_sync_interval_secs: u64,
     /// Raiz da API do GitHub.
     pub gh_api_url: String,
-    /// `gh` de onde vem o token na falta de `github.token` (`gh auth token`).
+    /// `gh` da fonte `cli` das conexões GitHub e da falta de conexão
+    /// `github` no hub (`gh auth token`, #275).
     pub gh_bin: String,
     /// Snapshots do `hub.db`; vazio = `<data>/backups`. Ponha em outro disco.
     pub backup_dir: String,
@@ -296,7 +298,7 @@ impl Default for HubConfig {
             bind: "127.0.0.1".into(),
             test_mode: false,
             gh_sync_interval_secs: 180,
-            gh_api_url: "https://api.github.com".into(),
+            gh_api_url: GITHUB.default_endpoint().unwrap_or_default().into(),
             gh_bin: "gh".into(),
             backup_dir: String::new(),
             backup_interval_hours: 6,

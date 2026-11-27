@@ -1,14 +1,22 @@
 //! Sincronização com o GitHub (spec §7.5): busca sem o lock do ledger,
 //! aplica numa transação e avisa a UI das mudanças.
+//!
+//! O token de cada projeto vem do resolvedor de credencial do ambiente, com
+//! a fonte da conexão `github` do projeto (#275, [`Sessions::github_source`]):
+//! o mesmo cache, o mesmo descarte no `401` e o mesmo mascaramento das
+//! sessões que o Jira e o GitLab.
 
+use crate::resolver::{github_key, Ask};
 use crate::{Result, Sessions, SessionsError};
 use ct_core::now_ms;
+use ct_core::provider::CredentialSource;
 use ct_gh::sync::{fetch, SyncInput};
-use ct_gh::{GhClient, GhError};
+use ct_gh::{GhClient, GhError, TokenProvider};
 use ct_ledger::{PrRow, Project};
+use ct_proc::CREDENTIAL_DEADLINE;
 use serde::Serialize;
 use serde_json::json;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn gh_error(e: GhError) -> SessionsError {
@@ -45,9 +53,27 @@ impl GithubSync {
         }
     }
 
-    /// Cliente do GitHub (token, status da conta).
+    /// Cliente base do GitHub (a API e o `gh` configurados). O token de um
+    /// projeto sai de [`Self::client_for`].
     pub fn client(&self) -> &GhClient {
         &self.client
+    }
+
+    /// Cliente com o token do projeto (#275): o resolvedor do ambiente com a
+    /// fonte da conexão `github` dele.
+    pub fn client_for(&self, project: &Project) -> GhClient {
+        self.client.with_provider(Arc::new(EnvToken {
+            sessions: self.sessions.clone(),
+            project: project.clone(),
+            cli: self.client.config().cli_cmd(),
+            deadline: self.deadline(),
+        }))
+    }
+
+    /// Prazo da fonte do token: o do `gh auth token` do cliente ou o do
+    /// comando de credencial, o maior.
+    fn deadline(&self) -> Duration {
+        self.client.config().token_timeout.max(CREDENTIAL_DEADLINE)
     }
 
     /// Head do PR (#286): o do espelho, gravado pelo sync com ETag. O PR
@@ -59,7 +85,7 @@ impl GithubSync {
             return Ok(Some(sha.clone()));
         }
         let sha = ct_gh::refs::pull_head_sha(
-            &self.client,
+            &self.client_for(project),
             &project.gh_owner,
             &project.gh_repo,
             pr.number,
@@ -75,14 +101,24 @@ impl GithubSync {
 
     /// Ponta da branch no GitHub agora; `None` = ela não existe.
     pub fn remote_branch_sha(&self, project: &Project, branch: &str) -> Result<Option<String>> {
-        ct_gh::refs::branch_head_sha(&self.client, &project.gh_owner, &project.gh_repo, branch)
-            .map_err(gh_error)
+        ct_gh::refs::branch_head_sha(
+            &self.client_for(project),
+            &project.gh_owner,
+            &project.gh_repo,
+            branch,
+        )
+        .map_err(gh_error)
     }
 
     /// Apaga a branch no GitHub; `false` = já não existia.
     pub fn delete_remote_branch(&self, project: &Project, branch: &str) -> Result<bool> {
-        ct_gh::refs::delete_branch(&self.client, &project.gh_owner, &project.gh_repo, branch)
-            .map_err(gh_error)
+        ct_gh::refs::delete_branch(
+            &self.client_for(project),
+            &project.gh_owner,
+            &project.gh_repo,
+            branch,
+        )
+        .map_err(gh_error)
     }
 
     /// Todos os projetos. A falha de um não impede os outros: fica em
@@ -138,11 +174,12 @@ impl GithubSync {
         }
         // Lock curto para ler; a rede roda sem ele.
         let input = SyncInput::load(&self.sessions.ledger(), project_id, now_ms())?;
-        let result = match fetch(&self.client, &input) {
+        let client = self.client_for(&input.project);
+        let result = match fetch(&client, &input) {
             Ok(mut snap) => {
                 // O login do token é o "eu" do projeto (#149); sem ele, fica
                 // o último conhecido.
-                snap.me = self.client.login().ok();
+                snap.me = client.login().ok();
                 let applied = self.sessions.ledger().apply_github(&snap)?;
                 for g in &applied.removed {
                     tracing::warn!("github: projeto {project_id}: {g}, removida do espelho");
@@ -153,7 +190,7 @@ impl GithubSync {
                         json!({ "work_item_id": wi, "status": status }),
                     );
                 }
-                self.sync_reviews(&input.project)?;
+                self.sync_reviews(&client, &input.project)?;
                 ProjectSync {
                     project_id,
                     ok: true,
@@ -195,17 +232,13 @@ impl GithubSync {
     /// mudaram (`updated_at`) desde a última leitura, sem o lock do ledger
     /// durante a rede. A falha no GitHub não derruba o sync: fica no log, e
     /// o que faltou é lido no próximo ciclo.
-    fn sync_reviews(&self, project: &Project) -> Result<()> {
+    fn sync_reviews(&self, client: &GhClient, project: &Project) -> Result<()> {
         let targets = self.sessions.ledger().pr_review_targets(project.id)?;
         if targets.is_empty() {
             return Ok(());
         }
-        let (got, err) = ct_gh::reviews::fetch_reviews(
-            &self.client,
-            &project.gh_owner,
-            &project.gh_repo,
-            &targets,
-        );
+        let (got, err) =
+            ct_gh::reviews::fetch_reviews(client, &project.gh_owner, &project.gh_repo, &targets);
         self.sessions.ledger().apply_pr_reviews(project.id, &got)?;
         if let Some(e) = err {
             tracing::warn!(
@@ -225,6 +258,73 @@ pub fn next_delay(interval: Duration, failures: u32) -> Duration {
         .checked_mul(1u32 << failures.min(16))
         .unwrap_or(cap)
         .min(cap)
+}
+
+/// Erro da conexão GitHub cuja fonte é um arquivo que não existe neste
+/// ambiente, sem sobrescrita (#276).
+pub fn missing_file_message(connection: &str, path: &str) -> String {
+    format!(
+        "a conexão {connection} lê o token do arquivo {path:?}, que não existe neste ambiente; \
+         configure a sobrescrita da conexão {connection} neste ambiente em Configurações › \
+         Ambiente › Credenciais das conexões (por exemplo, gh auth token)"
+    )
+}
+
+/// Token do GitHub de um projeto pelo resolvedor do ambiente (#275): a
+/// chave `github:<projeto>`, a fonte de [`Sessions::github_source`] e os
+/// secrets do projeto no cache do ambiente. Cada token novo atualiza o
+/// mascaramento das sessões vivas.
+struct EnvToken {
+    sessions: Sessions,
+    project: Project,
+    cli: String,
+    deadline: Duration,
+}
+
+impl TokenProvider for EnvToken {
+    fn token(&self) -> std::result::Result<String, GhError> {
+        let source = self
+            .sessions
+            .github_source(&self.project)
+            .map_or(CredentialSource::None, |s| s.source);
+        // A conexão do hub com `file` aponta para um caminho da máquina do
+        // hub (a migração grava assim o `github.token` dele, #237). Aqui ele
+        // pode não existir: o erro diz o que fazer, em vez de cair calado no
+        // `gh` deste ambiente (outra conta, outras permissões).
+        if let CredentialSource::File { path } = &source {
+            if !ct_core::provider::local_file(path).exists() {
+                let name = self
+                    .sessions
+                    .config()
+                    .credentials
+                    .github_connection_name(ct_core::github_connection(
+                        &self.project.tracker,
+                        &self.project.forge,
+                    ))
+                    .unwrap_or_else(|| ct_core::provider::DEFAULT_GITHUB_CONNECTION.into());
+                return Err(GhError::Token(missing_file_message(&name, path)));
+            }
+        }
+        let lookup = self.sessions.secret_lookup(&self.project);
+        self.sessions
+            .credentials()
+            .token(Ask {
+                key: &github_key(self.project.id),
+                what: "GitHub",
+                source: &source,
+                lookup: &lookup,
+                deadline: self.deadline,
+                cli: Some(&self.cli),
+            })
+            .map(|t| t.expose().to_string())
+            .map_err(|e| GhError::Token(e.to_string()))
+    }
+
+    fn invalidate(&self) {
+        self.sessions
+            .credentials()
+            .invalidate(&github_key(self.project.id));
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +372,167 @@ mod tests {
             .unwrap();
         l.set_work_item_branch(wi.id, branch, "/wt").unwrap();
         wi.id
+    }
+
+    /// #275: o sync do ambiente usa o token da conexão `github` padrão (a
+    /// do pull); trocar a credencial dela vale no ciclo seguinte, sem o
+    /// `gh` do ambiente, e o token resolvido entra no mascaramento das
+    /// sessões do projeto.
+    #[test]
+    fn trocar_a_credencial_da_conexao_github_vale_no_sync_do_ambiente() {
+        use ct_core::provider::{Connection, ProviderKind};
+        use ct_gh::fake::fake_gh_calls;
+        let env = TestEnv::new(FakeClaude::exit(0));
+        let gh = FakeGitHub::start("ghp_ficticio_novo_123456");
+        let bin = fake_gh(env.tmp.path(), "ghp_ficticio_do_gh");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("acme", "acme-web");
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        let p = env
+            .sessions
+            .ledger()
+            .add_project(&NewProject {
+                name: "acme-web".into(),
+                gh_owner: o.into(),
+                gh_repo: r.into(),
+                repo_path: "/x".into(),
+                base_branch: "develop".into(),
+                protected_branches: vec![],
+            })
+            .unwrap();
+        let conexao = |token: &str| Connection {
+            id: 1,
+            name: "github".into(),
+            kind: ProviderKind::Github,
+            endpoint: String::new(),
+            credential: CredentialSource::Command {
+                cmd: format!("printf '{token}\\n'"),
+            },
+            options: json!({}),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let creds = &env.cfg.credentials;
+        creds.set_connections(
+            vec![conexao("ghp_ficticio_velho_123456")],
+            Default::default(),
+        );
+        let sync = GithubSync::new(env.sessions.clone(), client);
+        let r1 = sync.sync_project(p.id).unwrap();
+        assert!(!r1.ok, "{r1:?}");
+        assert!(r1.error.as_deref().unwrap().contains("401"), "{r1:?}");
+
+        creds.set_connections(
+            vec![conexao("ghp_ficticio_novo_123456")],
+            Default::default(),
+        );
+        let r2 = sync.sync_project(p.id).unwrap();
+        assert!(r2.ok, "{r2:?}");
+        assert_eq!(fake_gh_calls(env.tmp.path()), 0, "o gh não é consultado");
+        let mask = env.sessions.connection_mask(&p);
+        assert_eq!(
+            mask.pty.apply(b"t=ghp_ficticio_novo_123456"),
+            b"t=***CONEXAO_TOKEN***"
+        );
+
+        // O projeto que referencia outra conexão GitHub usa a dele.
+        let mut acme = conexao("ghp_ficticio_acme_123456");
+        acme.id = 2;
+        acme.name = "github-acme".into();
+        creds.set_connections(
+            vec![conexao("ghp_ficticio_novo_123456"), acme],
+            Default::default(),
+        );
+        let mut ref_acme = p.clone();
+        let gh_cfg = ct_core::GithubConfig {
+            connection: Some(2),
+        };
+        ref_acme.tracker = ct_core::TrackerConfig::Github(gh_cfg.clone());
+        ref_acme.forge = ct_core::ForgeConfig::Github(gh_cfg);
+        assert_eq!(
+            env.sessions.github_source(&ref_acme).unwrap().source,
+            CredentialSource::Command {
+                cmd: "printf 'ghp_ficticio_acme_123456\\n'".into()
+            }
+        );
+
+        // O `github.token` do ambiente não vale mais por cima da conexão
+        // (#276): a migração o leva para a sobrescrita.
+        let file = env.sessions.config().dirs.github_token_file();
+        std::fs::write(&file, "ghp_ficticio_velho_123456\n").unwrap();
+        assert!(sync.sync_project(p.id).unwrap().ok);
+    }
+
+    /// #276: a conexão `github` do hub com `file` num caminho que não existe
+    /// neste ambiente (o `github.token` do hub, pela migração) falha com um
+    /// erro que diz o que fazer, sem cair no `gh` do ambiente. A sobrescrita
+    /// da conexão vale no ciclo seguinte, e `invalidate_connection` tira o
+    /// token do cache.
+    #[test]
+    fn arquivo_do_hub_ausente_pede_a_sobrescrita_da_conexao() {
+        use ct_core::provider::{Connection, ProviderKind};
+        use ct_gh::fake::fake_gh_calls;
+        let env = TestEnv::new(FakeClaude::exit(0));
+        let gh = FakeGitHub::start("ghp_ficticio_acme_123456");
+        let bin = fake_gh(env.tmp.path(), "ghp_ficticio_do_gh");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("deep-ion-ai", "demo");
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        let ausente = env.tmp.path().join("ausente").join("github.token");
+        let creds = &env.cfg.credentials;
+        creds.set_connections(
+            vec![Connection {
+                id: 1,
+                name: "github".into(),
+                kind: ProviderKind::Github,
+                endpoint: String::new(),
+                credential: CredentialSource::File {
+                    path: ausente.display().to_string(),
+                },
+                options: json!({}),
+                created_at: 0,
+                updated_at: 0,
+            }],
+            Default::default(),
+        );
+        let sync = GithubSync::new(env.sessions.clone(), client);
+        let r1 = sync.sync_project(env.project_id).unwrap();
+        let err = r1.error.unwrap_or_default();
+        assert!(!r1.ok);
+        assert!(err.contains("não existe neste ambiente"), "{err}");
+        assert!(err.contains("sobrescrita da conexão github"), "{err}");
+        assert_eq!(fake_gh_calls(env.tmp.path()), 0, "sem cair no gh");
+
+        // A sobrescrita da conexão (a tela do ambiente) vale no ciclo
+        // seguinte, sem reiniciar.
+        creds.set_overrides(
+            toml::from_str(
+                "[github]\ncredential_cmd = \"printf 'ghp_ficticio_acme_123456\\\\n'\"\n",
+            )
+            .unwrap(),
+        );
+        let r2 = sync.sync_project(env.project_id).unwrap();
+        assert!(r2.ok, "{r2:?}");
+        let p = env.sessions.ledger().get_project(env.project_id).unwrap();
+        let src = env.sessions.github_source(&p).unwrap().source;
+        let key = github_key(env.project_id);
+        assert!(env.sessions.credentials().cached(&key, &src).is_some());
+        env.sessions.invalidate_connection("github").unwrap();
+        assert!(env.sessions.credentials().cached(&key, &src).is_none());
     }
 
     #[test]
@@ -457,6 +718,7 @@ mod tests {
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
                     connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,
@@ -482,6 +744,7 @@ mod tests {
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
                     connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,
@@ -503,7 +766,7 @@ mod tests {
                             project_key: "PROJ".into(),
                             ..Default::default()
                         }),
-                        forge: ct_core::ForgeConfig::Github,
+                        forge: ct_core::ForgeConfig::Github(Default::default()),
                         branch_pattern: None,
                         attribution: true,
                         sync: true,

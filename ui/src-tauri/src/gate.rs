@@ -25,13 +25,11 @@ pub const METHOD_NOT_FOUND: i64 = -32601;
 /// o método com o nome fixo. Testes em `tests` conferem a tabela com o
 /// registro e com `lib.rs`.
 pub const SENSITIVE_ENV: &[(&str, &str)] = &[
-    ("github.set_token", "github_set_token"),
-    ("github.clear_token", "github_clear_token"),
     ("github.pr.comment", "github_pr_comment"),
     ("env.update", "env_update"),
     ("env.rollback", "env_rollback"),
     ("env.config.set", "env_config_set"),
-    ("env.credentials.set", "env_credentials_set"),
+    ("env.connections.set", "env_connections_set"),
     ("shell.open", "shell_open"),
     ("shell.close", "shell_close"),
     ("session.input", "session_input"),
@@ -61,9 +59,28 @@ pub const HUB_METHODS: &[&str] = &[
     "hub.backup.run",
     "hub.backup.set",
     "hub.backup.test",
+    "hub.connections.add",
+    "hub.connections.delete",
+    "hub.connections.list",
+    "hub.connections.test",
+    "hub.connections.update",
     "hub.dashboard.get",
     "hub.envs.list",
     "hub.envs.set_autonomous",
+    "hub.epic_run.approve",
+    "hub.epic_run.cancel",
+    "hub.epic_run.decide",
+    "hub.epic_run.events",
+    "hub.epic_run.handback",
+    "hub.epic_run.interrupt",
+    "hub.epic_run.list",
+    "hub.epic_run.pause",
+    "hub.epic_run.replan",
+    "hub.epic_run.resume",
+    "hub.epic_run.set_node",
+    "hub.epic_run.set_parallel",
+    "hub.epic_run.start",
+    "hub.epic_run.status",
     "hub.health.get",
     "hub.info",
     "hub.logs.follow",
@@ -286,5 +303,79 @@ mod tests {
         }
         assert!(!HUB_METHODS.contains(&"hub.env.call"));
         assert!(!HUB_METHODS.contains(&"hub.logs.lines"));
+    }
+
+    /// Registro gerado do hub (`cargo test -p cthubd --features ts export_ts`).
+    const HUB_REGISTRY_TS: &str = include_str!("../../src/protocol/hub-gen/methods.ts");
+
+    /// Métodos do escopo `ui` do hub que a UI desktop não chama e por isso
+    /// ficam fora de [`HUB_METHODS`]. Ao passar a chamar um deles pela ponte,
+    /// mova-o para a allowlist.
+    const HUB_NOT_EXPOSED: &[&str] = &[
+        // Leva qualquer método de ambiente sem passar pela allowlist.
+        "hub.env.call",
+        "hub.assignments.list",
+        "hub.autopilot.events",
+        "hub.backup.remote.list",
+        "hub.quarantine.list",
+        "hub.workitem.pr_feedback",
+    ];
+
+    /// Os métodos do escopo `ui` do registro gerado (`HUB_METHOD_SCOPES.ui`).
+    fn hub_ui_scope() -> Vec<&'static str> {
+        let start = HUB_REGISTRY_TS
+            .find("  ui: [")
+            .expect("HUB_METHOD_SCOPES.ui no registro gerado");
+        let block = &HUB_REGISTRY_TS[start..];
+        let block = &block[..block.find("],").expect("fim do escopo ui")];
+        block
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|m| m.starts_with("hub."))
+            .collect()
+    }
+
+    /// Todo método novo do escopo `ui` do hub exige uma decisão: liberar na
+    /// allowlist ou declarar em `HUB_NOT_EXPOSED`. Sem isto, uma tela nova
+    /// recebe "método fora da allowlist do hub" só no app (os testes da UI
+    /// usam a API falsa, que não passa pela ponte).
+    #[test]
+    fn escopo_ui_do_hub_tem_decisao_na_allowlist() {
+        let scope = hub_ui_scope();
+        assert!(scope.contains(&"hub.info"), "registro mal lido: {scope:?}");
+        for m in &scope {
+            let allowed = HUB_METHODS.contains(m);
+            let excluded = HUB_NOT_EXPOSED.contains(m);
+            assert!(
+                allowed || excluded,
+                "{m} está no escopo ui do hub, mas nem em HUB_METHODS nem em HUB_NOT_EXPOSED"
+            );
+            assert!(
+                !(allowed && excluded),
+                "{m} liberado e excluído ao mesmo tempo"
+            );
+        }
+        for m in HUB_NOT_EXPOSED {
+            assert!(
+                scope.contains(m),
+                "{m} saiu do registro: tire de HUB_NOT_EXPOSED"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn conexoes_do_hub_passam_pela_ponte() {
+        let b = bridge();
+        for m in [
+            "hub.connections.list",
+            "hub.connections.add",
+            "hub.connections.update",
+            "hub.connections.delete",
+            "hub.connections.test",
+        ] {
+            let e = hub_generic(&b, "hub", m, json!({})).await.unwrap_err();
+            assert_eq!(e.code, crate::bridge::BRIDGE_INVALID_PARAMS, "{m}: {e:?}");
+        }
     }
 }

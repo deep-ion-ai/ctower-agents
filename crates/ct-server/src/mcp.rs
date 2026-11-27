@@ -218,7 +218,8 @@ fn dispatch(
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            Ok(tool_result(call_tool(&l, &session, name, &args)))
+            let creds = &sessions.config().credentials;
+            Ok(tool_result(call_tool(&l, creds, &session, name, &args)))
         }
         _ => Err((-32601, format!("método desconhecido: {method}"))),
     }
@@ -264,7 +265,8 @@ fn dispatch_gestor(
             match name {
                 "ledger_record_decision" | "ledger_list_decisions" => {
                     let l = sessions.ledger();
-                    Ok(tool_result(call_tool(&l, session, name, &args)))
+                    let creds = &sessions.config().credentials;
+                    Ok(tool_result(call_tool(&l, creds, session, name, &args)))
                 }
                 _ => Ok(tool_result(Err(format!("tool desconhecida: {name}")))),
             }
@@ -778,7 +780,14 @@ fn sub_issues(l: &Ledger, epic: &WorkItem) -> Result<Vec<Value>, ct_ledger::Ledg
     Ok(out)
 }
 
-fn call_tool(l: &Ledger, s: &Session, name: &str, args: &Value) -> Result<Value, String> {
+/// `creds`: as conexões do ambiente, para o link da issue no Jira (#277).
+fn call_tool(
+    l: &Ledger,
+    creds: &ct_core::SharedCredentials,
+    s: &Session,
+    name: &str,
+    args: &Value,
+) -> Result<Value, String> {
     let arg = |k: &str| args.get(k).and_then(Value::as_str);
     let req = |k: &str| {
         arg(k)
@@ -855,7 +864,9 @@ fn call_tool(l: &Ledger, s: &Session, name: &str, args: &Value) -> Result<Value,
                     "title": i.title,
                     // Sem link no espelho, o do rastreador (`/browse/` no Jira).
                     "url": if i.url.is_empty() {
-                        ct_core::item_url(&p.tracker_ref(), wi.gh_number)
+                        let (conns, _) =
+                            creds.resolve(&p.gh_owner, &p.gh_repo, &p.tracker, &p.forge);
+                        ct_core::item_url(&p.tracker_ref(), &conns.jira_url(), wi.gh_number)
                     } else {
                         i.url.clone()
                     },
@@ -1649,7 +1660,7 @@ mod tests {
                 project_key: "PROJ".into(),
                 ..Default::default()
             }),
-            ct_core::ForgeConfig::Github,
+            ct_core::ForgeConfig::Github(Default::default()),
             false,
             1,
             rules,

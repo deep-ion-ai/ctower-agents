@@ -85,6 +85,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // `[credentials]` (#143): editável pela UI, vale no próximo uso.
     let credentials = ct_core::SharedCredentials::new(cfg.credentials.clone());
+    // Conexões do último pull e `[connections]` (#274): a fonte de
+    // credencial de cada projeto vale desde o boot; o pull as atualiza.
+    // O `github.token` do ambiente vira sobrescrita da conexão GitHub
+    // (#276) já no boot, com o que o último pull deixou no ledger.
+    let overrides = ct_server::hub_config::migrate_github_token(
+        &ledger,
+        &dirs.config.join("config.toml"),
+        &dirs,
+    )
+    .unwrap_or_else(|| cfg.connections.clone());
+    match ledger.hub_connections() {
+        Ok((conns, _)) => credentials.set_connections(conns, overrides),
+        Err(e) => tracing::warn!("conexões: cache não lido no boot: {e}"),
+    }
     let (events, _) = broadcast::channel(1024);
     let sessions = Sessions::new(
         SessionsConfig {
@@ -129,16 +143,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         s.backup_running().map(|n| n as u64)
     });
 
+    // O token de cada projeto vem da conexão `github` dele, pelo resolvedor
+    // do ambiente (#275).
     let github = Arc::new(GithubSync::new(
         sessions.clone(),
-        GhClient::new(
-            GhConfig::new(&cfg.gh_api_url, &cfg.gh_bin)
-                .with_token_file(dirs.config.join("github.token")),
-        ),
+        GhClient::new(GhConfig::new(&cfg.gh_api_url, &cfg.gh_bin)),
     ));
 
     // Projetos Jira + GitLab (#349, #350): o jira-cli e o glab do ambiente,
-    // com os comandos de credencial do cadastro; o laço do GitHub pula esses
+    // com as conexões do hub (#277); o laço do GitHub pula esses
     // projetos.
     let tracker_cfg = TrackerSyncConfig::new(&cfg.jira_bin)
         .with_glab_bin(&cfg.glab_bin)
@@ -146,7 +159,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Duration::from_secs(cfg.jira_view_timeout_secs.max(1)),
             Duration::from_secs(cfg.jira_list_timeout_secs.max(1)),
         );
-    let gitlab = Arc::new(tracker_cfg.gitlab().with_credentials(credentials.clone()));
+    let gitlab = Arc::new(
+        tracker_cfg
+            .gitlab()
+            .with_credentials(credentials.clone())
+            .with_env_cache(sessions.env_cache()),
+    );
     let tracker = Arc::new(JiraGitlabSync::new(sessions.clone(), tracker_cfg));
 
     // Sem hub o ambiente sobe, mas sem projetos e sem iniciar sessões;
@@ -180,6 +198,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         pull_every: Duration::from_secs(cfg.config_pull_interval_secs.max(1)),
         github: Some(Arc::clone(&github)),
         config_file: Some(dirs.config.join("config.toml")),
+        credentials: Some(credentials.clone()),
     };
     if cfg.retention_days == 0 {
         tracing::info!("poda dos work items inativos desligada (retention_days = 0)");

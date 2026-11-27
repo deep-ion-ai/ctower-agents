@@ -255,7 +255,7 @@ impl AnalysisVars<'_> {
 /// forma) e a chave `ACME-123` no Jira.
 fn closes_line(t: &TrackerRef, n: i64) -> String {
     match t.tracker {
-        TrackerConfig::Github => format!("Closes {}", item_short(t, n)),
+        TrackerConfig::Github(_) => format!("Closes {}", item_short(t, n)),
         TrackerConfig::Jira(_) => item_short(t, n),
     }
 }
@@ -389,7 +389,6 @@ mod tests {
     #[test]
     fn padrao_renderizado_no_jira_com_mr() {
         let jira = TrackerConfig::Jira(JiraConfig {
-            url: "https://jira.example.com".into(),
             project_key: "ACME".into(),
             ..Default::default()
         });

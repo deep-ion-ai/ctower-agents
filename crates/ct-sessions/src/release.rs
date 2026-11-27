@@ -427,16 +427,14 @@ mod tests {
         let env = TestEnv::new(FakeClaude::sleep(30));
         env.assign_config(1, |p| {
             p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.example.com".into(),
                 project_key: "ACME".into(),
+                connection: Some(7),
                 ..Default::default()
             });
             p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                connection: None,
-                host: "gitlab.example.com".into(),
+                connection: Some(8),
                 path: "acme/acme-web".into(),
                 clone_url: "https://gitlab.example.com/acme/acme-web.git".into(),
-                credential_cmd: String::new(),
             });
             // Mesmo que chegasse ligada (o hub recusa o campo nesses projetos).
             p.release = ReleaseConfig {

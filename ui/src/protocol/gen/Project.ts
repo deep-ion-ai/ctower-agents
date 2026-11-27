@@ -5,6 +5,7 @@ import type { AutonomyReport } from "./AutonomyReport";
 import type { DocsConfig } from "./DocsConfig";
 import type { ForgeConfig } from "./ForgeConfig";
 import type { LocationState } from "./LocationState";
+import type { ProjectEndpoints } from "./ProjectEndpoints";
 import type { ProjectKind } from "./ProjectKind";
 import type { ReleaseConfig } from "./ReleaseConfig";
 import type { SessionTemplates } from "./SessionTemplates";
@@ -96,4 +97,11 @@ approval: ApprovalConfig,
  * Configuração de release, como veio do hub (#204); desligada no
  * projeto local legado e num hub anterior.
  */
-release: ReleaseConfig, };
+release: ReleaseConfig, 
+/**
+ * Endereços e prefixos das conexões do projeto (#277), derivados por
+ * quem responde à UI (`projects.list`, `dashboard.get`) com as conexões
+ * e as sobrescritas deste ambiente. Não é cadastro: `None` no que sai
+ * do banco.
+ */
+endpoints?: ProjectEndpoints, };

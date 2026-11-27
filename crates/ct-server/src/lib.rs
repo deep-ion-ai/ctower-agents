@@ -347,8 +347,7 @@ pub(crate) mod test_util {
             let bin = ct_gh::fake::fake_gh(srv.env.tmp.path(), "tok");
             let client = ct_gh::GhClient::new(
                 ct_gh::GhConfig::new(&gh.url(), bin.to_str().unwrap())
-                    .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT)
-                    .with_token_file(srv.env.tmp.path().join("github.token")),
+                    .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
             );
             gh.set(&issues_path("deep-ion-ai", "demo", "open", None), json!([]));
             gh.set(

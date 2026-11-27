@@ -9,7 +9,7 @@
 use super::{row_to_project, Hub, HubAssignment, HubProject, HubSession, PROJECT_COLS};
 use crate::sync::project_key;
 use crate::{LedgerError, Result, SyncChange};
-use ct_core::provider::{self, Connection, ProviderDescriptor};
+use ct_core::provider;
 use ct_core::{now_ms, ForgeConfig, TrackerConfig};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -47,8 +47,8 @@ pub struct ProjectProvider {
 impl Default for ProjectProvider {
     fn default() -> Self {
         ProjectProvider {
-            tracker: TrackerConfig::Github,
-            forge: ForgeConfig::Github,
+            tracker: TrackerConfig::default(),
+            forge: ForgeConfig::default(),
             branch_pattern: None,
             attribution: true,
             docs: ct_core::DocsConfig::default(),
@@ -65,10 +65,7 @@ impl ProjectProvider {
     /// primeiro ciclo (`tracker_status`).
     pub fn validate(&self) -> std::result::Result<(), String> {
         self.validate_base()?;
-        match self.tracker.jira() {
-            Some(j) => provider::JIRA.validate_sync_filter(j),
-            None => Ok(()),
-        }
+        provider::descriptor(self.tracker.provider()).validate_sync(&self.tracker)
     }
 
     /// [`ProjectProvider::validate`] sem o filtro do sync do Jira: a edição
@@ -82,21 +79,11 @@ impl ProjectProvider {
                  github ou jira + gitlab)"
             ));
         }
-        // Os descritores conferem a conexão e o projeto de cada tipo (#234).
-        // Com conexão referenciada (#235), a credencial e a URL vêm dela e
-        // são conferidas em `Hub::check_project_connections`.
-        if let Some(j) = self.tracker.jira() {
-            if j.connection.is_none() {
-                provider::JIRA.validate(&Connection::from_jira(j))?;
-            }
-            provider::JIRA.validate_project(j)?;
-        }
-        if let Some(g) = self.forge.gitlab() {
-            provider::GITLAB.validate_project(g)?;
-            if g.connection.is_none() {
-                provider::GITLAB.validate(&Connection::from_gitlab(g))?;
-            }
-        }
+        // Os descritores conferem o lado do projeto de cada tipo (#234,
+        // #278). Jira e GitLab exigem a conexão (#277): a credencial e a URL
+        // vêm dela e são conferidas em `Hub::check_project_connections`. O
+        // GitHub (#275) usa uma conexão só para o rastreador e a forja.
+        provider::validate_project(&self.tracker, &self.forge)?;
         if let Some(pat) = &self.branch_pattern {
             ct_core::branch::validate_branch_pattern(pat).map_err(|e| e.to_string())?;
         }
@@ -540,12 +527,22 @@ impl Hub {
             }
             Some(ForgeConfig::Gitlab(g)) => {
                 let old = cur.forge.gitlab().expect("mesmo tipo");
-                if !g.host.eq_ignore_ascii_case(&old.host)
-                    || !g.path.eq_ignore_ascii_case(&old.path)
-                {
+                // O repositório é o host da conexão e o caminho (#277). Trocar
+                // a conexão por outra do mesmo host vale; o projeto antigo
+                // sem conexão (cadastro que a migração não converteu) ganha
+                // uma.
+                let host = |id: Option<i64>| -> String {
+                    id.and_then(|id| self.connection(id).ok())
+                        .map(|c| c.endpoint.trim().to_string())
+                        .unwrap_or_default()
+                };
+                let (old_host, new_host) = (host(old.connection), host(g.connection));
+                let other_host =
+                    old.connection.is_some() && !new_host.eq_ignore_ascii_case(&old_host);
+                if other_host || !g.path.eq_ignore_ascii_case(&old.path) {
                     return refuse(format!(
                         "o repositório do projeto não muda ({}/{} → {}/{}): cadastre outro projeto",
-                        old.host, old.path, g.host, g.path
+                        old_host, old.path, new_host, g.path
                     ));
                 }
                 ForgeConfig::Gitlab(g.clone())

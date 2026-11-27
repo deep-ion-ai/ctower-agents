@@ -6,7 +6,6 @@ import { useNav, type Screen } from "../state/nav";
 import { useTower } from "../state/tower";
 import { hubUpdateText } from "../maintenance/Updates";
 import { ago } from "../util/time";
-import { GithubTokenPanel, type TokenCall } from "../settings/GithubSettings";
 import type { QuarantineDiscarded, QuarantineGroup } from "../protocol/hub-gen";
 import { SideContent, SideGroup, SidePanel, SideRow } from "../shell/SidePanel";
 import { useShell } from "../shell/Shell";
@@ -46,20 +45,20 @@ import { DesktopOnly } from "../web/DesktopOnly";
  * revisão da configuração e último snapshot. Cada seção abre como aba de
  * editor (`hubTab`): a Visão geral reúne o que pede ação; as outras são os
  * painéis de sempre (propostas e saúde do gestor, quarentena de push,
- * ambientes ligados, secrets e variáveis, chave de recuperação e token do
- * GitHub do hub). Projetos e atribuições saiu na #18: cada projeto se
+ * ambientes ligados, conexões, secrets e variáveis e chave de recuperação).
+ * O token do GitHub do hub vem da conexão `github` (#263, #275), editada em
+ * Conexões. Projetos e atribuições saiu na #18: cada projeto se
  * configura na aba Configurações dele, e o cadastro e a ordem ficam no
  * índice de Projetos. Backup e snapshots do hub ficam em
  * Manutenção (#338). Terminal, sessões e recuperação continuam em cada
  * ambiente.
  */
 export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }> }) {
-  const { hub, api, refreshHub, web } = useTower();
+  const { hub, web } = useTower();
   const nav = useNav();
   const now = useNow();
   const section = screen.section ?? "overview";
   const hidden = web && !hubSectionOnWeb(section);
-  const call = useCallback<TokenCall>((method, params) => api.hubCall(method, params), [api]);
   const { health, error: healthError } = useHubHealth();
   const proposals = useHubProposals();
   const open = useCallback((s: HubSection) => nav.openTab(hubTab(s)), [nav]);
@@ -81,7 +80,7 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
       <div className="hub-empty">
         <h2>{HUB_SECTION_LABEL[section]}</h2>
         <p role="status" className="muted">
-          Esta seção fica só no app desktop: secrets, chave de recuperação e token do GitHub não passam pelo acesso web.
+          Esta seção fica só no app desktop: conexões, secrets e chave de recuperação não passam pelo acesso web.
         </p>
       </div>
     );
@@ -130,8 +129,6 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
             }),
           )
         }
-        call={call}
-        onTokenSaved={() => void refreshHub()}
       />
     );
   }
@@ -170,8 +167,6 @@ function Section({
   health,
   healthError,
   onRegister,
-  call,
-  onTokenSaved,
 }: {
   section: HubSection;
   /** Execução de épico aberta (`hubTab("epic-runs", { run })`, #304). */
@@ -182,8 +177,6 @@ function Section({
   health: ReturnType<typeof useHubHealth>["health"];
   healthError: string | null;
   onRegister(key: string): void;
-  call: TokenCall;
-  onTokenSaved(): void;
 }) {
   switch (section) {
     case "overview":
@@ -215,22 +208,6 @@ function Section({
       return <EpicRuns now={now} initialRun={run} />;
     case "autopilot":
       return <HubAutopilot />;
-    case "github":
-      return (
-        <GithubTokenPanel
-          id="hub-gh"
-          title="GitHub do hub"
-          call={call}
-          onSaved={onTokenSaved}
-          hint={
-            <>
-              O hub valida os repositórios no cadastro e sincroniza com o GitHub todos os projetos, com o token dele (
-              <span className="mono">~/.config/cthub/github.token</span> na máquina do hub, ou o login do{" "}
-              <span className="mono">gh</span> de lá). Cada ambiente mantém o próprio token para clonar.
-            </>
-          }
-        />
-      );
   }
 }
 

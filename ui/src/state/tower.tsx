@@ -15,6 +15,7 @@ import type { HubDashboard, HubEnv, HubInfo, HubProjectView, HubStatus, HubUpdat
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
 import { HUB_LOGS_PUSH } from "../logs/types";
 import { useTheme } from "./theme";
+import { mergeHubStatus } from "./hubStatus";
 import { dashboardsFromHub, envStatusesFromHub, envViewsFromHub } from "../web/hubData";
 
 /** Alerta recebido por push (não fica no ledger): transcript volátil, confiança. */
@@ -58,6 +59,9 @@ const REFRESH_ON = new Set([
   "permission_request",
   "permission_resolved",
   "sync_status",
+  // O pull trouxe, mudou ou tirou projetos, ou aplicou uma atribuição: sem
+  // reler, o projeto novo fica fora do dashboard do ambiente (#281).
+  "projects_changed",
 ]);
 
 export const REFRESH_DEBOUNCE_MS = 300;
@@ -119,6 +123,8 @@ export interface Tower {
    */
   web: boolean;
   envs: EnvView[];
+  /** A lista de ambientes já foi lida (antes disso, `envs` vazio não diz nada). */
+  envsLoaded: boolean;
   status: Record<string, EnvStatus>;
   dashboards: Record<string, Dashboard>;
   /** `env.info` de cada ambiente conectado. */
@@ -163,6 +169,7 @@ export function useTower(): Tower {
 export function TowerProvider({ api, children }: { api: DaemonApi; children: ReactNode }) {
   const web = !!api.web;
   const [localEnvs, setEnvs] = useState<EnvView[]>([]);
+  const [envsLoaded, setEnvsLoaded] = useState(false);
   const [localStatus, setStatus] = useState<Record<string, EnvStatus>>({});
   const [localDashboards, setDashboards] = useState<Record<string, Dashboard>>({});
   const [infos, setInfos] = useState<Record<string, EnvInfo>>({});
@@ -277,8 +284,12 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
   }, [api, hubConnected, refreshHubDashboard]);
 
   const reloadHub = useCallback(async () => {
-    setHubConn(await api.getHub());
-    setHubStatus(await api.hubStatus());
+    const startedAt = Date.now();
+    const conn = await api.getHub();
+    setHubConn(conn);
+    const fetched = await api.hubStatus();
+    // O evento `hub://status` pode chegar antes desta leitura (#281).
+    setHubStatus((prev) => mergeHubStatus(prev, fetched, conn, startedAt));
   }, [api]);
 
   // Tudo do hub: ao conectar e periodicamente.
@@ -338,6 +349,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
     if (web) return refreshHub();
     const list = await api.listEnvs();
     setEnvs(list);
+    setEnvsLoaded(true);
     const st = await api.statuses();
     setStatus(Object.fromEntries(st.map((s) => [s.env, s])));
     for (const s of st) {
@@ -504,6 +516,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
       api,
       web,
       envs,
+      envsLoaded,
       status,
       dashboards,
       infos,
@@ -529,6 +542,7 @@ export function TowerProvider({ api, children }: { api: DaemonApi; children: Rea
       api,
       web,
       envs,
+      envsLoaded,
       status,
       dashboards,
       infos,

@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 ct-core.workspace = true
 ct-gh.workspace = true
+ct-proc.workspace = true
 ct-http.workspace = true
 # Descrição da issue do Jira → Markdown no "Ver issue" (#434).
 ct-jira.workspace = true

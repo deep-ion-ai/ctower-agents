@@ -372,7 +372,6 @@ pub const METHODS: &[MethodSpec] = &[
         scopes: UI,
     },
     MethodSpec { name: "hub.secrets.rotate_pending_dismiss", params: "null", result: "{}", scopes: UI },
-    // Token do GitHub do hub: nunca na web (decisão do épico #205). O token não volta na resposta.
     // "Adicionar issue pelo ID" (#148): escreve só no espelho do Jira.
     MethodSpec {
         name: "hub.tracker.add_issue",

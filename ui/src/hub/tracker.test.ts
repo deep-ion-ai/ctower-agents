@@ -1,10 +1,12 @@
-import type { HubTrackerStatus } from "../protocol/hub-gen";
+import type { HubTrackerStatus, TrackerReadiness } from "../protocol/hub-gen";
 import { jiraHubProject } from "../test/fixtures";
 import {
   DEFAULT_TYPE_MAP,
   EMPTY_JIRA,
   branchPreview,
   connectionId,
+  githubConnOf,
+  githubParams,
   hostsOf,
   hubSupportsJira,
   extraFieldErrors,
@@ -15,6 +17,7 @@ import {
   kindOf,
   parseTypeMap,
   providerParams,
+  readinessChecks,
   searchJiraFields,
   typedFieldId,
 } from "./tracker";
@@ -35,10 +38,15 @@ test("cadastro sem conexão não vai ao hub: a URL e a credencial vêm da conex�
   expect(providerParams({ ...EMPTY_JIRA, jira_conn: "7" })).toEqual({
     error: "escolha a conexão do GitLab (Hub › Conexões)",
   });
-  expect(providerParams(CONNECTED)).toMatchObject({
-    tracker: { url: "", credential_cmd: "", connection: 7 },
-    forge: { kind: "gitlab", credential_cmd: "", connection: 8 },
+  const params = providerParams(CONNECTED);
+  expect(params).toMatchObject({
+    tracker: { kind: "jira", connection: 7 },
+    forge: { kind: "gitlab", connection: 8 },
   });
+  // O projeto só referencia a conexão (#277): sem URL, host nem comando.
+  const { tracker, forge } = params as { tracker: Record<string, unknown>; forge: Record<string, unknown> };
+  for (const k of ["url", "credential_cmd", "config_file"]) expect(tracker).not.toHaveProperty(k);
+  for (const k of ["host", "credential_cmd"]) expect(forge).not.toHaveProperty(k);
 });
 
 test("prévia do padrão de branch como o daemon gera", () => {
@@ -191,4 +199,47 @@ test("campos do projeto: ida e volta no formulário e validação como no hub", 
   expect(extraFieldsChanged([{ id: "a ", label: "b" }], [{ id: "a", label: " b" }])).toBe(false);
   expect(extraFieldsChanged([{ id: "a", label: "b" }], [{ id: "a", label: "c" }])).toBe(true);
   expect(extraFieldsChanged([], [{ id: "a", label: "b" }])).toBe(true);
+});
+
+test("prontidão: credencial vinda do cache aparece como tal (#268)", () => {
+  const r = (cached: boolean): TrackerReadiness => ({
+    owner: "acme",
+    repo: "acme-web",
+    checked_at: 1,
+    jira: {
+      cli: "1.7.0",
+      config_present: true,
+      server_matches: true,
+      credential_ok: true,
+      credential_cached: cached,
+      me_ok: true,
+      server_version: "8.5.2",
+      error: null,
+      custom_fields: [],
+    },
+    gitlab: { cli: "1.124.0", credential_ok: true, credential_cached: cached, api_ok: true, error: null },
+  });
+  const cred = (c: ReturnType<typeof readinessChecks>) => [
+    c.jira.find((i) => i.label === "credencial do Jira ok"),
+    c.gitlab.find((i) => i.label === "credencial do GitLab ok"),
+  ];
+  for (const item of cred(readinessChecks(r(true)))) {
+    expect(item?.ok).toBe(true);
+    expect(item?.value).toBe('token em cache; "Buscar issues agora" resolve de novo');
+  }
+  for (const item of cred(readinessChecks(r(false)))) expect(item?.value).toBeUndefined();
+});
+
+test("conexão GitHub do projeto e parâmetros (#275)", () => {
+  expect(githubConnOf({ tracker: { kind: "github" }, forge: { kind: "github" } })).toBeNull();
+  expect(githubConnOf({ tracker: { kind: "github" }, forge: { kind: "github", connection: 4 } })).toBe(4);
+  expect(githubConnOf({ tracker: { kind: "github", connection: 3 }, forge: { kind: "github", connection: 4 } })).toBe(3);
+  expect(githubParams("3")).toEqual({
+    tracker: { kind: "github", connection: 3 },
+    forge: { kind: "github", connection: 3 },
+  });
+  expect(githubParams("")).toEqual({
+    tracker: { kind: "github", connection: null },
+    forge: { kind: "github", connection: null },
+  });
 });

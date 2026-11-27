@@ -345,7 +345,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
             .map(|d| d.blocker)
             .collect();
         let tracker_hint = match &p.tracker {
-            ct_core::TrackerConfig::Github => {
+            ct_core::TrackerConfig::Github(_) => {
                 format!("`gh issue view <número> -R {}/{}`", p.gh_owner, p.gh_repo)
             }
             ct_core::TrackerConfig::Jira(_) => "`jira issue view <chave>`".to_string(),

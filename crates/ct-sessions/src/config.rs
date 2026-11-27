@@ -1,6 +1,7 @@
 //! `config.toml` do daemon (spec §13), com padrões para tudo.
 
 use crate::paths::Dirs;
+use ct_core::provider::{ProviderDescriptor, GITHUB};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::PathBuf;
@@ -108,13 +109,14 @@ pub struct DaemonConfig {
     pub cleanup: CleanupConfig,
     /// Log em arquivo, que a tela Logs da UI lê (`[logs]`, #65).
     pub logs: ct_core::LogsConfig,
-    /// Comandos de credencial do Jira e do GitLab só deste ambiente
-    /// (`[credentials."owner/repo"]`, #143), no lugar dos do cadastro.
+    /// Legado (#143): comandos de credencial do Jira e do GitLab só deste
+    /// ambiente, por projeto (`[credentials."owner/repo"]`), no lugar da
+    /// fonte da conexão. O pull converte o que dá em `[connections]`.
     pub credentials: ct_core::CredentialOverrides,
     /// Conexões do hub com comando de credencial só deste ambiente
     /// (`[connections."nome"]`, #237), depois da conversão de `[credentials]`.
-    /// Quem as aplica é o ct-server (`env_config`, `hub_config`); este campo
-    /// só existe para o `deny_unknown_fields` aceitar a tabela.
+    /// O `ctowerd` as carrega no boot (`SharedCredentials::set_connections`,
+    /// #274); o pull (ct-server, `hub_config`) relê o arquivo a cada vez.
     pub connections: ct_core::ConnectionOverrides,
 }
 
@@ -185,7 +187,7 @@ impl Default for DaemonConfig {
             scrollback_bytes: 4 * 1024 * 1024,
             pre_trust_worktrees: true,
             gh_sync_interval_secs: 180,
-            gh_api_url: "https://api.github.com".into(),
+            gh_api_url: GITHUB.default_endpoint().unwrap_or_default().into(),
             gh_bin: "gh".into(),
             jira_sync_interval_secs: 300,
             jira_bin: "jira".into(),

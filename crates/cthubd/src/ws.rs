@@ -18,7 +18,6 @@
 //! `hub.push.vapid_key|subscribe|list|update|remove|test` (Web Push, #203) e
 //! `hub.env.call { env, method, params }` (método do ambiente pelo canal
 //! reverso, #343) e
-//! `github.status|set_token|clear_token` (token do GitHub do hub) e
 //! `hub.update.get|check|start|rollback` (atualizar o hub, #421) e
 //! `hub.logs.tail|follow|unfollow` (log do hub, #65). Push:
 //! `hub_sync_status`, `hub.proposals.changed`, `hub.rules.changed`,
@@ -483,11 +482,22 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
     }
     let hub = st.hub.clone();
     let (o, r) = (owner.clone(), repo.clone());
-    let project = tokio::task::spawn_blocking(move || hub.lock().find_project(&o, &r))
-        .await
-        .map_err(|e| (-32603, e.to_string()))?
-        .map_err(|e| (-32000, e.to_string()))?
-        .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
+    // O link de reserva sai com a URL da conexão do Jira (#277).
+    let (project, jira_url) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let h = hub.lock();
+        let Some(p) = h.find_project(&o, &r).map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        let url = h
+            .project_connections(&p)
+            .map_err(|e| e.to_string())?
+            .jira_url();
+        Ok(Some((p, url)))
+    })
+    .await
+    .map_err(|e| (-32603, e.to_string()))?
+    .map_err(|e| (-32000, e))?
+    .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
     let markdown = |title: &Value, body: String, url: String| {
         json!(HubWorkItemBody {
             title: title.as_str().unwrap_or("").to_string(),
@@ -508,7 +518,8 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 "/repos/{}/{}/issues/{number}",
                 project.gh_owner, project.gh_repo
             );
-            let v = tokio::task::spawn_blocking(move || gh.client().get_json(&path))
+            let client = gh.client_for(&project);
+            let v = tokio::task::spawn_blocking(move || client.get_json(&path))
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
                 .map_err(|e| (-32000, format!("GitHub: {e}")))?
@@ -517,7 +528,7 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 .get("html_url")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), number));
+                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), &jira_url, number));
             let body = v
                 .get("body")
                 .and_then(Value::as_str)
@@ -540,7 +551,7 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 .get("url")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), number));
+                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), &jira_url, number));
             Ok(markdown(&v["title"], body, url))
         }
     }
@@ -819,6 +830,14 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
         }
+        "hub.connections.test" => {
+            // Fora de `hub_call`: lê a conexão com o lock do hub, solta, e
+            // só então confere o secret no store (#281), sem os dois locks.
+            let st2 = st.clone();
+            tokio::task::spawn_blocking(move || connection_test(&st2, &p))
+                .await
+                .map_err(|e| (-32603, e.to_string()))?
+        }
         m if m.starts_with("hub.secrets.") => {
             // Fora de `hub_call`: o `HubSecrets` pega o lock do store e
             // depois o do hub, que `hub_call` já seguraria.
@@ -979,8 +998,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
         "hub.connections.list"
         | "hub.connections.add"
         | "hub.connections.update"
-        | "hub.connections.delete"
-        | "hub.connections.test" => connections_call(&h, method, p),
+        | "hub.connections.delete" => connections_call(&h, method, p),
         "hub.projects.delete" => {
             let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
             let confirm = p.get("confirm").and_then(Value::as_bool).unwrap_or(false);
@@ -1462,84 +1480,36 @@ fn protected_param(p: &Value) -> Result<Option<Vec<String>>, (i64, String)> {
     }
 }
 
-/// `tracker` e `forge` do cadastro (#348), com as normalizações: URL do Jira
-/// sem barra final, chave em maiúsculas, mapa de tipos padrão quando vazio,
-/// e o repositório do GitLab pela URL de clone (`clone_url`, ou `url` do
-/// cadastro) ou por `host` + `path`.
+/// `tracker` e `forge` do cadastro (#348), com as normalizações: chave em
+/// maiúsculas, mapa de tipos padrão quando vazio e o repositório do GitLab
+/// pela URL de clone (`clone_url`, ou `url` do cadastro). Endereço e
+/// credencial do Jira e do GitLab são da conexão (#277): o cadastro só a
+/// referencia.
 fn provider_param(
     p: &Value,
 ) -> Result<(ct_core::TrackerConfig, ct_core::ForgeConfig), (i64, String)> {
     use ct_core::{ForgeConfig, TrackerConfig};
     let tracker: TrackerConfig = match p.get("tracker") {
-        None | Some(Value::Null) => TrackerConfig::Github,
+        None | Some(Value::Null) => TrackerConfig::default(),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| invalid(format!("tracker inválido: {e}")))?,
     };
     let forge: ForgeConfig = match p.get("forge") {
-        None | Some(Value::Null) => ForgeConfig::Github,
+        None | Some(Value::Null) => ForgeConfig::default(),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| invalid(format!("forge inválido: {e}")))?,
     };
-    let tracker = match tracker {
-        TrackerConfig::Jira(mut j) => {
-            j.url = j.url.trim().trim_end_matches('/').to_string();
-            j.project_key = j.project_key.trim().to_ascii_uppercase();
-            j.jql = j.jql.trim().to_string();
-            j.credential_cmd = j.credential_cmd.trim().to_string();
-            j.config_file = j.config_file.trim().to_string();
-            j.epic_link_field = j.epic_link_field.trim().to_string();
-            j.epic_name_field = j.epic_name_field.trim().to_string();
-            if j.type_map.is_empty() {
-                j.type_map = ct_core::default_type_map();
-            }
-            TrackerConfig::Jira(j)
-        }
-        t => t,
-    };
-    let forge = match forge {
-        ForgeConfig::Gitlab(mut g) => {
-            let url = Some(g.clone_url.trim())
-                .filter(|u| !u.is_empty())
-                .or_else(|| p.get("url").and_then(Value::as_str).map(str::trim))
-                .filter(|u| !u.is_empty())
-                .map(String::from);
-            match url {
-                Some(url) => {
-                    let r = ct_core::repo_from_url(&url)
-                        .ok_or_else(|| invalid(format!("URL do GitLab não reconhecida: {url}")))?;
-                    let given =
-                        |a: &str, b: &str| a.trim().is_empty() || a.trim().eq_ignore_ascii_case(b);
-                    if !given(&g.host, &r.host) || !given(g.path.trim_matches('/'), &r.path) {
-                        return Err(invalid(format!(
-                            "host e caminho do GitLab ({}/{}) não batem com a URL {url}",
-                            g.host, g.path
-                        )));
-                    }
-                    g.host = r.host;
-                    g.path = r.path;
-                    g.clone_url = url;
-                }
-                None => {
-                    let host = g.host.trim().to_ascii_lowercase();
-                    let path = g.path.trim().trim_matches('/').trim_end_matches(".git");
-                    let r = ct_core::repo_from_url(&format!("https://{host}/{path}")).ok_or_else(
-                        || {
-                            invalid(format!(
-                                "informe a URL de clone do GitLab, ou host e caminho válidos \
-                                 (host {host:?}, caminho {path:?})"
-                            ))
-                        },
-                    )?;
-                    g.clone_url = format!("https://{}/{}.git", r.host, r.path);
-                    g.host = r.host;
-                    g.path = r.path;
-                }
-            }
-            g.credential_cmd = g.credential_cmd.trim().to_string();
-            ForgeConfig::Gitlab(g)
-        }
-        f => f,
-    };
+    use ct_core::provider;
+    // As normalizações de cada tipo são do descritor (#278).
+    let (mut tracker, mut forge) = (tracker, forge);
+    provider::descriptor(tracker.provider()).normalize_tracker(&mut tracker);
+    let url = p.get("url").and_then(Value::as_str);
+    provider::descriptor(forge.provider())
+        .normalize_forge(&mut forge, url)
+        .map_err(invalid)?;
+    // GitHub (#275): o rastreador e a forja usam a mesma conexão; a dada
+    // num lado só vale para os dois. Duas diferentes, o cadastro recusa.
+    provider::share_connection(&mut tracker, &mut forge);
     Ok((tracker, forge))
 }
 
@@ -1660,6 +1630,61 @@ fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
 /// primeiro ciclo e relata pelo `tracker_status`.
 /// `hub.connections.*` (#235): o cadastro das conexões externas. O resultado
 /// não leva segredo: a credencial é o nome do secret ou o comando.
+/// `hub.connections.test`: a prontidão do descritor e, com credencial
+/// `secret`, se o secret existe no store do hub para cada projeto que usa a
+/// conexão (global ou do projeto; sem projeto, o global). O teste segue sem
+/// rede (#281).
+fn connection_test(st: &HubState, p: &Value) -> RpcResult {
+    let id = i64_param(p, "id")?;
+    let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
+    let (mut t, conn, users) = {
+        let h = st.hub.lock();
+        (
+            h.test_connection(id).map_err(e)?,
+            h.connection(id).map_err(e)?,
+            h.connection_users(id).map_err(e)?,
+        )
+    };
+    if let (
+        ct_core::provider::Readiness::Ready,
+        ct_core::provider::CredentialSource::Secret { name },
+        Some(secrets),
+    ) = (&t.readiness, &conn.credential, st.secrets.as_ref())
+    {
+        if let Some(reason) = missing_secret(name.trim(), &users, |scope| {
+            secrets.resolve(scope).contains_key(name.trim())
+        }) {
+            t.readiness = ct_core::provider::Readiness::NeedsSetup { reason };
+        }
+    }
+    Ok(json!(t))
+}
+
+/// Por que o secret `name` da conexão falta: `has(None)` confere o global,
+/// `has(Some("owner/repo"))` o que vale para o projeto (o dele ou o global).
+/// `None` = existe para todos os que usam a conexão.
+fn missing_secret(
+    name: &str,
+    users: &[String],
+    has: impl Fn(Option<&str>) -> bool,
+) -> Option<String> {
+    let fix = "grave-o em Hub › Secrets e variáveis (global, para uma conexão de vários projetos)";
+    if users.is_empty() {
+        return (!has(None)).then(|| format!("o secret {name} não existe no hub; {fix}"));
+    }
+    let missing: Vec<&str> = users
+        .iter()
+        .map(String::as_str)
+        .filter(|u| !has(Some(u)))
+        .collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "o secret {name} não existe no hub para {}; {fix}",
+            missing.join(", ")
+        )
+    })
+}
+
 fn connections_call(h: &ct_hub_store::Hub, method: &str, p: &Value) -> RpcResult {
     let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
     match method {
@@ -1678,10 +1703,6 @@ fn connections_call(h: &ct_hub_store::Hub, method: &str, p: &Value) -> RpcResult
         "hub.connections.delete" => {
             let id = i64_param(p, "id")?;
             Ok(json!(h.delete_connection(id).map_err(e)?))
-        }
-        "hub.connections.test" => {
-            let id = i64_param(p, "id")?;
-            Ok(json!(h.test_connection(id).map_err(e)?))
         }
         _ => Err((-32601, format!("método desconhecido: {method}"))),
     }
@@ -1733,8 +1754,15 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             (owner, repo)
         } else {
             let gh = github()?;
-            let (owner, repo) = gh.validate_repo(&owner, &repo).map_err(|m| (-32000, m))?;
-            gh.validate_branch(&owner, &repo, &base_branch)
+            // O token da conexão GitHub do projeto novo (#275).
+            let client = gh.client_for_new(ct_core::github_connection(
+                &provider.tracker,
+                &provider.forge,
+            ));
+            let (owner, repo) = gh
+                .validate_repo(&client, &owner, &repo)
+                .map_err(|m| (-32000, m))?;
+            gh.validate_branch(&client, &owner, &repo, &base_branch)
                 .map_err(|m| (-32000, m))?;
             (owner, repo)
         };
@@ -1800,8 +1828,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         .as_deref()
         .filter(|b| *b != cur.base_branch && cur.forge.gitlab().is_none())
     {
-        github()?
-            .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+        let gh = github()?;
+        gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
     // A base própria do modo autônomo (#181) precisa existir no GitHub.
@@ -1812,8 +1840,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         .map(|a| a.base_branch.trim())
         .filter(|b| !b.is_empty() && *b != cur.base_branch && cur.forge.gitlab().is_none())
     {
-        github()?
-            .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+        let gh = github()?;
+        gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
     // As branches da release ligada (#204) precisam existir no GitHub. O
@@ -1825,8 +1853,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
     {
         let r = r.normalized();
         for b in [&r.source, &r.target] {
-            github()?
-                .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+            let gh = github()?;
+            gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
                 .map_err(|m| (-32000, m))?;
         }
     }
@@ -2258,7 +2286,6 @@ mod export {
         ct_hub_store::HubRulesHistory::export_all_to(&dir).unwrap();
         ct_hub_store::HubRulesProposal::export_all_to(&dir).unwrap();
         ct_hub_store::HubRulesProposals::export_all_to(&dir).unwrap();
-        ct_gh::TokenStatus::export_all_to(&dir).unwrap();
         crate::update::HubUpdateStatus::export_all_to(&dir).unwrap();
         // Rastreador e forja (#347): os tipos soltos, além dos de `HubProject`.
         ct_core::TrackerKind::export_all_to(&dir).unwrap();
@@ -2508,9 +2535,12 @@ pub(crate) mod tests {
             let v = ui.call(m, json!({})).await;
             assert_eq!(v["error"]["code"], -32601, "{m}");
         }
-        // O RPC do token do GitHub saiu (#237): a conexão `github` cuida disso.
-        let v = ui.call("github.status", json!({})).await;
-        assert_eq!(v["error"]["code"], -32601);
+        // O RPC do token do GitHub saiu (#237): a conexão `github` cuida disso,
+        // editada em Hub › Conexões (#263).
+        for m in ["github.status", "github.set_token", "github.clear_token"] {
+            let v = ui.call(m, json!({ "token": "tok" })).await;
+            assert_eq!(v["error"]["code"], -32601, "{m}");
+        }
     }
 
     /// Método fora do registro (`crate::methods`) não é despachado: a recusa
@@ -3430,24 +3460,54 @@ pub(crate) mod tests {
             .contains("PRs abertos"));
     }
 
+    /// Conexões `jira-acme` (`https://jira.example.com`) e `gitlab-acme`
+    /// (`gitlab.example.com`) no hub, com comando de credencial (#277).
+    /// Devolve os `id`.
+    fn conexoes_acme(st: &HubState) -> (i64, i64) {
+        let conn = |name: &str, kind: &str, endpoint: &str, cmd: &str| {
+            let p = json!({ "name": name, "kind": kind, "endpoint": endpoint,
+                            "credential": { "kind": "command", "cmd": cmd } });
+            st.hub
+                .lock()
+                .add_connection(&serde_json::from_value(p).unwrap())
+                .unwrap()
+                .id
+        };
+        (
+            conn(
+                "jira-acme",
+                "jira",
+                "https://jira.example.com",
+                "pass show jira | head -1",
+            ),
+            conn(
+                "gitlab-acme",
+                "gitlab",
+                "gitlab.example.com",
+                "pass show gitlab | head -1",
+            ),
+        )
+    }
+
     /// Cadastro Jira + GitLab (#348): sem a integração com o GitHub (que o
     /// projeto GitHub exige), sem secret do hub, com as recusas de
     /// combinação e de padrão de branch; e o ambiente de sync pelo
-    /// `hub.projects.update`.
+    /// `hub.projects.update`. URL, host e credencial são das conexões
+    /// (#277): o cadastro só as referencia.
     #[tokio::test(flavor = "multi_thread")]
     async fn cadastro_jira_gitlab_sem_github_e_ambiente_de_sync() {
         let st = hub_com_dados();
         assert!(st.github.is_none());
+        let (jira_id, gitlab_id) = conexoes_acme(&st);
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let jira = json!({
-            "kind": "jira", "url": "https://jira.example.com/", "project_key": "proj",
-            "jql": "", "active_sprint_only": true,
-            "credential_cmd": "pass show jira | head -1"
+            "kind": "jira", "project_key": "proj", "jql": "", "active_sprint_only": true,
+            "connection": jira_id
         });
         let gitlab = json!({
             "kind": "gitlab", "clone_url": "git@gitlab.example.com:grupo/projeto/app.git",
-            "credential_cmd": "pass show gitlab | head -1"
+            "connection": gitlab_id
         });
 
         // O projeto GitHub ainda precisa do token do hub.
@@ -3493,13 +3553,37 @@ pub(crate) mod tests {
         let v = ui
             .call(
                 "hub.projects.add",
-                json!({ "tracker": jira, "forge": { "kind": "gitlab", "credential_cmd": "x" } }),
+                json!({ "tracker": jira, "forge": { "kind": "gitlab", "connection": gitlab_id } }),
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("URL de clone"),
+            "{v}"
+        );
+        // Sem conexão do Jira: recusado (#277).
+        let sem_conexao =
+            json!({ "kind": "jira", "project_key": "PROJ", "active_sprint_only": true });
+        let v = ui
+            .call(
+                "hub.projects.add",
+                json!({ "tracker": sem_conexao, "forge": gitlab }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("escolha a conexão do Jira"),
+            "{v}"
+        );
 
-        // Cadastro: normaliza URL e chave, preenche o mapa de tipos, deriva
-        // host e caminho da URL de clone.
+        // Cadastro: normaliza a chave, preenche o mapa de tipos, deriva o
+        // caminho da URL de clone.
         let v = ui
             .call(
                 "hub.projects.add",
@@ -3514,17 +3598,21 @@ pub(crate) mod tests {
             (Some("grupo/projeto"), Some("app")),
             "{v}"
         );
-        assert_eq!(p["tracker"]["url"], "https://jira.example.com");
+        assert_eq!(p["tracker"]["connection"], jira_id);
         assert_eq!(p["tracker"]["project_key"], "PROJ");
         assert_eq!(p["tracker"]["type_map"]["Épico"], "epic");
-        assert_eq!(p["forge"]["host"], "gitlab.example.com");
+        assert_eq!(p["forge"]["connection"], gitlab_id);
         assert_eq!(p["forge"]["path"], "grupo/projeto/app");
         assert_eq!(p["branch_pattern"], "{key}");
         assert_eq!(p["attribution"], false);
         assert_eq!(p["sync_env_id"], Value::Null);
-        // Credenciais nunca viram secret do hub: só o comando, no cadastro.
-        assert_eq!(p["tracker"]["credential_cmd"], "pass show jira | head -1");
-        assert_eq!(p["forge"]["credential_cmd"], "pass show gitlab | head -1");
+        // Endereço e credencial ficam na conexão, não no cadastro.
+        for k in ["url", "credential_cmd", "config_file"] {
+            assert!(p["tracker"].get(k).is_none(), "{k}: {v}");
+        }
+        for k in ["host", "credential_cmd"] {
+            assert!(p["forge"].get(k).is_none(), "{k}: {v}");
+        }
         let v = ui
             .call(
                 "hub.projects.add",
@@ -3592,6 +3680,16 @@ pub(crate) mod tests {
             .find(|p| p["project"]["gh_repo"] == "app")
             .unwrap();
         assert_eq!(jira["tracker_status"], Value::Null);
+        // A UI recebe os endereços e os prefixos das conexões (#277).
+        assert_eq!(
+            jira["project"]["endpoints"],
+            json!({
+                "jira_url": "https://jira.example.com",
+                "gitlab_host": "gitlab.example.com",
+                "jira_cli": r#"JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#,
+                "glab_cli": r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab"#,
+            })
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4024,6 +4122,56 @@ pub(crate) mod tests {
     }
 
     const SEGREDO: &str = "valor-que-nunca-sai-987";
+
+    /// #281: "Testar" de uma conexão com credencial `secret` confere se o
+    /// secret existe no store do hub; antes de gravar, fica a configurar.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn testar_conexao_com_secret_confere_o_store_do_hub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = hub_com_secrets(tmp.path());
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui
+            .call(
+                "hub.connections.add",
+                json!({ "name": "jira-acme", "kind": "jira", "endpoint": "https://jira.example.com",
+                        "credential": { "kind": "secret", "name": "JIRA_TOKEN_ACME" } }),
+            )
+            .await;
+        let id = v["result"]["id"].as_i64().unwrap();
+        let v = ui.call("hub.connections.test", json!({ "id": id })).await;
+        let r = &v["result"]["readiness"];
+        assert_eq!(r["state"], "needs_setup", "{v}");
+        assert!(
+            r["reason"]
+                .as_str()
+                .unwrap()
+                .contains("o secret JIRA_TOKEN_ACME não existe no hub"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.secrets.set",
+                json!({ "scope": "global", "name": "JIRA_TOKEN_ACME", "kind": "secret", "value": SEGREDO }),
+            )
+            .await;
+        assert!(v.get("error").is_none(), "{v}");
+        let v = ui.call("hub.connections.test", json!({ "id": id })).await;
+        assert_eq!(v["result"]["readiness"]["state"], "ready", "{v}");
+        assert!(!v.to_string().contains(SEGREDO));
+    }
+
+    #[test]
+    fn secret_da_conexao_falta_por_projeto() {
+        let users = vec!["acme/web".to_string(), "acme/api".to_string()];
+        // Só o acme/web tem o secret no escopo dele, e não há global.
+        let has = |scope: Option<&str>| scope == Some("acme/web");
+        let r = missing_secret("TOKEN", &users, has).unwrap();
+        assert!(r.contains("para acme/api;"), "{r}");
+        assert!(!r.contains("acme/web"), "{r}");
+        assert_eq!(missing_secret("TOKEN", &users, |_| true), None);
+        assert!(missing_secret("TOKEN", &[], |s| s.is_some()).is_some());
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn secrets_list_nunca_devolve_o_valor_de_um_secret() {
@@ -4925,11 +5073,17 @@ pub(crate) mod tests {
                     // "Ver issue" de projeto Jira (#434): 7 com descrição em
                     // wiki markup, 8 sem descrição, o resto com a senha recusada.
                     let n = v["params"]["number"].as_i64().unwrap_or(0);
+                    if n == 10 {
+                        // Sem `url`: o hub monta o link de reserva (#264).
+                        let r = json!({ "id": v["id"], "result": { "title": "Sem link" } });
+                        let _ = tx.send(WsMsg::Text(r.to_string().into())).await;
+                        continue;
+                    }
                     let d = match n {
                         7 => json!("h2. Contexto\n*a* <script>x</script>"),
                         8 => Value::Null,
                         _ => {
-                            let e = format!("Jira, PROJ-{n}: o Jira recusou a senha (401)");
+                            let e = format!("Jira, PROJ-{n}: o Jira recusou a credencial (401)");
                             let r =
                                 json!({ "id": v["id"], "error": { "code": -32000, "message": e } });
                             let _ = tx.send(WsMsg::Text(r.to_string().into())).await;
@@ -5260,15 +5414,15 @@ pub(crate) mod tests {
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let mut web = web_ui(&url, &cookie).await;
+        let (jira, gitlab) = conexoes_acme(&st);
         let v = ui
             .call(
                 "hub.projects.add",
                 json!({
-                    "tracker": { "kind": "jira", "url": "https://jira.x", "project_key": "PROJ",
-                                 "jql": "", "active_sprint_only": true,
-                                 "credential_cmd": "pass show jira" },
-                    "forge": { "kind": "gitlab", "clone_url": "git@git.x:acme/app.git",
-                               "credential_cmd": "pass show gitlab" }
+                    "tracker": { "kind": "jira", "project_key": "PROJ", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
+                    "forge": { "kind": "gitlab", "clone_url": "git@gitlab.example.com:acme/app.git",
+                               "connection": gitlab }
                 }),
             )
             .await;
@@ -5313,7 +5467,49 @@ pub(crate) mod tests {
         assert_eq!(v["result"]["body"], "", "{v}");
         let v = ui.call("hub.workitem.body", p(9)).await;
         assert_eq!(
-            v["error"]["message"], "Jira, PROJ-9: o Jira recusou a senha (401)",
+            v["error"]["message"], "Jira, PROJ-9: o Jira recusou a credencial (401)",
+            "{v}"
+        );
+    }
+
+    /// Projeto Jira com conexão (#264): o cadastro não tem URL, e o link de
+    /// reserva do "Ver issue" sai com a URL da conexão.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workitem_body_do_jira_com_conexao_usa_a_url_dela() {
+        let (st, _cookie) = hub_web();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let (jira, gitlab) = conexoes_acme(&st);
+        let v = ui
+            .call(
+                "hub.projects.add",
+                json!({
+                    "tracker": { "kind": "jira", "project_key": "ACME", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
+                    "forge": { "kind": "gitlab",
+                               "clone_url": "https://gitlab.example.com/acme/app.git",
+                               "connection": gitlab }
+                }),
+            )
+            .await;
+        assert!(v["result"].is_object(), "{v}");
+        st.hub.lock().ingest("env-x", "x", &[]).unwrap();
+        let v = ui
+            .call(
+                "hub.assignments.add",
+                json!({ "owner": "acme", "repo": "app", "env": "env-x" }),
+            )
+            .await;
+        assert_eq!(v["result"]["sync_env"], true, "{v}");
+        let _env = fake_env(&st, &url, "env-x").await;
+        let v = ui
+            .call(
+                "hub.workitem.body",
+                json!({ "owner": "acme", "repo": "app", "number": 10 }),
+            )
+            .await;
+        assert_eq!(
+            v["result"]["url"], "https://jira.example.com/browse/ACME-10",
             "{v}"
         );
     }
@@ -5327,15 +5523,15 @@ pub(crate) mod tests {
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let mut web = web_ui(&url, &cookie).await;
+        let (jira, gitlab) = conexoes_acme(&st);
         let v = ui
             .call(
                 "hub.projects.add",
                 json!({
-                    "tracker": { "kind": "jira", "url": "https://jira.example.com",
-                                 "project_key": "ACME", "jql": "", "active_sprint_only": true,
-                                 "credential_cmd": "pass show jira" },
-                    "forge": { "kind": "gitlab", "clone_url": "git@git.example.com:acme/app.git",
-                               "credential_cmd": "pass show gitlab" }
+                    "tracker": { "kind": "jira", "project_key": "ACME", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
+                    "forge": { "kind": "gitlab", "clone_url": "git@gitlab.example.com:acme/app.git",
+                               "connection": gitlab }
                 }),
             )
             .await;

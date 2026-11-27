@@ -5,10 +5,6 @@
  */
 export type GitlabConfig = { 
 /**
- * Host do GitLab (`gitlab.example.com`).
- */
-host: string, 
-/**
  * Caminho do projeto (`grupo/projeto/app`).
  */
 path: string, 
@@ -17,11 +13,8 @@ path: string,
  */
 clone_url: string, 
 /**
- * Comando que imprime o token (`pass show gitlab | head -1`).
- */
-credential_cmd: string, 
-/**
- * Conexão do hub com o GitLab (`forge.connection`, #235). Quando há,
- * host e credencial vêm dela, não do cadastro do projeto.
+ * Conexão do hub com o GitLab (`forge.connection`, #235). Host e
+ * credencial vêm dela ([`crate::provider::resolve_connections`]); o
+ * cadastro do projeto exige uma (#277).
  */
 connection?: number, };

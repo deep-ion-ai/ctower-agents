@@ -77,6 +77,17 @@ export function project(p: Partial<Project> = {}): Project {
 }
 
 /** Projeto Jira + GitLab do exemplo no ambiente (#352); a barra final da URL do Jira é de propósito. */
+/**
+ * Endereços e prefixos das conexões 7 (Jira) e 8 (GitLab) do exemplo, como
+ * o ambiente e o hub os mandam junto do projeto (#277).
+ */
+export const JIRA_GITLAB_ENDPOINTS = {
+  jira_url: "https://jira.example.com",
+  gitlab_host: "gitlab.example.com",
+  jira_cli: 'JIRA_API_TOKEN="$(pass show jira | head -1)" jira',
+  glab_cli: 'GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab',
+};
+
 export function jiraProject(p: Partial<Project> = {}): Project {
   return project({
     id: 7,
@@ -86,22 +97,20 @@ export function jiraProject(p: Partial<Project> = {}): Project {
     repo_path: "/home/user/projetos/app",
     tracker: {
       kind: "jira",
-      url: "https://jira.example.com/",
       project_key: "PROJ",
       jql: "",
-      credential_cmd: "pass show jira | head -1",
-      config_file: "",
       epic_link_field: "customfield_10601",
       epic_name_field: "customfield_10604",
       type_map: { Epic: "epic", Bug: "bug" },
+      connection: 7,
     },
     forge: {
       kind: "gitlab",
-      host: "gitlab.example.com",
       path: "grupo/projeto/app",
       clone_url: "https://gitlab.example.com/grupo/projeto/app.git",
-      credential_cmd: "pass show gitlab | head -1",
+      connection: 8,
     },
+    endpoints: JIRA_GITLAB_ENDPOINTS,
     branch_pattern: "{key}",
     attribution: false,
     sync_role: true,
@@ -353,11 +362,8 @@ export function jiraHubProject(p: Partial<HubProject> = {}): HubProject {
     name: "app",
     tracker: {
       kind: "jira",
-      url: "https://jira.example.com",
       project_key: "PROJ",
       jql: "",
-      credential_cmd: "pass show jira | head -1",
-      config_file: "",
       epic_link_field: "customfield_10601",
       epic_name_field: "customfield_10604",
       type_map: { Epic: "epic", Bug: "bug" },
@@ -365,12 +371,11 @@ export function jiraHubProject(p: Partial<HubProject> = {}): HubProject {
     },
     forge: {
       kind: "gitlab",
-      host: "gitlab.example.com",
       path: "grupo/projeto/app",
       clone_url: "https://gitlab.example.com/grupo/projeto/app.git",
-      credential_cmd: "pass show gitlab | head -1",
       connection: 8,
     },
+    endpoints: JIRA_GITLAB_ENDPOINTS,
     branch_pattern: "{key}",
     attribution: false,
     sync_env_id: "daemon-wsl",

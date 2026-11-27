@@ -449,64 +449,51 @@ impl Conn {
                     .map_err(|e| (-32603, e.to_string()))?
                     .map(|v| json!(v))
             }
-            "env.credentials.get" | "env.credentials.set" => {
+            // Sobrescrita de credencial por conexão (#276): vale no próximo
+            // uso, sem restart (o `SharedCredentials`, de onde saem a fonte
+            // e o prefixo da sessão, e o cache do resolvedor).
+            "env.connections.get" | "env.connections.set" => {
                 let Some(c) = self.st.env_config.clone() else {
                     return Err(invalid("edição do config.toml desativada neste ambiente"));
                 };
-                if method == "env.credentials.set" {
-                    let owner = str_param(p, "owner")?.to_string();
-                    let repo = str_param(p, "repo")?.to_string();
-                    let text = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-                    let (tracker_cmd, forge_cmd) = (text("tracker_cmd"), text("forge_cmd"));
-                    let c = Arc::clone(&c);
-                    tokio::task::spawn_blocking(move || {
-                        c.set_credentials(&owner, &repo, &tracker_cmd, &forge_cmd)
+                if method == "env.connections.set" {
+                    let name = str_param(p, "name")?.to_string();
+                    let cmd = p
+                        .get("credential_cmd")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let known = blocking(&sessions, |s| {
+                        let (conns, names) = s.ledger().hub_connections()?;
+                        let mut known = names;
+                        known.extend(conns.into_iter().map(|c| c.name));
+                        Ok(known)
                     })
-                    .await
-                    .map_err(|e| (-32603, e.to_string()))??;
+                    .await?;
+                    let c = Arc::clone(&c);
+                    let n = name.clone();
+                    let overrides =
+                        tokio::task::spawn_blocking(move || c.set_connection(&n, &cmd, &known))
+                            .await
+                            .map_err(|e| (-32603, e.to_string()))??;
+                    blocking(&sessions, move |s| {
+                        for w in s.ledger().connection_warnings(&overrides)? {
+                            tracing::warn!("conexões: {w}");
+                        }
+                        s.invalidate_connection(&name)?;
+                        Ok(())
+                    })
+                    .await?;
                 }
-                let readiness = self
-                    .st
-                    .tracker
-                    .as_ref()
-                    .map(|t| t.readiness())
-                    .unwrap_or_default();
                 let linked = self.linked();
                 let rows = blocking(&sessions, move |s| {
-                    let overrides = c.credentials().unwrap_or_default();
+                    let (_, overrides) = s.config().credentials.connections();
                     let l = s.ledger();
-                    let mut rows = Vec::new();
-                    for x in assigned_projects(&l, linked)? {
-                        let (jira, gitlab) = (x.tracker.jira(), x.forge.gitlab());
-                        if jira.is_none() && gitlab.is_none() {
-                            continue;
-                        }
-                        let o = overrides
-                            .get(&x.gh_owner, &x.gh_repo)
-                            .cloned()
-                            .unwrap_or_default();
-                        rows.push(crate::env_config::EnvCredential {
-                            tracker: x.tracker.kind(),
-                            forge: x.forge.kind(),
-                            project_tracker_cmd: jira
-                                .map(|j| j.credential_cmd.clone())
-                                .unwrap_or_default(),
-                            project_forge_cmd: gitlab
-                                .map(|g| g.credential_cmd.clone())
-                                .unwrap_or_default(),
-                            tracker_cmd: o.tracker_cmd,
-                            forge_cmd: o.forge_cmd,
-                            readiness: readiness
-                                .iter()
-                                .find(|r| r.owner == x.gh_owner && r.repo == x.gh_repo)
-                                .cloned(),
-                            sync: l.sync_state(x.id)?,
-                            owner: x.gh_owner,
-                            repo: x.gh_repo,
-                            name: x.name,
-                        });
-                    }
-                    Ok(rows)
+                    let (conns, names) = l.hub_connections()?;
+                    let projects = assigned_projects(&l, linked)?;
+                    Ok(crate::env_config::connection_rows(
+                        &conns, &names, &overrides, &projects,
+                    ))
                 })
                 .await?;
                 Ok(json!(rows))
@@ -522,12 +509,19 @@ impl Conn {
                 let unassigned = p.get("unassigned").and_then(Value::as_bool) == Some(true);
                 let linked = self.linked();
                 let v = blocking(&sessions, move |s| {
-                    let l = s.ledger();
-                    Ok(if unassigned {
-                        l.list_unassigned_projects()?
-                    } else {
-                        assigned_projects(&l, linked)?
-                    })
+                    let ps = {
+                        let l = s.ledger();
+                        if unassigned {
+                            l.list_unassigned_projects()?
+                        } else {
+                            assigned_projects(&l, linked)?
+                        }
+                    };
+                    // Endereços e prefixos das conexões deste ambiente (#277).
+                    Ok(ps
+                        .into_iter()
+                        .map(|p| s.with_endpoints(p))
+                        .collect::<Vec<_>>())
                 })
                 .await?;
                 Ok(json!(v))
@@ -815,6 +809,8 @@ impl Conn {
                 Ok(json!(v))
             }
             // Projeto Jira vai ao sync do jira-cli; os demais, ao do GitHub.
+            // No Jira, o `sync_now` roda o comando de credencial de novo,
+            // para a prontidão mostrar o estado dele agora (#268).
             "sync.now" => {
                 let gh = self.st.github.clone();
                 let tracker = self.st.tracker.clone();
@@ -824,7 +820,7 @@ impl Conn {
                 let project = p.get("project_id").and_then(Value::as_i64);
                 let v = tokio::task::spawn_blocking(move || match project {
                     Some(id) => match (tracker.filter(|t| t.handles(id)), gh) {
-                        (Some(t), _) => t.sync_project(id).map(|r| vec![r]),
+                        (Some(t), _) => t.sync_now(Some(id)),
                         (None, Some(g)) => g.sync_project(id).map(|r| vec![r]),
                         (None, None) => Err(ct_sessions::SessionsError::Invalid(
                             "sincronização com o GitHub desativada".into(),
@@ -836,7 +832,7 @@ impl Conn {
                             None => Vec::new(),
                         };
                         if let Some(t) = &tracker {
-                            all.extend(t.sync_all()?);
+                            all.extend(t.sync_now(None)?);
                         }
                         Ok(all)
                     }
@@ -901,34 +897,6 @@ impl Conn {
                 .map(|r| json!(r))
                 .map_err(from_sessions)
             }
-            "github.status" | "github.set_token" | "github.clear_token" => {
-                let gh = self
-                    .st
-                    .github
-                    .clone()
-                    .ok_or_else(|| (-32000, "integração com o GitHub desativada".into()))?;
-                let token = match method {
-                    "github.set_token" => Some(str_param(p, "token")?.to_string()),
-                    _ => None,
-                };
-                let method = method.to_string();
-                // O token nunca volta na resposta: só conta e origem.
-                tokio::task::spawn_blocking(move || {
-                    let c = gh.client();
-                    match method.as_str() {
-                        "github.set_token" => {
-                            c.set_token(&token.unwrap_or_default())?;
-                        }
-                        "github.clear_token" => c.clear_token()?,
-                        _ => {}
-                    }
-                    Ok::<_, ct_gh::GhError>(c.status())
-                })
-                .await
-                .map_err(|e| (-32603, e.to_string()))?
-                .map(|st| json!(st))
-                .map_err(|e| (-32000, e.to_string()))
-            }
             // Comentário na conversa do PR, com o token do GitHub do
             // ambiente (Revisão, #328).
             "github.pr.comment" => {
@@ -948,8 +916,12 @@ impl Conn {
                 })
                 .await?;
                 tokio::task::spawn_blocking(move || {
-                    gh.client()
-                        .comment_pr(&project.gh_owner, &project.gh_repo, pr, &body)
+                    gh.client_for(&project).comment_pr(
+                        &project.gh_owner,
+                        &project.gh_repo,
+                        pr,
+                        &body,
+                    )
                 })
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
@@ -1353,7 +1325,8 @@ fn dashboard(s: &Sessions, linked: bool) -> Result<Value, SessionsError> {
             });
         }
         projects.push(DashboardProject {
-            project,
+            // Endereços e prefixos das conexões deste ambiente (#277).
+            project: s.with_endpoints(project),
             work_items,
         });
     }
@@ -1939,20 +1912,43 @@ mod tests {
         assert_eq!(v["error"]["code"], -32602, "{v}");
     }
 
-    /// #143: `env.credentials.get|set` lista os projetos Jira/GitLab com o
-    /// comando do cadastro e o deste ambiente, grava no config.toml e vale
-    /// na hora para as sessões (o `SharedCredentials` delas).
+    /// #276: `env.connections.get|set` lista as conexões do hub com a
+    /// sobrescrita deste ambiente e grava no config.toml; a mudança vale no
+    /// próximo uso, sem restart: a fonte do resolvedor e o prefixo da sessão
+    /// (#277: lidos da conexão, não do cadastro).
     #[tokio::test(flavor = "multi_thread")]
-    async fn credencial_do_ambiente_editavel_pelo_ws() {
+    async fn sobrescrita_da_conexao_editavel_pelo_ws() {
         let mut srv = Srv::linked(FakeClaude::exit(0));
-        srv.env.assign_config(1, |p| {
-            p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.example.com".into(),
-                project_key: "ACME".into(),
-                credential_cmd: "pass show jira | head -1".into(),
-                ..Default::default()
-            });
-        });
+        let cfg: ct_ledger::ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 2,
+            "config_epoch": 1,
+            "changed": true,
+            "projects": [{
+                "owner": "deep-ion-ai", "repo": "demo", "name": "demo",
+                "base_branch": "develop", "protected_branches": [],
+                "repo_path": srv.env.repo.display().to_string(), "rev": 2,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1 }
+            }],
+            "removed": [],
+            "connections": [{
+                "id": 1, "name": "jira-acme", "kind": "jira",
+                "endpoint": "https://jira.example.com",
+                "credential": { "kind": "command", "cmd": "pass show hub/jira" },
+                "options": {}, "created_at": 0, "updated_at": 0
+            }],
+            "connection_names": ["jira-acme"]
+        }))
+        .unwrap();
+        {
+            let l = srv.env.sessions.ledger();
+            l.apply_hub_config(&cfg, |p| p.repo_path.clone()).unwrap();
+            let (conns, _) = l.hub_connections().unwrap();
+            srv.env
+                .cfg
+                .credentials
+                .set_connections(conns, Default::default());
+        }
         let path = srv.env.tmp.path().join("config.toml");
         srv.state.env_config = Some(Arc::new(
             crate::env_config::EnvConfig::new(path.clone(), 180, None)
@@ -1960,47 +1956,85 @@ mod tests {
         ));
         let url = spawn_server(&srv).await;
         let mut ui = Ui::new(&url).await;
-        let v = ui.call("env.credentials.get", json!({})).await;
+        let v = ui.call("env.connections.get", json!({})).await;
         let rows = v["result"].as_array().unwrap_or_else(|| panic!("{v}"));
         assert_eq!(rows.len(), 1, "{v}");
-        assert_eq!(rows[0]["tracker"], "jira");
-        assert_eq!(rows[0]["project_tracker_cmd"], "pass show jira | head -1");
-        assert_eq!(rows[0]["tracker_cmd"], "");
-        let (owner, repo) = (rows[0]["owner"].clone(), rows[0]["repo"].clone());
+        assert_eq!(rows[0]["name"], "jira-acme");
+        assert_eq!(rows[0]["kind"], "jira");
+        assert_eq!(
+            rows[0]["hub_source"],
+            json!({ "kind": "command", "detail": null })
+        );
+        assert_eq!(rows[0]["credential_cmd"], "");
+        assert_eq!(rows[0]["projects"], json!(["demo"]));
 
         let v = ui
             .call(
-                "env.credentials.set",
-                json!({ "owner": owner, "repo": repo,
-                        "tracker_cmd": "/usr/bin/pass show jira | head -1" }),
+                "env.connections.set",
+                json!({ "name": "jira-acme", "credential_cmd": "pass show acme/jira" }),
             )
             .await;
         assert_eq!(
-            v["result"][0]["tracker_cmd"], "/usr/bin/pass show jira | head -1",
+            v["result"][0]["credential_cmd"], "pass show acme/jira",
             "{v}"
         );
         assert!(std::fs::read_to_string(&path)
             .unwrap()
-            .contains("tracker_cmd = \"/usr/bin/pass show jira | head -1\""));
+            .contains("credential_cmd = \"pass show acme/jira\""));
         let p = srv
             .env
             .sessions
             .ledger()
             .get_project(srv.env.project_id)
             .unwrap();
-        let (eff, applied) = srv.env.sessions.with_env_credentials(p);
-        assert!(applied.tracker);
         assert_eq!(
-            eff.tracker.jira().unwrap().credential_cmd,
-            "/usr/bin/pass show jira | head -1"
+            srv.env.sessions.jira_source(&p).unwrap().source,
+            ct_core::provider::CredentialSource::Command {
+                cmd: "pass show acme/jira".into()
+            }
         );
+        assert_eq!(
+            srv.env.sessions.project_connections(&p).jira_prefix(),
+            r#"JIRA_API_TOKEN="$(pass show acme/jira)" jira"#,
+            "prefixo da sessão"
+        );
+        // A UI recebe o prefixo deste ambiente junto do projeto (#277).
+        let v = ui.call("projects.list", json!({})).await;
+        assert_eq!(
+            v["result"][0]["endpoints"],
+            json!({
+                "jira_url": "https://jira.example.com",
+                "gitlab_host": "",
+                "jira_cli": r#"JIRA_API_TOKEN="$(pass show acme/jira)" jira"#,
+                "glab_cli": "",
+            }),
+            "{v}"
+        );
+
+        // Vazio volta à fonte do hub.
         let v = ui
-            .call(
-                "env.credentials.set",
-                json!({ "owner": owner, "repo": repo, "tracker_cmd": "a\nb" }),
-            )
+            .call("env.connections.set", json!({ "name": "jira-acme" }))
             .await;
-        assert_eq!(v["error"]["code"], -32602, "{v}");
+        assert_eq!(v["result"][0]["credential_cmd"], "", "{v}");
+        let p = srv
+            .env
+            .sessions
+            .ledger()
+            .get_project(srv.env.project_id)
+            .unwrap();
+        assert_eq!(
+            srv.env.sessions.project_connections(&p).jira_prefix(),
+            r#"JIRA_API_TOKEN="$(pass show hub/jira)" jira"#
+        );
+
+        for params in [
+            json!({ "name": "jira-outra", "credential_cmd": "pass show x" }),
+            json!({ "name": "jira-acme", "credential_cmd": "a\nb" }),
+            json!({ "credential_cmd": "pass show x" }),
+        ] {
+            let v = ui.call("env.connections.set", params).await;
+            assert_eq!(v["error"]["code"], -32602, "{v}");
+        }
     }
 
     /// `POST /hooks/permission` como o `ctower hook`, sem esperar a resposta.
@@ -2841,6 +2875,7 @@ mod tests {
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
                     connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,
@@ -2859,14 +2894,12 @@ mod tests {
                         repo_path,
                         rev: 1,
                         tracker: ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                            url: FAKE_SERVER.into(),
                             project_key: "PROJ".into(),
-                            credential_cmd: "printf 'senha-de-teste\\n'".into(),
-                            config_file: fake.config_file().display().to_string(),
                             type_map: ct_core::default_type_map(),
+                            connection: Some(1),
                             ..Default::default()
                         }),
-                        forge: ct_core::ForgeConfig::Github,
+                        forge: ct_core::ForgeConfig::Github(Default::default()),
                         branch_pattern: None,
                         attribution: true,
                         sync: false,
@@ -2877,6 +2910,22 @@ mod tests {
                 |p| p.repo_path.clone(),
             )
             .unwrap();
+        // URL, credencial e `config_file` vêm da conexão do Jira (#277).
+        srv.env.cfg.credentials.set_connections(
+            vec![ct_core::provider::Connection {
+                id: 1,
+                name: "jira-acme".into(),
+                kind: ct_core::provider::ProviderKind::Jira,
+                endpoint: FAKE_SERVER.into(),
+                credential: ct_core::provider::CredentialSource::Command {
+                    cmd: "printf 'senha-de-teste\\n'".into(),
+                },
+                options: json!({ "config_file": fake.config_file().display().to_string() }),
+                created_at: 0,
+                updated_at: 0,
+            }],
+            Default::default(),
+        );
         fake.set_issues(&[
             api_issue("PROJ-1", "Épico", "new"),
             api_issue("PROJ-2", "Tarefa", "done"),
@@ -3189,31 +3238,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn token_do_github_configuravel_sem_expor_o_token() {
-        let (srv, gh) = Srv::with_github(FakeClaude::exit(0));
-        gh.set("/user", json!({ "login": "octocat" }));
-        let url = spawn_server(&srv).await;
-        let mut ui = Ui::new(&url).await;
-        let v = ui.call("github.status", json!({})).await;
-        assert_eq!(v["result"]["source"], "gh", "{v}");
-        assert_eq!(v["result"]["login"], "octocat");
-        let v = ui
-            .call("github.set_token", json!({ "token": "invalido" }))
-            .await;
-        assert_eq!(v["error"]["code"], -32000, "{v}");
-        let v = ui.call("github.set_token", json!({ "token": "tok" })).await;
-        assert_eq!(v["result"]["source"], "token", "{v}");
-        assert!(!v.to_string().contains("\"tok\""), "{v}");
-        let file = srv.env.tmp.path().join("github.token");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "tok");
-        let v = ui.call("github.clear_token", json!({})).await;
-        assert_eq!(v["result"]["source"], "gh", "{v}");
-        assert!(!file.exists());
-        let v = ui.call("github.set_token", json!({})).await;
-        assert_eq!(v["error"]["code"], -32602);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn comenta_no_pr_pelo_projeto() {
         let (mut srv, gh) = Srv::with_github(FakeClaude::exit(0));
         srv.link();
@@ -3324,6 +3348,7 @@ mod tests {
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
                     connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,
