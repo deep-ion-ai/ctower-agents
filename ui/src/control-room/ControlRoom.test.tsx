@@ -252,7 +252,14 @@ test("avisos do hub e hub fora: na lista, no botão de saúde e nos detalhes; le
 test("com hub: chips de épicos em execução e do piloto abrem as seções do hub; sem os métodos, somem", async () => {
   const api = hubApi([])
     .onHub("hub.epic_run.list", [{ id: 1 }, { id: 2 }])
-    .onHub("hub.autopilot.status", { settings: { paused: false }, projects: [{}, {}, {}] });
+    .onHub("hub.autopilot.status", {
+      settings: { paused: false },
+      accounts: [],
+      projects: [1, 2, 3].map((n) => ({ owner: "acme", repo: `app-${n}`, queue: [] })),
+      sessions: [],
+      parked: [],
+      events: [],
+    });
   render(<App api={api} />);
   const user = userEvent.setup();
   expect(await within(chips()).findByRole("button", { name: "2 épicos em execução" })).toBeInTheDocument();
