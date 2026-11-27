@@ -53,6 +53,8 @@ pub const METHODS: &[MethodSpec] = &[
         scopes: UI,
     },
     MethodSpec { name: "hub.projects.impact", params: "{ owner: string; repo: string }", result: "DeleteImpact", scopes: UI },
+    // Última release e entregas na base sem release, por projeto (#355).
+    MethodSpec { name: "hub.projects.release", params: "null", result: "ProjectRelease[]", scopes: UI_WEB },
     MethodSpec { name: "hub.tree.get", params: "{ owner: string; repo: string }", result: "HubTree", scopes: UI_WEB },
     MethodSpec { name: "hub.dashboard.get", params: "null", result: "HubDashboard", scopes: UI_WEB },
     MethodSpec { name: "hub.envs.list", params: "null", result: "HubEnv[]", scopes: UI_WEB },

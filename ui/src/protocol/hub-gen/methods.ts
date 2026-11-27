@@ -45,6 +45,7 @@ import type { HubWorkItemBody } from "./HubWorkItemBody";
 import type { MorningDigest } from "./MorningDigest";
 import type { ProjectAdded } from "./ProjectAdded";
 import type { ProjectDeleted } from "./ProjectDeleted";
+import type { ProjectRelease } from "./ProjectRelease";
 import type { ProposalDecided } from "./ProposalDecided";
 import type { PushRemoved } from "./PushRemoved";
 import type { PushTestResult } from "./PushTestResult";
@@ -69,6 +70,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.projects.move",
     "hub.projects.delete",
     "hub.projects.impact",
+    "hub.projects.release",
     "hub.tree.get",
     "hub.dashboard.get",
     "hub.envs.list",
@@ -162,6 +164,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.info",
     "hub.status",
     "hub.projects.list",
+    "hub.projects.release",
     "hub.tree.get",
     "hub.dashboard.get",
     "hub.envs.list",
@@ -230,6 +233,7 @@ export interface HubMethods {
   "hub.projects.move": { params: { owner: string; repo: string; before?: { owner: string; repo: string } | null; after?: { owner: string; repo: string } | null }; result: HubProject };
   "hub.projects.delete": { params: { owner: string; repo: string; confirm?: boolean | null }; result: ProjectDeleted };
   "hub.projects.impact": { params: { owner: string; repo: string }; result: DeleteImpact };
+  "hub.projects.release": { params: null; result: ProjectRelease[] };
   "hub.tree.get": { params: { owner: string; repo: string }; result: HubTree };
   "hub.dashboard.get": { params: null; result: HubDashboard };
   "hub.envs.list": { params: null; result: HubEnv[] };

@@ -43,6 +43,7 @@ mod priority;
 mod proposals;
 mod push;
 mod release;
+mod releases;
 mod rules;
 mod tracker;
 mod views;
@@ -110,6 +111,7 @@ pub use push::{
     ChannelStates, HubPushDevice, NewPushSubscription, PushEvent, PushNotice, PushTarget,
     CHANNEL_STALE_MS, PUSH_FAILURES_MAX, PUSH_SUBSCRIPTIONS_MAX,
 };
+pub use releases::ProjectRelease;
 pub use web_sessions::{HubWebSession, IssuedWebSession, WEB_SESSION_TOUCH_MS};
 
 pub use views::{
@@ -1073,6 +1075,29 @@ UPDATE epic_decision
        answered_by = 'motor'
  WHERE answer IS NULL
    AND run_id IN (SELECT id FROM epic_run WHERE status IN ('concluido', 'cancelado'));
+"#,
+    // 50: última release publicada e entregas na base sem release (#355,
+    // épico #353), lidas do GitHub pelo sync do hub. `project_release` tem
+    // uma linha por projeto já lido (`tag` nulo = sem release); as entregas
+    // são os PRs mesclados na base depois da release, com número e título
+    // para o tooltip. `truncated` = a leitura parou no limite de páginas.
+    r#"
+CREATE TABLE project_release (
+  project_id   INTEGER PRIMARY KEY,
+  tag          TEXT,
+  name         TEXT NOT NULL DEFAULT '',
+  published_at INTEGER,
+  url          TEXT NOT NULL DEFAULT '',
+  truncated    INTEGER NOT NULL DEFAULT 0,
+  synced_at    INTEGER NOT NULL
+);
+CREATE TABLE project_delivery (
+  project_id INTEGER NOT NULL,
+  pr_number  INTEGER NOT NULL,
+  title      TEXT NOT NULL,
+  merged_at  INTEGER NOT NULL,
+  PRIMARY KEY (project_id, pr_number)
+);
 "#,
 ];
 
@@ -5581,7 +5606,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 49);
+        assert_eq!(v, 50);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

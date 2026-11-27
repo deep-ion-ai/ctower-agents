@@ -995,6 +995,9 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 .map(|v| json!(v))
                 .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))
         }
+        // Última release e entregas sem release de todos os projetos (#355),
+        // do espelho do hub: sem chamada ao GitHub.
+        "hub.projects.release" => Ok(json!(h.project_releases().map_err(e)?)),
         "hub.connections.list"
         | "hub.connections.add"
         | "hub.connections.update"
@@ -2265,6 +2268,7 @@ mod export {
         HubEnvCall::export_all_to(&dir).unwrap();
         crate::push::PushRemoved::export_all_to(&dir).unwrap();
         crate::push::PushTestResult::export_all_to(&dir).unwrap();
+        ct_hub_store::ProjectRelease::export_all_to(&dir).unwrap();
         ct_hub_store::HubPushDevice::export_all_to(&dir).unwrap();
         ct_hub_store::HubWebSession::export_all_to(&dir).unwrap();
         crate::secrets::SecretsList::export_all_to(&dir).unwrap();

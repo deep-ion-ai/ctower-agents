@@ -93,6 +93,7 @@ pub const HUB_METHODS: &[&str] = &[
     "hub.projects.impact",
     "hub.projects.list",
     "hub.projects.move",
+    "hub.projects.release",
     "hub.projects.update",
     "hub.proposals.decide",
     "hub.proposals.list",
