@@ -742,7 +742,6 @@ impl Sessions {
         self.inner
             .live
             .lock()
-            .unwrap()
             .insert(session.id.clone(), pty.clone());
         self.sync_pty_mask(&session.id, &pty);
         if remote_name.is_some() {
@@ -853,9 +852,9 @@ impl Sessions {
     /// (código ≠ 0 ou sinal) sem `SessionEnd` antes vira `interrupted` e entra
     /// na recuperação (#283).
     fn on_process_exit(&self, project_id: i64, wi_id: i64, sid: &str, code: Option<i32>) {
-        self.inner.live.lock().unwrap().remove(sid);
+        self.inner.live.lock().remove(sid);
         self.forget_session_token(sid);
-        let killed = self.inner.killed.lock().unwrap().remove(sid);
+        let killed = self.inner.killed.lock().remove(sid);
         let clean = code == Some(0) || killed;
         let to = if clean {
             SessionState::Exited

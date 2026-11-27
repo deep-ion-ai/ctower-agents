@@ -528,8 +528,10 @@ impl Cleaner {
     }
 
     /// (concluídos, em andamento com worktree), sem o work item do projeto.
+    /// Varredura longa (todos os projetos e work items): vai pelo pool de
+    /// leitura e não segura a conexão de escrita (#244).
     fn collect(&self, sessions: &Sessions) -> Result<(Vec<CleanupTarget>, Vec<CleanupTarget>)> {
-        let l = sessions.ledger();
+        let l = sessions.ledger_read();
         let (mut out, mut open) = (Vec::new(), Vec::new());
         for project in l.list_all_projects()? {
             let titles: std::collections::HashMap<i64, String> = l
@@ -710,7 +712,25 @@ impl Cleaner {
         }
         let mut items = Vec::new();
         for t in &targets {
-            let steps = self.run_target(sessions, t, scope.step, dry_run, now);
+            // Lê, solta, age, confere (#244): o alvo vem da varredura do
+            // começo, e as etapas dos itens anteriores podem levar minutos.
+            // Antes de apagar, o work item é relido; se mudou, fica para a
+            // próxima verificação.
+            let changed = if dry_run {
+                None
+            } else {
+                changed_since_plan(sessions, t)?
+            };
+            let steps = match changed {
+                Some(reason) => match scope
+                    .step
+                    .or_else(|| self.steps_for(t).next().map(|s| s.kind()))
+                {
+                    Some(kind) => vec![StepRun::blocked(kind, Some(reason))],
+                    None => Vec::new(),
+                },
+                None => self.run_target(sessions, t, scope.step, dry_run, now),
+            };
             if !steps.is_empty() {
                 items.push(ItemRun {
                     work_item_id: t.work_item.id,
@@ -819,6 +839,33 @@ impl Cleaner {
         }
         out
     }
+}
+
+/// O work item do alvo mudou desde a varredura: o motivo. Confere o que
+/// decide a limpeza: status, worktree, branch, a conclusão e as sessões
+/// vivas (uma nova bloqueia).
+fn changed_since_plan(sessions: &Sessions, t: &CleanupTarget) -> Result<Option<String>> {
+    const MUDOU: &str = "o work item mudou desde o plano; fica para a próxima verificação";
+    let l = sessions.ledger_read();
+    let wi = match l.get_work_item(t.work_item.id) {
+        Ok(wi) => wi,
+        Err(ct_ledger::LedgerError::NotFound(..)) => return Ok(Some(MUDOU.into())),
+        Err(e) => return Err(e.into()),
+    };
+    let before = &t.work_item;
+    if (wi.status, &wi.worktree_path, &wi.branch)
+        != (before.status, &before.worktree_path, &before.branch)
+    {
+        return Ok(Some(MUDOU.into()));
+    }
+    if completion(&l, &t.project, &wi)?.is_some() != t.completion.is_some() {
+        return Ok(Some(MUDOU.into()));
+    }
+    let new_live = l
+        .list_sessions(wi.id)?
+        .into_iter()
+        .any(|s| s.state.is_live() && !t.live_sessions.contains(&s.id));
+    Ok(new_live.then(|| MUDOU.into()))
 }
 
 /// `kind` roda mesmo com `held` bloqueada: só a `target/` com o worktree
@@ -1374,5 +1421,74 @@ mod tests {
             );
         }
         assert!("lixo".parse::<StepKind>().is_err());
+    }
+
+    /// Etapa que, na primeira execução, reabre o outro work item do plano.
+    struct Reabre {
+        runs: Runs,
+        ids: (i64, i64),
+    }
+
+    impl CleanupStep for Reabre {
+        fn kind(&self) -> StepKind {
+            StepKind::Worktree
+        }
+        fn plan(&self, _: &StepContext<'_>) -> Result<StepPlan> {
+            Ok(pend(StepKind::Worktree, 10))
+        }
+        fn run(&self, ctx: &StepContext<'_>) -> Result<StepOutcome> {
+            let me = ctx.target.work_item.id;
+            self.runs
+                .lock()
+                .unwrap()
+                .push((StepKind::Worktree, ctx.target.work_item.gh_number));
+            let other = if me == self.ids.0 {
+                self.ids.1
+            } else {
+                self.ids.0
+            };
+            ctx.sessions
+                .ledger()
+                .set_work_item_status(other, WorkItemStatus::EmExecucao, "reaberto")
+                .unwrap();
+            Ok(StepOutcome::default())
+        }
+    }
+
+    /// Lê, solta, age, confere (#244): o work item reaberto depois da
+    /// varredura, enquanto a limpeza age em outro, não é limpo.
+    #[test]
+    fn work_item_que_mudou_depois_do_plano_nao_e_limpo() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        let ids = (concluido(&env, 1), concluido(&env, 2));
+        let runs: Runs = Arc::default();
+        let c = Cleaner::new(
+            sem_idade(),
+            vec![Box::new(Reabre {
+                runs: Arc::clone(&runs),
+                ids,
+            })],
+        );
+        let now = ct_core::now_ms();
+        let r = c
+            .run(&env.sessions, CleanupScope::default(), false, now)
+            .unwrap();
+        assert_eq!(runs.lock().unwrap().len(), 1);
+        assert_eq!(r.items.len(), 2);
+        let results: Vec<_> = r.items.iter().map(|i| i.steps[0].result).collect();
+        assert_eq!(results, [StepResult::Feita, StepResult::Bloqueada]);
+        assert!(r.items[1].steps[0]
+            .reason
+            .as_deref()
+            .is_some_and(|m| m.contains("mudou desde o plano")));
+        // No dry-run nada é conferido nem executado.
+        let r = c
+            .run(&env.sessions, CleanupScope::default(), true, now)
+            .unwrap();
+        assert_eq!(runs.lock().unwrap().len(), 1);
+        assert!(r
+            .items
+            .iter()
+            .all(|i| i.steps[0].result == StepResult::Simulada));
     }
 }

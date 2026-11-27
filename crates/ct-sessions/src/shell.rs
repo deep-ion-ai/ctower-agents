@@ -172,7 +172,7 @@ impl Sessions {
         // Conferir o limite e inserir sob a mesma trava: dois `shell.open`
         // juntos não passam do limite.
         let pty = {
-            let mut shells = self.inner.shells.lock().unwrap();
+            let mut shells = self.inner.shells.lock();
             if shells.len() >= SHELL_LIMIT {
                 return Err(SessionsError::Invalid(format!(
                     "limite de {SHELL_LIMIT} shells abertos neste ambiente; feche um antes"
@@ -207,7 +207,7 @@ impl Sessions {
         let this = self.clone();
         let sid = info.id.clone();
         pty.on_exit(move |code| {
-            this.inner.shells.lock().unwrap().remove(&sid);
+            this.inner.shells.lock().remove(&sid);
             this.notify("shell_exited", json!({ "shell_id": sid, "code": code }));
         });
         Ok(info)
@@ -219,7 +219,6 @@ impl Sessions {
             .inner
             .shells
             .lock()
-            .unwrap()
             .values()
             .map(LiveShell::snapshot)
             .collect();
@@ -232,7 +231,6 @@ impl Sessions {
         self.inner
             .shells
             .lock()
-            .unwrap()
             .get(shell_id)
             .map(|s| s.pty.clone())
     }
@@ -258,7 +256,6 @@ impl Sessions {
             .inner
             .shells
             .lock()
-            .unwrap()
             .values()
             .filter(|s| inside(&s.info.cwd, dir))
             .map(|s| s.pty.clone())

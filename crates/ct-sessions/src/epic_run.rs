@@ -256,11 +256,7 @@ impl Sessions {
         // Reserva a marca na mesma trava da checagem: entradas simultâneas
         // não passam todas pelo intervalo (#341).
         {
-            let mut seen = self
-                .inner
-                .human_input
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut seen = self.inner.human_input.lock();
             if seen
                 .get(session_id)
                 .is_some_and(|t| now - t < HUMAN_INPUT_DEBOUNCE_MS)
@@ -270,11 +266,7 @@ impl Sessions {
             seen.insert(session_id.to_string(), now);
         }
         let release = || {
-            self.inner
-                .human_input
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(session_id);
+            self.inner.human_input.lock().remove(session_id);
         };
         let recorded = (|| -> Result<bool> {
             let s = self.ledger().get_session(session_id)?;

@@ -60,22 +60,26 @@ pub struct TestEnv {
     pub repo: PathBuf,
     notices: Arc<Mutex<Vec<(String, Value)>>>,
     forward: Option<Notifier>,
-    /// Ledger em `<data>/ledger.db` em vez de em memória.
+    /// Ledger em `<data>/ledger.db` (o padrão, com o pool de leitura como
+    /// em produção, #244) em vez de em memória.
     file_ledger: bool,
 }
 
 impl TestEnv {
+    /// Ambiente com o ledger em arquivo: as consultas passam pelo pool de
+    /// leitura como em produção, e uma escrita por ele falha no teste
+    /// (#244).
     pub fn new(fake: FakeClaude) -> Self {
-        Self::build_env(fake, None, false)
+        Self::build_env(fake, None, true)
     }
 
     /// Como `new`, repassando também as notificações para `forward`.
     pub fn with_notifier(fake: FakeClaude, forward: Notifier) -> Self {
-        Self::build_env(fake, Some(forward), false)
+        Self::build_env(fake, Some(forward), true)
     }
 
-    /// Como `new`, com o ledger em arquivo (`<data>/ledger.db`), para
-    /// varrer o que foi persistido.
+    /// Como `new` (o ledger em arquivo, `<data>/ledger.db`), para varrer o
+    /// que foi persistido.
     pub fn with_file_ledger(fake: FakeClaude) -> Self {
         Self::build_env(fake, None, true)
     }
@@ -136,6 +140,14 @@ impl TestEnv {
     /// Recria o ambiente com outro binário do agente (ledger novo).
     pub fn set_claude_bin(&mut self, bin: &str) {
         self.cfg.claude_bin = bin.into();
+        if self.file_ledger {
+            let db = self.cfg.dirs.ledger_db();
+            for suffix in ["", "-wal", "-shm"] {
+                let mut f = db.clone().into_os_string();
+                f.push(suffix);
+                let _ = std::fs::remove_file(f);
+            }
+        }
         let (s, p) = build(
             &self.cfg,
             &self.repo,
@@ -443,7 +455,9 @@ fn build(
     file_ledger: bool,
 ) -> (Sessions, i64) {
     let ledger = if file_ledger {
-        Ledger::open(&cfg.dirs.ledger_db(), "env-teste").unwrap()
+        // `env_id` aleatório, como no ledger em memória: dois ambientes de
+        // teste no mesmo hub não colidem.
+        Ledger::open(&cfg.dirs.ledger_db(), &uuid::Uuid::new_v4().to_string()).unwrap()
     } else {
         Ledger::open_in_memory().unwrap()
     };
