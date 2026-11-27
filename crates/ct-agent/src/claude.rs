@@ -1,10 +1,20 @@
 //! Runtime do Claude Code: argv (`--session-id`/`--resume`, `--add-dir`,
 //! `--mcp-config`, `--settings`, ...), `mcp.json` e `settings.json` (hooks e
-//! atribuição) da sessão.
+//! atribuição) da sessão; a confiança no `.claude.json` ([`trust`]) e os
+//! transcripts em `~/.claude/projects` ([`transcript`]).
 
-use crate::{AgentRuntime, Conversation, LaunchContext, LaunchPlan, PlanFile};
+pub mod transcript;
+pub mod trust;
+
+pub use transcript::ClaudeTranscripts;
+
+use crate::{
+    AgentHome, AgentRuntime, Conversation, LaunchContext, LaunchPlan, PlanFile, TranscriptReader,
+};
 use ct_core::{SessionMode, Tool, CLAUDE_EFFORTS};
 use serde_json::{json, Value};
+use std::io;
+use std::path::{Path, PathBuf};
 
 /// O Claude Code como [`AgentRuntime`].
 #[derive(Debug, Clone, Copy, Default)]
@@ -102,6 +112,37 @@ impl AgentRuntime for ClaudeRuntime {
             env: Vec::new(),
             files,
         }
+    }
+
+    fn home_from_env(&self) -> AgentHome {
+        AgentHome {
+            config_file: trust::claude_json_path(),
+            transcripts_root: trust::claude_projects_dir(),
+        }
+    }
+
+    fn prepare_workspace(&self, home: &AgentHome, dirs: &[&str]) -> io::Result<Vec<String>> {
+        match &home.config_file {
+            Some(claude_json) => trust::ensure_trusted(claude_json, dirs),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn transcript_dirs_for(
+        &self,
+        transcripts_root: &Path,
+        cwd: &str,
+        transcripts: &[&Path],
+    ) -> Vec<PathBuf> {
+        transcript::transcript_dirs_for(transcripts_root, cwd, transcripts)
+    }
+
+    fn transcript_entry_id<'a>(&self, name: &'a str, is_file: bool) -> Option<&'a str> {
+        transcript::transcript_entry_id(name, is_file)
+    }
+
+    fn transcripts(&self) -> &dyn TranscriptReader {
+        &ClaudeTranscripts
     }
 }
 
@@ -306,5 +347,30 @@ mod tests {
         );
         assert_eq!(effort_from_argv(&s(&["claude", "--effort", "turbo"])), None);
         assert_eq!(effort_from_argv(&s(&["claude"])), None);
+    }
+
+    #[test]
+    fn prepare_workspace_no_claude_json_e_sem_ele() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join(".claude.json");
+        std::fs::write(&f, "{}").unwrap();
+        // Sem arquivo na home: não mexe em nada.
+        let none = AgentHome::default();
+        assert!(ClaudeRuntime
+            .prepare_workspace(&none, &["/r"])
+            .unwrap()
+            .is_empty());
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "{}");
+
+        let home = AgentHome {
+            config_file: Some(f.clone()),
+            transcripts_root: None,
+        };
+        assert_eq!(
+            ClaudeRuntime.prepare_workspace(&home, &["/r"]).unwrap(),
+            ["/r"]
+        );
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+        assert_eq!(v["projects"]["/r"]["hasTrustDialogAccepted"], true);
     }
 }

@@ -30,8 +30,7 @@
 
 pub use crate::cleanup_branches::{never_touch, BranchLocalStep, BranchRemoteStep, RemoteBranches};
 pub use crate::cleanup_sessions::{
-    agent_transcript_dirs, claude_project_slug, remove_agent_transcripts, AgentTranscripts,
-    SessionsStep,
+    agent_transcript_dirs, remove_agent_transcripts, AgentTranscripts, SessionsStep,
 };
 pub use crate::cleanup_worktree::{worktree_activity, TargetStep, WorktreeStep};
 use crate::config::CleanupConfig;

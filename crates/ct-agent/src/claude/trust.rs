@@ -1,4 +1,5 @@
-//! Pré-aceite da confiança na pasta do Claude Code (issue #16).
+//! Pré-aceite da confiança na pasta do Claude Code (issue #16): o
+//! `prepare_workspace` do [`super::ClaudeRuntime`] (#241).
 //!
 //! O Claude Code pergunta "Is this a project you trust?" (com "No, exit"
 //! pré-selecionado) em toda pasta nova, e nenhum hook dispara até alguém

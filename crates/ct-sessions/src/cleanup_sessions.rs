@@ -1,5 +1,5 @@
 //! Etapa "sessões" da limpeza de um work item concluído (issue #285, épico
-//! #284) e a remoção dos transcripts do Claude Code do worktree que saiu.
+//! #284) e a remoção dos transcripts do agente do worktree que saiu.
 //!
 //! [`SessionsStep`]:
 //! - Sessões `interrupted`/`exited` saem da Recuperação: o `run` faz um
@@ -13,7 +13,7 @@
 //!   com `cleanup.end_idle_sessions_hours` > 0 a etapa encerra sozinha as
 //!   que estão `idle` neste daemon há pelo menos esse tempo.
 //! - Transcripts do agente: para cada worktree do work item que já não
-//!   existe, apaga `~/.claude/projects/<slug>` se houver backup em
+//!   existe, apaga as pastas de transcript do agente se houver backup em
 //!   `<data>/transcripts` de todos os transcripts da pasta
 //!   (`cleanup.remove_agent_transcripts`).
 //!
@@ -54,17 +54,6 @@ const END_TIMEOUT: Duration = Duration::from_secs(10);
 // O agente que ignora o `SIGHUP` sai com o `SIGKILL` dentro do prazo.
 const _: () = assert!(crate::KILL_GRACE.as_secs() < END_TIMEOUT.as_secs());
 
-/// Nome da pasta do Claude Code para `path` em `~/.claude/projects`: cada
-/// caractere fora de `[A-Za-z0-9]` vira `-` (`/home/u/wt/a.b` →
-/// `-home-u-wt-a-b`). O caminho do transcript registrado pelos hooks também
-/// é usado ([`agent_transcript_dirs`]), então uma mudança de regra do Claude
-/// Code não faz apagar a pasta errada: no máximo deixa de achar uma.
-pub fn claude_project_slug(path: &str) -> String {
-    path.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
 /// Pastas de transcript do agente de um worktree ([`agent_transcript_dirs`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentTranscripts {
@@ -80,13 +69,14 @@ impl AgentTranscripts {
     }
 }
 
-/// Avalia, sem mudar nada, as pastas de `~/.claude/projects` do worktree:
-/// a do slug do caminho e as que contêm os transcripts registrados das
-/// sessões com esse `cwd` (só filhas diretas de `~/.claude/projects`, nunca
-/// links simbólicos). Uma pasta pode sair se cada entrada dela tiver backup
-/// em `<data>/transcripts`: `<id>.jsonl` exige `<data>/transcripts/<id>.jsonl`
-/// e a pasta `<id>/` (dados do agente da sessão) também. Outra entrada
-/// qualquer bloqueia. Sessão viva com esse `cwd` também bloqueia.
+/// Avalia, sem mudar nada, as pastas de transcript do agente do worktree
+/// ([`ct_agent::AgentRuntime::transcript_dirs_for`]: a do caminho e as que
+/// contêm os transcripts registrados das sessões com esse `cwd`), nunca
+/// links simbólicos. Uma pasta pode sair se cada entrada dela tiver backup
+/// em `<data>/transcripts`: cada entrada de uma sessão
+/// ([`ct_agent::AgentRuntime::transcript_entry_id`]) exige
+/// `<data>/transcripts/<id>.jsonl`. Outra entrada qualquer bloqueia. Sessão
+/// viva com esse `cwd` também bloqueia.
 ///
 /// Não olha se o worktree ainda existe: quem chama decide quando apagar.
 pub fn agent_transcript_dirs(sessions: &Sessions, worktree: &str) -> Result<AgentTranscripts> {
@@ -99,9 +89,10 @@ pub fn agent_transcript_dirs(sessions: &Sessions, worktree: &str) -> Result<Agen
 /// o original.
 fn evaluate(sessions: &Sessions, worktree: &str, strict: bool) -> Result<AgentTranscripts> {
     let mut out = AgentTranscripts::default();
-    let Some(projects) = sessions.config().claude_projects.clone() else {
+    let Some(root) = sessions.config().agent_home.transcripts_root.clone() else {
         return Ok(out);
     };
+    let runtime = crate::agent_runtime(crate::AGENT_TOOL)?;
     if worktree.is_empty() {
         return Ok(out);
     }
@@ -115,20 +106,11 @@ fn evaluate(sessions: &Sessions, worktree: &str, strict: bool) -> Result<AgentTr
         .iter()
         .filter_map(|s| s.tool_session_id.as_deref())
         .collect();
-    let mut candidates = vec![projects.join(claude_project_slug(worktree))];
-    for s in &in_cwd {
-        let Some(parent) = s
-            .transcript_path
-            .as_deref()
-            .and_then(|t| Path::new(t).parent())
-        else {
-            continue;
-        };
-        if parent.parent() == Some(projects.as_path()) && !candidates.iter().any(|c| c == parent) {
-            candidates.push(parent.to_path_buf());
-        }
-    }
-    for dir in candidates {
+    let registered: Vec<&Path> = in_cwd
+        .iter()
+        .filter_map(|s| s.transcript_path.as_deref().map(Path::new))
+        .collect();
+    for dir in runtime.transcript_dirs_for(&root, worktree, &registered) {
         match fs::symlink_metadata(&dir) {
             Ok(m) if m.is_dir() => {}
             _ => continue,
@@ -138,17 +120,13 @@ fn evaluate(sessions: &Sessions, worktree: &str, strict: bool) -> Result<AgentTr
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             let ft = entry.file_type()?;
-            let (id, is_file) = if ft.is_file() {
-                match name.strip_suffix(".jsonl") {
-                    Some(id) if !id.is_empty() => (id.to_string(), true),
-                    _ => {
-                        missing.push(name);
-                        continue;
-                    }
-                }
-            } else if ft.is_dir() {
-                (name.clone(), false)
-            } else {
+            let is_file = ft.is_file();
+            // Só arquivo ou pasta; link simbólico e outros bloqueiam.
+            let id = runtime
+                .transcript_entry_id(&name, is_file)
+                .filter(|_| is_file || ft.is_dir())
+                .map(str::to_string);
+            let Some(id) = id else {
                 missing.push(name);
                 continue;
             };
@@ -507,15 +485,6 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn slug_do_claude_code() {
-        assert_eq!(
-            claude_project_slug("/Users/u/worktrees/control-tower/feat__285-x.y"),
-            "-Users-u-worktrees-control-tower-feat--285-x-y"
-        );
-        assert_eq!(claude_project_slug("/home/joão/wt"), "-home-jo-o-wt");
-    }
-
     /// Critério de aceite: sessão viva de issue concluída nunca é encerrada
     /// sem ação explícita ou a opção ligada.
     #[test]
@@ -690,7 +659,7 @@ mod tests {
     }
 
     /// Sessão `exited` de um worktree, com o transcript em
-    /// `<claude_projects>/<slug>/<tool_id>.jsonl`.
+    /// `<pasta do agente para o worktree>/<tool_id>.jsonl`.
     struct Wt {
         env: TestEnv,
         wi: i64,
@@ -704,12 +673,11 @@ mod tests {
         let worktree = env.tmp.path().join("wt").join("demo").join("feat__9-x");
         fs::create_dir_all(&worktree).unwrap();
         let wt_str = worktree.to_string_lossy().to_string();
-        let dir = env
-            .cfg
-            .claude_projects
-            .clone()
+        let root = env.cfg.agent_home.transcripts_root.clone().unwrap();
+        let dir = crate::agent_runtime(crate::AGENT_TOOL)
             .unwrap()
-            .join(claude_project_slug(&wt_str));
+            .transcript_dirs_for(&root, &wt_str, &[])
+            .remove(0);
         fs::create_dir_all(dir.join("u-1").join("subagents")).unwrap();
         fs::write(dir.join("u-1.jsonl"), "{\"a\":1}\n").unwrap();
         fs::write(dir.join("u-1").join("subagents").join("x.jsonl"), "{}\n").unwrap();

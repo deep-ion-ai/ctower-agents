@@ -27,7 +27,6 @@ pub mod shell;
 pub mod tracker_sync;
 pub mod transcript_view;
 pub mod transcripts;
-pub mod trust;
 pub mod update;
 pub mod usage;
 
@@ -51,6 +50,9 @@ pub use transcript_view::{ContextUsage, TranscriptEntry, TranscriptSource, Trans
 pub use transcripts::TranscriptIntegrity;
 pub use usage::{SessionUsage, StatuslineInstall};
 
+pub use ct_agent::AgentHome;
+use ct_agent::AgentRuntime;
+use ct_core::Tool;
 use ct_ledger::Ledger;
 use ct_pty::PtySession;
 use serde_json::Value;
@@ -88,6 +90,30 @@ pub enum SessionsError {
 
 pub type Result<T> = std::result::Result<T, SessionsError>;
 
+/// Agente das sessões novas e dono de [`SessionsConfig::agent_home`]: por
+/// enquanto toda sessão é do Claude Code (épico #225).
+pub const AGENT_TOOL: Tool = Tool::Claude;
+
+/// [`AgentHome`] do agente de [`AGENT_TOOL`] pelas variáveis do processo,
+/// para o boot. `pre_trust = false` (`pre_trust_worktrees`) tira o arquivo
+/// da confiança: as sessões sobem sem pré-aceitá-la.
+pub fn agent_home_from_env(pre_trust: bool) -> AgentHome {
+    let mut home = ct_agent::runtime(AGENT_TOOL)
+        .map(|r| r.home_from_env())
+        .unwrap_or_default();
+    if !pre_trust {
+        home.config_file = None;
+    }
+    home
+}
+
+/// Runtime registrado para a ferramenta (#240); ferramenta sem runtime vira
+/// erro.
+pub(crate) fn agent_runtime(tool: Tool) -> Result<&'static dyn AgentRuntime> {
+    ct_agent::runtime(tool)
+        .ok_or_else(|| SessionsError::Invalid(format!("agente sem runtime: {}", tool.as_str())))
+}
+
 /// Depois do `SIGHUP` de [`Sessions::kill`], quanto esperar o agente sair
 /// antes do `SIGKILL` (#312). Depois do `SIGHUP`, o agente pode precisar de
 /// alguns segundos para gravar o transcript e encerrar os filhos; 5 s dão
@@ -110,13 +136,9 @@ pub struct SessionsConfig {
     /// Pasta das sessões do gestor (`DaemonConfig::gestor_dir`).
     pub gestor_dir: PathBuf,
     pub scrollback: usize,
-    /// `.claude.json` onde pré-aceitar a confiança nas pastas das sessões
-    /// (`None` = não mexe; o humano responde ao diálogo no terminal).
-    pub claude_json: Option<PathBuf>,
-    /// `~/.claude/projects`, onde o Claude Code guarda os transcripts de
-    /// cada pasta; a limpeza apaga a do worktree removido (#285). `None` =
-    /// nunca apaga.
-    pub claude_projects: Option<PathBuf>,
+    /// Onde o agente guarda o próprio estado (confiança nas pastas e
+    /// transcripts por pasta, #16/#285), do runtime de [`AGENT_TOOL`].
+    pub agent_home: AgentHome,
     /// Idade máxima da configuração do hub (secrets do cache) antes do aviso
     /// no spawn (`secrets_max_age_hours`); `None` = não avisa.
     pub secrets_max_age: Option<Duration>,
