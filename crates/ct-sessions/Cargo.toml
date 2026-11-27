@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ct-agent.workspace = true
 ct-core.workspace = true
 ct-gh.workspace = true
 ct-git.workspace = true

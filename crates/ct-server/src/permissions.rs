@@ -27,7 +27,7 @@ use tokio::sync::oneshot;
 
 /// Quanto o daemon espera a resposta da UI. Fica abaixo do prazo do
 /// `ctower hook` e do `timeout` do hook no Claude Code
-/// (`ct_sessions::PERMISSION_HOOK_TIMEOUT_SECS`).
+/// (`ct_agent::claude::PERMISSION_HOOK_TIMEOUT_SECS`).
 pub const WAIT: Duration = Duration::from_secs(120);
 
 /// Respostas aceitas por `session.permission.respond`.
