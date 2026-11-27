@@ -1,7 +1,7 @@
 //! Servidor HTTP do daemon (spec §8, §9, §11): `/hooks`, `/hooks/permission` e `/mcp` com o token
 //! de hook, `/ws`, `/hub/sync`, `/cleanup/plan`, `/cleanup/run` e
-//! `/secrets/rotate-env-key` com o token de UI, `/session/secret` com o
-//! token da sessão (#165),
+//! `/secrets/rotate-env-key` com o token de UI, `/session/secret` (#165) e
+//! `/session/git-credential` (#334) com o token da sessão,
 //! `/healthz` sem autenticação. Com hub ligado, o daemon também mantém o
 //! canal reverso com ele (`hub_channel`, `/sync/channel`). O hub é outro
 //! binário (`cthubd`); a base HTTP/WS comum aos dois fica em `ct-http`.
@@ -173,6 +173,10 @@ pub fn router(state: AppState) -> Router {
             post(env_secrets::rotate_env_key_http),
         )
         .route("/session/secret", post(env_secrets::session_secret_http))
+        .route(
+            "/session/git-credential",
+            post(env_secrets::session_git_credential_http),
+        )
         .route(
             "/session/release/context",
             post(env_secrets::release_context_http),

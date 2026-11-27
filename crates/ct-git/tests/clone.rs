@@ -179,3 +179,106 @@ fn token_do_gitlab_vira_cabecalho_do_host() {
         "{err}"
     );
 }
+
+/// #334: o credential helper entra por variável de ambiente, só para o host
+/// da URL, depois do `GIT_CONFIG_COUNT` herdado; SSH e HTTP não levam.
+#[test]
+fn credential_helper_vale_so_para_o_host_da_url() {
+    use std::ffi::OsString;
+    let get = |envs: &[(OsString, OsString)], k: &str| {
+        envs.iter()
+            .find(|(n, _)| n == &OsString::from(k))
+            .map(|(_, v)| v.to_string_lossy().into_owned())
+    };
+    let envs = ct_git::credential_helper_envs(
+        "https://usuario@gitlab.example.com:8443/g/r.git",
+        "'ctower' git-credential",
+        0,
+    )
+    .unwrap();
+    assert_eq!(get(&envs, "GIT_CONFIG_COUNT").as_deref(), Some("1"));
+    assert_eq!(
+        get(&envs, "GIT_CONFIG_KEY_0").as_deref(),
+        Some("credential.https://gitlab.example.com:8443.helper")
+    );
+    assert_eq!(
+        get(&envs, "GIT_CONFIG_VALUE_0").as_deref(),
+        Some("!'ctower' git-credential")
+    );
+    let envs =
+        ct_git::credential_helper_envs("https://gitlab.example.com/g/r.git", "h", 2).unwrap();
+    assert_eq!(get(&envs, "GIT_CONFIG_COUNT").as_deref(), Some("3"));
+    assert!(get(&envs, "GIT_CONFIG_KEY_2").is_some());
+    assert!(ct_git::credential_helper_envs("git@gitlab.example.com:g/r.git", "h", 0).is_none());
+    assert!(ct_git::credential_helper_envs("http://gitlab.example.com/g/r.git", "h", 0).is_none());
+}
+
+/// #334: o git de verdade chama o helper do ambiente só para o host dele, e
+/// o token fica fora do `.git/config`.
+#[test]
+fn git_chama_o_helper_so_para_o_host_da_conexao() {
+    use std::process::{Command, Stdio};
+    let d = TempDir::new().unwrap();
+    let helper = d.path().join("helper.sh");
+    std::fs::write(
+        &helper,
+        "#!/bin/sh\ncat >/dev/null\nprintf 'username=oauth2\\npassword=tok-ficticio\\n'\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let repo = d.path().join("r");
+    std::fs::create_dir(&repo).unwrap();
+    assert!(Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(&repo)
+        .status()
+        .unwrap()
+        .success());
+    let envs = ct_git::credential_helper_envs(
+        "https://gitlab.example.com/g/r.git",
+        &format!("'{}'", helper.display()),
+        0,
+    )
+    .unwrap();
+    let fill = |host: &str| {
+        let mut c = Command::new("git");
+        c.current_dir(&repo)
+            .args(["credential", "fill"])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .envs(envs.iter().map(|(k, v)| (k, v)))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        {
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(format!("protocol=https\nhost={host}\n\n").as_bytes())
+                .unwrap();
+        }
+        child.wait_with_output().unwrap()
+    };
+    let ok = fill("gitlab.example.com");
+    assert!(ok.status.success());
+    let out = String::from_utf8_lossy(&ok.stdout);
+    assert!(out.contains("username=oauth2"), "{out}");
+    assert!(out.contains("password=tok-ficticio"), "{out}");
+    // Outro host: o helper não é consultado e o git, sem prompt, falha.
+    let outro = fill("outro.example.com");
+    assert!(!outro.status.success());
+    assert!(!String::from_utf8_lossy(&outro.stdout).contains("tok-ficticio"));
+    // O `.git/config` não guarda o helper nem o token.
+    let cfg = std::fs::read_to_string(repo.join(".git/config")).unwrap();
+    assert!(
+        !cfg.contains("helper") && !cfg.contains("tok-ficticio"),
+        "{cfg}"
+    );
+}

@@ -176,3 +176,66 @@ fn secret_get_erros_saem_no_stderr_sem_valor() {
     // Sem o nome: erro de argumento, diferente de zero (não é hook).
     secret_get().args(["secret", "get"]).assert().failure();
 }
+
+// ---- `ctower git-credential` (#334) ----
+
+#[test]
+fn git_credential_get_imprime_usuario_e_token_da_conexao() {
+    let (url, h) = fake_daemon("200 OK", "username=oauth2\npassword=tok-ficticio-123\n");
+    secret_get()
+        .env("CTOWER_URL", &url)
+        .env("CTOWER_SESSION_TOKEN", "token-da-sessao")
+        .args(["git-credential", "get"])
+        .write_stdin("protocol=https\nhost=gitlab.example.com\n\n")
+        .assert()
+        .success()
+        .stdout("username=oauth2\npassword=tok-ficticio-123\n");
+    let req = h.join().unwrap();
+    assert!(req.starts_with("POST /session/git-credential "), "{req}");
+    assert!(
+        req.to_ascii_lowercase()
+            .contains("authorization: bearer token-da-sessao"),
+        "{req}"
+    );
+    assert!(
+        req.ends_with(r#"{"host":"gitlab.example.com","protocol":"https"}"#),
+        "{req}"
+    );
+}
+
+#[test]
+fn git_credential_outro_host_sai_calado_e_falha_diz_o_motivo() {
+    // Host que não é o da conexão: nada no stdout, saída 0 (o git segue).
+    let (url, h) = fake_daemon("404 Not Found", "sem credencial para este host");
+    secret_get()
+        .env("CTOWER_URL", &url)
+        .env("CTOWER_SESSION_TOKEN", "t")
+        .args(["git-credential", "get"])
+        .write_stdin("protocol=https\nhost=outro.example.com\n\n")
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+    h.join().unwrap();
+    // Credencial da conexão indisponível: motivo no stderr, sem valor.
+    let (url, h) = fake_daemon("503 Service Unavailable", "comando de credencial falhou");
+    secret_get()
+        .env("CTOWER_URL", &url)
+        .env("CTOWER_SESSION_TOKEN", "t")
+        .args(["git-credential", "get"])
+        .write_stdin("protocol=https\nhost=gitlab.example.com\n\n")
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(contains("comando de credencial falhou"));
+    h.join().unwrap();
+    // `store` e `erase` não fazem nada (nem chamam o daemon).
+    for op in ["store", "erase"] {
+        secret_get()
+            .args(["git-credential", op])
+            .write_stdin("protocol=https\nhost=gitlab.example.com\n\n")
+            .assert()
+            .success()
+            .stdout("");
+    }
+}

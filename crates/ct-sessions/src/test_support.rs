@@ -41,7 +41,7 @@ impl FakeClaude {
         let script = format!(
             "#!/bin/bash\n\
              out=\"{out}/$CTOWER_SESSION.txt\"\n\
-             {{ printf '%s\\n' \"$@\"; echo \"PWD=$(pwd)\"; echo \"SIZE=$(stty size 2>/dev/null)\"; env | grep -E '^(CTOWER|CT|T|GITLAB|JIRA|GH)_' | sort; echo \"ENV_PATH=$PATH\"; echo \"ENV_HOME=$HOME\"; }} > \"$out.tmp\"\n\
+             {{ printf '%s\\n' \"$@\"; echo \"PWD=$(pwd)\"; echo \"SIZE=$(stty size 2>/dev/null)\"; env | grep -E '^(CTOWER|CT|T|GITLAB|JIRA|GH|GIT_CONFIG)_' | sort; echo \"ENV_PATH=$PATH\"; echo \"ENV_HOME=$HOME\"; }} > \"$out.tmp\"\n\
              mv \"$out.tmp\" \"$out\"\n\
              {body}\n",
             out = out_dir.display(),
