@@ -1,6 +1,7 @@
 import { useNav } from "../state/nav";
 import { itemRef, itemShort } from "../util/item";
 import { useTower } from "../state/tower";
+import type { ProjectMatch } from "./TileGrid";
 
 /** Meia-noite local do dia de `now`. */
 export function startOfDay(now: number): number {
@@ -12,9 +13,11 @@ export function startOfDay(now: number): number {
 type Dashboards = ReturnType<typeof useTower>["dashboards"];
 
 /** Work items em revisão e concluídos hoje, de todos os ambientes. */
-export function dayItems(envs: { id: string }[], dashboards: Dashboards, now: number) {
+export function dayItems(envs: { id: string }[], dashboards: Dashboards, now: number, only?: ProjectMatch) {
   const all = envs.flatMap((e) =>
-    (dashboards[e.id]?.projects ?? []).flatMap((p) =>
+    (dashboards[e.id]?.projects ?? [])
+      .filter((p) => !only || only(e.id, p.project))
+      .flatMap((p) =>
       p.work_items.map((wi) => ({ env: e.id, project: p.project, wi })),
     ),
   );
@@ -29,10 +32,10 @@ export function dayItems(envs: { id: string }[], dashboards: Dashboards, now: nu
  * Em revisão (com decisões pendentes) e concluídas hoje (spec §10): o fim do
  * dia, embaixo da grade e na visão "Concluídas hoje" do painel lateral.
  */
-export function Footer({ now }: { now: number }) {
+export function Footer({ now, only }: { now: number; only?: ProjectMatch }) {
   const { envs, dashboards } = useTower();
   const nav = useNav();
-  const { review, done } = dayItems(envs, dashboards, now);
+  const { review, done } = dayItems(envs, dashboards, now, only);
 
   return (
     <footer className="control-footer">
