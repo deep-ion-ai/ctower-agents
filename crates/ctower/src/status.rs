@@ -116,7 +116,7 @@ pub fn status() -> i32 {
 /// O executável que o serviço instalado sobe, se ele não existir: o caso em
 /// que o launchd só registra exit 78 em loop (#360).
 fn missing_program() -> Option<std::path::PathBuf> {
-    let prog = ct_sessions::update::Manager::from_env().program()?;
+    let prog = ct_update::service::Manager::from_env().program()?;
     (!prog.exists()).then_some(prog)
 }
 
@@ -146,7 +146,7 @@ pub fn restart(force: bool) -> i32 {
             }
         }
     }
-    match ct_sessions::update::Manager::from_env()
+    match ct_update::service::Manager::from_env()
         .command("restart")
         .status()
     {

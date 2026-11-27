@@ -15,11 +15,11 @@ use ct_server::{notifier, router, AppState};
 use ct_sessions::cleanup::Cleaner;
 use ct_sessions::config::{DaemonConfig, HUB_REMOVED};
 use ct_sessions::github::next_delay;
-use ct_sessions::update::Build;
 use ct_sessions::{
     ensure_env_id, ensure_token, Dirs, GithubSync, JiraGitlabSync, Sessions, SessionsConfig,
     TrackerSyncConfig,
 };
+use ct_update::Build;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -223,7 +223,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let updates = Arc::new(Updates::new(
-        ct_sessions::update::source(&cfg, &dirs),
+        ct_update::Source::new(&cfg.update_repo, &cfg.update_ref, dirs.update_dir()),
         Build::current(),
         events.clone(),
     ));

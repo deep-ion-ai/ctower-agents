@@ -27,7 +27,6 @@ pub mod shell;
 pub mod tracker_sync;
 pub mod transcript_view;
 pub mod transcripts;
-pub mod update;
 pub mod usage;
 
 pub use github::{GithubSync, ProjectSync};

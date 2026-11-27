@@ -2,10 +2,8 @@
 //! verificação sob demanda (`env.check_update`) e periódica, e o disparo do
 //! atualizador (`env.update`). Cada mudança sai no push `update.status`.
 
-use ct_sessions::update::{
-    read_state, resolve_bin, running, spawn_runner, systemd_run_bin, Available, Build, Source,
-    UpdateState,
-};
+use ct_update::service::{spawn_runner, systemd_run_bin};
+use ct_update::{read_state, resolve_bin, running, Available, Build, Source, UpdateState};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;

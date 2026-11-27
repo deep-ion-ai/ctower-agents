@@ -15,7 +15,6 @@ ct-jira.workspace = true
 ct-ledger.workspace = true
 ct-pty.workspace = true
 ct-secrets.workspace = true
-ct-update.workspace = true
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -30,7 +29,7 @@ ts-rs = { workspace = true, optional = true }
 # Ambiente de teste (repo git temporário + claude falso) para outros crates.
 test-support = ["dep:tempfile", "ct-pty/test-support"]
 # Tipos TypeScript para a UI (ts-rs).
-ts = ["dep:ts-rs", "ct-agent/ts", "ct-core/ts", "ct-git/ts", "ct-ledger/ts", "ct-update/ts"]
+ts = ["dep:ts-rs", "ct-agent/ts", "ct-core/ts", "ct-git/ts", "ct-ledger/ts"]
 
 [dev-dependencies]
 ct-gh = { workspace = true, features = ["test-support"] }
