@@ -110,11 +110,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             worktrees_root: cfg.worktrees_root(),
             gestor_dir: cfg.gestor_dir(&dirs),
             scrollback: cfg.scrollback_bytes,
-            claude_json: cfg
-                .pre_trust_worktrees
-                .then(ct_sessions::trust::claude_json_path)
-                .flatten(),
-            claude_projects: ct_sessions::trust::claude_projects_dir(),
+            agent_home: ct_sessions::agent_home_from_env(cfg.pre_trust_worktrees),
             secrets_max_age: cfg.secrets_max_age(),
             process_env: None,
             shell: None,

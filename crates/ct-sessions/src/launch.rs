@@ -3,16 +3,17 @@
 
 use crate::paths::{private_dir, write_private};
 use crate::{Result, Sessions, SessionsError};
+use ct_agent::Conversation;
 use ct_core::branch::{branch_from_pattern, worktree_dir_name};
 use ct_core::{
-    ProjectKind, SessionMode, SessionState, Tool, WorkItemKind, WorkItemTrigger, CLAUDE_EFFORTS,
+    ProjectKind, SessionMode, SessionState, WorkItemKind, WorkItemTrigger, CLAUDE_EFFORTS,
     CLAUDE_MODELS,
 };
 use ct_git::{ensure_worktree, WorktreeSpec};
 use ct_ledger::{Ledger, NewEvent, NewSession, Project, Session, WorkItem};
 use ct_pty::SpawnSpec;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -80,54 +81,7 @@ impl AgentOptions {
             _ => Ok(()),
         }
     }
-
-    /// Argumentos do `claude` para o modelo e o modo. `gestor` soma os
-    /// limites fixos do gestor ao system prompt, `rules` as regras do
-    /// agente do projeto e do épico (#357) e `docs` a linha da pasta de docs
-    /// (#441; um só `--append-system-prompt`, com o do modo `subagents` por
-    /// último, se houver).
-    fn args(&self, gestor: bool, rules: Option<&str>, docs: Option<&str>) -> Vec<String> {
-        let mut args = Vec::new();
-        if let Some(m) = &self.model {
-            args.extend(["--model".to_string(), m.clone()]);
-        }
-        if let Some(e) = &self.effort {
-            args.extend(["--effort".to_string(), e.clone()]);
-        }
-        let mut append = Vec::new();
-        if gestor {
-            append.push(GESTOR_LIMITS);
-        }
-        if let Some(r) = rules {
-            append.push(r);
-        }
-        if let Some(d) = docs {
-            append.push(d);
-        }
-        if self.mode == SessionMode::Subagents {
-            append.push(SUBAGENTS_PROMPT);
-        }
-        if !append.is_empty() {
-            args.extend(["--append-system-prompt".to_string(), append.join("\n\n")]);
-        }
-        args
-    }
 }
-
-/// Esforço (`--effort`) do argv de uma sessão já lançada, para a retomada
-/// seguir com ele (#182): o ledger guarda o modelo, não o esforço.
-pub(crate) fn effort_from_argv(argv: &[String]) -> Option<String> {
-    argv.windows(2)
-        .find(|w| w[0] == "--effort")
-        .map(|w| w[1].clone())
-        .filter(|e| CLAUDE_EFFORTS.contains(&e.as_str()))
-}
-
-/// Instrução do modo `subagents`, somada ao system prompt do Claude Code.
-const SUBAGENTS_PROMPT: &str = "Modo subagents (Control Tower): delegue cada tarefa do trabalho \
-a um subagente (ferramenta Agent), com contexto suficiente para executá-la sozinho, em paralelo \
-quando as tarefas forem independentes. Nesta sessão, planeje, coordene, revise o que os \
-subagentes entregarem e integre o resultado.";
 
 /// Limites fixos do gestor de projetos (spec do gestor §10.2). Vão no
 /// system prompt de toda sessão do gestor, inclusive na retomada, e o
@@ -210,18 +164,11 @@ impl PtySize {
     };
 }
 
-/// Como o agente é chamado, com o id da conversa na ferramenta: conversa
-/// nova com id fixo, ou retomada.
-pub(crate) enum LaunchMode<'a> {
-    New(&'a str),
-    Resume(&'a str),
-}
-
 /// O que muda entre iniciar e retomar: onde, como chamar o agente, prompt,
 /// tamanho do PTY e modelo/modo.
 pub(crate) struct LaunchSpec<'a> {
     pub cwd: &'a str,
-    pub mode: LaunchMode<'a>,
+    pub mode: Conversation<'a>,
     pub prompt: &'a str,
     pub size: PtySize,
     pub agent: &'a AgentOptions,
@@ -231,30 +178,6 @@ pub(crate) struct LaunchSpec<'a> {
     /// (#440); vazio na retomada (a pasta já existe e é achada por `<n>-*`).
     pub title: &'a str,
 }
-
-impl LaunchMode<'_> {
-    fn tool_session_id(&self) -> &str {
-        match self {
-            LaunchMode::New(id) | LaunchMode::Resume(id) => id,
-        }
-    }
-}
-
-/// Eventos de hook instalados por sessão (`--settings`), com o argumento do
-/// `ctower hook`.
-const HOOKS: &[(&str, &str)] = &[
-    ("SessionStart", "session-start"),
-    ("UserPromptSubmit", "user-prompt-submit"),
-    ("Notification", "notification"),
-    ("Stop", "stop"),
-    ("SessionEnd", "session-end"),
-    ("PreToolUse", "pre-tool-use"),
-    ("PermissionRequest", "permission-request"),
-];
-
-/// Prazo do hook `PermissionRequest` no Claude Code (s): acima da espera
-/// do daemon pela resposta da UI (`ctower hook` desiste antes).
-pub const PERMISSION_HOOK_TIMEOUT_SECS: u64 = 180;
 
 /// Número do work item das sessões do projeto (sem issue: planejar, criar
 /// issues e épicos). Não tem branch nem worktree; roda no clone principal.
@@ -294,7 +217,7 @@ impl Sessions {
             &wi,
             LaunchSpec {
                 cwd: &project.repo_path,
-                mode: LaunchMode::New(&tool_session_id),
+                mode: Conversation::New(&tool_session_id),
                 prompt,
                 size: size.unwrap_or(PtySize::DEFAULT),
                 agent,
@@ -345,7 +268,7 @@ impl Sessions {
             &wi,
             LaunchSpec {
                 cwd: &dir_str,
-                mode: LaunchMode::New(&tool_session_id),
+                mode: Conversation::New(&tool_session_id),
                 prompt,
                 size: size.unwrap_or(PtySize::DEFAULT),
                 agent,
@@ -491,7 +414,7 @@ impl Sessions {
             &wi,
             LaunchSpec {
                 cwd: &worktree_str,
-                mode: LaunchMode::New(&tool_session_id),
+                mode: Conversation::New(&tool_session_id),
                 prompt: auto_prompt.as_deref().unwrap_or(&req.prompt),
                 size: req.size.unwrap_or(PtySize::DEFAULT),
                 agent: &req.agent,
@@ -578,9 +501,13 @@ impl Sessions {
             let item = (wi.gh_number > PROJECT_WORK_ITEM).then_some(wi);
             self.ensure_docs(project, item, title)
         };
+        // Registro estático por `Tool` (#240); por enquanto toda sessão é do
+        // Claude Code, com o binário de `claude_bin`.
+        let tool = crate::AGENT_TOOL;
+        let runtime = crate::agent_runtime(tool)?;
         let session = self.ledger().create_session(&NewSession {
             work_item_id: wi.id,
-            tool: Tool::Claude,
+            tool,
             cwd: cwd.to_string(),
             launch_cmd: vec![cfg.claude_bin.clone()],
             model: agent.model.clone(),
@@ -588,52 +515,17 @@ impl Sessions {
         })?;
         let dir = cfg.dirs.session_dir(&session.id);
         private_dir(&dir)?;
-        let mcp_path = dir.join("mcp.json");
-        let settings_path = dir.join("settings.json");
-        write_private(
-            &mcp_path,
-            mcp_config(cfg.port, &cfg.hook_token, &session.id)
-                .to_string()
-                .as_bytes(),
+        // A pasta de docs vai no mesmo `--add-dir` abaixo: sem a confiança,
+        // o agente pergunta por ela em toda sessão (#222).
+        self.prepare_workspace(
+            runtime,
+            project,
+            wi,
+            &session.id,
+            cwd,
+            docs.project.as_deref(),
         )?;
-        write_private(
-            &settings_path,
-            session_settings(&cfg.ctower_bin, project.attribution)
-                .to_string()
-                .as_bytes(),
-        )?;
-        if let Some(claude_json) = &cfg.claude_json {
-            // A pasta de docs vai no mesmo `--add-dir` abaixo: sem a
-            // confiança, o Claude Code pergunta por ela em toda sessão (#222).
-            self.pre_trust(
-                claude_json,
-                project,
-                wi,
-                &session.id,
-                cwd,
-                docs.project.as_deref(),
-            )?;
-        }
 
-        let tool_session_id = mode.tool_session_id();
-        let mut args = match mode {
-            LaunchMode::New(id) => vec!["--session-id".to_string(), id.to_string()],
-            LaunchMode::Resume(id) => vec!["--resume".to_string(), id.to_string()],
-        };
-        // Antes de outra opção: `--add-dir` aceita vários valores e
-        // engoliria o prompt posicional.
-        if let Some(dir) = &docs.project {
-            args.extend(["--add-dir".to_string(), dir.to_string_lossy().to_string()]);
-        }
-        args.extend([
-            "--mcp-config".to_string(),
-            mcp_path.to_string_lossy().to_string(),
-            "--settings".to_string(),
-            settings_path.to_string_lossy().to_string(),
-        ]);
-        if let Some(name) = &remote_name {
-            args.extend(["--remote-control".to_string(), name.clone()]);
-        }
         // Regras do agente vigentes no cache do pull, relidas a cada início
         // e retomada (spec do Jira e GitLab §10.1).
         // Issue fora do espelho (#143): o épico é desconhecido; a sessão sobe
@@ -686,28 +578,65 @@ impl Sessions {
         .flatten()
         .collect::<Vec<_>>();
         let docs_line = (!docs_line.is_empty()).then(|| docs_line.join("\n\n"));
-        args.extend(agent.args(gestor, rules.as_deref(), docs_line.as_deref()));
-        if !prompt.is_empty() {
-            // Os comandos de credencial deste ambiente no lugar dos da
-            // conexão do hub (`[credentials]`, #143; `[connections]`, #274).
-            args.push(cfg.credentials.rewrite_prompt(
+        // System prompt somado, na ordem: limites do gestor, regras do
+        // agente do projeto e do épico (#357) e a linha de docs (#441); o
+        // runtime soma o do modo `subagents` por último.
+        let system_prompt = [
+            gestor.then_some(GESTOR_LIMITS),
+            rules.as_deref(),
+            docs_line.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        // Os comandos de credencial deste ambiente no lugar dos da conexão
+        // do hub (`[credentials]`, #143; `[connections]`, #274).
+        let prompt = (!prompt.is_empty()).then(|| {
+            cfg.credentials.rewrite_prompt(
                 &project.gh_owner,
                 &project.gh_repo,
                 &project.tracker,
                 &project.forge,
                 prompt,
-            ));
+            )
+        });
+        let extra_dirs = docs.project.iter().cloned().collect::<Vec<_>>();
+        let plan = runtime.launch_plan(&ct_agent::LaunchContext {
+            program: &cfg.claude_bin,
+            session_id: &session.id,
+            session_dir: &dir,
+            conversation: mode,
+            port: cfg.port,
+            hook_token: &cfg.hook_token,
+            ctower_bin: &cfg.ctower_bin,
+            attribution: project.attribution,
+            extra_dirs: &extra_dirs,
+            remote_control: remote_name.as_deref(),
+            model: agent.model.as_deref(),
+            effort: agent.effort.as_deref(),
+            mode: agent.mode,
+            system_prompt: &system_prompt,
+            prompt: prompt.as_deref(),
+        });
+        for f in &plan.files {
+            write_private(&f.path, &f.contents)?;
         }
-        let mut argv = vec![cfg.claude_bin.clone()];
-        argv.extend(args.iter().cloned());
         self.ledger()
-            .set_session_launch(&session.id, &argv, Some(tool_session_id))?;
+            .set_session_launch(&session.id, &plan.argv(), Some(mode.id()))?;
 
-        // Secrets e variáveis do hub primeiro; as `CTOWER_*` vêm depois e
-        // sempre vencem. O token da sessão (#165) só vive em memória.
+        // Secrets e variáveis do hub primeiro, depois as do runtime; as
+        // `CTOWER_*` vêm por último e sempre vencem. O token da sessão
+        // (#165) só vive em memória.
         let pty_mask = secrets.mask.pty.clone();
         self.set_mask(&session.id, secrets.mask);
+        let ct_agent::LaunchPlan {
+            program,
+            args,
+            env: runtime_env,
+            ..
+        } = plan;
         let mut env = secrets.env;
+        env.extend(runtime_env);
         env.extend([
             ("CTOWER_SESSION".to_string(), session.id.clone()),
             (
@@ -759,7 +688,7 @@ impl Sessions {
         }
         self.set_session_token(&session_token, &session.id);
         let spawned = self.spawn_pty(SpawnSpec {
-            program: cfg.claude_bin.clone(),
+            program,
             args,
             cwd: PathBuf::from(cwd),
             env,
@@ -873,12 +802,13 @@ impl Sessions {
         Ok(())
     }
 
-    /// Pré-aceita a confiança na raiz do repositório, no worktree e, se a
-    /// sessão recebe, na pasta de docs do projeto (`--add-dir`, #222). Falha
-    /// vira alerta (a sessão segue; o humano responde ao diálogo).
-    fn pre_trust(
+    /// Pré-aceita, pelo runtime ([`ct_agent::AgentRuntime::prepare_workspace`]),
+    /// a confiança na raiz do repositório, no worktree e, se a sessão recebe,
+    /// na pasta de docs do projeto (`--add-dir`, #222). Falha vira alerta (a
+    /// sessão segue; o humano responde ao diálogo).
+    fn prepare_workspace(
         &self,
-        claude_json: &Path,
+        runtime: &dyn ct_agent::AgentRuntime,
         project: &Project,
         wi: &WorkItem,
         session_id: &str,
@@ -888,7 +818,8 @@ impl Sessions {
         let docs = docs.map(|d| d.to_string_lossy().into_owned());
         let mut dirs = vec![project.repo_path.as_str(), cwd];
         dirs.extend(docs.as_deref());
-        let (kind, payload) = match crate::trust::ensure_trusted(claude_json, &dirs) {
+        let home = &self.config().agent_home;
+        let (kind, payload) = match runtime.prepare_workspace(home, &dirs) {
             Ok(changed) if changed.is_empty() => return Ok(()),
             Ok(changed) => ("trust_granted", json!({ "paths": changed })),
             Err(e) => {
@@ -948,7 +879,6 @@ impl Sessions {
     }
 }
 
-/// `mcp.json` da sessão: servidor HTTP do ledger com os cabeçalhos de autenticação.
 /// Alerta e evento da sessão de issue sem o épico resolvido (#143).
 pub const EPIC_UNRESOLVED: &str = "epic_unresolved";
 
@@ -959,21 +889,6 @@ fn epic_warning(reason: &str) -> String {
          Se ela pertencer a um épico, as regras dele não foram carregadas nesta sessão. \
          Antes de alterar qualquer arquivo, pare e pergunte ao usuário como seguir."
     )
-}
-
-pub(crate) fn mcp_config(port: u16, hook_token: &str, session_id: &str) -> Value {
-    json!({
-        "mcpServers": {
-            "ctower": {
-                "type": "http",
-                "url": format!("http://127.0.0.1:{port}/mcp"),
-                "headers": {
-                    "Authorization": format!("Bearer {hook_token}"),
-                    "X-Ctower-Session": session_id,
-                }
-            }
-        }
-    })
 }
 
 /// Variáveis da sessão que dependem do rastreador e da forja (spec do Jira e
@@ -1030,43 +945,16 @@ fn provider_env(
     env
 }
 
-/// `settings.json` da sessão: os hooks e, com a atribuição desligada no
-/// projeto (spec do Jira e GitLab §9.3), as chaves do Claude Code que tiram o
-/// `Co-Authored-By` dos commits e o rodapé dos PRs/MRs. `attribution` com
-/// texto vazio esconde a atribuição (Claude Code 2.1); `includeCoAuthoredBy`
-/// é a chave antiga, ainda lida, para versões anteriores.
-pub(crate) fn session_settings(ctower_bin: &str, attribution: bool) -> Value {
-    let mut s = hook_settings(ctower_bin);
-    if !attribution {
-        s["attribution"] = json!({ "commit": "", "pr": "" });
-        s["includeCoAuthoredBy"] = json!(false);
-    }
-    s
-}
-
-/// `settings.json` da sessão com os hooks do Control Tower (passado em `--settings`).
-pub(crate) fn hook_settings(ctower_bin: &str) -> Value {
-    let mut hooks = serde_json::Map::new();
-    for (event, arg) in HOOKS {
-        let mut entry = json!({
-            "hooks": [{ "type": "command", "command": format!("{ctower_bin} hook {arg}") }]
-        });
-        if *event == "PreToolUse" {
-            entry["matcher"] = json!("Bash");
-        }
-        if *event == "PermissionRequest" {
-            entry["hooks"][0]["timeout"] = json!(PERMISSION_HOOK_TIMEOUT_SECS);
-        }
-        hooks.insert((*event).to_string(), json!([entry]));
-    }
-    json!({ "hooks": hooks })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::*;
+    use ct_agent::claude::{
+        effort_from_argv, hook_settings, session_settings, PERMISSION_HOOK_TIMEOUT_SECS,
+        SUBAGENTS_PROMPT,
+    };
     use ct_core::{SessionState, WorkItemStatus};
+    use serde_json::Value;
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
@@ -2253,7 +2141,7 @@ mod tests {
         let env = TestEnv::new(FakeClaude::exit(0));
         let s = env.sessions.start(env.request(2, "Confiança")).unwrap();
         let cj: Value = serde_json::from_str(
-            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+            &std::fs::read_to_string(env.cfg.agent_home.config_file.as_ref().unwrap()).unwrap(),
         )
         .unwrap();
         let repo = env.repo.to_string_lossy().to_string();
@@ -2277,7 +2165,7 @@ mod tests {
         let root = env.docs_root_up();
         let s = env.sessions.start(env.request(2, "Docs")).unwrap();
         let cj: Value = serde_json::from_str(
-            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+            &std::fs::read_to_string(env.cfg.agent_home.config_file.as_ref().unwrap()).unwrap(),
         )
         .unwrap();
         let proj = root.join("deep-ion-ai__demo").to_string_lossy().to_string();
@@ -2297,7 +2185,7 @@ mod tests {
         docs_ligados(&env);
         let s = env.sessions.start(env.request(2, "Sem docs")).unwrap();
         let cj: Value = serde_json::from_str(
-            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+            &std::fs::read_to_string(env.cfg.agent_home.config_file.as_ref().unwrap()).unwrap(),
         )
         .unwrap();
         let projects = cj["projects"].as_object().unwrap();
@@ -2315,7 +2203,11 @@ mod tests {
     #[test]
     fn claude_json_invalido_vira_alerta_e_sessao_segue() {
         let env = TestEnv::new(FakeClaude::exit(0));
-        std::fs::write(env.cfg.claude_json.as_ref().unwrap(), "{ quebrado").unwrap();
+        std::fs::write(
+            env.cfg.agent_home.config_file.as_ref().unwrap(),
+            "{ quebrado",
+        )
+        .unwrap();
         let s = env.sessions.start(env.request(3, "X")).unwrap();
         assert!(s.pid.is_some());
         assert!(env
