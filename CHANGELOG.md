@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.11.1](https://github.com/deep-ion-ai/ctower-agents/compare/v1.11.0...v1.11.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent:** imports que faltaram na extração do ClaudeRuntime ([b889df6](https://github.com/deep-ion-ai/ctower-agents/commit/b889df699a94c3520335bc57a897d96dc717a3f7))
+* **hub:** execução de épico ponta a ponta — wip, token de agente, retomada e tela ([#341](https://github.com/deep-ion-ai/ctower-agents/issues/341)) ([c3c978b](https://github.com/deep-ion-ai/ctower-agents/commit/c3c978b26079ab7fea8aac4970003b4ee80d884b))
+* **hub:** execução de épico ponta a ponta — wip, token de agente, retomada e tela ([#341](https://github.com/deep-ion-ai/ctower-agents/issues/341)) ([6451c5f](https://github.com/deep-ion-ai/ctower-agents/commit/6451c5f46d51b3f6b3486087f4ce015e4688c009))
+
 ## [1.11.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.10.0...v1.11.0) (2026-11-27)
 
 
