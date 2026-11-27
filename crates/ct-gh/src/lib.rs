@@ -6,6 +6,7 @@
 //! demanda.
 //! Síncrono; quem chama roda fora do runtime assíncrono.
 
+pub mod deliveries;
 pub mod refs;
 pub mod release;
 pub mod reviews;

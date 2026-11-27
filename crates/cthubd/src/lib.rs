@@ -119,7 +119,9 @@ use tokio::sync::broadcast;
 /// desliga o `/code-review` da integração depois da aprovação), `epic_pr`
 /// no `hub.epic_run.status`, a origem `plano_falhou` dos pedidos e os
 /// eventos `wip_ready`, `revived` e `plan_revived`.
-pub const PROTOCOL_VERSION: &str = "1.27";
+/// 1.28 (#355): `hub.projects.release` (última release publicada e PRs
+/// mesclados na base depois dela, por projeto, lidos do espelho do hub).
+pub const PROTOCOL_VERSION: &str = "1.28";
 
 #[derive(Clone)]
 pub struct HubState {
