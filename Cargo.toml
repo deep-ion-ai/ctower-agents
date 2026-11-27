@@ -21,6 +21,8 @@ ct-jira = { path = "crates/ct-jira" }
 ct-gitlab = { path = "crates/ct-gitlab" }
 ct-proc = { path = "crates/ct-proc" }
 ct-sessions = { path = "crates/ct-sessions" }
+ct-sync = { path = "crates/ct-sync" }
+ct-cleanup = { path = "crates/ct-cleanup" }
 ct-server = { path = "crates/ct-server" }
 ct-client = { path = "crates/ct-client" }
 ct-http = { path = "crates/ct-http" }

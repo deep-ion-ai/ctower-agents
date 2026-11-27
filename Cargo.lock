@@ -524,6 +524,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct-cleanup"
+version = "1.11.1"
+dependencies = [
+ "ct-agent",
+ "ct-core",
+ "ct-gh",
+ "ct-git",
+ "ct-gitlab",
+ "ct-ledger",
+ "ct-sessions",
+ "ct-sync",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "ts-rs",
+]
+
+[[package]]
 name = "ct-client"
 version = "1.11.1"
 dependencies = [
@@ -695,6 +714,7 @@ name = "ct-server"
 version = "1.11.1"
 dependencies = [
  "axum",
+ "ct-cleanup",
  "ct-core",
  "ct-gh",
  "ct-git",
@@ -705,6 +725,7 @@ dependencies = [
  "ct-proc",
  "ct-secrets",
  "ct-sessions",
+ "ct-sync",
  "ct-update",
  "cthubd",
  "futures-util",
@@ -731,8 +752,6 @@ dependencies = [
  "ct-core",
  "ct-gh",
  "ct-git",
- "ct-gitlab",
- "ct-jira",
  "ct-ledger",
  "ct-proc",
  "ct-pty",
@@ -747,6 +766,26 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "ct-sync"
+version = "1.11.1"
+dependencies = [
+ "ct-core",
+ "ct-gh",
+ "ct-gitlab",
+ "ct-jira",
+ "ct-ledger",
+ "ct-proc",
+ "ct-secrets",
+ "ct-sessions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.8.23",
+ "tracing",
+ "ts-rs",
 ]
 
 [[package]]
@@ -814,6 +853,7 @@ version = "1.11.1"
 dependencies = [
  "assert_cmd",
  "clap",
+ "ct-cleanup",
  "ct-core",
  "ct-gh",
  "ct-hub-store",
@@ -837,6 +877,7 @@ dependencies = [
  "axum",
  "clap",
  "ct-agent",
+ "ct-cleanup",
  "ct-core",
  "ct-gh",
  "ct-git",
@@ -845,6 +886,7 @@ dependencies = [
  "ct-ledger",
  "ct-server",
  "ct-sessions",
+ "ct-sync",
  "ct-update",
  "cthubd",
  "futures-util",

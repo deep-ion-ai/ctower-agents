@@ -3,9 +3,7 @@
 //! (`POST /cleanup/plan` e `POST /cleanup/run`). Vale mesmo com o job de
 //! verificação desligado.
 
-use ct_sessions::cleanup::{
-    human_bytes, CleanupItem, CleanupPlan, CleanupRun, StepResult, StepState,
-};
+use ct_cleanup::{human_bytes, CleanupItem, CleanupPlan, CleanupRun, StepResult, StepState};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::time::Duration;

@@ -1,6 +1,7 @@
 //! Limpeza do ambiente depois da conclusão do work item (épico #284, issue
 //! #287): a base comum às etapas de sessões (#285), worktree e `target/`
-//! (#265) e branches (#286).
+//! (#265) e branches (#286). Crate próprio desde a #242, sobre o
+//! `ct-sessions` (ciclo de vida das sessões) e o `ct-sync`.
 //!
 //! - [`completion`]: o sinal único de conclusão. Lê só o ledger e o espelho
 //!   da forja (`issue_cache`/`pr_cache`, mantido pelo sync periódico do
@@ -26,17 +27,25 @@
 //! Além dos concluídos, o plano traz os work items em andamento cujo
 //! worktree está inativo há `cleanup.target_idle_days`, só com a etapa
 //! `target/` e `completion: None`
-//! ([`crate::cleanup_worktree::inactive_targets`]).
+//! ([`crate::worktree::inactive_targets`]).
 
-pub use crate::cleanup_branches::{never_touch, BranchLocalStep, BranchRemoteStep, RemoteBranches};
-pub use crate::cleanup_sessions::{
+pub mod branches;
+pub mod epic;
+mod gitlab;
+pub mod sessions;
+pub mod worktree;
+
+pub use crate::branches::{never_touch, BranchLocalStep, BranchRemoteStep, RemoteBranches};
+pub use crate::sessions::{
     agent_transcript_dirs, remove_agent_transcripts, AgentTranscripts, SessionsStep,
 };
-pub use crate::cleanup_worktree::{worktree_activity, TargetStep, WorktreeStep};
-use crate::config::CleanupConfig;
-use crate::{GithubSync, Result, Sessions, SessionsError, PROJECT_WORK_ITEM};
-use ct_core::{PrState, WorkItemStatus};
-use ct_ledger::{Ledger, Project, WorkItem};
+pub use crate::worktree::{worktree_activity, TargetStep, WorktreeStep};
+use ct_ledger::{Project, WorkItem};
+pub use ct_sessions::completion::{completion, Completion, CompletionSignal};
+use ct_sessions::config::CleanupConfig;
+use ct_sessions::{Result, Sessions, SessionsError, PROJECT_WORK_ITEM};
+use ct_sync::GithubSync;
+pub use epic::{EpicWorktree, WorktreeRemoval};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -206,105 +215,6 @@ impl StepPlan {
         }
         self
     }
-}
-
-/// O que marcou o work item como concluído.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum CompletionSignal {
-    /// Status `concluido` no ledger.
-    WorkItemConcluido,
-    /// PR (MR, no GitLab) da branch mesclado.
-    PrMesclado,
-    /// PR (MR, no GitLab) da branch fechado sem merge.
-    PrFechado,
-    /// Issue fechada no GitHub.
-    IssueFechada,
-}
-
-impl CompletionSignal {
-    pub fn label(self) -> &'static str {
-        match self {
-            CompletionSignal::WorkItemConcluido => "work item concluído",
-            CompletionSignal::PrMesclado => "PR mesclado",
-            CompletionSignal::PrFechado => "PR fechado",
-            CompletionSignal::IssueFechada => "issue fechada",
-        }
-    }
-
-    /// O rótulo com o nome da mudança na forja: `MR mesclado` no GitLab.
-    pub fn label_for(self, forge: ct_core::ForgeKind) -> String {
-        match self {
-            CompletionSignal::PrMesclado | CompletionSignal::PrFechado => {
-                self.label().replacen("PR", ct_core::change_label(forge), 1)
-            }
-            _ => self.label().to_string(),
-        }
-    }
-}
-
-/// Conclusão de um work item ([`completion`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct Completion {
-    pub signal: CompletionSignal,
-    /// Desde quando (ms), se conhecido: base de `min_age_hours`.
-    pub since: Option<i64>,
-    /// PR que deu o sinal (`pr_mesclado`/`pr_fechado`).
-    pub pr: Option<i64>,
-}
-
-/// Sinal único de conclusão do work item (épico #284): status `concluido`
-/// no ledger ou no hub (`GET /sync/done`, #298), PR da branch mesclado ou
-/// fechado, ou issue fechada. Um PR
-/// aberto da branch vence os demais sinais (o trabalho continua). Lê só o
-/// ledger e o espelho do GitHub, sem chamar a API: o sync periódico, com
-/// ETag, é o cache que mantém o espelho em dia. O work item do projeto
-/// (`#0`) nunca conclui.
-pub fn completion(l: &Ledger, project: &Project, wi: &WorkItem) -> Result<Option<Completion>> {
-    if wi.gh_number <= PROJECT_WORK_ITEM {
-        return Ok(None);
-    }
-    let prs = l.prs_for_work_item(wi.id)?;
-    if prs.iter().any(|p| p.state == PrState::Open) {
-        return Ok(None);
-    }
-    if wi.status == WorkItemStatus::Concluido {
-        return Ok(Some(Completion {
-            signal: CompletionSignal::WorkItemConcluido,
-            since: wi.closed_at,
-            pr: None,
-        }));
-    }
-    // Marcado `concluido` no hub (tela Hub), que não chega ao ledger daqui.
-    if let Some(since) = l.hub_done(project.id, wi.gh_number)? {
-        return Ok(Some(Completion {
-            signal: CompletionSignal::WorkItemConcluido,
-            since,
-            pr: None,
-        }));
-    }
-    // Do mais recente para o mais antigo: vale o último PR da branch.
-    if let Some(pr) = prs.first() {
-        let signal = match pr.state {
-            PrState::Merged => CompletionSignal::PrMesclado,
-            PrState::Closed => CompletionSignal::PrFechado,
-            PrState::Open => unreachable!("PR aberto tratado acima"),
-        };
-        return Ok(Some(Completion {
-            signal,
-            since: Some(pr.updated_at),
-            pr: Some(pr.number),
-        }));
-    }
-    Ok(l.get_issue(project.id, wi.gh_number)?
-        .filter(|i| i.state == "closed")
-        .map(|i| Completion {
-            signal: CompletionSignal::IssueFechada,
-            since: Some(i.updated_at),
-            pr: None,
-        }))
 }
 
 /// Work item candidato à limpeza: o que as etapas recebem.
@@ -588,7 +498,7 @@ impl Cleaner {
         self
     }
 
-    /// GitLab dos projetos com forja GitLab ([`crate::gitlab::GitlabRemote`]).
+    /// GitLab dos projetos com forja GitLab ([`ct_sync::gitlab::GitlabRemote`]).
     pub fn with_gitlab(mut self, gitlab: Option<Arc<dyn RemoteBranches>>) -> Self {
         self.gitlab = gitlab;
         self
@@ -608,7 +518,7 @@ impl Cleaner {
     /// `target/` de um worktree inativo (só a etapa `target/`).
     pub fn all_targets(&self, sessions: &Sessions, now: i64) -> Result<Vec<CleanupTarget>> {
         let (mut done, open) = self.collect(sessions)?;
-        done.extend(crate::cleanup_worktree::inactive_targets(
+        done.extend(crate::worktree::inactive_targets(
             sessions,
             open,
             self.config.target_idle_days,
@@ -921,9 +831,10 @@ fn independent(kind: StepKind, held: StepKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{FakeClaude, TestEnv};
     use ct_core::WorkItemKind;
+    use ct_core::{PrState, WorkItemStatus};
     use ct_ledger::{GithubSnapshot, IssueRow, PrRow};
+    use ct_sessions::test_support::{FakeClaude, TestEnv};
     use std::sync::Mutex;
 
     const H: i64 = 3_600_000;

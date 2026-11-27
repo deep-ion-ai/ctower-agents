@@ -11,6 +11,7 @@ ct-hub-store.workspace = true
 ct-ledger.workspace = true
 ct-secrets.workspace = true
 ct-sessions.workspace = true
+ct-cleanup.workspace = true
 ct-update.workspace = true
 clap.workspace = true
 serde.workspace = true

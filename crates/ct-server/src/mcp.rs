@@ -12,7 +12,8 @@ use axum::Json;
 use ct_core::{DecisionOrigin, ProjectKind, WorkItemKind, WorkItemStatus};
 use ct_ledger::DecisionScope;
 use ct_ledger::{Ledger, NewDecision, Session, WorkItem};
-use ct_sessions::{GithubSync, Sessions};
+use ct_sessions::Sessions;
+use ct_sync::GithubSync;
 use serde_json::{json, Value};
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";

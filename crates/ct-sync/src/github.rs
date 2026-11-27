@@ -2,18 +2,20 @@
 //! aplica numa transação e avisa a UI das mudanças.
 //!
 //! O token de cada projeto vem do resolvedor de credencial do ambiente, com
-//! a fonte da conexão `github` do projeto (#275, [`Sessions::github_source`]):
-//! o mesmo cache, o mesmo descarte no `401` e o mesmo mascaramento das
-//! sessões que o Jira e o GitLab.
+//! a fonte da conexão `github` do projeto (#275,
+//! [`ct_sessions::Connections::github_source`]): o mesmo cache, o mesmo
+//! descarte no `401` e o mesmo mascaramento das sessões que o Jira e o
+//! GitLab.
 
-use crate::resolver::{github_key, Ask};
-use crate::{Result, Sessions, SessionsError};
 use ct_core::now_ms;
 use ct_core::provider::CredentialSource;
 use ct_gh::sync::{fetch, SyncInput};
 use ct_gh::{GhClient, GhError, TokenProvider};
 use ct_ledger::{PrRow, Project};
 use ct_proc::CREDENTIAL_DEADLINE;
+use ct_sessions::autonomy::{DraftPr, PrOpener};
+use ct_sessions::resolver::{github_key, Ask};
+use ct_sessions::{Result, SessionsError, SyncHandle};
 use serde::Serialize;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -38,16 +40,16 @@ pub struct ProjectSync {
 }
 
 pub struct GithubSync {
-    sessions: Sessions,
+    handle: SyncHandle,
     client: GhClient,
     /// Uma sincronização por vez (laço periódico × `sync.now`).
     running: Mutex<()>,
 }
 
 impl GithubSync {
-    pub fn new(sessions: Sessions, client: GhClient) -> Self {
+    pub fn new(handle: SyncHandle, client: GhClient) -> Self {
         GithubSync {
-            sessions,
+            handle,
             client,
             running: Mutex::new(()),
         }
@@ -63,7 +65,7 @@ impl GithubSync {
     /// fonte da conexão `github` dele.
     pub fn client_for(&self, project: &Project) -> GhClient {
         self.client.with_provider(Arc::new(EnvToken {
-            sessions: self.sessions.clone(),
+            handle: self.handle.clone(),
             project: project.clone(),
             cli: self.client.config().cli_cmd(),
             deadline: self.deadline(),
@@ -92,7 +94,7 @@ impl GithubSync {
         )
         .map_err(gh_error)?;
         if let Some(s) = &sha {
-            self.sessions
+            self.handle
                 .ledger()
                 .set_pr_head_sha(project.id, pr.number, s)?;
         }
@@ -126,7 +128,7 @@ impl GithubSync {
     pub fn sync_all(&self) -> Result<Vec<ProjectSync>> {
         let _one = self.running.lock().unwrap_or_else(|e| e.into_inner());
         let ids: Vec<i64> = self
-            .sessions
+            .handle
             .ledger()
             .list_projects()?
             .iter()
@@ -145,7 +147,7 @@ impl GithubSync {
     fn sync_one(&self, project_id: i64) -> Result<ProjectSync> {
         // O espelho do GitHub do ambiente é só dos projetos atribuídos (spec
         // do hub como plano de controle §4.2).
-        if !self.sessions.ledger().project_active(project_id)? {
+        if !self.handle.ledger().project_active(project_id)? {
             return Ok(ProjectSync {
                 project_id,
                 ok: false,
@@ -155,12 +157,7 @@ impl GithubSync {
                 status_changes: 0,
             });
         }
-        if self
-            .sessions
-            .ledger()
-            .get_project(project_id)?
-            .tracker
-            .kind()
+        if self.handle.ledger().get_project(project_id)?.tracker.kind()
             != ct_core::TrackerKind::Github
         {
             return Ok(ProjectSync {
@@ -173,19 +170,19 @@ impl GithubSync {
             });
         }
         // Lock curto para ler; a rede roda sem ele.
-        let input = SyncInput::load(&self.sessions.ledger(), project_id, now_ms())?;
+        let input = SyncInput::load(&self.handle.ledger(), project_id, now_ms())?;
         let client = self.client_for(&input.project);
         let result = match fetch(&client, &input) {
             Ok(mut snap) => {
                 // O login do token é o "eu" do projeto (#149); sem ele, fica
                 // o último conhecido.
                 snap.me = client.login().ok();
-                let applied = self.sessions.ledger().apply_github(&snap)?;
+                let applied = self.handle.ledger().apply_github(&snap)?;
                 for g in &applied.removed {
                     tracing::warn!("github: projeto {project_id}: {g}, removida do espelho");
                 }
                 for (wi, status) in &applied.status_changes {
-                    self.sessions.notify(
+                    self.handle.notify(
                         "work_item_status",
                         json!({ "work_item_id": wi, "status": status }),
                     );
@@ -202,7 +199,7 @@ impl GithubSync {
             }
             Err(e) => {
                 let msg = e.to_string();
-                self.sessions.ledger().record_sync_error(project_id, &msg)?;
+                self.handle.ledger().record_sync_error(project_id, &msg)?;
                 ProjectSync {
                     project_id,
                     ok: false,
@@ -214,11 +211,11 @@ impl GithubSync {
             }
         };
         let last_ok_at = self
-            .sessions
+            .handle
             .ledger()
             .sync_state(project_id)?
             .and_then(|s| s.last_ok_at);
-        self.sessions.notify(
+        self.handle.notify(
             "sync_status",
             json!({ "project_id": project_id, "ok": result.ok,
                     "last_ok_at": last_ok_at, "error": result.error }),
@@ -233,13 +230,13 @@ impl GithubSync {
     /// durante a rede. A falha no GitHub não derruba o sync: fica no log, e
     /// o que faltou é lido no próximo ciclo.
     fn sync_reviews(&self, client: &GhClient, project: &Project) -> Result<()> {
-        let targets = self.sessions.ledger().pr_review_targets(project.id)?;
+        let targets = self.handle.ledger().pr_review_targets(project.id)?;
         if targets.is_empty() {
             return Ok(());
         }
         let (got, err) =
             ct_gh::reviews::fetch_reviews(client, &project.gh_owner, &project.gh_repo, &targets);
-        self.sessions.ledger().apply_pr_reviews(project.id, &got)?;
+        self.handle.ledger().apply_pr_reviews(project.id, &got)?;
         if let Some(e) = err {
             tracing::warn!(
                 "github: projeto {}: reviews dos PRs não lidas: {e}",
@@ -271,11 +268,11 @@ pub fn missing_file_message(connection: &str, path: &str) -> String {
 }
 
 /// Token do GitHub de um projeto pelo resolvedor do ambiente (#275): a
-/// chave `github:<projeto>`, a fonte de [`Sessions::github_source`] e os
+/// chave `github:<projeto>`, a fonte de [`ct_sessions::Connections::github_source`] e os
 /// secrets do projeto no cache do ambiente. Cada token novo atualiza o
 /// mascaramento das sessões vivas.
 struct EnvToken {
-    sessions: Sessions,
+    handle: SyncHandle,
     project: Project,
     cli: String,
     deadline: Duration,
@@ -284,7 +281,8 @@ struct EnvToken {
 impl TokenProvider for EnvToken {
     fn token(&self) -> std::result::Result<String, GhError> {
         let source = self
-            .sessions
+            .handle
+            .connections
             .github_source(&self.project)
             .map_or(CredentialSource::None, |s| s.source);
         // A conexão do hub com `file` aponta para um caminho da máquina do
@@ -294,9 +292,9 @@ impl TokenProvider for EnvToken {
         if let CredentialSource::File { path } = &source {
             if !ct_core::provider::local_file(path).exists() {
                 let name = self
-                    .sessions
-                    .config()
-                    .credentials
+                    .handle
+                    .connections
+                    .shared()
                     .github_connection_name(ct_core::github_connection(
                         &self.project.tracker,
                         &self.project.forge,
@@ -305,9 +303,10 @@ impl TokenProvider for EnvToken {
                 return Err(GhError::Token(missing_file_message(&name, path)));
             }
         }
-        let lookup = self.sessions.secret_lookup(&self.project);
-        self.sessions
-            .credentials()
+        let lookup = self.handle.connections.secret_lookup(&self.project);
+        self.handle
+            .connections
+            .resolver()
             .token(Ask {
                 key: &github_key(self.project.id),
                 what: "GitHub",
@@ -321,21 +320,36 @@ impl TokenProvider for EnvToken {
     }
 
     fn invalidate(&self) {
-        self.sessions
-            .credentials()
+        self.handle
+            .connections
+            .resolver()
             .invalidate(&github_key(self.project.id));
+    }
+}
+
+/// Rascunho do PR da integração do modo autônomo (#181) pelo cliente com o
+/// token do projeto.
+impl PrOpener for GithubSync {
+    fn ensure_draft_pr(
+        &self,
+        project: &Project,
+        head: &str,
+        base: &str,
+    ) -> std::result::Result<Option<DraftPr>, String> {
+        self.client_for(project)
+            .ensure_draft_pr(project, head, base)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{FakeClaude, TestEnv};
     use ct_core::{WorkItemKind, WorkItemStatus};
     use ct_gh::fake::{fake_gh, FakeGitHub};
     use ct_gh::sync::{closed_since, issues_path, pulls_path};
     use ct_gh::GhConfig;
     use ct_ledger::NewProject;
+    use ct_sessions::test_support::{FakeClaude, TestEnv};
     use serde_json::Value;
     use std::sync::Arc;
     use std::time::Instant;
@@ -354,7 +368,7 @@ mod tests {
             &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
             json!([]),
         );
-        let sync = Arc::new(GithubSync::new(env.sessions.clone(), client));
+        let sync = Arc::new(GithubSync::new(env.sessions.sync_handle(), client));
         (env, gh, sync)
     }
 
@@ -424,7 +438,7 @@ mod tests {
             vec![conexao("ghp_ficticio_velho_123456")],
             Default::default(),
         );
-        let sync = GithubSync::new(env.sessions.clone(), client);
+        let sync = GithubSync::new(env.sessions.sync_handle(), client);
         let r1 = sync.sync_project(p.id).unwrap();
         assert!(!r1.ok, "{r1:?}");
         assert!(r1.error.as_deref().unwrap().contains("401"), "{r1:?}");
@@ -509,7 +523,7 @@ mod tests {
             }],
             Default::default(),
         );
-        let sync = GithubSync::new(env.sessions.clone(), client);
+        let sync = GithubSync::new(env.sessions.sync_handle(), client);
         let r1 = sync.sync_project(env.project_id).unwrap();
         let err = r1.error.unwrap_or_default();
         assert!(!r1.ok);

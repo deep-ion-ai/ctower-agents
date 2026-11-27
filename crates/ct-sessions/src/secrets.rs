@@ -117,7 +117,7 @@ pub enum SecretGetError {
 /// Valores mascarados de uma sessão: na saída do PTY e no backup do
 /// transcript (que também cobre a forma escapada em JSON).
 #[derive(Clone, Default)]
-pub(crate) struct SessionMask {
+pub struct SessionMask {
     pub pty: MaskSet,
     pub transcript: MaskSet,
 }
@@ -201,8 +201,7 @@ pub(crate) fn new_session_token() -> std::io::Result<String> {
 impl Sessions {
     /// Chave e cache de secrets deste ambiente.
     pub fn env_cache(&self) -> EnvCache {
-        let dirs = &self.config().dirs;
-        EnvCache::new(dirs.env_key_file(), dirs.secrets_cache_file())
+        self.connections().env_cache()
     }
 
     /// Idade (ms) da configuração do hub no ambiente: desde a última
@@ -274,7 +273,7 @@ impl Sessions {
     /// Vale para qualquer fonte (comando, secret ou arquivo, #274): o cache
     /// guarda o token com a fonte que o resolveu, a mesma que o sync usa
     /// ([`Sessions::sources`]), de todos os tipos que o projeto usa.
-    pub(crate) fn connection_mask(&self, project: &Project) -> SessionMask {
+    pub fn connection_mask(&self, project: &Project) -> SessionMask {
         let resolver = self.credentials();
         let mut found: Vec<std::sync::Arc<Secret>> = Vec::new();
         for (kind, s) in self.sources(project) {
@@ -285,16 +284,6 @@ impl Sessions {
             .map(|t| ("CONEXAO_TOKEN", t.expose()))
             .collect();
         SessionMask::new(&pairs)
-    }
-
-    /// Busca de secret do resolvedor para as conexões do projeto (fonte
-    /// `Secret`, #274): o valor atual no cache de secrets do ambiente, pelas
-    /// regras do spawn e do `ctower secret get` ([`cached_secret`]).
-    pub(crate) fn secret_lookup<'a>(
-        &'a self,
-        project: &'a Project,
-    ) -> impl Fn(&str) -> Option<String> + 'a {
-        move |name| cached_secret(&self.env_cache(), project, name)
     }
 
     /// Guarda (só em memória) o mascaramento de uma sessão.
@@ -615,7 +604,7 @@ pub(crate) fn scope_of(project: &Project) -> Option<String> {
 /// globais), como no spawn e no `ctower secret get`. Nome reservado, cache
 /// ausente ou ilegível: `None` (o resolvedor diz que o secret não existe no
 /// ambiente; o cache ilegível já avisa no log).
-pub(crate) fn cached_secret(cache: &EnvCache, project: &Project, name: &str) -> Option<String> {
+pub fn cached_secret(cache: &EnvCache, project: &Project, name: &str) -> Option<String> {
     if is_reserved_name(name) {
         return None;
     }
@@ -1155,7 +1144,7 @@ mod tests {
 
         // O que o sync faz: a fonte efetiva e a busca no cache de secrets.
         let p = env.sessions.ledger().get_project(env.project_id).unwrap();
-        let lookup = env.sessions.secret_lookup(&p);
+        let lookup = env.sessions.connections().secret_lookup(&p);
         for (key, what, source) in [
             (
                 crate::resolver::jira_key(p.id),

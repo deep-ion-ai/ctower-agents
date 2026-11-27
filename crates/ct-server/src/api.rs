@@ -142,8 +142,8 @@ mod export {
         crate::permissions::PermissionRequest::export_all_to(&dir).unwrap();
         crate::hub_sync::HubSyncResult::export_all_to(&dir).unwrap();
         crate::cleanup::CleanupStatus::export_all_to(&dir).unwrap();
-        ct_sessions::cleanup::CleanupRun::export_all_to(&dir).unwrap();
-        ct_sessions::epic_run::WorktreeRemoval::export_all_to(&dir).unwrap();
+        ct_cleanup::CleanupRun::export_all_to(&dir).unwrap();
+        ct_cleanup::WorktreeRemoval::export_all_to(&dir).unwrap();
         ct_sessions::epic_run::EpicBranch::export_all_to(&dir).unwrap();
         // Os tipos do /ws do hub ficam em ui/src/protocol/hub-gen (cthubd).
         Dashboard::export_all_to(&dir).unwrap();
@@ -167,7 +167,7 @@ mod export {
         // Os dados dos descritores (#278), para o registro da UI.
         ct_core::provider::ProviderInfo::export_all_to(&dir).unwrap();
         crate::plan::EnvAccount::export_all_to(&dir).unwrap();
-        ct_sessions::ProjectSync::export_all_to(&dir).unwrap();
+        ct_sync::ProjectSync::export_all_to(&dir).unwrap();
         ct_sessions::GestorScope::export_all_to(&dir).unwrap();
         ct_sessions::RemoteControlEnable::export_all_to(&dir).unwrap();
         ct_sessions::Shell::export_all_to(&dir).unwrap();
