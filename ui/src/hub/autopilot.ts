@@ -192,6 +192,7 @@ export function nextBandText(d: BudgetDecision, offsetMin = -new Date(d.now).get
 /** Motivo de o item ter ficado de fora da fila (`QueueItem.skip`). */
 export const SKIP_TEXT: Record<string, string> = {
   epic: "épico",
+  epic_run: "em execução de épico",
   status: "fora do backlog",
   not_in_mirror: "fora do espelho",
   not_approved: "sem rótulo de aprovação",

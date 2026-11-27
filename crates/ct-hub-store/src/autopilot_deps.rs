@@ -52,7 +52,8 @@ pub struct DependencyEdge {
 }
 
 /// Um bloqueante informado pela sessão de análise.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct BlockerInput {
     pub number: i64,
     #[serde(default)]
@@ -274,25 +275,10 @@ impl Hub {
                  WHERE project_id = ?1 AND number = ?2 AND source = 'analysis'",
                 params![project_id, i.number],
             )?;
-            let mut blockers = BTreeSet::new();
-            for b in &i.blocked_by {
-                // Uma issue não bloqueia a si mesma; repetida vale uma vez.
-                if b.number == i.number || !blockers.insert(b.number) {
-                    continue;
-                }
-                let n = self.conn.execute(
-                    "INSERT INTO autopilot_dependency
-                       (project_id, number, blocker, reason, source, removed, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, 'analysis', 0, ?5)
-                     ON CONFLICT (project_id, number, blocker) DO NOTHING",
-                    params![project_id, i.number, b.number, clip(&b.reason), now],
-                )?;
-                if n > 0 {
-                    out.edges += 1;
-                } else {
-                    out.kept_manual += 1;
-                }
-            }
+            let (edges, kept) =
+                self.insert_analysis_edges(project_id, i.number, &i.blocked_by, now)?;
+            out.edges += edges;
+            out.kept_manual += kept;
             out.items += 1;
         }
         if !set.order.is_empty() {
@@ -329,6 +315,39 @@ impl Hub {
         self.save_autopilot_analysis(&round)?;
         tx.commit()?;
         Ok(out)
+    }
+
+    /// Grava as arestas de análise de `number` (sem apagar as anteriores:
+    /// quem chama apaga). Uma issue não bloqueia a si mesma; repetida vale
+    /// uma vez; a aresta corrigida à mão (ativa ou lápide) fica. Devolve as
+    /// gravadas e as que ficaram por causa da manual.
+    pub(crate) fn insert_analysis_edges(
+        &self,
+        project_id: i64,
+        number: i64,
+        blocked_by: &[BlockerInput],
+        now: i64,
+    ) -> Result<(usize, usize)> {
+        let (mut edges, mut kept) = (0, 0);
+        let mut blockers = BTreeSet::new();
+        for b in blocked_by {
+            if b.number == number || !blockers.insert(b.number) {
+                continue;
+            }
+            let n = self.conn.execute(
+                "INSERT INTO autopilot_dependency
+                   (project_id, number, blocker, reason, source, removed, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 'analysis', 0, ?5)
+                 ON CONFLICT (project_id, number, blocker) DO NOTHING",
+                params![project_id, number, b.number, clip(&b.reason), now],
+            )?;
+            if n > 0 {
+                edges += 1;
+            } else {
+                kept += 1;
+            }
+        }
+        Ok((edges, kept))
     }
 
     /// Correção manual de uma aresta (veja [`ManualEdit`]).

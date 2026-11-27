@@ -33,6 +33,18 @@ pub struct StartRequest {
     pub override_approval: bool,
 }
 
+/// De onde sai a worktree de uma sessão de issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartBase<'a> {
+    /// A base do projeto.
+    Project,
+    /// Sessão autônoma (#181): sai da branch de integração (já alinhada com
+    /// a base) e grava [`crate::autonomy::AUTONOMY_SESSION`].
+    Autonomy(&'a str, &'a str),
+    /// Sub-issue da execução de épico (#298): sai da `wip` do épico.
+    EpicRun(&'a str),
+}
+
 /// Modelo e modo de execução do agente, escolhidos ao iniciar a sessão.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentOptions {
@@ -345,18 +357,29 @@ impl Sessions {
 
     /// Inicia uma sessão nova para o work item, criando worktree e branch se preciso.
     pub fn start(&self, req: StartRequest) -> Result<Session> {
-        self.start_with_base(req, None)
+        self.start_with_base(req, StartBase::Project)
     }
 
-    /// [`Sessions::start`] com outra base para a worktree: `Some((branch,
-    /// base))` = sessão autônoma (#181), que sai da branch de integração
-    /// `branch` (já alinhada com `base`) e grava o evento
-    /// [`crate::autonomy::AUTONOMY_SESSION`] no work item.
-    pub(crate) fn start_with_base(
-        &self,
-        req: StartRequest,
-        autonomy: Option<(&str, &str)>,
-    ) -> Result<Session> {
+    /// Sessão de sub-issue da execução de épico (#298): sai da branch
+    /// `base` (a `wip` do épico) e grava o evento
+    /// [`crate::epic_run::EPIC_RUN_SESSION`] no work item (a sessão aceita
+    /// texto no `session.continue`).
+    pub fn start_epic_run(&self, req: StartRequest, base: &str) -> Result<Session> {
+        if base.trim().is_empty() {
+            return Err(SessionsError::Invalid(
+                "epic_run.base: a branch do épico".into(),
+            ));
+        }
+        self.start_with_base(req, StartBase::EpicRun(base.trim()))
+    }
+
+    /// [`Sessions::start`] com outra base para a worktree (veja
+    /// [`StartBase`]).
+    pub(crate) fn start_with_base(&self, req: StartRequest, how: StartBase<'_>) -> Result<Session> {
+        let autonomy = match how {
+            StartBase::Autonomy(b, base) => Some((b, base)),
+            _ => None,
+        };
         if req.gh_number <= PROJECT_WORK_ITEM {
             return Err(SessionsError::Invalid(format!(
                 "número de issue inválido: {} (sessão sem issue: start_project)",
@@ -412,9 +435,21 @@ impl Sessions {
         ensure_worktree(&WorktreeSpec {
             repo_path: Path::new(&project.repo_path),
             branch: &branch,
-            base: autonomy.map_or(project.base_branch.as_str(), |(b, _)| b),
+            base: match how {
+                StartBase::Project => project.base_branch.as_str(),
+                StartBase::Autonomy(b, _) | StartBase::EpicRun(b) => b,
+            },
             worktree_path: &worktree,
         })?;
+        if let StartBase::EpicRun(base) = how {
+            self.ledger().append_event(NewEvent {
+                project_id: project.id,
+                work_item_id: Some(wi.id),
+                session_id: None,
+                kind: crate::epic_run::EPIC_RUN_SESSION,
+                payload: json!({ "base": base }),
+            })?;
+        }
         if let Some((integration, base)) = autonomy {
             self.ledger().append_event(NewEvent {
                 project_id: project.id,

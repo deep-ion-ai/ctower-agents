@@ -34,6 +34,10 @@ import { ago, duration } from "../util/time";
 import { versionNewer } from "../util/version";
 import { AgentRules } from "../hub/AgentRules";
 import { IssueBodyModal } from "./IssueBodyModal";
+import { RunEpicDialog } from "./RunEpicDialog";
+import { hubTab } from "../hub/sections";
+import { EPIC_RUN_PROTOCOL, isActive as epicRunActive } from "../hub/epicRun";
+import type { EpicRun } from "../protocol/hub-gen";
 import { STATUS } from "./status";
 import { StatusMenu } from "./StatusMenu";
 import { mergedOpen, mergedOpenText } from "./TreeRow";
@@ -269,6 +273,22 @@ export function WorkItemPanel({
   }, [api, hubUp, hasWi, owner, repo, n, signature, tick]);
 
   const open = (url: string) => api.openUrl(url).catch((e) => setActionError(String(e)));
+
+  // Execução de épico (#304): a ativa deste épico, se houver.
+  const [epicRun, setEpicRun] = useState<EpicRun | null>(null);
+  const [runDialog, setRunDialog] = useState(false);
+  const epicRunsOk = !!hub.info?.protocol && !versionNewer(EPIC_RUN_PROTOCOL, hub.info.protocol);
+  useEffect(() => {
+    if (!isEpic || !hubUp || !epicRunsOk) return;
+    let live = true;
+    api.hubCall<EpicRun[]>("hub.epic_run.list", { owner, repo, epic: n }).then(
+      (l) => live && setEpicRun(l.find((r) => epicRunActive(r.status)) ?? null),
+      () => live && setEpicRun(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, isEpic, hubUp, epicRunsOk, owner, repo, n]);
 
   // "Ver issue" (#434) lê pelo hub: fora do ar ou anterior ao método, desabilitado.
   const hubProtocol = hub.info?.protocol;
@@ -614,6 +634,22 @@ export function WorkItemPanel({
               {diffEnvs.length > 1 ? `Ver diff · ${x.name}` : "Ver diff"}
             </button>
           ))}
+          {isEpic && hubUp && epicRunsOk && (
+            <button
+              type="button"
+              className="btn"
+              title={
+                epicRun
+                  ? "Abre a execução deste épico em Hub › Execução de épicos"
+                  : "Plano por agente e motor no hub: uma sessão por sub-issue, com o modelo de cada uma"
+              }
+              onClick={() =>
+                epicRun ? nav.openTab(hubTab("epic-runs", { run: epicRun.id })) : setRunDialog(true)
+              }
+            >
+              {epicRun ? "Ver execução do épico" : "Executar épico"}
+            </button>
+          )}
           <button type="button" className="btn" onClick={() => void open(node.issue.url)}>
             {warn ? `Fechar a issue no ${tracker} ↗` : `Abrir issue no ${tracker} ↗`}
           </button>
@@ -910,6 +946,19 @@ export function WorkItemPanel({
 
       {isEpic && hub.expected && (
         <AgentRules owner={owner} repo={repo} epic={n} label={itemFullRef(project, n)} now={now} className="sec iv-card iv-rules" />
+      )}
+      {runDialog && (
+        <RunEpicDialog
+          owner={owner}
+          repo={repo}
+          epic={n}
+          onClose={() => setRunDialog(false)}
+          onStarted={(r) => {
+            setRunDialog(false);
+            setEpicRun(r);
+            nav.openTab(hubTab("epic-runs", { run: r.id }));
+          }}
+        />
       )}
       {viewing && (
         <IssueBodyModal

@@ -52,15 +52,19 @@ pub enum PushEvent {
     /// Resumo da manhã do piloto automático (#185): só o projeto, as
     /// contagens e o link.
     MorningDigest,
+    /// Pedido de decisão novo numa execução de épico (#298): o épico, a
+    /// sub-issue e a origem, nunca o texto do pedido.
+    EpicDecision,
 }
 
 impl PushEvent {
-    pub const ALL: [PushEvent; 5] = [
+    pub const ALL: [PushEvent; 6] = [
         PushEvent::SessionError,
         PushEvent::EnvStale,
         PushEvent::ProposalNew,
         PushEvent::NeedsHuman,
         PushEvent::MorningDigest,
+        PushEvent::EpicDecision,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -70,6 +74,7 @@ impl PushEvent {
             PushEvent::ProposalNew => "proposal_new",
             PushEvent::NeedsHuman => "needs_human",
             PushEvent::MorningDigest => "morning_digest",
+            PushEvent::EpicDecision => "epic_decision",
         }
     }
 
@@ -663,6 +668,48 @@ impl Hub {
             });
         }
 
+        // Pedidos de decisão das execuções de épico (#298), ainda sem
+        // resposta: o épico, a sub-issue e a origem.
+        let mut stmt = self.conn.prepare(
+            "SELECT d.id, p.gh_owner, p.gh_repo, r.epic, d.number, d.origin
+             FROM epic_decision d JOIN epic_run r ON r.id = d.run_id
+             JOIN project p ON p.id = r.project_id
+             WHERE d.created_at >= ?1 AND d.answer IS NULL AND p.deleted_at IS NULL
+             ORDER BY d.id",
+        )?;
+        let rows = stmt
+            .query_map([since], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        for (id, owner, repo, epic, number, origin) in rows {
+            let what = match origin.as_str() {
+                "plano_errado" => "plano errado",
+                "ci_esgotado" => "CI sem correção",
+                "sem_progresso" => "sem progresso",
+                "conflito_rebase" => "conflito de rebase",
+                "issue_alterada" => "sub-issue alterada",
+                o => o,
+            };
+            let item = number.map(|n| format!(" (#{n})")).unwrap_or_default();
+            all.push(PushNotice {
+                key: format!("epic_decision:{id}"),
+                event: PushEvent::EpicDecision,
+                title: "Execução de épico: decisão pendente".into(),
+                body: format!("{owner}/{repo}#{epic}: {what}{item}"),
+                url: item_url(&owner, &repo, epic),
+                tag: format!("epic_decision:{owner}/{repo}#{epic}"),
+            });
+        }
+
         let mut out = Vec::new();
         for n in all {
             if self.push_mark(&n.key, now)? && !baseline {
@@ -1081,6 +1128,54 @@ mod tests {
             service_of("https://web.push.apple.com/abc?x"),
             "web.push.apple.com"
         );
+    }
+
+    #[test]
+    fn pedido_de_decisao_do_epico_vira_push_sem_o_texto() {
+        let hub = Hub::open_in_memory().unwrap();
+        let pid = hub
+            .add_project(&crate::NewHubProject {
+                owner: "acme".into(),
+                repo: "acme-web".into(),
+                name: "acme-web".into(),
+                base_branch: "develop".into(),
+                protected_branches: vec![],
+            })
+            .unwrap()
+            .project
+            .id;
+        let now = now_ms();
+        assert!(hub.push_collect_at(now, WINDOW, 0).unwrap().is_empty());
+        let run = hub
+            .create_epic_run(
+                &crate::NewEpicRun {
+                    project_id: pid,
+                    epic: 10,
+                    env_id: "env-a".into(),
+                    started_by: "fulano".into(),
+                    max_parallel: None,
+                    plan_model: None,
+                    plan_effort: None,
+                },
+                now,
+            )
+            .unwrap();
+        hub.add_epic_decision(
+            run.id,
+            Some(11),
+            ct_core::EpicDecisionOrigin::CiEsgotado,
+            "texto que o agente escreveu",
+            now + 1,
+        )
+        .unwrap();
+        let n = hub.push_collect_at(now + 2, WINDOW, 0).unwrap();
+        assert_eq!(n.len(), 1, "{n:?}");
+        assert_eq!(n[0].event, PushEvent::EpicDecision);
+        assert_eq!(n[0].body, "acme/acme-web#10: CI sem correção (#11)");
+        assert!(!n[0].body.contains("agente"));
+        assert_eq!(n[0].url, "/?go=item&project=acme/acme-web&n=10");
+        // Uma vez só.
+        assert!(hub.push_collect_at(now + 3, WINDOW, 0).unwrap().is_empty());
     }
 
     #[test]

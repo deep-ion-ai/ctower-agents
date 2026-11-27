@@ -133,3 +133,4 @@ export type { WorkItem } from "./WorkItem";
 export type { WorkItemKind } from "./WorkItemKind";
 export type { WorkItemStatus } from "./WorkItemStatus";
 export type { WorkItemSummary } from "./WorkItemSummary";
+export type { WorktreeRemoval } from "./WorktreeRemoval";

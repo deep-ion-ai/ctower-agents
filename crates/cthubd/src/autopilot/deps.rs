@@ -216,6 +216,7 @@ mod tests {
             priority: Some(Priority::P1),
             model: Some("opus".into()),
             approved: true,
+            epic_run: false,
             fingerprint: String::new(),
         };
         let t = reanalysis_text(&[&i]);

@@ -291,6 +291,46 @@ pub const METHODS: &[MethodSpec] = &[
         scopes: UI_WEB,
     },
     MethodSpec { name: "hub.autopilot.set", params: "{ [key: string]: unknown }", result: "unknown", scopes: UI },
+    // Execução de épico (#298): disparo, plano, controle e decisões.
+    MethodSpec {
+        name: "hub.epic_run.list",
+        params: "{ owner?: string | null; repo?: string | null; epic?: number | null } | null",
+        result: "EpicRun[]",
+        scopes: UI_WEB,
+    },
+    MethodSpec { name: "hub.epic_run.status", params: "{ run_id: number }", result: "EpicRunView", scopes: UI_WEB },
+    MethodSpec {
+        name: "hub.epic_run.events",
+        params: "{ run_id: number; after?: number | null; limit?: number | null }",
+        result: "EpicRunEvent[]",
+        scopes: UI_WEB,
+    },
+    MethodSpec {
+        name: "hub.epic_run.start",
+        params: "{ owner: string; repo: string; epic: number; env_id: string; max_parallel?: number | null; plan_model?: string | null; plan_effort?: string | null }",
+        result: "EpicRun",
+        scopes: UI_WEB,
+    },
+    MethodSpec {
+        name: "hub.epic_run.approve",
+        params: "{ run_id: number; version: number; max_parallel?: number | null; code_review?: boolean | null }",
+        result: "EpicRun",
+        scopes: UI_WEB,
+    },
+    MethodSpec { name: "hub.epic_run.replan", params: "{ run_id: number; reason?: string | null }", result: "EpicRun", scopes: UI_WEB },
+    MethodSpec { name: "hub.epic_run.pause", params: "{ run_id: number; reason?: string | null }", result: "EpicRun", scopes: UI_WEB },
+    MethodSpec { name: "hub.epic_run.interrupt", params: "{ run_id: number }", result: "EpicRun", scopes: UI_WEB },
+    MethodSpec { name: "hub.epic_run.resume", params: "{ run_id: number }", result: "EpicRun", scopes: UI_WEB },
+    MethodSpec { name: "hub.epic_run.cancel", params: "{ run_id: number }", result: "EpicRun", scopes: UI_WEB },
+    MethodSpec { name: "hub.epic_run.set_parallel", params: "{ run_id: number; max_parallel: number }", result: "EpicRun", scopes: UI_WEB },
+    MethodSpec { name: "hub.epic_run.decide", params: "{ decision_id: number; answer: string; blocker?: number | null }", result: "EpicDecision", scopes: UI_WEB },
+    MethodSpec {
+        name: "hub.epic_run.set_node",
+        params: "{ run_id: number; number: number; model?: string | null; effort?: string | null }",
+        result: "EpicPlan",
+        scopes: UI_WEB,
+    },
+    MethodSpec { name: "hub.epic_run.handback", params: "{ run_id: number; number: number }", result: "EpicNode", scopes: UI_WEB },
     MethodSpec { name: "hub.autopilot.policy.get", params: "{ account: string }", result: "AutopilotPolicyView", scopes: UI },
     MethodSpec {
         name: "hub.autopilot.policy.set",
@@ -372,12 +412,14 @@ mod tests {
     }
 
     /// Os literais de método nos braços de despacho (`"hub.x" =>` ou `"hub.x" |`)
-    /// de `ws.rs` e do piloto automático, antes dos testes de cada arquivo.
+    /// de `ws.rs`, do piloto automático e da execução de épico, antes dos testes
+    /// de cada arquivo.
     fn despachados() -> BTreeSet<String> {
         let fontes = [
             include_str!("ws.rs"),
             include_str!("autopilot/mod.rs"),
             include_str!("autopilot/runner.rs"),
+            include_str!("epic_run/rpc.rs"),
         ];
         let mut found = BTreeSet::new();
         for src in fontes {

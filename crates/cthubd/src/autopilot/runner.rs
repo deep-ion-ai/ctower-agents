@@ -100,7 +100,7 @@ pub trait EnvPort: Send + Sync {
 
 /// O canal de verdade, pelo `call_env` do `/ws` (limite de trabalho em
 /// andamento e modelo da issue aplicados lá).
-struct HubPort(HubState);
+pub(crate) struct HubPort(pub(crate) HubState);
 
 impl EnvPort for HubPort {
     fn online(&self, env_id: &str) -> bool {
@@ -309,6 +309,8 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
             priority: None,
         };
         let meta = hub.autopilot_issue_meta(p.id)?;
+        // Sub-issues de épico em execução (#303): o motor do épico as dirige.
+        let epic_run = hub.epic_run_numbers(p.id)?;
         let mut items = Vec::new();
         for r in hub.ranking(&filter, RANKING_MAX)?.items {
             let model = hub
@@ -330,6 +332,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
                 model,
                 approved: hub.is_approved(&p.gh_owner, &p.gh_repo, r.number)?,
                 fingerprint,
+                epic_run: epic_run.contains(&r.number),
             });
         }
         // Dependências (#215): as arestas e a situação de cada bloqueante
@@ -448,7 +451,7 @@ fn set_protocol(e: &mut plan::EnvSnap, protocol: Option<(u32, u32)>) {
 
 /// O protocolo do ambiente, pelo `env.info`; `None` = não respondeu agora.
 /// Sem o campo (ou ilegível) conta como `0.0`: anterior a tudo.
-async fn env_protocol(port: &dyn EnvPort, env_id: &str) -> Option<(u32, u32)> {
+pub(crate) async fn env_protocol(port: &dyn EnvPort, env_id: &str) -> Option<(u32, u32)> {
     let v = port
         .call(env_id.to_string(), "env.info", json!({}))
         .await

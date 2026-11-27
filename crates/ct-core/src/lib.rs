@@ -7,6 +7,7 @@ pub mod branch;
 mod clock;
 mod credentials;
 pub mod docs;
+pub mod epic_run;
 pub mod files;
 pub mod guard;
 mod logs;
@@ -28,6 +29,10 @@ pub use credentials::{
     CredentialOverrides, EnvSource, ProjectConnections, SharedCredentials,
 };
 pub use docs::DocsConfig;
+pub use epic_run::{
+    area_overlaps, areas_overlap, normalize_area, normalize_areas, EPIC_AREAS_MAX,
+    EPIC_AREA_MAX_CHARS, EPIC_RUN_PARALLEL_CEILING, EPIC_RUN_PARALLEL_DEFAULT,
+};
 pub use logs::LogsConfig;
 pub use model::*;
 pub use provider::{ProjectEndpoints, ResolvedConnections};

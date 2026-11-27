@@ -9,6 +9,8 @@ pub mod cleanup_worktree;
 pub mod config;
 pub mod diff;
 pub mod docs;
+pub mod epic_plan;
+pub mod epic_run;
 pub mod files;
 pub mod github;
 pub mod gitlab;
@@ -156,6 +158,9 @@ struct Inner {
     /// Serializa a conferência "uma sessão de release viva por projeto" com
     /// a criação da sessão (#204).
     release_start: Mutex<()>,
+    /// Última entrada humana registrada por sessão da execução de épico
+    /// (#301), para o debounce do evento `human_input`.
+    human_input: Mutex<HashMap<String, i64>>,
     notify: Notifier,
     /// Prazo da cauda do mascaramento nos PTYs das sessões novas
     /// ([`Sessions::set_mask_hold`]); `None` = o de produção
@@ -204,6 +209,7 @@ impl Sessions {
                     weak.clone(),
                 ))),
                 release_start: Mutex::new(()),
+                human_input: Mutex::new(HashMap::new()),
                 notify,
                 #[cfg(any(test, feature = "test-support"))]
                 mask_hold: Mutex::new(None),

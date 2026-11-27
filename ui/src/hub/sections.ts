@@ -31,7 +31,9 @@ export type HubSection =
   /** Painel do piloto automático (#185): estado, fila, sessões e "pausar tudo". */
   | "autopilot-panel"
   /** Política de orçamento do piloto automático por conta (#180). */
-  | "autopilot";
+  | "autopilot"
+  /** Execução de épicos (#304): aprovação do plano, execução e integração. */
+  | "epic-runs";
 
 export const HUB_SECTION_LABEL: Record<HubSection, string> = {
   overview: "Visão geral",
@@ -47,6 +49,7 @@ export const HUB_SECTION_LABEL: Record<HubSection, string> = {
   devices: "Dispositivos",
   "autopilot-panel": "Painel do piloto",
   autopilot: "Orçamento do plano",
+  "epic-runs": "Execução de épicos",
 };
 
 /** Outros nomes pelos quais a paleta acha a seção. */
@@ -64,6 +67,7 @@ const KEYWORDS: Record<HubSection, string> = {
   devices: "notificações push celular pwa avisos alertas",
   "autopilot-panel": "piloto automático autônomo fila pausar retomar sessões estacionadas resumo manhã",
   autopilot: "piloto automático autônomo orçamento cota plano faixas horário semanal reserva",
+  "epic-runs": "épico execução plano aprovar ondas sub-issues motor decisões integração merge",
 };
 
 export interface HubGroup {
@@ -84,6 +88,8 @@ export const HUB_GROUPS: HubGroup[] = [
   // Piloto automático (épico #178): o painel (#185, também na web) e a
   // política de orçamento por conta (#180, só no desktop).
   { label: "Piloto automático", sections: ["autopilot-panel", "autopilot"] },
+  // Execução de épicos (#304, épico #295): também na web.
+  { label: "Épicos", sections: ["epic-runs"] },
 ];
 
 export const HUB_SECTIONS: HubSection[] = HUB_GROUPS.flatMap((g) => g.sections);

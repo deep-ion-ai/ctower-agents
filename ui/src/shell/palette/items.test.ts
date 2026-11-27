@@ -38,6 +38,7 @@ test("sem hub e sem ambiente: telas e comandos", () => {
     "Hub › Dispositivos",
     "Hub › Painel do piloto",
     "Hub › Orçamento do plano",
+    "Hub › Execução de épicos",
     // Seções da Manutenção (#335).
     "Manutenção › Visão geral",
     "Manutenção › Atualizações › Este app",
@@ -213,6 +214,7 @@ test("web: sem os lugares e comandos exclusivos do desktop (#201)", () => {
     "Hub › Sessões web",
     "Hub › Dispositivos",
     "Hub › Painel do piloto",
+    "Hub › Execução de épicos",
     "Logs",
     "Configurações › Aparência",
     "Configurações › Plano da conta",
