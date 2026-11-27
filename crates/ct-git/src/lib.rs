@@ -299,6 +299,47 @@ pub fn gh_clone(
     Ok(())
 }
 
+/// Host (com a porta, se houver) de uma URL HTTPS, sem o usuário
+/// (`https://usuario@host/...`). `None` = não é HTTPS ou sem host.
+pub fn https_host(url: &str) -> Option<&str> {
+    let rest = url.trim().strip_prefix("https://")?;
+    let host = rest.split('/').next().filter(|h| !h.is_empty())?;
+    host.rsplit('@').next().filter(|h| !h.is_empty())
+}
+
+/// Usuário que o git manda com o token do GitLab (`Basic oauth2:<token>`),
+/// o mesmo de [`token_auth_envs`].
+pub const TOKEN_USER: &str = "oauth2";
+
+/// Credential helper do git só para o host de `url`, só neste processo e nos
+/// filhos dele (`GIT_CONFIG_COUNT`, sem `argv` nem `.git/config`): `helper` é
+/// o comando que o git chama (`<helper> get`). `base` é o `GIT_CONFIG_COUNT`
+/// que o processo já herda (as entradas dele ficam, a nossa vem depois): os
+/// helpers de `~/.gitconfig` e do sistema são consultados antes e, se algum
+/// responder, o nosso nem roda. `None` = URL que não é HTTPS (SSH usa a
+/// chave) ou sem host.
+pub fn credential_helper_envs(
+    url: &str,
+    helper: &str,
+    base: usize,
+) -> Option<Vec<(OsString, OsString)>> {
+    let host = https_host(url)?;
+    Some(vec![
+        (
+            OsString::from("GIT_CONFIG_COUNT"),
+            OsString::from((base + 1).to_string()),
+        ),
+        (
+            OsString::from(format!("GIT_CONFIG_KEY_{base}")),
+            OsString::from(format!("credential.https://{host}.helper")),
+        ),
+        (
+            OsString::from(format!("GIT_CONFIG_VALUE_{base}")),
+            OsString::from(format!("!{helper}")),
+        ),
+    ])
+}
+
 /// Cabeçalho de autenticação do token do GitLab no `git` por HTTPS, só para
 /// o host da URL e só neste processo (`GIT_CONFIG_COUNT`, sem `argv` nem
 /// `.git/config`): `Authorization: Basic base64(oauth2:<token>)`, a forma
@@ -306,10 +347,7 @@ pub fn gh_clone(
 /// URL que não é HTTPS (SSH usa a chave) ou sem host.
 pub fn token_auth_envs(url: &str, token: &str) -> Option<Vec<(OsString, OsString)>> {
     use base64::Engine;
-    let rest = url.trim().strip_prefix("https://")?;
-    let host = rest.split('/').next().filter(|h| !h.is_empty())?;
-    // Usuário na URL (`https://usuario@host/...`) não entra na chave.
-    let host = host.rsplit('@').next()?;
+    let host = https_host(url)?;
     let basic = base64::engine::general_purpose::STANDARD.encode(format!("oauth2:{token}"));
     Some(vec![
         (OsString::from("GIT_CONFIG_COUNT"), OsString::from("1")),

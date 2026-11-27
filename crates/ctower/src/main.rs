@@ -87,6 +87,14 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SecretCmd,
     },
+    /// Credential helper do git das sessões do GitLab: o `fetch` e o `push`
+    /// usam o token da conexão do projeto. O ambiente da sessão já o
+    /// registra; não é para rodar à mão.
+    #[command(hide = true)]
+    GitCredential {
+        /// Operação do git: `get`, `store` ou `erase`.
+        op: String,
+    },
     /// Na sessão de release: as etapas determinísticas da release (merge
     /// commit preso ao SHA, aprovação de runs). Saída: 0 ok, 3 recusada, 1
     /// falha.
@@ -209,6 +217,7 @@ fn main() {
         Cmd::Secret { cmd } => match cmd {
             SecretCmd::Get { name } => secrets::get(&name),
         },
+        Cmd::GitCredential { op } => secrets::git_credential(&op),
         Cmd::Release { cmd } => release::run(cmd),
     };
     std::process::exit(code);

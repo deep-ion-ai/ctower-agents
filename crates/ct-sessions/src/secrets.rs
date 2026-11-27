@@ -394,6 +394,57 @@ impl Sessions {
         Ok(entry.value.expose().to_string())
     }
 
+    /// Credencial do git para o `fetch` e o `push` da sessão dona de `token`
+    /// (#334): o token da conexão do GitLab do projeto, pelo mesmo resolvedor
+    /// do clone ([`Sessions::connection_token`]), e só quando `protocol` é
+    /// `https` e `host` (com a porta, como o git manda) é o da URL de clone do
+    /// projeto. Outro host, SSH ou projeto sem GitLab: `Ok(None)`, para o git
+    /// seguir com os outros helpers. Sem token resolvido: `Unavailable`. O
+    /// valor entra no mascaramento da sessão antes de sair.
+    pub fn session_git_credential(
+        &self,
+        token: &str,
+        protocol: &str,
+        host: &str,
+    ) -> Result<Option<(String, String)>, SecretGetError> {
+        let session_id = self
+            .session_of_token(token)
+            .ok_or(SecretGetError::Unauthorized)?;
+        let project = {
+            let l = self.ledger();
+            l.get_session(&session_id)
+                .and_then(|s| l.get_work_item(s.work_item_id))
+                .and_then(|wi| l.get_project(wi.project_id))
+        }
+        .map_err(|e| SecretGetError::Unavailable(e.to_string()))?;
+        let Some(clone_url) = project.forge.gitlab().map(|g| g.clone_url.as_str()) else {
+            return Ok(None);
+        };
+        let host = host.trim();
+        let same_host = ct_git::https_host(clone_url)
+            .is_some_and(|h| !host.is_empty() && h.eq_ignore_ascii_case(host));
+        if !protocol.trim().eq_ignore_ascii_case("https") || !same_host {
+            return Ok(None);
+        }
+        let value = self
+            .connection_token(&project, ct_core::provider::ProviderKind::Gitlab)
+            .map_err(SecretGetError::Unavailable)?;
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            return Err(SecretGetError::Unavailable(
+                "a credencial da conexão do GitLab veio vazia".into(),
+            ));
+        }
+        let pty = self.inner.live.lock().unwrap().get(&session_id).cloned();
+        self.add_mask(
+            &session_id,
+            pty.as_ref(),
+            &SessionMask::new(&[("CONEXAO_TOKEN", &value)]),
+        );
+        tracing::info!("git: credencial da conexão do GitLab lida pela sessão {session_id}");
+        Ok(Some((ct_git::TOKEN_USER.to_string(), value)))
+    }
+
     /// O cache mudou (pull com entrega nova) ou o sync resolveu o token de
     /// uma conexão (#266): soma ao conjunto mascarado de cada sessão viva os
     /// secrets atuais do projeto dela e os tokens das conexões em cache,
@@ -1029,6 +1080,102 @@ mod tests {
             m.pty.apply(b"x tok-acme-gitlab-654321 y"),
             b"x ***CONEXAO_TOKEN*** y"
         );
+    }
+
+    /// #334: o `fetch` e o `push` da sessão recebem o token da conexão do
+    /// GitLab só para o host (e a porta) da URL de clone, por HTTPS; outro
+    /// host, SSH e token de sessão desconhecido não levam nada. O valor sai
+    /// mascarado na sessão.
+    #[test]
+    fn credencial_do_git_vale_so_para_o_host_do_clone() {
+        let env = TestEnv::new(FakeClaude::script(
+            "while read l; do echo \"saida=$l\"; done",
+        ));
+        let marca = env.tmp.path().join("marca-credencial");
+        let gitlab = cmd_com_marca(&marca, "tok-acme-gitlab-654321");
+        assign_jira_gitlab(&env, "true", &gitlab);
+        let s = env.sessions.start(env.request(35, "Git")).unwrap();
+        let token = token_of(&env, &s.id);
+        let cred =
+            |proto: &str, host: &str| env.sessions.session_git_credential(&token, proto, host);
+
+        let ok = cred("https", "gitlab.example.com").unwrap();
+        assert_eq!(
+            ok,
+            Some(("oauth2".to_string(), "tok-acme-gitlab-654321".to_string()))
+        );
+        // Host em outra caixa é o mesmo host.
+        assert!(cred("https", "GitLab.Example.com").unwrap().is_some());
+        // Outro host, outra porta, HTTP e SSH: o git segue sem a nossa credencial.
+        assert_eq!(cred("https", "outro.example.com").unwrap(), None);
+        assert_eq!(cred("https", "gitlab.example.com:8443").unwrap(), None);
+        assert_eq!(cred("http", "gitlab.example.com").unwrap(), None);
+        assert_eq!(cred("ssh", "gitlab.example.com").unwrap(), None);
+        assert_eq!(cred("https", "").unwrap(), None);
+        // A segunda leitura veio do cache do resolvedor.
+        assert_eq!(std::fs::read_to_string(&marca).unwrap().lines().count(), 1);
+        assert!(matches!(
+            env.sessions.session_git_credential(
+                "token-desconhecido",
+                "https",
+                "gitlab.example.com"
+            ),
+            Err(SecretGetError::Unauthorized)
+        ));
+
+        // O token sai mascarado na sessão.
+        let pty = env.sessions.pty(&s.id).unwrap();
+        pty.write(b"tok-acme-gitlab-654321\n").unwrap();
+        let saida = wait_output(&env, &s.id, "saida=***CONEXAO_TOKEN***");
+        assert!(!saida.contains("tok-acme-gitlab"), "{saida}");
+        env.sessions.kill(&s.id).unwrap();
+    }
+
+    /// #334: projeto no GitHub, ou GitLab por SSH, não recebe credencial do
+    /// GitLab; credencial que falha vira indisponível, sem o valor.
+    #[test]
+    fn credencial_do_git_sem_gitlab_https_ou_com_falha() {
+        let env = TestEnv::new(FakeClaude::script("sleep 30"));
+        let s = env.sessions.start(env.request(35, "GitHub")).unwrap();
+        let token = token_of(&env, &s.id);
+        assert_eq!(
+            env.sessions
+                .session_git_credential(&token, "https", "github.com")
+                .unwrap(),
+            None
+        );
+        env.sessions.kill(&s.id).unwrap();
+
+        let env = TestEnv::new(FakeClaude::script("sleep 30"));
+        assign_jira_gitlab(&env, "true", "exit 1");
+        let s = env.sessions.start(env.request(35, "Falha")).unwrap();
+        let token = token_of(&env, &s.id);
+        let e = env
+            .sessions
+            .session_git_credential(&token, "https", "gitlab.example.com")
+            .unwrap_err();
+        assert!(matches!(e, SecretGetError::Unavailable(_)), "{e}");
+        env.sessions.kill(&s.id).unwrap();
+
+        // SSH: a URL de clone não é HTTPS, não há host para atender.
+        let env = TestEnv::new(FakeClaude::script("sleep 30"));
+        assign_jira_gitlab(&env, "true", "printf 'tok-ssh-123456'");
+        env.assign_config(1, |p| {
+            p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                connection: Some(8),
+                path: "acme/acme-web".into(),
+                clone_url: "git@gitlab.example.com:acme/acme-web.git".into(),
+            });
+        });
+        let s = env.sessions.start(env.request(35, "Ssh")).unwrap();
+        let token = token_of(&env, &s.id);
+        assert_eq!(
+            env.sessions
+                .session_git_credential(&token, "https", "gitlab.example.com")
+                .unwrap(),
+            None
+        );
+        env.sessions.kill(&s.id).unwrap();
     }
 
     /// Token que o sync já resolveu sai mascarado no PTY e no transcript da
