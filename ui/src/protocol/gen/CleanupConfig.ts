@@ -32,9 +32,9 @@ min_idle_hours: number,
  */
 end_idle_sessions_hours: number, 
 /**
- * Apaga `~/.claude/projects/<slug-do-worktree>` (transcripts do Claude
- * Code) depois que o worktree sai, e só se houver backup em
- * `<data>/transcripts` de todos os transcripts da pasta (#285).
+ * Apaga as pastas de transcript do agente do worktree
+ * (`AgentRuntime::transcript_dirs_for`) depois que ele sai, e só se
+ * houver backup em `<data>/transcripts` de todos os transcripts da pasta (#285).
  */
 remove_agent_transcripts: boolean, 
 /**
