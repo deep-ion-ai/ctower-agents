@@ -288,7 +288,7 @@ impl Sessions {
 
     /// Guarda (só em memória) o mascaramento de uma sessão.
     pub(crate) fn set_mask(&self, session_id: &str, mask: SessionMask) {
-        let mut masks = self.inner.masks.lock().unwrap();
+        let mut masks = self.inner.masks.lock();
         if mask.pty.is_empty() {
             masks.remove(session_id);
         } else {
@@ -301,7 +301,6 @@ impl Sessions {
         self.inner
             .session_tokens
             .lock()
-            .unwrap()
             .insert(token.to_string(), session_id.to_string());
     }
 
@@ -310,7 +309,6 @@ impl Sessions {
         self.inner
             .session_tokens
             .lock()
-            .unwrap()
             .retain(|_, s| s != session_id);
     }
 
@@ -320,7 +318,7 @@ impl Sessions {
         if token.is_empty() {
             return None;
         }
-        let tokens = self.inner.session_tokens.lock().unwrap();
+        let tokens = self.inner.session_tokens.lock();
         tokens
             .iter()
             .find(|(t, _)| same_bytes(t.as_bytes(), token.as_bytes()))
@@ -386,7 +384,7 @@ impl Sessions {
         // soma a entrega nova antes de trocar o cache ([`Sessions::premask`]),
         // mas não alcança a sessão que ainda está subindo (fora das vivas).
         if entry.kind == Kind::Secret {
-            let pty = self.inner.live.lock().unwrap().get(&session_id).cloned();
+            let pty = self.inner.live.lock().get(&session_id).cloned();
             let mask = SessionMask::new(&[(name, entry.value.expose())]);
             self.add_mask(&session_id, pty.as_ref(), &mask);
         }
@@ -435,7 +433,7 @@ impl Sessions {
                 "a credencial da conexão do GitLab veio vazia".into(),
             ));
         }
-        let pty = self.inner.live.lock().unwrap().get(&session_id).cloned();
+        let pty = self.inner.live.lock().get(&session_id).cloned();
         self.add_mask(
             &session_id,
             pty.as_ref(),
@@ -485,7 +483,6 @@ impl Sessions {
         self.inner
             .live
             .lock()
-            .unwrap()
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
@@ -517,7 +514,7 @@ impl Sessions {
     /// PTY dela, se houver. O PTY recebe o conjunto com o lock dos conjuntos
     /// preso: duas somas ao mesmo tempo nunca deixam no PTY o conjunto menor.
     fn add_mask(&self, session_id: &str, pty: Option<&ct_pty::PtySession>, extra: &SessionMask) {
-        let mut masks = self.inner.masks.lock().unwrap();
+        let mut masks = self.inner.masks.lock();
         let merged = masks
             .get(session_id)
             .cloned()
@@ -535,7 +532,7 @@ impl Sessions {
     /// guardado, que pode ter crescido depois do spawn (#320: um `ctower
     /// secret get` antes de a sessão estar entre as vivas).
     pub(crate) fn sync_pty_mask(&self, session_id: &str, pty: &ct_pty::PtySession) {
-        let masks = self.inner.masks.lock().unwrap();
+        let masks = self.inner.masks.lock();
         if let Some(m) = masks.get(session_id) {
             pty.set_mask(m.pty.clone());
         }
@@ -543,7 +540,7 @@ impl Sessions {
 
     /// Esquece o mascaramento de uma sessão (retomada ou arquivada).
     pub(crate) fn forget_mask(&self, session_id: &str) {
-        self.inner.masks.lock().unwrap().remove(session_id);
+        self.inner.masks.lock().remove(session_id);
     }
 
     /// Mascaramento do backup do transcript da sessão: o guardado no spawn
@@ -551,7 +548,7 @@ impl Sessions {
     /// projeto da sessão. Cache de secrets ausente ou ilegível: só os tokens
     /// das conexões em cache (não há outros valores conhecidos a esconder).
     pub(crate) fn transcript_mask(&self, s: &Session) -> MaskSet {
-        if let Some(m) = self.inner.masks.lock().unwrap().get(&s.id) {
+        if let Some(m) = self.inner.masks.lock().get(&s.id) {
             return m.transcript.clone();
         }
         let project = {
@@ -1220,10 +1217,10 @@ mod tests {
         assign_jira_gitlab(&env, jira, "");
         let s = env.sessions.start(env.request(35, "Máscara")).unwrap();
         env.wait_fake_output(&s.id);
-        assert!(!env.sessions.inner.masks.lock().unwrap().contains_key(&s.id));
+        assert!(!env.sessions.inner.masks.lock().contains_key(&s.id));
         sync_resolve(&env, &crate::resolver::jira_key(env.project_id), jira);
         let deadline = Instant::now() + T;
-        while !env.sessions.inner.masks.lock().unwrap().contains_key(&s.id) {
+        while !env.sessions.inner.masks.lock().contains_key(&s.id) {
             assert!(Instant::now() < deadline, "máscara não atualizada");
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -1287,7 +1284,7 @@ mod tests {
         )]);
         let s = env.sessions.start(env.request(35, "Máscara")).unwrap();
         env.wait_fake_output(&s.id);
-        assert!(!env.sessions.inner.masks.lock().unwrap().contains_key(&s.id));
+        assert!(!env.sessions.inner.masks.lock().contains_key(&s.id));
 
         // O que o sync faz: a fonte efetiva e a busca no cache de secrets.
         let p = env.sessions.ledger().get_project(env.project_id).unwrap();
@@ -1323,7 +1320,6 @@ mod tests {
                 .inner
                 .masks
                 .lock()
-                .unwrap()
                 .get(&s.id)
                 .map(|m| m.pty.apply(b"tok-acme-arquivo-424242"));
             if n.as_deref() == Some(b"***CONEXAO_TOKEN***".as_slice()) {

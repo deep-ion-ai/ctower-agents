@@ -43,7 +43,7 @@ pub use github::{
     GithubSnapshot, GoneIssue, IssueMeta, IssueRow, PrRow, SyncState, GH_ISSUE_GONE_CAUSE,
     GH_ISSUE_GONE_REASON,
 };
-pub use handle::LedgerHandle;
+pub use handle::{LedgerHandle, LedgerRead, READ_POOL_SIZE};
 pub use hub_config::{
     connection_warnings, ConfigApplied, ConfigDone, ConfigProject, ConfigRemoved, ConfigResponse,
     DoneResponse,
@@ -70,8 +70,8 @@ pub use sync::{
 pub use tree::{DecisionCounts, ProjectTree, TreeNode, WorkItemSummary};
 pub use work_items::WorkItem;
 
-use rusqlite::{types::Type, Connection, Row};
-use std::path::Path;
+use rusqlite::{types::Type, Connection, OpenFlags, Row};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -82,6 +82,9 @@ pub struct Ledger {
     conn: Connection,
     /// Ambiente dono deste ledger (`<config_dir>/env_id`).
     env_id: String,
+    /// Arquivo do banco: `None` em memória. Com ele, o [`LedgerHandle`] abre
+    /// as conexões somente leitura do pool (#244).
+    path: Option<PathBuf>,
 }
 
 impl Ledger {
@@ -90,7 +93,34 @@ impl Ledger {
         // Antes do WAL: trocar o journal_mode também pode esbarrar em lock.
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
-        Self::init(conn, env_id)
+        let mut ledger = Self::init(conn, env_id)?;
+        ledger.path = Some(path.to_path_buf());
+        Ok(ledger)
+    }
+
+    /// Conexão somente leitura ao banco de um ledger já aberto (e migrado)
+    /// por [`Ledger::open`]: o pool de leitura do [`LedgerHandle`] (#244).
+    /// No WAL, ela lê o último commit sem esperar o escritor; uma escrita por
+    /// ela falha (`SQLITE_READONLY`).
+    pub fn open_reader(path: &Path, env_id: &str) -> Result<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        conn.pragma_update(None, "query_only", true)?;
+        Ok(Ledger {
+            conn,
+            env_id: env_id.to_string(),
+            path: Some(path.to_path_buf()),
+        })
+    }
+
+    /// Arquivo do banco; `None` no ledger em memória.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Ledger em memória com um `env_id` aleatório (testes).
@@ -114,6 +144,7 @@ impl Ledger {
         Ok(Ledger {
             conn,
             env_id: env_id.to_string(),
+            path: None,
         })
     }
 }

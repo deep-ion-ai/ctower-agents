@@ -91,7 +91,6 @@ impl Sessions {
             .inner
             .live
             .lock()
-            .unwrap()
             .values()
             .filter_map(|p| p.pid().map(i64::from))
             .collect();

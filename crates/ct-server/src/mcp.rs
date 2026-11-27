@@ -104,7 +104,7 @@ fn dispatch(
     params: &Value,
 ) -> RpcResult {
     let session = sessions
-        .ledger()
+        .ledger_read()
         .get_session(session_id)
         .map_err(|_| (-32001, format!("sessão desconhecida: {session_id:?}")))?;
     if is_gestor(sessions, &session) {
@@ -182,7 +182,16 @@ fn dispatch(
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         return Ok(tool_result(report_blocker(sessions, hub, &session, &args)));
     }
-    let l = sessions.ledger();
+    // Consultas vão pelo pool de leitura (#244); as tools que gravam, pela
+    // conexão de escrita.
+    let (reader, writer);
+    let l: &Ledger = if reads_only(method, params) {
+        reader = sessions.ledger_read();
+        &reader
+    } else {
+        writer = sessions.ledger();
+        &writer
+    };
     match method {
         "initialize" => Ok(json!({
             "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(DEFAULT_PROTOCOL),
@@ -220,15 +229,32 @@ fn dispatch(
                 .unwrap_or_default();
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             let creds = &sessions.config().credentials;
-            Ok(tool_result(call_tool(&l, creds, &session, name, &args)))
+            Ok(tool_result(call_tool(l, creds, &session, name, &args)))
         }
         _ => Err((-32601, format!("método desconhecido: {method}"))),
     }
 }
 
+/// Tools do [`call_tool`] que só consultam o ledger.
+const READ_ONLY_TOOLS: &[&str] = &[
+    "ledger_list_decisions",
+    "ledger_get_context",
+    "rules_get",
+    "pr_feedback",
+];
+
+/// A chamada só consulta o ledger: pode ir pelo pool de leitura.
+fn reads_only(method: &str, params: &Value) -> bool {
+    method != "tools/call"
+        || params
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|n| READ_ONLY_TOOLS.contains(&n))
+}
+
 /// A sessão é do gestor (projeto sentinela `_ctower/gestor`).
 fn is_gestor(sessions: &Sessions, s: &Session) -> bool {
-    let l = sessions.ledger();
+    let l = sessions.ledger_read();
     l.get_work_item(s.work_item_id)
         .and_then(|wi| l.get_project(wi.project_id))
         .is_ok_and(|p| p.kind == ProjectKind::Gestor)
@@ -337,7 +363,7 @@ fn decisions_via_hub(
 ) -> Result<Value, String> {
     let e = |e: ct_ledger::LedgerError| e.to_string();
     let (query, ids) = {
-        let l = sessions.ledger();
+        let l = sessions.ledger_read();
         let wi = l.get_work_item(s.work_item_id).map_err(e)?;
         let p = l.get_project(wi.project_id).map_err(e)?;
         let ids = scope_ids(&l, &wi, scope)?;
@@ -352,7 +378,10 @@ fn decisions_via_hub(
     match hub.query_decisions(&query) {
         Ok(decisions) => Ok(json!({ "decisions": decisions, "source": "hub" })),
         Err(reason) => {
-            let decisions = sessions.ledger().list_decisions(&ids, false).map_err(e)?;
+            let decisions = sessions
+                .ledger_read()
+                .list_decisions(&ids, false)
+                .map_err(e)?;
             Ok(json!({
                 "decisions": decisions,
                 "source": "local",
@@ -519,7 +548,7 @@ fn propose_model(
 ) -> Result<Value, String> {
     let hub = hub.ok_or_else(|| format!("hub indisponível: {}", crate::hub_sync::NOT_LINKED))?;
     let (owner, repo) = {
-        let l = sessions.ledger();
+        let l = sessions.ledger_read();
         let e = |e: ct_ledger::LedgerError| e.to_string();
         let wi = l.get_work_item(s.work_item_id).map_err(e)?;
         let p = l.get_project(wi.project_id).map_err(e)?;
@@ -601,7 +630,7 @@ fn set_dependencies(
 ) -> Result<Value, String> {
     let hub = hub.ok_or_else(|| format!("hub indisponível: {}", crate::hub_sync::NOT_LINKED))?;
     let (owner, repo) = {
-        let l = sessions.ledger();
+        let l = sessions.ledger_read();
         let e = |e: ct_ledger::LedgerError| e.to_string();
         let wi = l.get_work_item(s.work_item_id).map_err(e)?;
         let p = l.get_project(wi.project_id).map_err(e)?;
@@ -690,7 +719,7 @@ fn set_epic_plan(
 ) -> Result<Value, String> {
     let hub = hub.ok_or_else(|| format!("hub indisponível: {}", crate::hub_sync::NOT_LINKED))?;
     let (owner, repo) = {
-        let l = sessions.ledger();
+        let l = sessions.ledger_read();
         let e = |e: ct_ledger::LedgerError| e.to_string();
         let wi = l.get_work_item(s.work_item_id).map_err(e)?;
         let p = l.get_project(wi.project_id).map_err(e)?;
@@ -742,7 +771,7 @@ fn report_blocker(
         .filter(|r| !r.is_empty())
         .ok_or("parâmetro obrigatório: reason")?;
     let (owner, repo, number) = {
-        let l = sessions.ledger();
+        let l = sessions.ledger_read();
         let e = |e: ct_ledger::LedgerError| e.to_string();
         let wi = l.get_work_item(s.work_item_id).map_err(e)?;
         let p = l.get_project(wi.project_id).map_err(e)?;

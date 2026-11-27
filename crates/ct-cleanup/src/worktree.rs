@@ -84,7 +84,7 @@ fn reserved(sessions: &Sessions, t: &CleanupTarget, wt: &str) -> Option<String> 
 fn live_in(sessions: &Sessions, t: &CleanupTarget, wt: &str) -> Result<Vec<String>> {
     let prefix = format!("{}/", wt.trim_end_matches('/'));
     let mut ids: Vec<String> = sessions
-        .ledger()
+        .ledger_read()
         .live_sessions()?
         .into_iter()
         .filter(|s| s.cwd == wt || s.cwd.starts_with(&prefix))
@@ -133,7 +133,7 @@ pub fn worktree_activity(sessions: &Sessions, t: &CleanupTarget, wt: &str) -> Re
         _ => s.last_event_at,
     };
     let mut at: Vec<i64> = sessions
-        .ledger()
+        .ledger_read()
         .sessions_in_cwd(wt)?
         .iter()
         .map(last)

@@ -48,13 +48,14 @@ pub use usage::{SessionUsage, StatuslineInstall};
 
 pub use ct_agent::AgentHome;
 use ct_agent::AgentRuntime;
+use ct_core::Lock;
 use ct_core::Tool;
-use ct_ledger::{Ledger, LedgerHandle};
+use ct_ledger::{Ledger, LedgerHandle, LedgerRead};
 use ct_pty::PtySession;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
 use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
@@ -174,6 +175,11 @@ impl SyncHandle {
         self.ledger.lock()
     }
 
+    /// Conexão de leitura do pool ([`LedgerHandle::read`]), para consultas.
+    pub fn ledger_read(&self) -> LedgerRead<'_> {
+        self.ledger.read()
+    }
+
     /// Push para as UIs conectadas (`{ "event": ..., "data": ... }`).
     pub fn notify(&self, event: &str, data: Value) {
         (self.notify)(event, data);
@@ -183,30 +189,30 @@ impl SyncHandle {
 struct Inner {
     cfg: SessionsConfig,
     ledger: LedgerHandle,
-    live: Mutex<HashMap<String, PtySession>>,
+    live: Lock<HashMap<String, PtySession>>,
     /// Sessões encerradas por `kill` (pedido humano): a saída é limpa.
-    killed: Mutex<HashSet<String>>,
+    killed: Lock<HashSet<String>>,
     /// Mascaramento dos secrets de cada sessão (#167), só em memória.
-    masks: Mutex<HashMap<String, secrets::SessionMask>>,
+    masks: Lock<HashMap<String, secrets::SessionMask>>,
     /// Token de cada sessão viva (#165) → id da sessão, só em memória.
-    session_tokens: Mutex<HashMap<String, String>>,
+    session_tokens: Lock<HashMap<String, String>>,
     /// Shells livres vivos (#428), só em memória.
-    shells: Mutex<HashMap<String, shell::LiveShell>>,
+    shells: Lock<HashMap<String, shell::LiveShell>>,
     /// Fontes e token de cada conexão (Jira, GitLab, GitHub), em cache: o
     /// comando de credencial não roda a cada ciclo (#236, #275).
     connections: Connections,
     /// Serializa a conferência "uma sessão de release viva por projeto" com
     /// a criação da sessão (#204).
-    release_start: Mutex<()>,
+    release_start: Lock<()>,
     /// Última entrada humana registrada por sessão da execução de épico
     /// (#301), para o debounce do evento `human_input`.
-    human_input: Mutex<HashMap<String, i64>>,
+    human_input: Lock<HashMap<String, i64>>,
     notify: Notifier,
     /// Prazo da cauda do mascaramento nos PTYs das sessões novas
     /// ([`Sessions::set_mask_hold`]); `None` = o de produção
     /// ([`ct_pty::MASK_HOLD`]).
     #[cfg(any(test, feature = "test-support"))]
-    mask_hold: Mutex<Option<Duration>>,
+    mask_hold: Lock<Option<Duration>>,
 }
 
 /// Fachada do ciclo de vida das sessões. Clonar compartilha o estado.
@@ -247,16 +253,16 @@ impl Sessions {
                 ),
                 cfg,
                 ledger: LedgerHandle::new(ledger),
-                live: Mutex::new(HashMap::new()),
-                killed: Mutex::new(HashSet::new()),
-                masks: Mutex::new(HashMap::new()),
-                session_tokens: Mutex::new(HashMap::new()),
-                shells: Mutex::new(HashMap::new()),
-                release_start: Mutex::new(()),
-                human_input: Mutex::new(HashMap::new()),
+                live: Lock::new(HashMap::new()),
+                killed: Lock::new(HashSet::new()),
+                masks: Lock::new(HashMap::new()),
+                session_tokens: Lock::new(HashMap::new()),
+                shells: Lock::new(HashMap::new()),
+                release_start: Lock::new(()),
+                human_input: Lock::new(HashMap::new()),
                 notify,
                 #[cfg(any(test, feature = "test-support"))]
-                mask_hold: Mutex::new(None),
+                mask_hold: Lock::new(None),
             }),
         }
     }
@@ -364,14 +370,22 @@ impl Sessions {
         Ok(())
     }
 
-    /// Acesso direto ao ledger (consultas do servidor).
+    /// Conexão de escrita do ledger. Para só ler, use
+    /// [`Sessions::ledger_read`].
     pub fn ledger(&self) -> MutexGuard<'_, Ledger> {
         self.inner.ledger.lock()
     }
 
+    /// Conexão de leitura do pool (#244): consultas da UI, do MCP e
+    /// varreduras que não escrevem, sem esperar a conexão de escrita. Lê o
+    /// último commit; escrever por ela falha.
+    pub fn ledger_read(&self) -> LedgerRead<'_> {
+        self.inner.ledger.read()
+    }
+
     /// PTY de uma sessão viva neste processo do daemon.
     pub fn pty(&self, session_id: &str) -> Option<PtySession> {
-        self.inner.live.lock().unwrap().get(session_id).cloned()
+        self.inner.live.lock().get(session_id).cloned()
     }
 
     /// Encerra a sessão a pedido do humano: `SIGHUP` e, se o agente não
@@ -380,11 +394,7 @@ impl Sessions {
     pub fn kill(&self, session_id: &str) -> Result<()> {
         match self.pty(session_id) {
             Some(p) => {
-                self.inner
-                    .killed
-                    .lock()
-                    .unwrap()
-                    .insert(session_id.to_string());
+                self.inner.killed.lock().insert(session_id.to_string());
                 Ok(p.terminate(KILL_GRACE)?)
             }
             None => Err(SessionsError::Invalid(format!(
@@ -399,7 +409,7 @@ impl Sessions {
     /// [`ct_pty::MASK_HOLD`] (#313).
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_mask_hold(&self, hold: Duration) {
-        *self.inner.mask_hold.lock().unwrap() = Some(hold);
+        *self.inner.mask_hold.lock() = Some(hold);
     }
 
     /// Sobe o PTY de uma sessão, com o prazo da cauda dos testes, se houver
@@ -407,7 +417,7 @@ impl Sessions {
     pub(crate) fn spawn_pty(&self, spec: ct_pty::SpawnSpec) -> std::io::Result<PtySession> {
         let scrollback = self.inner.cfg.scrollback;
         #[cfg(any(test, feature = "test-support"))]
-        if let Some(hold) = *self.inner.mask_hold.lock().unwrap() {
+        if let Some(hold) = *self.inner.mask_hold.lock() {
             return PtySession::spawn_with_hold(spec, scrollback, hold);
         }
         PtySession::spawn(spec, scrollback)
@@ -421,3 +431,40 @@ impl Sessions {
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{FakeClaude, TestEnv};
+    use ct_core::SessionState;
+    use std::sync::Arc;
+
+    /// Critério de aceite do #244: um pânico numa thread com os locks das
+    /// sessões na mão (`live`, `killed`, `masks`, os tokens e o ledger) não
+    /// derruba as operações seguintes.
+    #[test]
+    fn panico_com_os_locks_de_sessao_nao_derruba_as_proximas() {
+        let env = TestEnv::new(FakeClaude::sleep(30));
+        let s = env.sessions.start(env.request(4, "Longa")).unwrap();
+        let inner = Arc::clone(&env.sessions.inner);
+        let r = std::thread::spawn(move || {
+            let _live = inner.live.lock();
+            let _killed = inner.killed.lock();
+            let _masks = inner.masks.lock();
+            let _tokens = inner.session_tokens.lock();
+            let _ledger = inner.ledger.lock();
+            panic!("pânico com os locks de sessão");
+        })
+        .join();
+        assert!(r.is_err());
+
+        assert!(env.sessions.pty(&s.id).is_some());
+        env.sessions.kill(&s.id).unwrap();
+        env.wait_state(&s.id, SessionState::Exited);
+        assert!(env.sessions.pty(&s.id).is_none());
+        let outra = env.sessions.start(env.request(5, "Outra")).unwrap();
+        assert!(env.sessions.pty(&outra.id).is_some());
+        assert_eq!(env.sessions.ledger_read().live_sessions().unwrap().len(), 1);
+        env.sessions.kill(&outra.id).unwrap();
+        env.wait_state(&outra.id, SessionState::Exited);
+    }
+}
