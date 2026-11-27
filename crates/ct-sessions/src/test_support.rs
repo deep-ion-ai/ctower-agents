@@ -109,8 +109,10 @@ impl TestEnv {
             worktrees_root: tmp.path().join("wt"),
             gestor_dir: tmp.path().join("data/gestor"),
             scrollback: 64 * 1024,
-            claude_json: Some(tmp.path().join(".claude.json")),
-            claude_projects: Some(tmp.path().join("claude-projects")),
+            agent_home: ct_agent::AgentHome {
+                config_file: Some(tmp.path().join(".claude.json")),
+                transcripts_root: Some(tmp.path().join("claude-projects")),
+            },
             secrets_max_age: Some(Duration::from_secs(24 * 3600)),
             process_env: Some(Vec::new()),
             shell: Some(write_fake_shell(tmp.path()).to_string_lossy().into()),

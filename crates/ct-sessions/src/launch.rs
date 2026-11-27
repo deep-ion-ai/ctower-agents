@@ -6,7 +6,7 @@ use crate::{Result, Sessions, SessionsError};
 use ct_agent::Conversation;
 use ct_core::branch::{branch_from_pattern, worktree_dir_name};
 use ct_core::{
-    ProjectKind, SessionMode, SessionState, Tool, WorkItemKind, WorkItemTrigger, CLAUDE_EFFORTS,
+    ProjectKind, SessionMode, SessionState, WorkItemKind, WorkItemTrigger, CLAUDE_EFFORTS,
     CLAUDE_MODELS,
 };
 use ct_git::{ensure_worktree, WorktreeSpec};
@@ -503,10 +503,8 @@ impl Sessions {
         };
         // Registro estático por `Tool` (#240); por enquanto toda sessão é do
         // Claude Code, com o binário de `claude_bin`.
-        let tool = Tool::Claude;
-        let runtime = ct_agent::runtime(tool).ok_or_else(|| {
-            SessionsError::Invalid(format!("agente sem runtime: {}", tool.as_str()))
-        })?;
+        let tool = crate::AGENT_TOOL;
+        let runtime = crate::agent_runtime(tool)?;
         let session = self.ledger().create_session(&NewSession {
             work_item_id: wi.id,
             tool,
@@ -517,18 +515,16 @@ impl Sessions {
         })?;
         let dir = cfg.dirs.session_dir(&session.id);
         private_dir(&dir)?;
-        if let Some(claude_json) = &cfg.claude_json {
-            // A pasta de docs vai no mesmo `--add-dir` abaixo: sem a
-            // confiança, o Claude Code pergunta por ela em toda sessão (#222).
-            self.pre_trust(
-                claude_json,
-                project,
-                wi,
-                &session.id,
-                cwd,
-                docs.project.as_deref(),
-            )?;
-        }
+        // A pasta de docs vai no mesmo `--add-dir` abaixo: sem a confiança,
+        // o agente pergunta por ela em toda sessão (#222).
+        self.prepare_workspace(
+            runtime,
+            project,
+            wi,
+            &session.id,
+            cwd,
+            docs.project.as_deref(),
+        )?;
 
         // Regras do agente vigentes no cache do pull, relidas a cada início
         // e retomada (spec do Jira e GitLab §10.1).
@@ -806,12 +802,13 @@ impl Sessions {
         Ok(())
     }
 
-    /// Pré-aceita a confiança na raiz do repositório, no worktree e, se a
-    /// sessão recebe, na pasta de docs do projeto (`--add-dir`, #222). Falha
-    /// vira alerta (a sessão segue; o humano responde ao diálogo).
-    fn pre_trust(
+    /// Pré-aceita, pelo runtime ([`ct_agent::AgentRuntime::prepare_workspace`]),
+    /// a confiança na raiz do repositório, no worktree e, se a sessão recebe,
+    /// na pasta de docs do projeto (`--add-dir`, #222). Falha vira alerta (a
+    /// sessão segue; o humano responde ao diálogo).
+    fn prepare_workspace(
         &self,
-        claude_json: &Path,
+        runtime: &dyn ct_agent::AgentRuntime,
         project: &Project,
         wi: &WorkItem,
         session_id: &str,
@@ -821,7 +818,8 @@ impl Sessions {
         let docs = docs.map(|d| d.to_string_lossy().into_owned());
         let mut dirs = vec![project.repo_path.as_str(), cwd];
         dirs.extend(docs.as_deref());
-        let (kind, payload) = match crate::trust::ensure_trusted(claude_json, &dirs) {
+        let home = &self.config().agent_home;
+        let (kind, payload) = match runtime.prepare_workspace(home, &dirs) {
             Ok(changed) if changed.is_empty() => return Ok(()),
             Ok(changed) => ("trust_granted", json!({ "paths": changed })),
             Err(e) => {
@@ -2143,7 +2141,7 @@ mod tests {
         let env = TestEnv::new(FakeClaude::exit(0));
         let s = env.sessions.start(env.request(2, "Confiança")).unwrap();
         let cj: Value = serde_json::from_str(
-            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+            &std::fs::read_to_string(env.cfg.agent_home.config_file.as_ref().unwrap()).unwrap(),
         )
         .unwrap();
         let repo = env.repo.to_string_lossy().to_string();
@@ -2167,7 +2165,7 @@ mod tests {
         let root = env.docs_root_up();
         let s = env.sessions.start(env.request(2, "Docs")).unwrap();
         let cj: Value = serde_json::from_str(
-            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+            &std::fs::read_to_string(env.cfg.agent_home.config_file.as_ref().unwrap()).unwrap(),
         )
         .unwrap();
         let proj = root.join("deep-ion-ai__demo").to_string_lossy().to_string();
@@ -2187,7 +2185,7 @@ mod tests {
         docs_ligados(&env);
         let s = env.sessions.start(env.request(2, "Sem docs")).unwrap();
         let cj: Value = serde_json::from_str(
-            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+            &std::fs::read_to_string(env.cfg.agent_home.config_file.as_ref().unwrap()).unwrap(),
         )
         .unwrap();
         let projects = cj["projects"].as_object().unwrap();
@@ -2205,7 +2203,11 @@ mod tests {
     #[test]
     fn claude_json_invalido_vira_alerta_e_sessao_segue() {
         let env = TestEnv::new(FakeClaude::exit(0));
-        std::fs::write(env.cfg.claude_json.as_ref().unwrap(), "{ quebrado").unwrap();
+        std::fs::write(
+            env.cfg.agent_home.config_file.as_ref().unwrap(),
+            "{ quebrado",
+        )
+        .unwrap();
         let s = env.sessions.start(env.request(3, "X")).unwrap();
         assert!(s.pid.is_some());
         assert!(env

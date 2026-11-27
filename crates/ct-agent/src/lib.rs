@@ -4,13 +4,19 @@
 //! O runtime não escreve arquivos nem cria processos: devolve um
 //! [`LaunchPlan`] declarativo (programa, argv, ambiente e arquivos). Quem
 //! grava os arquivos, junta o ambiente com os secrets e as `CTOWER_*` e faz
-//! o spawn no PTY continua sendo o `Sessions` (`ct-sessions`).
+//! o spawn no PTY continua sendo o `Sessions` (`ct-sessions`). O formato de
+//! fora do processo também fica aqui (#241): a confiança nas pastas
+//! ([`AgentRuntime::prepare_workspace`]), o layout das pastas de transcript
+//! ([`AgentRuntime::transcript_dirs_for`]) e a leitura das linhas
+//! ([`TranscriptReader`]).
 
 pub mod claude;
 
 pub use claude::ClaudeRuntime;
 
 use ct_core::{SessionMode, Tool};
+use serde::Serialize;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Conversa do agente, pelo id dela na ferramenta: nova com id fixo, ou
@@ -90,6 +96,56 @@ impl LaunchPlan {
     }
 }
 
+/// Onde o agente guarda o próprio estado neste ambiente. O `ctowerd` a
+/// resolve no boot ([`AgentRuntime::home_from_env`]); os testes fixam pastas
+/// temporárias.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentHome {
+    /// Arquivo de configuração do agente em que
+    /// [`AgentRuntime::prepare_workspace`] pré-aceita a confiança nas pastas
+    /// (`None` = não mexe; o humano responde ao diálogo no terminal).
+    pub config_file: Option<PathBuf>,
+    /// Raiz dos transcripts do agente por pasta de trabalho; a limpeza apaga
+    /// os do worktree removido (#285). `None` = nunca apaga.
+    pub transcripts_root: Option<PathBuf>,
+}
+
+/// Uma fala da conversa: texto do usuário ou do agente, ou uma chamada de
+/// ferramenta (`tool`, com o nome e o argumento principal).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct TranscriptEntry {
+    /// `user` | `assistant` | `tool`.
+    pub role: String,
+    pub text: String,
+    /// `timestamp` da linha (ISO 8601), se houver.
+    pub ts: Option<String>,
+}
+
+/// Resposta de `session.context`: o uso da última resposta do agente
+/// (fora de subagentes). `None` nos campos = ainda sem resposta no
+/// transcript.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ContextUsage {
+    /// Tokens no contexto: entrada (com cache criado e lido) mais a saída
+    /// da última resposta.
+    pub tokens: Option<u64>,
+    /// Modelo da última resposta (ex.: `claude-opus-5-5`).
+    pub model: Option<String>,
+    pub ts: Option<String>,
+}
+
+/// Leitura do formato do transcript do agente (#328). Recebe o fim do
+/// arquivo, já mascarado e começando numa linha inteira.
+pub trait TranscriptReader: Send + Sync {
+    /// Falas da conversa principal, da mais antiga para a mais recente.
+    fn entries(&self, data: &[u8]) -> Vec<TranscriptEntry>;
+
+    /// Uso de contexto da última resposta do agente; `None` = nenhuma.
+    fn last_usage(&self, data: &[u8]) -> Option<ContextUsage>;
+}
+
 /// Um agente que o Control Tower sabe lançar.
 pub trait AgentRuntime: Send + Sync {
     /// Ferramenta do runtime (`sessions.tool` no ledger).
@@ -97,6 +153,32 @@ pub trait AgentRuntime: Send + Sync {
 
     /// Plano de lançamento de uma sessão. Puro: não toca disco nem processos.
     fn launch_plan(&self, ctx: &LaunchContext<'_>) -> LaunchPlan;
+
+    /// [`AgentHome`] pelas variáveis do processo (`HOME` e as do agente).
+    fn home_from_env(&self) -> AgentHome;
+
+    /// Prepara as pastas da sessão antes do spawn: pré-aceita a confiança
+    /// em `dirs` no `home.config_file`. Retorna as pastas que mudaram (vazio
+    /// = nada a fazer, ou `config_file` ausente). Erro = nada foi alterado.
+    fn prepare_workspace(&self, home: &AgentHome, dirs: &[&str]) -> io::Result<Vec<String>>;
+
+    /// Pastas de transcript do agente da pasta de trabalho `cwd`, dentro de
+    /// `transcripts_root`: a que o agente usa para o caminho e as que contêm
+    /// `transcripts` (caminhos registrados pelos hooks das sessões nesse
+    /// `cwd`). Não olha o disco: quem chama confere se existem.
+    fn transcript_dirs_for(
+        &self,
+        transcripts_root: &Path,
+        cwd: &str,
+        transcripts: &[&Path],
+    ) -> Vec<PathBuf>;
+
+    /// Sessão (id na ferramenta) dona de uma entrada de uma pasta de
+    /// [`Self::transcript_dirs_for`]; `None` = entrada desconhecida.
+    fn transcript_entry_id<'a>(&self, name: &'a str, is_file: bool) -> Option<&'a str>;
+
+    /// Leitor do formato do transcript.
+    fn transcripts(&self) -> &dyn TranscriptReader;
 }
 
 static CLAUDE: ClaudeRuntime = ClaudeRuntime;

@@ -18,6 +18,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+ct-agent.workspace = true
 ct-gh = { workspace = true, features = ["test-support"] }
 cthubd.workspace = true
 futures-util.workspace = true

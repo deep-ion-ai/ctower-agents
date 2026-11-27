@@ -517,7 +517,10 @@ name = "ct-agent"
 version = "1.11.0"
 dependencies = [
  "ct-core",
+ "serde",
  "serde_json",
+ "tempfile",
+ "ts-rs",
 ]
 
 [[package]]
@@ -833,6 +836,7 @@ version = "1.11.0"
 dependencies = [
  "axum",
  "clap",
+ "ct-agent",
  "ct-core",
  "ct-gh",
  "ct-git",
