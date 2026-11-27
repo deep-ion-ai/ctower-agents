@@ -194,7 +194,8 @@ test("sem hub e sem ambiente: telas e comandos continuam", async () => {
   );
   await user.clear(input());
   await user.type(input(), "#1");
-  expect(screen.getByRole("status")).toHaveTextContent("Nada encontrado.");
+  // Sem ambiente nem hub, a faixa de primeiros passos também é um status.
+  expect(screen.getAllByRole("status").some((s) => s.textContent === "Nada encontrado.")).toBe(true);
 });
 
 test("comandos de projeto (#9): \"novo projeto\" abre o cadastro; \"configurar ctower\", a configuração", async () => {

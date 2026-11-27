@@ -518,6 +518,7 @@ version = "1.10.0"
 dependencies = [
  "axum",
  "ct-core",
+ "ct-hub-store",
  "ct-ledger",
  "ct-server",
  "ct-sessions",
@@ -561,6 +562,8 @@ dependencies = [
 name = "ct-git"
 version = "1.10.0"
 dependencies = [
+ "base64",
+ "ct-proc",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -597,6 +600,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct-hub-store"
+version = "1.10.0"
+dependencies = [
+ "ct-core",
+ "ct-gh",
+ "ct-ledger",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "ct-jira"
 version = "1.10.0"
 dependencies = [
@@ -627,7 +647,9 @@ dependencies = [
 name = "ct-proc"
 version = "1.10.0"
 dependencies = [
+ "ct-core",
  "libc",
+ "tempfile",
  "thiserror 2.0.21",
  "zeroize",
 ]
@@ -636,6 +658,7 @@ dependencies = [
 name = "ct-pty"
 version = "1.10.0"
 dependencies = [
+ "libc",
  "portable-pty",
  "tempfile",
  "zeroize",
@@ -665,8 +688,10 @@ dependencies = [
  "ct-gh",
  "ct-git",
  "ct-http",
+ "ct-hub-store",
  "ct-jira",
  "ct-ledger",
+ "ct-proc",
  "ct-secrets",
  "ct-sessions",
  "cthubd",
@@ -696,6 +721,7 @@ dependencies = [
  "ct-gitlab",
  "ct-jira",
  "ct-ledger",
+ "ct-proc",
  "ct-pty",
  "ct-secrets",
  "ct-update",
@@ -724,6 +750,7 @@ dependencies = [
  "tempfile",
  "toml 0.8.23",
  "ts-rs",
+ "ureq",
 ]
 
 [[package]]
@@ -737,8 +764,10 @@ dependencies = [
  "ct-core",
  "ct-gh",
  "ct-http",
+ "ct-hub-store",
  "ct-jira",
  "ct-ledger",
+ "ct-proc",
  "ct-secrets",
  "ct-update",
  "futures-util",
@@ -775,6 +804,7 @@ dependencies = [
  "clap",
  "ct-core",
  "ct-gh",
+ "ct-hub-store",
  "ct-ledger",
  "ct-secrets",
  "ct-sessions",
@@ -796,7 +826,9 @@ dependencies = [
  "clap",
  "ct-core",
  "ct-gh",
+ "ct-git",
  "ct-http",
+ "ct-hub-store",
  "ct-ledger",
  "ct-server",
  "ct-sessions",

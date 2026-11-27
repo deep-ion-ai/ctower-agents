@@ -24,6 +24,11 @@ export const PUSH_EVENTS: { event: PushEvent; label: string; hint: string }[] = 
     label: "Resumo da manhã do piloto automático",
     hint: "em todo dia útil, no horário da política: projeto, contagens e link (hub 1.20)",
   },
+  {
+    event: "epic_decision",
+    label: "Decisão pendente na execução de épico",
+    hint: "o épico, a sub-issue e o motivo, sem o texto do agente (hub 1.26)",
+  },
 ];
 
 /**

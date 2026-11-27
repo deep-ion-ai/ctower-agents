@@ -18,7 +18,6 @@
 //! `hub.push.vapid_key|subscribe|list|update|remove|test` (Web Push, #203) e
 //! `hub.env.call { env, method, params }` (método do ambiente pelo canal
 //! reverso, #343) e
-//! `github.status|set_token|clear_token` (token do GitHub do hub) e
 //! `hub.update.get|check|start|rollback` (atualizar o hub, #421) e
 //! `hub.logs.tail|follow|unfollow` (log do hub, #65). Push:
 //! `hub_sync_status`, `hub.proposals.changed`, `hub.rules.changed`,
@@ -51,7 +50,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use ct_http::rpc::{i64_param, invalid, str_param, RpcResult};
 use ct_http::{bearer_ok, unauthorized};
-use ct_ledger::{
+use ct_hub_store::{
     AssignmentFilter, HubAssignment, HubProjectPatch, HubSession, NewHubProject, Placement,
     ProjectProvider, QuarantineGroup, RankingFilter,
 };
@@ -68,6 +67,8 @@ pub struct HubInfo {
     /// Versão do protocolo do hub (`major.minor`).
     pub protocol: String,
     pub version: String,
+    /// Capacidades do hub, para gating por recurso (#227).
+    pub capabilities: Vec<String>,
     /// Commit do build; vazio se compilado fora do git.
     pub commit: String,
     pub name: String,
@@ -185,7 +186,8 @@ pub(crate) async fn upgrade(
 }
 
 /// Por onde a conexão chegou: o `/ws` (token de UI, tudo) ou o `/web/ws`
-/// (sessão web `id`, só `crate::web::WEB_METHODS` e `WEB_PUSHES`).
+/// (sessão web `id`, só os métodos de escopo `Web` do registro
+/// `crate::methods` e `WEB_PUSHES`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Channel {
     Ui,
@@ -367,7 +369,7 @@ async fn env_call(st: &HubState, p: Value) -> RpcResult {
 /// nos parâmetros, vale o da issue no hub, para a sessão iniciada à mão
 /// pela web, e pelo agendador (#183), usar o modelo decidido. Só com
 /// `owner`, `repo` e `gh_number`; o que veio nos parâmetros vence.
-pub(crate) fn with_issue_agent(hub: &ct_ledger::Hub, mut params: Value) -> Value {
+pub(crate) fn with_issue_agent(hub: &ct_hub_store::Hub, mut params: Value) -> Value {
     let (Some(owner), Some(repo), Some(n)) = (
         params.get("owner").and_then(Value::as_str),
         params.get("repo").and_then(Value::as_str),
@@ -390,13 +392,13 @@ pub(crate) fn with_issue_agent(hub: &ct_ledger::Hub, mut params: Value) -> Value
 
 /// `{ model, effort }` de `hub.workitem.set_model` (nulos ou ausentes =
 /// limpar).
-fn issue_agent_param(p: &Value) -> Result<ct_ledger::IssueAgent, (i64, String)> {
+fn issue_agent_param(p: &Value) -> Result<ct_hub_store::IssueAgent, (i64, String)> {
     let field = |k: &str| match p.get(k) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(v)) if !v.trim().is_empty() => Ok(Some(v.trim().to_string())),
         Some(_) => Err(invalid(format!("{k} deve ser texto ou null"))),
     };
-    let agent = ct_ledger::IssueAgent {
+    let agent = ct_hub_store::IssueAgent {
         model: field("model")?,
         effort: field("effort")?,
     };
@@ -480,11 +482,22 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
     }
     let hub = st.hub.clone();
     let (o, r) = (owner.clone(), repo.clone());
-    let project = tokio::task::spawn_blocking(move || hub.lock().find_project(&o, &r))
-        .await
-        .map_err(|e| (-32603, e.to_string()))?
-        .map_err(|e| (-32000, e.to_string()))?
-        .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
+    // O link de reserva sai com a URL da conexão do Jira (#277).
+    let (project, jira_url) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let h = hub.lock();
+        let Some(p) = h.find_project(&o, &r).map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        let url = h
+            .project_connections(&p)
+            .map_err(|e| e.to_string())?
+            .jira_url();
+        Ok(Some((p, url)))
+    })
+    .await
+    .map_err(|e| (-32603, e.to_string()))?
+    .map_err(|e| (-32000, e))?
+    .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))?;
     let markdown = |title: &Value, body: String, url: String| {
         json!(HubWorkItemBody {
             title: title.as_str().unwrap_or("").to_string(),
@@ -505,7 +518,8 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 "/repos/{}/{}/issues/{number}",
                 project.gh_owner, project.gh_repo
             );
-            let v = tokio::task::spawn_blocking(move || gh.client().get_json(&path))
+            let client = gh.client_for(&project);
+            let v = tokio::task::spawn_blocking(move || client.get_json(&path))
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
                 .map_err(|e| (-32000, format!("GitHub: {e}")))?
@@ -514,7 +528,7 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 .get("html_url")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), number));
+                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), &jira_url, number));
             let body = v
                 .get("body")
                 .and_then(Value::as_str)
@@ -537,7 +551,7 @@ async fn workitem_body(st: &HubState, p: Value) -> RpcResult {
                 .get("url")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), number));
+                .unwrap_or_else(|| ct_core::item_url(&project.tracker_ref(), &jira_url, number));
             Ok(markdown(&v["title"], body, url))
         }
     }
@@ -663,7 +677,7 @@ fn web_sessions_call(st: &HubState, method: &str, p: &Value, current: Option<&st
 }
 
 /// Eventos de `hub.push.subscribe|update` (`events`), sem repetição.
-fn push_events(p: &Value) -> Result<Option<Vec<ct_ledger::PushEvent>>, (i64, String)> {
+fn push_events(p: &Value) -> Result<Option<Vec<ct_hub_store::PushEvent>>, (i64, String)> {
     let Some(v) = p.get("events").filter(|v| !v.is_null()) else {
         return Ok(None);
     };
@@ -673,7 +687,7 @@ fn push_events(p: &Value) -> Result<Option<Vec<ct_ledger::PushEvent>>, (i64, Str
     let mut out = Vec::new();
     for e in arr {
         let name = e.as_str().unwrap_or("");
-        let ev = ct_ledger::PushEvent::parse(name)
+        let ev = ct_hub_store::PushEvent::parse(name)
             .ok_or_else(|| invalid(format!("evento de push desconhecido: {name:?}")))?;
         if !out.contains(&ev) {
             out.push(ev);
@@ -711,7 +725,7 @@ fn push_call(st: &HubState, method: &str, p: &Value, current: Option<&str>) -> R
             let (p256dh, auth) = (str_param(&keys, "p256dh")?, str_param(&keys, "auth")?);
             push.validate(endpoint, p256dh, auth)
                 .map_err(|m| invalid(&m))?;
-            let sub = ct_ledger::NewPushSubscription {
+            let sub = ct_hub_store::NewPushSubscription {
                 endpoint: endpoint.to_string(),
                 p256dh: p256dh.to_string(),
                 auth: auth.to_string(),
@@ -754,6 +768,15 @@ fn push_call(st: &HubState, method: &str, p: &Value, current: Option<&str>) -> R
 }
 
 async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) -> RpcResult {
+    // Registro dos métodos do hub (#229): o que não está nele não é despachado.
+    let scope = if web_session.is_some() {
+        crate::methods::Scope::Web
+    } else {
+        crate::methods::Scope::Ui
+    };
+    if !crate::methods::allowed_in(method, scope) {
+        return Err((-32601, format!("método desconhecido: {method}")));
+    }
     match method {
         m if m.starts_with("hub.web.") => {
             let (st, method) = (st.clone(), method.to_string());
@@ -764,7 +787,6 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
             .await
             .map_err(|e| (-32603, e.to_string()))?
         }
-        "github.status" | "github.set_token" | "github.clear_token" => github(st, method, &p).await,
         "hub.env.call" => env_call(st, p).await,
         "hub.plan.accounts" => plan_accounts(st, web_session.is_some()),
         // Agendador do piloto automático (#183): o painel (#185) lê o estado
@@ -778,6 +800,10 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         | "hub.autopilot.set"
         | "hub.autopilot.deps.set" => {
             crate::autopilot::runner::call(st, method, p, web_session.is_some()).await
+        }
+        // Execução de épico (#298).
+        m if m.starts_with("hub.epic_run.") => {
+            crate::epic_run::rpc::call(st, method, p, web_session.is_some()).await
         }
         // Política de orçamento do piloto automático por conta (#180).
         m if m.starts_with("hub.autopilot.") => {
@@ -801,6 +827,14 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         m if m.starts_with("hub.recovery.") => {
             let (st, method) = (st.clone(), method.to_string());
             tokio::task::spawn_blocking(move || recovery_call(&st, &method, p))
+                .await
+                .map_err(|e| (-32603, e.to_string()))?
+        }
+        "hub.connections.test" => {
+            // Fora de `hub_call`: lê a conexão com o lock do hub, solta, e
+            // só então confere o secret no store (#281), sem os dois locks.
+            let st2 = st.clone();
+            tokio::task::spawn_blocking(move || connection_test(&st2, &p))
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
         }
@@ -920,6 +954,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
         "hub.info" => Ok(json!(HubInfo {
             protocol: crate::PROTOCOL_VERSION.into(),
             version: ct_core::VERSION.into(),
+            capabilities: vec![ct_http::sync::CAPABILITY_VERSION_HANDSHAKE.into()],
             commit: ct_core::BUILD_COMMIT.into(),
             name: st.name.to_string(),
             config_rev: h.config_rev().map_err(e)?,
@@ -960,6 +995,10 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 .map(|v| json!(v))
                 .ok_or_else(|| (-32000, format!("projeto {owner}/{repo} não está no hub")))
         }
+        "hub.connections.list"
+        | "hub.connections.add"
+        | "hub.connections.update"
+        | "hub.connections.delete" => connections_call(&h, method, p),
         "hub.projects.delete" => {
             let (owner, repo) = (str_param(p, "owner")?, str_param(p, "repo")?);
             let confirm = p.get("confirm").and_then(Value::as_bool).unwrap_or(false);
@@ -1202,7 +1241,9 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
             let limit = p
                 .get("limit")
                 .and_then(Value::as_u64)
-                .map_or(ct_ledger::RANKING_LIMIT, |l| l.min(u32::MAX as u64) as u32);
+                .map_or(ct_hub_store::RANKING_LIMIT, |l| {
+                    l.min(u32::MAX as u64) as u32
+                });
             let f = RankingFilter { project, priority };
             Ok(json!(h.ranking(&f, limit).map_err(e)?))
         }
@@ -1213,11 +1254,11 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 _ => return Err(invalid("owner e repo vão juntos")),
             };
             let min_severity = opt_str(p, "min_severity")
-                .map(|s| s.parse::<ct_ledger::Severity>())
+                .map(|s| s.parse::<ct_hub_store::Severity>())
                 .transpose()
                 .map_err(invalid)?
-                .unwrap_or(ct_ledger::Severity::Info);
-            let f = ct_ledger::HealthFilter {
+                .unwrap_or(ct_hub_store::Severity::Info);
+            let f = ct_hub_store::HealthFilter {
                 project,
                 min_severity,
             };
@@ -1233,7 +1274,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 (None, None) => None,
                 _ => return Err(invalid("owner e repo vão juntos")),
             };
-            let f = ct_ledger::ProposalFilter {
+            let f = ct_hub_store::ProposalFilter {
                 state,
                 project,
                 number: p.get("number").and_then(Value::as_i64),
@@ -1241,7 +1282,9 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
             let limit = p
                 .get("limit")
                 .and_then(Value::as_u64)
-                .map_or(ct_ledger::RANKING_LIMIT, |l| l.min(u32::MAX as u64) as u32);
+                .map_or(ct_hub_store::RANKING_LIMIT, |l| {
+                    l.min(u32::MAX as u64) as u32
+                });
             Ok(json!(h
                 .list_proposals(&f, limit, ct_core::now_ms())
                 .map_err(e)?))
@@ -1270,21 +1313,21 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 (None, Some(ids)) => {
                     let ids: Vec<i64> = serde_json::from_value(ids.clone())
                         .map_err(|_| invalid("ids deve ser uma lista de números"))?;
-                    if ids.is_empty() || ids.len() > ct_ledger::PROPOSAL_PENDING_MAX as usize {
+                    if ids.is_empty() || ids.len() > ct_hub_store::PROPOSAL_PENDING_MAX as usize {
                         return Err(invalid(format!(
                             "ids deve ter de 1 a {} propostas",
-                            ct_ledger::PROPOSAL_PENDING_MAX
+                            ct_hub_store::PROPOSAL_PENDING_MAX
                         )));
                     }
-                    let out: Vec<ct_ledger::ProposalDecided> = ids
+                    let out: Vec<ct_hub_store::ProposalDecided> = ids
                         .into_iter()
                         .map(|id| match decide(id) {
-                            Ok(v) => ct_ledger::ProposalDecided {
+                            Ok(v) => ct_hub_store::ProposalDecided {
                                 id,
                                 proposal: Some(v),
                                 error: None,
                             },
-                            Err(err) => ct_ledger::ProposalDecided {
+                            Err(err) => ct_hub_store::ProposalDecided {
                                 id,
                                 proposal: None,
                                 error: Some(err.to_string()),
@@ -1366,7 +1409,7 @@ fn hub_call_locked(st: &HubState, method: &str, p: &Value) -> RpcResult {
                 (None, None) => None,
                 _ => return Err(invalid("owner e repo vão juntos")),
             };
-            let f = ct_ledger::RulesProposalFilter {
+            let f = ct_hub_store::RulesProposalFilter {
                 state,
                 project,
                 epic_number: p.get("epic_number").and_then(Value::as_i64),
@@ -1402,7 +1445,7 @@ fn placement<T>(before: Option<T>, after: Option<T>) -> Result<Placement<T>, (i6
 
 /// "sessões vivas relatadas: ..." para as mensagens de confirmação.
 fn sessions_text(
-    live: &[ct_ledger::HubSession],
+    live: &[ct_hub_store::HubSession],
     names: &std::collections::HashMap<String, String>,
 ) -> String {
     if live.is_empty() {
@@ -1437,84 +1480,36 @@ fn protected_param(p: &Value) -> Result<Option<Vec<String>>, (i64, String)> {
     }
 }
 
-/// `tracker` e `forge` do cadastro (#348), com as normalizações: URL do Jira
-/// sem barra final, chave em maiúsculas, mapa de tipos padrão quando vazio,
-/// e o repositório do GitLab pela URL de clone (`clone_url`, ou `url` do
-/// cadastro) ou por `host` + `path`.
+/// `tracker` e `forge` do cadastro (#348), com as normalizações: chave em
+/// maiúsculas, mapa de tipos padrão quando vazio e o repositório do GitLab
+/// pela URL de clone (`clone_url`, ou `url` do cadastro). Endereço e
+/// credencial do Jira e do GitLab são da conexão (#277): o cadastro só a
+/// referencia.
 fn provider_param(
     p: &Value,
 ) -> Result<(ct_core::TrackerConfig, ct_core::ForgeConfig), (i64, String)> {
     use ct_core::{ForgeConfig, TrackerConfig};
     let tracker: TrackerConfig = match p.get("tracker") {
-        None | Some(Value::Null) => TrackerConfig::Github,
+        None | Some(Value::Null) => TrackerConfig::default(),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| invalid(format!("tracker inválido: {e}")))?,
     };
     let forge: ForgeConfig = match p.get("forge") {
-        None | Some(Value::Null) => ForgeConfig::Github,
+        None | Some(Value::Null) => ForgeConfig::default(),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| invalid(format!("forge inválido: {e}")))?,
     };
-    let tracker = match tracker {
-        TrackerConfig::Jira(mut j) => {
-            j.url = j.url.trim().trim_end_matches('/').to_string();
-            j.project_key = j.project_key.trim().to_ascii_uppercase();
-            j.jql = j.jql.trim().to_string();
-            j.credential_cmd = j.credential_cmd.trim().to_string();
-            j.config_file = j.config_file.trim().to_string();
-            j.epic_link_field = j.epic_link_field.trim().to_string();
-            j.epic_name_field = j.epic_name_field.trim().to_string();
-            if j.type_map.is_empty() {
-                j.type_map = ct_core::default_type_map();
-            }
-            TrackerConfig::Jira(j)
-        }
-        t => t,
-    };
-    let forge = match forge {
-        ForgeConfig::Gitlab(mut g) => {
-            let url = Some(g.clone_url.trim())
-                .filter(|u| !u.is_empty())
-                .or_else(|| p.get("url").and_then(Value::as_str).map(str::trim))
-                .filter(|u| !u.is_empty())
-                .map(String::from);
-            match url {
-                Some(url) => {
-                    let r = ct_core::repo_from_url(&url)
-                        .ok_or_else(|| invalid(format!("URL do GitLab não reconhecida: {url}")))?;
-                    let given =
-                        |a: &str, b: &str| a.trim().is_empty() || a.trim().eq_ignore_ascii_case(b);
-                    if !given(&g.host, &r.host) || !given(g.path.trim_matches('/'), &r.path) {
-                        return Err(invalid(format!(
-                            "host e caminho do GitLab ({}/{}) não batem com a URL {url}",
-                            g.host, g.path
-                        )));
-                    }
-                    g.host = r.host;
-                    g.path = r.path;
-                    g.clone_url = url;
-                }
-                None => {
-                    let host = g.host.trim().to_ascii_lowercase();
-                    let path = g.path.trim().trim_matches('/').trim_end_matches(".git");
-                    let r = ct_core::repo_from_url(&format!("https://{host}/{path}")).ok_or_else(
-                        || {
-                            invalid(format!(
-                                "informe a URL de clone do GitLab, ou host e caminho válidos \
-                                 (host {host:?}, caminho {path:?})"
-                            ))
-                        },
-                    )?;
-                    g.clone_url = format!("https://{}/{}.git", r.host, r.path);
-                    g.host = r.host;
-                    g.path = r.path;
-                }
-            }
-            g.credential_cmd = g.credential_cmd.trim().to_string();
-            ForgeConfig::Gitlab(g)
-        }
-        f => f,
-    };
+    use ct_core::provider;
+    // As normalizações de cada tipo são do descritor (#278).
+    let (mut tracker, mut forge) = (tracker, forge);
+    provider::descriptor(tracker.provider()).normalize_tracker(&mut tracker);
+    let url = p.get("url").and_then(Value::as_str);
+    provider::descriptor(forge.provider())
+        .normalize_forge(&mut forge, url)
+        .map_err(invalid)?;
+    // GitHub (#275): o rastreador e a forja usam a mesma conexão; a dada
+    // num lado só vale para os dois. Duas diferentes, o cadastro recusa.
+    provider::share_connection(&mut tracker, &mut forge);
     Ok((tracker, forge))
 }
 
@@ -1633,6 +1628,86 @@ fn bool_param(p: &Value, k: &str) -> Result<Option<bool>, (i64, String)> {
 /// usa o token do GitHub. O cadastro confere só a forma (combinação,
 /// campos e padrão de branch); o ambiente de sync confere o resto no
 /// primeiro ciclo e relata pelo `tracker_status`.
+/// `hub.connections.*` (#235): o cadastro das conexões externas. O resultado
+/// não leva segredo: a credencial é o nome do secret ou o comando.
+/// `hub.connections.test`: a prontidão do descritor e, com credencial
+/// `secret`, se o secret existe no store do hub para cada projeto que usa a
+/// conexão (global ou do projeto; sem projeto, o global). O teste segue sem
+/// rede (#281).
+fn connection_test(st: &HubState, p: &Value) -> RpcResult {
+    let id = i64_param(p, "id")?;
+    let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
+    let (mut t, conn, users) = {
+        let h = st.hub.lock();
+        (
+            h.test_connection(id).map_err(e)?,
+            h.connection(id).map_err(e)?,
+            h.connection_users(id).map_err(e)?,
+        )
+    };
+    if let (
+        ct_core::provider::Readiness::Ready,
+        ct_core::provider::CredentialSource::Secret { name },
+        Some(secrets),
+    ) = (&t.readiness, &conn.credential, st.secrets.as_ref())
+    {
+        if let Some(reason) = missing_secret(name.trim(), &users, |scope| {
+            secrets.resolve(scope).contains_key(name.trim())
+        }) {
+            t.readiness = ct_core::provider::Readiness::NeedsSetup { reason };
+        }
+    }
+    Ok(json!(t))
+}
+
+/// Por que o secret `name` da conexão falta: `has(None)` confere o global,
+/// `has(Some("owner/repo"))` o que vale para o projeto (o dele ou o global).
+/// `None` = existe para todos os que usam a conexão.
+fn missing_secret(
+    name: &str,
+    users: &[String],
+    has: impl Fn(Option<&str>) -> bool,
+) -> Option<String> {
+    let fix = "grave-o em Hub › Secrets e variáveis (global, para uma conexão de vários projetos)";
+    if users.is_empty() {
+        return (!has(None)).then(|| format!("o secret {name} não existe no hub; {fix}"));
+    }
+    let missing: Vec<&str> = users
+        .iter()
+        .map(String::as_str)
+        .filter(|u| !has(Some(u)))
+        .collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "o secret {name} não existe no hub para {}; {fix}",
+            missing.join(", ")
+        )
+    })
+}
+
+fn connections_call(h: &ct_hub_store::Hub, method: &str, p: &Value) -> RpcResult {
+    let e = |e: ct_ledger::LedgerError| (-32000, e.to_string());
+    match method {
+        "hub.connections.list" => Ok(json!(h.list_connections().map_err(e)?)),
+        "hub.connections.add" => {
+            let new: ct_hub_store::NewConnection = serde_json::from_value(p.clone())
+                .map_err(|err| invalid(format!("conexão inválida: {err}")))?;
+            Ok(json!(h.add_connection(&new).map_err(e)?))
+        }
+        "hub.connections.update" => {
+            let id = i64_param(p, "id")?;
+            let patch: ct_hub_store::ConnectionPatch = serde_json::from_value(p.clone())
+                .map_err(|err| invalid(format!("alteração inválida: {err}")))?;
+            Ok(json!(h.update_connection(id, &patch).map_err(e)?))
+        }
+        "hub.connections.delete" => {
+            let id = i64_param(p, "id")?;
+            Ok(json!(h.delete_connection(id).map_err(e)?))
+        }
+        _ => Err((-32601, format!("método desconhecido: {method}"))),
+    }
+}
+
 fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
     let github = || {
         st.github.clone().ok_or_else(|| {
@@ -1679,8 +1754,15 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
             (owner, repo)
         } else {
             let gh = github()?;
-            let (owner, repo) = gh.validate_repo(&owner, &repo).map_err(|m| (-32000, m))?;
-            gh.validate_branch(&owner, &repo, &base_branch)
+            // O token da conexão GitHub do projeto novo (#275).
+            let client = gh.client_for_new(ct_core::github_connection(
+                &provider.tracker,
+                &provider.forge,
+            ));
+            let (owner, repo) = gh
+                .validate_repo(&client, &owner, &repo)
+                .map_err(|m| (-32000, m))?;
+            gh.validate_branch(&client, &owner, &repo, &base_branch)
                 .map_err(|m| (-32000, m))?;
             (owner, repo)
         };
@@ -1746,8 +1828,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         .as_deref()
         .filter(|b| *b != cur.base_branch && cur.forge.gitlab().is_none())
     {
-        github()?
-            .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+        let gh = github()?;
+        gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
     // A base própria do modo autônomo (#181) precisa existir no GitHub.
@@ -1758,8 +1840,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
         .map(|a| a.base_branch.trim())
         .filter(|b| !b.is_empty() && *b != cur.base_branch && cur.forge.gitlab().is_none())
     {
-        github()?
-            .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+        let gh = github()?;
+        gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
             .map_err(|m| (-32000, m))?;
     }
     // As branches da release ligada (#204) precisam existir no GitHub. O
@@ -1771,8 +1853,8 @@ fn project_write(st: &HubState, method: &str, p: &Value) -> RpcResult {
     {
         let r = r.normalized();
         for b in [&r.source, &r.target] {
-            github()?
-                .validate_branch(&cur.gh_owner, &cur.gh_repo, b)
+            let gh = github()?;
+            gh.validate_branch(&gh.client_for(&cur), &cur.gh_owner, &cur.gh_repo, b)
                 .map_err(|m| (-32000, m))?;
         }
     }
@@ -1851,7 +1933,7 @@ async fn notify_config_changed(st: &HubState, scope: &Scope) {
         Scope::Global => online.into_iter().collect(),
         Scope::Project(key) => {
             let (owner, repo) = key.rsplit_once('/').unwrap_or_default();
-            let f = ct_ledger::AssignmentFilter {
+            let f = ct_hub_store::AssignmentFilter {
                 env: None,
                 owner: Some(owner.to_string()),
                 repo: Some(repo.to_string()),
@@ -2131,34 +2213,6 @@ fn secrets_call(st: &HubState, method: &str, p: &Value) -> RpcResult {
     }
 }
 
-/// Token do GitHub do hub. O token nunca volta na resposta: só conta e origem.
-async fn github(st: &HubState, method: &str, p: &Value) -> RpcResult {
-    let gh = st
-        .github
-        .clone()
-        .ok_or_else(|| (-32000, "integração com o GitHub desativada".into()))?;
-    let token = match method {
-        "github.set_token" => Some(str_param(p, "token")?.to_string()),
-        _ => None,
-    };
-    let method = method.to_string();
-    tokio::task::spawn_blocking(move || {
-        let c = gh.client();
-        match method.as_str() {
-            "github.set_token" => {
-                c.set_token(&token.unwrap_or_default())?;
-            }
-            "github.clear_token" => c.clear_token()?,
-            _ => {}
-        }
-        Ok::<_, ct_gh::GhError>(c.status())
-    })
-    .await
-    .map_err(|e| (-32603, e.to_string()))?
-    .map(|st| json!(st))
-    .map_err(|e| (-32000, e.to_string()))
-}
-
 #[cfg(all(test, feature = "ts"))]
 mod export {
     use super::*;
@@ -2182,11 +2236,19 @@ mod export {
         HubPlanAccounts::export_all_to(&dir).unwrap();
         crate::autopilot::AutopilotPolicyView::export_all_to(&dir).unwrap();
         crate::autopilot::AutopilotStatus::export_all_to(&dir).unwrap();
-        ct_ledger::MorningDigest::export_all_to(&dir).unwrap();
-        ct_ledger::AutonomyWip::export_all_to(&dir).unwrap();
-        ct_ledger::AutopilotEvent::export_all_to(&dir).unwrap();
+        ct_hub_store::MorningDigest::export_all_to(&dir).unwrap();
+        ct_hub_store::AutonomyWip::export_all_to(&dir).unwrap();
+        ct_hub_store::AutopilotEvent::export_all_to(&dir).unwrap();
         // `hub.autopilot.deps.set` (#215).
-        ct_ledger::DependencyEdge::export_all_to(&dir).unwrap();
+        ct_hub_store::DependencyEdge::export_all_to(&dir).unwrap();
+        // Execução de épico (#296).
+        ct_hub_store::EpicRun::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicPlan::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicPlanDraft::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicNode::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicDecision::export_all_to(&dir).unwrap();
+        ct_hub_store::EpicRunEvent::export_all_to(&dir).unwrap();
+        crate::epic_run::rpc::EpicRunView::export_all_to(&dir).unwrap();
         ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
@@ -2203,28 +2265,27 @@ mod export {
         HubEnvCall::export_all_to(&dir).unwrap();
         crate::push::PushRemoved::export_all_to(&dir).unwrap();
         crate::push::PushTestResult::export_all_to(&dir).unwrap();
-        ct_ledger::HubPushDevice::export_all_to(&dir).unwrap();
-        ct_ledger::HubWebSession::export_all_to(&dir).unwrap();
+        ct_hub_store::HubPushDevice::export_all_to(&dir).unwrap();
+        ct_hub_store::HubWebSession::export_all_to(&dir).unwrap();
         crate::secrets::SecretsList::export_all_to(&dir).unwrap();
         crate::secrets::RecoveryStatus::export_all_to(&dir).unwrap();
         crate::secrets::RecoveryGenerated::export_all_to(&dir).unwrap();
-        ct_ledger::ProjectAdded::export_all_to(&dir).unwrap();
-        ct_ledger::DeleteImpact::export_all_to(&dir).unwrap();
-        ct_ledger::AssignmentAdded::export_all_to(&dir).unwrap();
-        ct_ledger::HubProjectView::export_all_to(&dir).unwrap();
-        ct_ledger::HubEnv::export_all_to(&dir).unwrap();
-        ct_ledger::HubTree::export_all_to(&dir).unwrap();
-        ct_ledger::HubHistory::export_all_to(&dir).unwrap();
-        ct_ledger::HubDashboard::export_all_to(&dir).unwrap();
-        ct_ledger::HubRanking::export_all_to(&dir).unwrap();
-        ct_ledger::HubHealth::export_all_to(&dir).unwrap();
-        ct_ledger::HubProposals::export_all_to(&dir).unwrap();
-        ct_ledger::ProposalDecided::export_all_to(&dir).unwrap();
-        ct_ledger::HubRules::export_all_to(&dir).unwrap();
-        ct_ledger::HubRulesHistory::export_all_to(&dir).unwrap();
-        ct_ledger::HubRulesProposal::export_all_to(&dir).unwrap();
-        ct_ledger::HubRulesProposals::export_all_to(&dir).unwrap();
-        ct_gh::TokenStatus::export_all_to(&dir).unwrap();
+        ct_hub_store::ProjectAdded::export_all_to(&dir).unwrap();
+        ct_hub_store::DeleteImpact::export_all_to(&dir).unwrap();
+        ct_hub_store::AssignmentAdded::export_all_to(&dir).unwrap();
+        ct_hub_store::HubProjectView::export_all_to(&dir).unwrap();
+        ct_hub_store::HubEnv::export_all_to(&dir).unwrap();
+        ct_hub_store::HubTree::export_all_to(&dir).unwrap();
+        ct_hub_store::HubHistory::export_all_to(&dir).unwrap();
+        ct_hub_store::HubDashboard::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRanking::export_all_to(&dir).unwrap();
+        ct_hub_store::HubHealth::export_all_to(&dir).unwrap();
+        ct_hub_store::HubProposals::export_all_to(&dir).unwrap();
+        ct_hub_store::ProposalDecided::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRules::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRulesHistory::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRulesProposal::export_all_to(&dir).unwrap();
+        ct_hub_store::HubRulesProposals::export_all_to(&dir).unwrap();
         crate::update::HubUpdateStatus::export_all_to(&dir).unwrap();
         // Rastreador e forja (#347): os tipos soltos, além dos de `HubProject`.
         ct_core::TrackerKind::export_all_to(&dir).unwrap();
@@ -2258,6 +2319,71 @@ mod export {
             format!("// Gerado por `cargo test -p cthubd --features ts export_ts`.\n{index}"),
         )
         .unwrap();
+        write_methods(&dir, &names);
+    }
+
+    /// `methods.ts`: `HubMethods` (parâmetros e resultado por método) e
+    /// `HUB_METHOD_SCOPES`, do registro `crate::methods` (#229), no mesmo
+    /// formato do `methods.ts` do ambiente (`ct-server`, #228). Cada nome de
+    /// tipo nas expressões tem de ser um tipo exportado acima: um nome sem
+    /// arquivo quebra o teste. Fica fora do `index.ts`, que só lista tipos.
+    fn write_methods(dir: &Path, names: &[(String, String)]) {
+        use crate::methods::{Scope, METHODS};
+        use std::collections::BTreeSet;
+        let known: std::collections::BTreeMap<&str, &str> = names
+            .iter()
+            .map(|(n, p)| (n.as_str(), p.as_str()))
+            .collect();
+        let mut imports: BTreeSet<(&str, &str)> = BTreeSet::new();
+        for m in METHODS {
+            for expr in [m.params, m.result] {
+                // Só o que está fora de aspas: "P0" e "global" são literais.
+                let fora_de_aspas = expr
+                    .split('"')
+                    .step_by(2)
+                    .flat_map(|t| t.split(|c: char| !(c.is_alphanumeric() || c == '_')));
+                for word in fora_de_aspas {
+                    if !word.starts_with(|c: char| c.is_ascii_uppercase()) {
+                        continue;
+                    }
+                    let path: &str = known
+                        .get(word)
+                        .copied()
+                        .unwrap_or_else(|| panic!("tipo sem export em {}: {word}", m.name));
+                    imports.insert((word, path));
+                }
+            }
+        }
+        let mut ts = String::from(
+            "// Gerado por `cargo test -p cthubd --features ts export_ts` a partir de\n\
+             // `crates/cthubd/src/methods.rs`. Não editar à mão.\n",
+        );
+        for (word, path) in &imports {
+            ts += &format!("import type {{ {word} }} from \"./{path}\";\n");
+        }
+        let scope_list = |scope: Scope| -> String {
+            let mut out = String::new();
+            for m in METHODS.iter().filter(|m| m.scopes.contains(&scope)) {
+                out += &format!("    \"{}\",\n", m.name);
+            }
+            out
+        };
+        ts += "\n/** Métodos por escopo: `ui` (o app desktop, o /ws) e `web` (o /web/ws). */\n";
+        ts += "export const HUB_METHOD_SCOPES = {\n";
+        ts += &format!("  ui: [\n{}  ],\n", scope_list(Scope::Ui));
+        ts += &format!("  web: [\n{}  ],\n", scope_list(Scope::Web));
+        ts += "} as const;\n\n";
+        ts += "/** Parâmetros (`null`: nenhum) e resultado de cada método do hub. */\n";
+        ts += "export interface HubMethods {\n";
+        for m in METHODS {
+            ts += &format!(
+                "  \"{}\": {{ params: {}; result: {} }};\n",
+                m.name, m.params, m.result
+            );
+        }
+        ts += "}\n\n";
+        ts += "export type HubMethod = keyof HubMethods;\n";
+        fs::write(dir.join("methods.ts"), ts).unwrap();
     }
 }
 
@@ -2275,7 +2401,8 @@ pub(crate) mod tests {
     }
     use crate::router;
     use ct_core::WorkItemKind;
-    use ct_ledger::{Hub, Ledger, NewProject, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
+    use ct_ledger::{Ledger, NewProject};
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -2349,7 +2476,7 @@ pub(crate) mod tests {
     fn hub_com_dados() -> HubState {
         let hub = SharedHub::new(Hub::open_in_memory().unwrap());
         hub.lock()
-            .add_project(&ct_ledger::NewHubProject {
+            .add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -2408,8 +2535,26 @@ pub(crate) mod tests {
             let v = ui.call(m, json!({})).await;
             assert_eq!(v["error"]["code"], -32601, "{m}");
         }
-        let v = ui.call("github.status", json!({})).await;
-        assert_eq!(v["error"]["code"], -32000);
+        // O RPC do token do GitHub saiu (#237): a conexão `github` cuida disso,
+        // editada em Hub › Conexões (#263).
+        for m in ["github.status", "github.set_token", "github.clear_token"] {
+            let v = ui.call(m, json!({ "token": "tok" })).await;
+            assert_eq!(v["error"]["code"], -32601, "{m}");
+        }
+    }
+
+    /// Método fora do registro (`crate::methods`) não é despachado: a recusa
+    /// vem antes dos braços, no `/ws` e na web (que não o tem no escopo).
+    #[tokio::test]
+    async fn metodo_fora_do_registro_nao_despacha() {
+        let st = hub_com_dados();
+        let r = call(&st, "hub.inventado", json!({}), None).await;
+        assert_eq!(r.unwrap_err().0, -32601);
+        let r = call(&st, "hub.projects.add", json!({}), Some("web-1")).await;
+        assert_eq!(r.unwrap_err().0, -32601);
+        // Dentro do registro, o despacho segue: o projeto de teste existe.
+        let r = call(&st, "hub.projects.list", json!({}), None).await;
+        assert!(r.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2646,7 +2791,7 @@ pub(crate) mod tests {
             .hub
             .lock()
             .create_proposal(
-                &ct_ledger::NewProposal {
+                &ct_hub_store::NewProposal {
                     kind: ct_core::ProposalKind::Model,
                     owner: "deep-ion-ai".into(),
                     repo: "demo".into(),
@@ -2737,7 +2882,7 @@ pub(crate) mod tests {
             st.hub
                 .lock()
                 .create_proposal(
-                    &ct_ledger::NewProposal {
+                    &ct_hub_store::NewProposal {
                         kind,
                         owner: "deep-ion-ai".into(),
                         repo: "demo".into(),
@@ -2985,7 +3130,7 @@ pub(crate) mod tests {
 
     /// Um ambiente "wsl" envia o work item `n` de `deep-ion-ai/novo`, com uma
     /// sessão viva.
-    fn push_novo(st: &HubState, l: &Ledger, n: i64) -> ct_ledger::IngestResult {
+    fn push_novo(st: &HubState, l: &Ledger, n: i64) -> ct_hub_store::IngestResult {
         if l.list_projects().unwrap().is_empty() {
             l.add_project(&NewProject {
                 name: "novo-local".into(),
@@ -3315,24 +3460,54 @@ pub(crate) mod tests {
             .contains("PRs abertos"));
     }
 
+    /// Conexões `jira-acme` (`https://jira.example.com`) e `gitlab-acme`
+    /// (`gitlab.example.com`) no hub, com comando de credencial (#277).
+    /// Devolve os `id`.
+    fn conexoes_acme(st: &HubState) -> (i64, i64) {
+        let conn = |name: &str, kind: &str, endpoint: &str, cmd: &str| {
+            let p = json!({ "name": name, "kind": kind, "endpoint": endpoint,
+                            "credential": { "kind": "command", "cmd": cmd } });
+            st.hub
+                .lock()
+                .add_connection(&serde_json::from_value(p).unwrap())
+                .unwrap()
+                .id
+        };
+        (
+            conn(
+                "jira-acme",
+                "jira",
+                "https://jira.example.com",
+                "pass show jira | head -1",
+            ),
+            conn(
+                "gitlab-acme",
+                "gitlab",
+                "gitlab.example.com",
+                "pass show gitlab | head -1",
+            ),
+        )
+    }
+
     /// Cadastro Jira + GitLab (#348): sem a integração com o GitHub (que o
     /// projeto GitHub exige), sem secret do hub, com as recusas de
     /// combinação e de padrão de branch; e o ambiente de sync pelo
-    /// `hub.projects.update`.
+    /// `hub.projects.update`. URL, host e credencial são das conexões
+    /// (#277): o cadastro só as referencia.
     #[tokio::test(flavor = "multi_thread")]
     async fn cadastro_jira_gitlab_sem_github_e_ambiente_de_sync() {
         let st = hub_com_dados();
         assert!(st.github.is_none());
+        let (jira_id, gitlab_id) = conexoes_acme(&st);
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let jira = json!({
-            "kind": "jira", "url": "https://jira.example.com/", "project_key": "proj",
-            "jql": "", "active_sprint_only": true,
-            "credential_cmd": "pass show jira | head -1"
+            "kind": "jira", "project_key": "proj", "jql": "", "active_sprint_only": true,
+            "connection": jira_id
         });
         let gitlab = json!({
             "kind": "gitlab", "clone_url": "git@gitlab.example.com:grupo/projeto/app.git",
-            "credential_cmd": "pass show gitlab | head -1"
+            "connection": gitlab_id
         });
 
         // O projeto GitHub ainda precisa do token do hub.
@@ -3378,13 +3553,37 @@ pub(crate) mod tests {
         let v = ui
             .call(
                 "hub.projects.add",
-                json!({ "tracker": jira, "forge": { "kind": "gitlab", "credential_cmd": "x" } }),
+                json!({ "tracker": jira, "forge": { "kind": "gitlab", "connection": gitlab_id } }),
             )
             .await;
         assert_eq!(v["error"]["code"], -32602, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("URL de clone"),
+            "{v}"
+        );
+        // Sem conexão do Jira: recusado (#277).
+        let sem_conexao =
+            json!({ "kind": "jira", "project_key": "PROJ", "active_sprint_only": true });
+        let v = ui
+            .call(
+                "hub.projects.add",
+                json!({ "tracker": sem_conexao, "forge": gitlab }),
+            )
+            .await;
+        assert_eq!(v["error"]["code"], -32602, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("escolha a conexão do Jira"),
+            "{v}"
+        );
 
-        // Cadastro: normaliza URL e chave, preenche o mapa de tipos, deriva
-        // host e caminho da URL de clone.
+        // Cadastro: normaliza a chave, preenche o mapa de tipos, deriva o
+        // caminho da URL de clone.
         let v = ui
             .call(
                 "hub.projects.add",
@@ -3399,17 +3598,21 @@ pub(crate) mod tests {
             (Some("grupo/projeto"), Some("app")),
             "{v}"
         );
-        assert_eq!(p["tracker"]["url"], "https://jira.example.com");
+        assert_eq!(p["tracker"]["connection"], jira_id);
         assert_eq!(p["tracker"]["project_key"], "PROJ");
         assert_eq!(p["tracker"]["type_map"]["Épico"], "epic");
-        assert_eq!(p["forge"]["host"], "gitlab.example.com");
+        assert_eq!(p["forge"]["connection"], gitlab_id);
         assert_eq!(p["forge"]["path"], "grupo/projeto/app");
         assert_eq!(p["branch_pattern"], "{key}");
         assert_eq!(p["attribution"], false);
         assert_eq!(p["sync_env_id"], Value::Null);
-        // Credenciais nunca viram secret do hub: só o comando, no cadastro.
-        assert_eq!(p["tracker"]["credential_cmd"], "pass show jira | head -1");
-        assert_eq!(p["forge"]["credential_cmd"], "pass show gitlab | head -1");
+        // Endereço e credencial ficam na conexão, não no cadastro.
+        for k in ["url", "credential_cmd", "config_file"] {
+            assert!(p["tracker"].get(k).is_none(), "{k}: {v}");
+        }
+        for k in ["host", "credential_cmd"] {
+            assert!(p["forge"].get(k).is_none(), "{k}: {v}");
+        }
         let v = ui
             .call(
                 "hub.projects.add",
@@ -3477,6 +3680,16 @@ pub(crate) mod tests {
             .find(|p| p["project"]["gh_repo"] == "app")
             .unwrap();
         assert_eq!(jira["tracker_status"], Value::Null);
+        // A UI recebe os endereços e os prefixos das conexões (#277).
+        assert_eq!(
+            jira["project"]["endpoints"],
+            json!({
+                "jira_url": "https://jira.example.com",
+                "gitlab_host": "gitlab.example.com",
+                "jira_cli": r#"JIRA_API_TOKEN="$(pass show jira | head -1)" jira"#,
+                "glab_cli": r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab"#,
+            })
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3652,7 +3865,7 @@ pub(crate) mod tests {
             .unwrap()
             .to_string_lossy()
             .ends_with("-pre-delete.db"));
-        assert!(ct_ledger::list_snapshots(&tmp.path().join("backups"))
+        assert!(ct_hub_store::list_snapshots(&tmp.path().join("backups"))
             .unwrap()
             .is_empty());
         let v = ui.call("hub.projects.list", json!({})).await;
@@ -3894,47 +4107,6 @@ pub(crate) mod tests {
         assert_eq!(st.hub.lock().list_projects().unwrap().len(), 1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn token_do_github_do_hub_sem_expor_o_token() {
-        use ct_gh::fake::{fake_gh, FakeGitHub};
-        use ct_gh::{GhClient, GhConfig};
-        let tmp = tempfile::tempdir().unwrap();
-        let gh = FakeGitHub::start("tok");
-        gh.set("/user", json!({ "login": "octocat" }));
-        let bin = fake_gh(tmp.path(), "tok");
-        let file = tmp.path().join("github.token");
-        let client = GhClient::new(
-            GhConfig::new(&gh.url(), bin.to_str().unwrap())
-                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT)
-                .with_token_file(file.clone()),
-        );
-        let mut st = hub_com_dados();
-        st.github = Some(std::sync::Arc::new(crate::github::HubGithub::new(
-            st.hub.clone(),
-            client,
-            "hub-id",
-            st.events.clone(),
-        )));
-        let url = spawn_server(&st).await;
-        let mut ui = Ui::new(&url).await;
-        let v = ui.call("github.status", json!({})).await;
-        assert_eq!(v["result"]["source"], "gh", "{v}");
-        assert_eq!(v["result"]["login"], "octocat");
-        let v = ui
-            .call("github.set_token", json!({ "token": "invalido" }))
-            .await;
-        assert_eq!(v["error"]["code"], -32000, "{v}");
-        let v = ui.call("github.set_token", json!({ "token": "tok" })).await;
-        assert_eq!(v["result"]["source"], "token", "{v}");
-        assert!(!v.to_string().contains("\"tok\""), "{v}");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "tok");
-        let v = ui.call("github.clear_token", json!({})).await;
-        assert_eq!(v["result"]["source"], "gh", "{v}");
-        assert!(!file.exists());
-        let v = ui.call("github.set_token", json!({})).await;
-        assert_eq!(v["error"]["code"], -32602);
-    }
-
     /// Hub de dados com o store de secrets aberto em `tmp`.
     fn hub_com_secrets(tmp: &std::path::Path) -> HubState {
         let dirs = crate::config::Dirs {
@@ -3950,6 +4122,56 @@ pub(crate) mod tests {
     }
 
     const SEGREDO: &str = "valor-que-nunca-sai-987";
+
+    /// #281: "Testar" de uma conexão com credencial `secret` confere se o
+    /// secret existe no store do hub; antes de gravar, fica a configurar.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn testar_conexao_com_secret_confere_o_store_do_hub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = hub_com_secrets(tmp.path());
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui
+            .call(
+                "hub.connections.add",
+                json!({ "name": "jira-acme", "kind": "jira", "endpoint": "https://jira.example.com",
+                        "credential": { "kind": "secret", "name": "JIRA_TOKEN_ACME" } }),
+            )
+            .await;
+        let id = v["result"]["id"].as_i64().unwrap();
+        let v = ui.call("hub.connections.test", json!({ "id": id })).await;
+        let r = &v["result"]["readiness"];
+        assert_eq!(r["state"], "needs_setup", "{v}");
+        assert!(
+            r["reason"]
+                .as_str()
+                .unwrap()
+                .contains("o secret JIRA_TOKEN_ACME não existe no hub"),
+            "{v}"
+        );
+        let v = ui
+            .call(
+                "hub.secrets.set",
+                json!({ "scope": "global", "name": "JIRA_TOKEN_ACME", "kind": "secret", "value": SEGREDO }),
+            )
+            .await;
+        assert!(v.get("error").is_none(), "{v}");
+        let v = ui.call("hub.connections.test", json!({ "id": id })).await;
+        assert_eq!(v["result"]["readiness"]["state"], "ready", "{v}");
+        assert!(!v.to_string().contains(SEGREDO));
+    }
+
+    #[test]
+    fn secret_da_conexao_falta_por_projeto() {
+        let users = vec!["acme/web".to_string(), "acme/api".to_string()];
+        // Só o acme/web tem o secret no escopo dele, e não há global.
+        let has = |scope: Option<&str>| scope == Some("acme/web");
+        let r = missing_secret("TOKEN", &users, has).unwrap();
+        assert!(r.contains("para acme/api;"), "{r}");
+        assert!(!r.contains("acme/web"), "{r}");
+        assert_eq!(missing_secret("TOKEN", &users, |_| true), None);
+        assert!(missing_secret("TOKEN", &[], |s| s.is_some()).is_some());
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn secrets_list_nunca_devolve_o_valor_de_um_secret() {
@@ -4545,6 +4767,7 @@ pub(crate) mod tests {
         assert!(v["result"]["envs"].is_array(), "{v}");
         let v = web.call("hub.info", json!({})).await;
         assert_eq!(v["result"]["protocol"], crate::PROTOCOL_VERSION);
+        assert_eq!(v["result"]["capabilities"], json!(["version-handshake"]));
         let v = web.call("hub.projects.list", json!({})).await;
         assert_eq!(v["result"][0]["project"]["gh_repo"], "demo");
         // Ação da fase 1 que escreve: mudar status.
@@ -4569,10 +4792,14 @@ pub(crate) mod tests {
         let mut ui = Ui::new(&url).await;
         let params = json!({ "owner": "deep-ion-ai", "repo": "demo", "token": "t",
                              "scope": "global", "name": "X", "value": "v", "key": "k" });
-        for m in crate::web::WEB_SENSITIVE
+        // Tudo que o registro não dá à web (escopo só `Ui`) é recusado aqui.
+        let so_ui: Vec<&str> = crate::methods::METHODS
             .iter()
-            .chain(crate::web::WEB_REFUSED)
-        {
+            .filter(|m| !m.scopes.contains(&crate::methods::Scope::Web))
+            .map(|m| m.name)
+            .collect();
+        assert!(so_ui.contains(&"hub.projects.delete"), "{so_ui:?}");
+        for m in &so_ui {
             let v = web.call(m, params.clone()).await;
             assert_eq!(v["error"]["code"], -32601, "{m}: {v}");
             assert_eq!(v["error"]["message"], "método indisponível na web", "{m}");
@@ -4582,7 +4809,14 @@ pub(crate) mod tests {
         assert_eq!(v["result"].as_array().unwrap().len(), 1);
         // No /ws, com o token de UI, os sensíveis chegam ao despacho (podem
         // falhar por outro motivo, como o store fechado, mas não pela lista).
-        for m in crate::web::WEB_SENSITIVE {
+        let sensiveis = [
+            "hub.projects.delete",
+            "hub.secrets.set",
+            "hub.secrets.delete",
+            "hub.recovery.generate",
+            "hub.recovery.verify",
+        ];
+        for m in sensiveis {
             let v = ui.call(m, params.clone()).await;
             assert_ne!(v["error"]["code"], -32601, "{m}: {v}");
         }
@@ -4685,6 +4919,14 @@ pub(crate) mod tests {
         let h = req.headers_mut();
         h.insert("authorization", format!("Bearer {tok}").parse().unwrap());
         h.insert(ct_http::sync::ENV_ID_HEADER, env_id.parse().unwrap());
+        h.insert(
+            ct_http::sync::PROTOCOL_HEADER,
+            ct_http::sync::SYNC_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        h.insert(
+            ct_http::sync::VERSION_HEADER,
+            ct_core::VERSION.parse().unwrap(),
+        );
         let (ws, _) = connect_async(req).await.unwrap();
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let log = std::sync::Arc::clone(&seen);
@@ -4805,6 +5047,14 @@ pub(crate) mod tests {
         let h = req.headers_mut();
         h.insert("authorization", format!("Bearer {tok}").parse().unwrap());
         h.insert(ct_http::sync::ENV_ID_HEADER, env_id.parse().unwrap());
+        h.insert(
+            ct_http::sync::PROTOCOL_HEADER,
+            ct_http::sync::SYNC_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        h.insert(
+            ct_http::sync::VERSION_HEADER,
+            ct_core::VERSION.parse().unwrap(),
+        );
         let (ws, _) = connect_async(req).await.unwrap();
         let task = tokio::spawn(async move {
             let (mut tx, mut rx) = ws.split();
@@ -4823,11 +5073,17 @@ pub(crate) mod tests {
                     // "Ver issue" de projeto Jira (#434): 7 com descrição em
                     // wiki markup, 8 sem descrição, o resto com a senha recusada.
                     let n = v["params"]["number"].as_i64().unwrap_or(0);
+                    if n == 10 {
+                        // Sem `url`: o hub monta o link de reserva (#264).
+                        let r = json!({ "id": v["id"], "result": { "title": "Sem link" } });
+                        let _ = tx.send(WsMsg::Text(r.to_string().into())).await;
+                        continue;
+                    }
                     let d = match n {
                         7 => json!("h2. Contexto\n*a* <script>x</script>"),
                         8 => Value::Null,
                         _ => {
-                            let e = format!("Jira, PROJ-{n}: o Jira recusou a senha (401)");
+                            let e = format!("Jira, PROJ-{n}: o Jira recusou a credencial (401)");
                             let r =
                                 json!({ "id": v["id"], "error": { "code": -32000, "message": e } });
                             let _ = tx.send(WsMsg::Text(r.to_string().into())).await;
@@ -5158,15 +5414,15 @@ pub(crate) mod tests {
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let mut web = web_ui(&url, &cookie).await;
+        let (jira, gitlab) = conexoes_acme(&st);
         let v = ui
             .call(
                 "hub.projects.add",
                 json!({
-                    "tracker": { "kind": "jira", "url": "https://jira.x", "project_key": "PROJ",
-                                 "jql": "", "active_sprint_only": true,
-                                 "credential_cmd": "pass show jira" },
-                    "forge": { "kind": "gitlab", "clone_url": "git@git.x:acme/app.git",
-                               "credential_cmd": "pass show gitlab" }
+                    "tracker": { "kind": "jira", "project_key": "PROJ", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
+                    "forge": { "kind": "gitlab", "clone_url": "git@gitlab.example.com:acme/app.git",
+                               "connection": gitlab }
                 }),
             )
             .await;
@@ -5211,7 +5467,49 @@ pub(crate) mod tests {
         assert_eq!(v["result"]["body"], "", "{v}");
         let v = ui.call("hub.workitem.body", p(9)).await;
         assert_eq!(
-            v["error"]["message"], "Jira, PROJ-9: o Jira recusou a senha (401)",
+            v["error"]["message"], "Jira, PROJ-9: o Jira recusou a credencial (401)",
+            "{v}"
+        );
+    }
+
+    /// Projeto Jira com conexão (#264): o cadastro não tem URL, e o link de
+    /// reserva do "Ver issue" sai com a URL da conexão.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workitem_body_do_jira_com_conexao_usa_a_url_dela() {
+        let (st, _cookie) = hub_web();
+        let url = spawn_server(&st).await;
+        let mut ui = Ui::new(&url).await;
+        let (jira, gitlab) = conexoes_acme(&st);
+        let v = ui
+            .call(
+                "hub.projects.add",
+                json!({
+                    "tracker": { "kind": "jira", "project_key": "ACME", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
+                    "forge": { "kind": "gitlab",
+                               "clone_url": "https://gitlab.example.com/acme/app.git",
+                               "connection": gitlab }
+                }),
+            )
+            .await;
+        assert!(v["result"].is_object(), "{v}");
+        st.hub.lock().ingest("env-x", "x", &[]).unwrap();
+        let v = ui
+            .call(
+                "hub.assignments.add",
+                json!({ "owner": "acme", "repo": "app", "env": "env-x" }),
+            )
+            .await;
+        assert_eq!(v["result"]["sync_env"], true, "{v}");
+        let _env = fake_env(&st, &url, "env-x").await;
+        let v = ui
+            .call(
+                "hub.workitem.body",
+                json!({ "owner": "acme", "repo": "app", "number": 10 }),
+            )
+            .await;
+        assert_eq!(
+            v["result"]["url"], "https://jira.example.com/browse/ACME-10",
             "{v}"
         );
     }
@@ -5225,15 +5523,15 @@ pub(crate) mod tests {
         let url = spawn_server(&st).await;
         let mut ui = Ui::new(&url).await;
         let mut web = web_ui(&url, &cookie).await;
+        let (jira, gitlab) = conexoes_acme(&st);
         let v = ui
             .call(
                 "hub.projects.add",
                 json!({
-                    "tracker": { "kind": "jira", "url": "https://jira.example.com",
-                                 "project_key": "ACME", "jql": "", "active_sprint_only": true,
-                                 "credential_cmd": "pass show jira" },
-                    "forge": { "kind": "gitlab", "clone_url": "git@git.example.com:acme/app.git",
-                               "credential_cmd": "pass show gitlab" }
+                    "tracker": { "kind": "jira", "project_key": "ACME", "jql": "",
+                                 "active_sprint_only": true, "connection": jira },
+                    "forge": { "kind": "gitlab", "clone_url": "git@gitlab.example.com:acme/app.git",
+                               "connection": gitlab }
                 }),
             )
             .await;
@@ -5639,7 +5937,7 @@ pub(crate) mod tests {
         let v = subscribe(&mut web, &format!("{base}/abc"), &b).await;
         let dev = &v["result"];
         assert_eq!(dev["current"], true, "{v}");
-        assert_eq!(dev["events"].as_array().unwrap().len(), 5, "{v}");
+        assert_eq!(dev["events"].as_array().unwrap().len(), 6, "{v}");
         assert!(dev.get("endpoint").is_none() && dev.get("p256dh").is_none());
         let id = dev["id"].as_i64().unwrap();
 

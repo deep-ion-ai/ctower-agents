@@ -78,6 +78,8 @@ export type Screen =
       register?: RegisterIntent;
       project?: ProjectRef;
       assign?: true;
+      /** Execução de épico aberta em Hub › Execução de épicos (#304). */
+      run?: number;
     }
   /**
    * Manutenção (#335), por seção: sem `section`, a Visão geral. Cada seção

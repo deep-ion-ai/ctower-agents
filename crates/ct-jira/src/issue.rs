@@ -44,8 +44,10 @@ pub fn list_entry(v: &Value, cfg: &JiraConfig) -> Option<ListEntry> {
 /// - os metadados são os campos padrão ([`crate::meta::STANDARD_FIELDS`]) e
 ///   depois os campos próprios do cadastro (`extra_fields`);
 /// - os responsáveis são os identificadores do `fields.assignee`
-///   ([`assignee_ids`]).
-pub fn issue_row(v: &Value, cfg: &JiraConfig) -> Option<IssueRow> {
+///   ([`assignee_ids`]);
+/// - o link é `<jira_url>/browse/<chave>`, com a URL da conexão do Jira do
+///   projeto (#277).
+pub fn issue_row(v: &Value, cfg: &JiraConfig, jira_url: &str) -> Option<IssueRow> {
     let key = v.get("key")?.as_str()?;
     let number = cfg.number_from_key(key)?;
     let f = v.get("fields")?;
@@ -131,7 +133,7 @@ pub fn issue_row(v: &Value, cfg: &JiraConfig) -> Option<IssueRow> {
         labels,
         parent_number,
         has_sub_issues: role == JiraTypeRole::Epic || has_subtasks,
-        url: format!("{}/browse/{key}", cfg.url.trim_end_matches('/')),
+        url: format!("{}/browse/{key}", jira_url.trim_end_matches('/')),
         updated_at: f
             .get("updated")
             .and_then(Value::as_str)
@@ -176,9 +178,10 @@ mod tests {
     use ct_core::default_type_map;
     use serde_json::json;
 
+    const URL: &str = "https://jira.example.com/";
+
     fn cfg() -> JiraConfig {
         JiraConfig {
-            url: "https://jira.example.com/".into(),
             project_key: "PROJ".into(),
             epic_link_field: "customfield_10601".into(),
             epic_name_field: "customfield_10604".into(),
@@ -228,7 +231,7 @@ mod tests {
             "indeterminate",
             json!({ "customfield_10601": "PROJ-5014", "labels": ["fonetica"] }),
         );
-        let r = issue_row(&v, &cfg()).unwrap();
+        let r = issue_row(&v, &cfg(), URL).unwrap();
         assert_eq!(r.gh_number, 5450);
         assert_eq!(r.title, "Resumo de PROJ-5450");
         assert_eq!(r.state, "open");
@@ -254,7 +257,7 @@ mod tests {
                 "emailAddress": "fulano@example.com", "displayName": "Fulano de Tal",
             } }),
         );
-        let r = issue_row(&v, &cfg()).unwrap();
+        let r = issue_row(&v, &cfg(), URL).unwrap();
         assert_eq!(
             r.assignees,
             ["fulano", "JIRAUSER10001", "fulano@example.com"]
@@ -278,7 +281,7 @@ mod tests {
                 "emailAddress": "Fulano@Example.com", "displayName": "Fulano de Tal",
             } }),
         );
-        let r = issue_row(&v, &cfg()).unwrap();
+        let r = issue_row(&v, &cfg(), URL).unwrap();
         assert_eq!(r.assignees, ["000000:fulano-0001", "Fulano@Example.com"]);
         assert!(ct_core::is_assignee(&r.assignees, "fulano@example.com"));
     }
@@ -293,9 +296,12 @@ mod tests {
             "new",
             json!({ "assignee": null }),
         );
-        assert!(issue_row(&nulo, &cfg()).unwrap().assignees.is_empty());
+        assert!(issue_row(&nulo, &cfg(), URL).unwrap().assignees.is_empty());
         let ausente = issue("PROJ-9", "Tarefa", false, "new", json!({}));
-        assert!(issue_row(&ausente, &cfg()).unwrap().assignees.is_empty());
+        assert!(issue_row(&ausente, &cfg(), URL)
+            .unwrap()
+            .assignees
+            .is_empty());
         let vazio = json!({ "name": " ", "displayName": "Ninguém" });
         assert!(assignee_ids(Some(&vazio)).is_empty());
     }
@@ -314,7 +320,7 @@ mod tests {
                 "priority": { "name": "Alta", "id": "2" },
             }),
         );
-        let meta: Vec<_> = issue_row(&v, &cfg())
+        let meta: Vec<_> = issue_row(&v, &cfg(), URL)
             .unwrap()
             .meta
             .into_iter()
@@ -343,7 +349,7 @@ mod tests {
             "new",
             json!({ "assignee": null, "reporter": { "name": "beltrano" } }),
         );
-        let fields: Vec<_> = issue_row(&v, &cfg())
+        let fields: Vec<_> = issue_row(&v, &cfg(), URL)
             .unwrap()
             .meta
             .into_iter()
@@ -392,7 +398,7 @@ mod tests {
             ],
             ..cfg()
         };
-        let meta: Vec<_> = issue_row(&v, &cfg)
+        let meta: Vec<_> = issue_row(&v, &cfg, URL)
             .unwrap()
             .meta
             .into_iter()
@@ -437,7 +443,7 @@ mod tests {
             "new",
             json!({ "customfield_10099": { "displayName": "Quem Implementa" } }),
         );
-        let fields: Vec<_> = issue_row(&v, &cfg)
+        let fields: Vec<_> = issue_row(&v, &cfg, URL)
             .unwrap()
             .meta
             .into_iter()
@@ -456,19 +462,24 @@ mod tests {
             "new",
             json!({ "customfield_10600": [gh] }),
         );
-        let r = issue_row(&v, &cfg()).unwrap();
+        let r = issue_row(&v, &cfg(), URL).unwrap();
         assert_eq!(r.sprints.len(), 1, "detectado");
         assert_eq!(r.sprints[0].name, "Sprint 48");
         let mut c = cfg();
         c.sprint_field = "customfield_10999".into();
-        assert!(issue_row(&v, &c).unwrap().sprints.is_empty());
+        assert!(issue_row(&v, &c, URL).unwrap().sprints.is_empty());
         c.sprint_field = "customfield_10600".into();
-        assert_eq!(issue_row(&v, &c).unwrap().sprints[0].id, 7);
+        assert_eq!(issue_row(&v, &c, URL).unwrap().sprints[0].id, 7);
     }
 
     #[test]
     fn epico_pelo_mapa_ou_pelo_epic_name() {
-        let r = issue_row(&issue("PROJ-1", "Épico", false, "new", json!({})), &cfg()).unwrap();
+        let r = issue_row(
+            &issue("PROJ-1", "Épico", false, "new", json!({})),
+            &cfg(),
+            URL,
+        )
+        .unwrap();
         assert!(r.has_sub_issues && r.parent_number.is_none());
         // Tipo fora do mapa, com Epic Name: épico.
         let v = issue(
@@ -478,7 +489,7 @@ mod tests {
             "new",
             json!({ "customfield_10604": "Fonética" }),
         );
-        assert!(issue_row(&v, &cfg()).unwrap().has_sub_issues);
+        assert!(issue_row(&v, &cfg(), URL).unwrap().has_sub_issues);
         // Story com sub-tasks: épico no Control Tower.
         let v = issue(
             "PROJ-3",
@@ -487,7 +498,7 @@ mod tests {
             "new",
             json!({ "subtasks": [{ "key": "PROJ-4" }] }),
         );
-        assert!(issue_row(&v, &cfg()).unwrap().has_sub_issues);
+        assert!(issue_row(&v, &cfg(), URL).unwrap().has_sub_issues);
     }
 
     #[test]
@@ -499,7 +510,7 @@ mod tests {
             "new",
             json!({ "parent": { "key": "PROJ-3" }, "customfield_10604": "x" }),
         );
-        let r = issue_row(&v, &cfg()).unwrap();
+        let r = issue_row(&v, &cfg(), URL).unwrap();
         assert_eq!(r.parent_number, Some(3));
         assert!(!r.has_sub_issues, "sub-task nunca é épico");
     }
@@ -508,10 +519,10 @@ mod tests {
     fn done_fecha_pela_categoria_e_nao_pelo_nome() {
         let mut v = issue("PROJ-9", "Tarefa", false, "done", json!({}));
         v["fields"]["status"]["name"] = json!("Concluído");
-        assert_eq!(issue_row(&v, &cfg()).unwrap().state, "closed");
+        assert_eq!(issue_row(&v, &cfg(), URL).unwrap().state, "closed");
         let mut v = issue("PROJ-9", "Tarefa", false, "indeterminate", json!({}));
         v["fields"]["status"]["name"] = json!("Done");
-        assert_eq!(issue_row(&v, &cfg()).unwrap().state, "open");
+        assert_eq!(issue_row(&v, &cfg(), URL).unwrap().state, "open");
     }
 
     #[test]
@@ -520,7 +531,7 @@ mod tests {
         c.type_map.insert("Melhoria".into(), JiraTypeRole::Chore);
         c.type_map
             .insert("Impedimento".into(), JiraTypeRole::Ignore);
-        let r = issue_row(&issue("PROJ-5", "Erro", false, "new", json!({})), &c).unwrap();
+        let r = issue_row(&issue("PROJ-5", "Erro", false, "new", json!({})), &c, URL).unwrap();
         assert_eq!(r.labels, vec!["bug"]);
         let v = issue(
             "PROJ-6",
@@ -529,14 +540,29 @@ mod tests {
             "new",
             json!({ "labels": ["chore"] }),
         );
-        assert_eq!(issue_row(&v, &c).unwrap().labels, vec!["chore"]);
-        assert!(issue_row(&issue("PROJ-7", "Impedimento", false, "new", json!({})), &c).is_none());
+        assert_eq!(issue_row(&v, &c, URL).unwrap().labels, vec!["chore"]);
+        assert!(issue_row(
+            &issue("PROJ-7", "Impedimento", false, "new", json!({})),
+            &c,
+            URL
+        )
+        .is_none());
     }
 
     #[test]
     fn outra_chave_e_descartada() {
-        assert!(issue_row(&issue("OUTRO-5", "Tarefa", false, "new", json!({})), &cfg()).is_none());
-        assert!(issue_row(&issue("PROJ-X", "Tarefa", false, "new", json!({})), &cfg()).is_none());
+        assert!(issue_row(
+            &issue("OUTRO-5", "Tarefa", false, "new", json!({})),
+            &cfg(),
+            URL
+        )
+        .is_none());
+        assert!(issue_row(
+            &issue("PROJ-X", "Tarefa", false, "new", json!({})),
+            &cfg(),
+            URL
+        )
+        .is_none());
         // Epic Link para outro projeto: sem pai.
         let v = issue(
             "PROJ-8",
@@ -545,7 +571,7 @@ mod tests {
             "new",
             json!({ "customfield_10601": "OUTRO-1" }),
         );
-        assert_eq!(issue_row(&v, &cfg()).unwrap().parent_number, None);
+        assert_eq!(issue_row(&v, &cfg(), URL).unwrap().parent_number, None);
         let e = list_entry(
             &json!({ "key": "PROJ-8", "fields": { "updated": "2026-10-28T13:15:30Z" } }),
             &cfg(),

@@ -182,7 +182,7 @@ case "$2" in
 esac; exit 0"#,
         );
         std::fs::create_dir_all(p.join("data")).unwrap();
-        ct_ledger::Hub::open(&p.join("data/hub.db"))
+        ct_hub_store::Hub::open(&p.join("data/hub.db"))
             .unwrap()
             .add_legacy_env_token("wsl")
             .unwrap();
@@ -259,7 +259,7 @@ fn atualiza_reinicia_e_volta_com_rollback() {
     );
     assert_eq!(u.read("cargo.log"), "CTHUB_WEB_REQUIRED=1\n");
     // Snapshot consistente (VACUUM INTO) do hub.db, com os tokens.
-    let snap = ct_ledger::Hub::open(&u.path("data/update/db/hub.db")).unwrap();
+    let snap = ct_hub_store::Hub::open(&u.path("data/update/db/hub.db")).unwrap();
     assert_eq!(snap.env_token_names().unwrap(), vec!["wsl"]);
     assert_eq!(u.read("systemctl.log"), "--user restart cthubd\n");
 
@@ -272,11 +272,11 @@ fn atualiza_reinicia_e_volta_com_rollback() {
 
     // O hub novo aceitou dados (token "nova") e o esquema "migrou"; o
     // rollback manual volta o banco do snapshot só com --force.
-    let epoch = ct_ledger::Hub::open(&u.path("data/update/db/hub.db"))
+    let epoch = ct_hub_store::Hub::open(&u.path("data/update/db/hub.db"))
         .unwrap()
         .config_epoch()
         .unwrap();
-    ct_ledger::Hub::open(&u.path("data/hub.db"))
+    ct_hub_store::Hub::open(&u.path("data/hub.db"))
         .unwrap()
         .add_legacy_env_token("nova")
         .unwrap();
@@ -311,10 +311,10 @@ fn atualiza_reinicia_e_volta_com_rollback() {
     let pre = pre_rollback(&u);
     assert_eq!(pre.len(), 1, "{pre:?}");
     bump_schema(&pre[0], v); // só para abrir sem recusar o esquema "futuro"
-    let kept = ct_ledger::Hub::open(&pre[0]).unwrap();
+    let kept = ct_hub_store::Hub::open(&pre[0]).unwrap();
     assert_eq!(kept.env_token_names().unwrap(), vec!["nova", "wsl"]);
     // O restaurado não tem o "nova" e tem outra época da configuração.
-    let h = ct_ledger::Hub::open(&u.path("data/hub.db")).unwrap();
+    let h = ct_hub_store::Hub::open(&u.path("data/hub.db")).unwrap();
     assert_eq!(h.env_token_names().unwrap(), vec!["wsl"]);
     assert_ne!(h.config_epoch().unwrap(), epoch);
     let log = u.read("data/update/update.log");
@@ -424,7 +424,8 @@ fn rollback_sem_versao_anterior_falha() {
 #[test]
 fn sonda_contra_o_hub_de_verdade() {
     let tmp = tempfile::tempdir().unwrap();
-    let hub = ct_ledger::SharedHub::new(ct_ledger::Hub::open(&tmp.path().join("hub.db")).unwrap());
+    let hub =
+        ct_hub_store::SharedHub::new(ct_hub_store::Hub::open(&tmp.path().join("hub.db")).unwrap());
     let state = cthubd::HubState::new(hub, UI_TOKEN, "h", "hub-id");
     let std_l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = std_l.local_addr().unwrap().port();
@@ -465,7 +466,7 @@ fn rollback_automatico_guarda_o_banco_e_renova_a_epoca() {
     let log = u.read("data/update/update.log");
     assert!(log.contains("ctower hub resync"), "{log}");
     assert!(log.contains("config_epoch renovada"), "{log}");
-    let h = ct_ledger::Hub::open(&u.path("data/hub.db")).unwrap();
+    let h = ct_hub_store::Hub::open(&u.path("data/hub.db")).unwrap();
     assert_eq!(h.env_token_names().unwrap(), vec!["wsl"]);
 }
 

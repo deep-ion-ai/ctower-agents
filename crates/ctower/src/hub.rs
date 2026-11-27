@@ -58,7 +58,7 @@ pub fn set_token() -> i32 {
     report((|| {
         let d = dirs()?;
         let (token, env_id) = read_token_and_id()?;
-        if token.starts_with(ct_ledger::AGENT_TOKEN_PREFIX) {
+        if token.starts_with(ct_hub_store::AGENT_TOKEN_PREFIX) {
             return Err(
                 "este é o token de agente (cta_...); grave-o com ctower hub \
                         set-agent-token"
@@ -101,10 +101,10 @@ pub fn set_agent_token() -> i32 {
     report((|| {
         let d = dirs()?;
         let token = read_token()?;
-        if !token.starts_with(ct_ledger::AGENT_TOKEN_PREFIX) {
+        if !token.starts_with(ct_hub_store::AGENT_TOKEN_PREFIX) {
             return Err(format!(
                 "token de agente começa com {}; o de sync vai em ctower hub set-token",
-                ct_ledger::AGENT_TOKEN_PREFIX
+                ct_hub_store::AGENT_TOKEN_PREFIX
             ));
         }
         d.ensure().map_err(|e| e.to_string())?;

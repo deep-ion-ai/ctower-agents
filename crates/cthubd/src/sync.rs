@@ -12,11 +12,12 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use ct_http::sync::{
-    ConfigReply, DecisionsQuery, DecisionsReply, PushRequest, PushResponse, ENV_ID_HEADER,
-    ENV_PUBKEY_HEADER,
+    ConfigReply, DecisionsQuery, DecisionsReply, PushRequest, PushResponse, VersionInfo,
+    VersionRefusal, ENV_ID_HEADER, ENV_PUBKEY_HEADER,
 };
 use ct_http::{bearer_token, unauthorized};
-use ct_ledger::{project_key, IngestResult, LedgerError, AGENT_TOKEN_PREFIX};
+use ct_hub_store::{Hub, IngestResult, AGENT_TOKEN_PREFIX};
+use ct_ledger::{project_key, LedgerError};
 use ct_secrets::{Entry, Scope};
 use std::collections::HashSet;
 
@@ -33,6 +34,57 @@ pub(crate) fn agent_token_here(token: &str) -> Option<Response> {
     })
 }
 
+/// Resultado do portão de entrada do sync (#227).
+pub(crate) enum Gate {
+    /// Token que não é de sync deste hub.
+    Denied,
+    /// Versão diferente ou ausente: recusa com o motivo.
+    Refused(VersionRefusal),
+    /// Aceito; é o nome do ambiente.
+    Admitted(String),
+}
+
+/// Autentica o token, prende ao `env_id` (como sempre), grava a versão que o
+/// ambiente informou e confere o handshake: só versão igual à do hub passa
+/// (#227). A versão fica gravada também na recusa, para a sala de controle
+/// mostrar o ambiente como desatualizado.
+pub(crate) fn gate(
+    hub: &Hub,
+    token: &str,
+    env_id: &str,
+    env: Option<VersionInfo>,
+) -> Result<Gate, LedgerError> {
+    let Some(row) = hub.authenticate(token)? else {
+        return Ok(Gate::Denied);
+    };
+    if row.env_id.is_none() {
+        tracing::warn!(
+            "o token de {} não nasceu preso a um env_id (instalação antiga): preso agora ao \
+             primeiro uso; gire-o com \"cthubd add-env {}\"",
+            row.name,
+            row.name
+        );
+    }
+    hub.bind_env_token(&row.name, env_id)?;
+    hub.set_env_version(
+        env_id,
+        env.as_ref().map(|v| v.protocol.as_str()),
+        env.as_ref().map(|v| v.version.as_str()),
+    )?;
+    let local = VersionInfo::local();
+    if env.as_ref().is_some_and(|e| e.same_as(&local)) {
+        return Ok(Gate::Admitted(row.name));
+    }
+    let refusal = VersionRefusal::new(local, env);
+    tracing::warn!("ambiente {} recusado: {}", row.name, refusal.message);
+    Ok(Gate::Refused(refusal))
+}
+
+/// Recusa por versão diferente: `426` com [`VersionRefusal`] no corpo.
+pub(crate) fn refused(r: VersionRefusal) -> Response {
+    (StatusCode::UPGRADE_REQUIRED, axum::Json(r)).into_response()
+}
+
 /// `POST /sync/push`.
 pub(crate) async fn push(State(st): State<HubState>, headers: HeaderMap, body: Bytes) -> Response {
     let Some(token) = bearer_token(&headers) else {
@@ -41,64 +93,61 @@ pub(crate) async fn push(State(st): State<HubState>, headers: HeaderMap, body: B
     if let Some(r) = agent_token_here(&token) {
         return r;
     }
+    let env_version = VersionInfo::from_headers(&headers);
     let req: PushRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("lote inválido: {e}")).into_response(),
     };
     let hub = st.hub.clone();
     let has_plan = req.plan.is_some();
-    let r = tokio::task::spawn_blocking(move || -> Result<Option<IngestResult>, LedgerError> {
-        let hub = hub.lock();
-        let Some(env) = hub.authenticate(&token)? else {
-            return Ok(None);
-        };
-        if env.env_id.is_none() {
-            tracing::warn!(
-                "o token de {} não nasceu preso a um env_id (instalação antiga): preso agora ao \
-                 primeiro uso; gire-o com \"cthubd add-env {}\"",
-                env.name,
-                env.name
-            );
-        }
-        hub.bind_env_token(&env.name, &req.env_id)?;
-        let r = hub.ingest(&req.env_id, &env.name, &req.entries)?;
-        hub.set_env_pending(&req.env_id, req.pending)?;
-        if let Some(c) = &req.cleanup {
-            hub.set_env_cleanup(&req.env_id, c)?;
-        }
-        if let Some(p) = &req.plan {
-            hub.set_env_plan(&req.env_id, p)?;
-        }
-        if r.quarantined > 0 {
-            tracing::warn!(
-                "push de {}: {} linha(s) em quarentena de projeto(s) não cadastrado(s) no hub: {} \
-                 (cadastre com hub.projects.add ou descarte com hub.quarantine.discard)",
-                env.name,
-                r.quarantined,
-                r.quarantined_projects.join(", ")
-            );
-        }
-        if r.discarded > 0 {
-            tracing::warn!(
-                "push de {}: {} linha(s) descartada(s) de projeto(s) excluído(s) do hub: {}",
-                env.name,
-                r.discarded,
-                r.discarded_projects.join(", ")
-            );
-        }
-        if r.mirror_rejected > 0 {
-            tracing::warn!(
-                "push de {}: {} linha(s) do espelho do rastreador descartada(s): o ambiente não é \
-                 o ambiente de sync de {}",
-                env.name,
-                r.mirror_rejected,
-                r.mirror_rejected_projects.join(", ")
-            );
-        }
-        Ok(Some(r))
-    })
+    let r = tokio::task::spawn_blocking(
+        move || -> Result<Option<Result<IngestResult, VersionRefusal>>, LedgerError> {
+            let hub = hub.lock();
+            let name = match gate(&hub, &token, &req.env_id, env_version)? {
+                Gate::Denied => return Ok(None),
+                Gate::Refused(r) => return Ok(Some(Err(r))),
+                Gate::Admitted(name) => name,
+            };
+            let r = hub.ingest(&req.env_id, &name, &req.entries)?;
+            hub.set_env_pending(&req.env_id, req.pending)?;
+            if let Some(c) = &req.cleanup {
+                hub.set_env_cleanup(&req.env_id, c)?;
+            }
+            if let Some(p) = &req.plan {
+                hub.set_env_plan(&req.env_id, p)?;
+            }
+            if r.quarantined > 0 {
+                tracing::warn!(
+                    "push de {}: {} linha(s) em quarentena de projeto(s) não cadastrado(s) no \
+                     hub: {} (cadastre com hub.projects.add ou descarte com \
+                     hub.quarantine.discard)",
+                    name,
+                    r.quarantined,
+                    r.quarantined_projects.join(", ")
+                );
+            }
+            if r.discarded > 0 {
+                tracing::warn!(
+                    "push de {}: {} linha(s) descartada(s) de projeto(s) excluído(s) do hub: {}",
+                    name,
+                    r.discarded,
+                    r.discarded_projects.join(", ")
+                );
+            }
+            if r.mirror_rejected > 0 {
+                tracing::warn!(
+                    "push de {}: {} linha(s) do espelho do rastreador descartada(s): o ambiente \
+                     não é o ambiente de sync de {}",
+                    name,
+                    r.mirror_rejected,
+                    r.mirror_rejected_projects.join(", ")
+                );
+            }
+            Ok(Some(Ok(r)))
+        },
+    )
     .await;
-    if matches!(r, Ok(Ok(Some(_)))) {
+    if matches!(r, Ok(Ok(Some(Ok(_))))) {
         // Sessões e eventos novos podem virar Web Push (#203).
         st.push_kick();
         // Leitura nova do plano: o agendador do piloto automático (#183)
@@ -108,7 +157,7 @@ pub(crate) async fn push(State(st): State<HubState>, headers: HeaderMap, body: B
         }
     }
     match r {
-        Ok(Ok(Some(r))) => {
+        Ok(Ok(Some(Ok(r)))) => {
             if r.rules_proposals > 0 {
                 // Proposta de regras nova (#357): a UI relê as pendentes.
                 st.rules_changed();
@@ -118,6 +167,7 @@ pub(crate) async fn push(State(st): State<HubState>, headers: HeaderMap, body: B
             })
             .into_response()
         }
+        Ok(Ok(Some(Err(refusal)))) => refused(refusal),
         Ok(Ok(None)) => unauthorized(),
         Ok(Err(LedgerError::Conflict(m))) => (StatusCode::FORBIDDEN, m).into_response(),
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -154,6 +204,7 @@ pub(crate) async fn config(
     if let Some(r) = agent_token_here(&token) {
         return r;
     }
+    let env_version = VersionInfo::from_headers(&headers);
     let Some(env_id) = headers
         .get(ENV_ID_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -182,53 +233,49 @@ pub(crate) async fn config(
     };
     let hub = st.hub.clone();
     let secrets = st.secrets.clone();
-    let r = tokio::task::spawn_blocking(move || -> Result<Option<ConfigReply>, ConfigFail> {
-        // O lock do hub sai antes do store: `HubSecrets::set` pega o store e
-        // depois o hub. Lido depois do `config_rev`, o store está pelo menos
-        // tão novo quanto ele.
-        let (config, deliver_to) = {
-            let hub = hub.lock();
-            let Some(env) = hub.authenticate(&token)? else {
-                return Ok(None);
-            };
-            if env.env_id.is_none() {
-                tracing::warn!(
-                    "o token de {} não nasceu preso a um env_id (instalação antiga): preso agora ao \
-                     primeiro uso; gire-o com \"cthubd add-env {}\"",
-                    env.name,
-                    env.name
-                );
-            }
-            hub.bind_env_token(&env.name, &env_id)?;
-            let key = match &pubkey {
-                Some(pk) => {
-                    hub.set_env_pubkey(&env_id, &pk.to_string())?;
-                    // Antes da entrega desta resposta: o `since` confirma
-                    // só entregas anteriores à mesma chave (#165).
-                    hub.record_env_applied(&env_id, q.since, q.epoch)?;
-                    hub.env_pubkey(&env_id)?
+    let r = tokio::task::spawn_blocking(
+        move || -> Result<Option<Result<ConfigReply, VersionRefusal>>, ConfigFail> {
+            // O lock do hub sai antes do store: `HubSecrets::set` pega o store e
+            // depois o hub. Lido depois do `config_rev`, o store está pelo menos
+            // tão novo quanto ele.
+            let (config, deliver_to) = {
+                let hub = hub.lock();
+                match gate(&hub, &token, &env_id, env_version)? {
+                    Gate::Denied => return Ok(None),
+                    Gate::Refused(r) => return Ok(Some(Err(r))),
+                    Gate::Admitted(_) => {}
                 }
-                None => None,
+                let key = match &pubkey {
+                    Some(pk) => {
+                        hub.set_env_pubkey(&env_id, &pk.to_string())?;
+                        // Antes da entrega desta resposta: o `since` confirma
+                        // só entregas anteriores à mesma chave (#165).
+                        hub.record_env_applied(&env_id, q.since, q.epoch)?;
+                        hub.env_pubkey(&env_id)?
+                    }
+                    None => None,
+                };
+                let force = key.as_ref().is_some_and(|k| k.needs_delivery());
+                let config = hub.env_config_with(&env_id, q.since, q.epoch, force)?;
+                let deliver_to = pubkey.filter(|_| config.changed);
+                (config, deliver_to)
             };
-            let force = key.as_ref().is_some_and(|k| k.needs_delivery());
-            let config = hub.env_config_with(&env_id, q.since, q.epoch, force)?;
-            let deliver_to = pubkey.filter(|_| config.changed);
-            (config, deliver_to)
-        };
-        let secrets = match deliver_to {
-            None => None,
-            Some(pk) => {
-                let b64 = seal_for_env(secrets.as_deref(), &config, &pk)?;
-                hub.lock()
-                    .mark_secrets_delivered(&env_id, &pk.to_string())?;
-                Some(b64)
-            }
-        };
-        Ok(Some(ConfigReply { config, secrets }))
-    })
+            let secrets = match deliver_to {
+                None => None,
+                Some(pk) => {
+                    let b64 = seal_for_env(secrets.as_deref(), &config, &pk)?;
+                    hub.lock()
+                        .mark_secrets_delivered(&env_id, &pk.to_string())?;
+                    Some(b64)
+                }
+            };
+            Ok(Some(Ok(ConfigReply { config, secrets })))
+        },
+    )
     .await;
     match r {
-        Ok(Ok(Some(c))) => axum::Json(c).into_response(),
+        Ok(Ok(Some(Ok(c)))) => axum::Json(c).into_response(),
+        Ok(Ok(Some(Err(refusal)))) => refused(refusal),
         Ok(Ok(None)) => unauthorized(),
         Ok(Err(ConfigFail::Ledger(LedgerError::Conflict(m)))) => {
             (StatusCode::FORBIDDEN, m).into_response()
@@ -366,7 +413,8 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use ct_core::{DecisionOrigin, WorkItemKind};
-    use ct_ledger::{Hub, Ledger, NewDecision, NewProject, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
+    use ct_ledger::{Ledger, NewDecision, NewProject};
     use http_body_util::BodyExt;
     use serde_json::{json, Value};
     use tower::ServiceExt;
@@ -388,7 +436,13 @@ mod tests {
         token: Option<&str>,
         body: Value,
     ) -> (StatusCode, Value) {
-        let mut req = Request::post(path).header("content-type", "application/json");
+        let mut req = Request::post(path)
+            .header("content-type", "application/json")
+            .header(
+                ct_http::sync::PROTOCOL_HEADER,
+                ct_http::sync::SYNC_PROTOCOL_VERSION,
+            )
+            .header(ct_http::sync::VERSION_HEADER, ct_core::VERSION);
         if let Some(t) = token {
             req = req.header("authorization", format!("Bearer {t}"));
         }
@@ -518,7 +572,7 @@ mod tests {
                 h.quarantine_count("deep-ion-ai", "demo").unwrap(),
                 entries_len
             );
-            h.add_project(&ct_ledger::NewHubProject {
+            h.add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -614,7 +668,12 @@ mod tests {
         token: Option<&str>,
         env_id: Option<&str>,
     ) -> (StatusCode, Value) {
-        let mut req = Request::get(path);
+        let mut req = Request::get(path)
+            .header(
+                ct_http::sync::PROTOCOL_HEADER,
+                ct_http::sync::SYNC_PROTOCOL_VERSION,
+            )
+            .header(ct_http::sync::VERSION_HEADER, ct_core::VERSION);
         if let Some(t) = token {
             req = req.header("authorization", format!("Bearer {t}"));
         }
@@ -641,7 +700,7 @@ mod tests {
         let tok = {
             let h = st.hub.lock();
             for repo in ["demo", "outro"] {
-                h.add_project(&ct_ledger::NewHubProject {
+                h.add_project(&ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: repo.into(),
                     name: repo.into(),
@@ -729,7 +788,7 @@ mod tests {
             let a = h.add_legacy_env_token("a").unwrap();
             let b = h.add_legacy_env_token("b").unwrap();
             for repo in ["demo", "outro"] {
-                h.add_project(&ct_ledger::NewHubProject {
+                h.add_project(&ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: repo.into(),
                     name: repo.into(),
@@ -807,6 +866,133 @@ mod tests {
         assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
 
+    /// `POST` com a versão do handshake escolhida (`protocol`, `version`);
+    /// `None` = sem os cabeçalhos (ambiente anterior ao handshake).
+    async fn post_v(
+        st: &HubState,
+        path: &str,
+        token: &str,
+        body: Value,
+        v: Option<(&str, &str)>,
+    ) -> (StatusCode, Value) {
+        let mut req = Request::post(path)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"));
+        if let Some((p, ver)) = v {
+            req = req
+                .header(ct_http::sync::PROTOCOL_HEADER, p)
+                .header(ct_http::sync::VERSION_HEADER, ver);
+        }
+        let resp = router(st.clone())
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    /// `GET /sync/config` com a versão do handshake escolhida.
+    async fn get_v(
+        st: &HubState,
+        token: &str,
+        env_id: &str,
+        v: Option<(&str, &str)>,
+    ) -> (StatusCode, Value) {
+        let mut req = Request::get("/sync/config")
+            .header("authorization", format!("Bearer {token}"))
+            .header("X-Ctower-Env-Id", env_id);
+        if let Some((p, ver)) = v {
+            req = req
+                .header(ct_http::sync::PROTOCOL_HEADER, p)
+                .header(ct_http::sync::VERSION_HEADER, ver);
+        }
+        let resp = router(st.clone())
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    /// Handshake de versão (#227) no push e no config: versão igual passa;
+    /// diferente, parcialmente diferente ou ausente dá `426` com o código e as
+    /// duas versões; o hub grava a versão que o ambiente informou.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn handshake_de_versao_no_push_e_no_config() {
+        let st = state();
+        let tok = st
+            .hub
+            .lock()
+            .issue_env_token_with_env_id("a", "env-a")
+            .unwrap()
+            .token;
+        let body = json!({ "env_id": "env-a", "entries": [] });
+        let igual = Some((ct_http::sync::SYNC_PROTOCOL_VERSION, ct_core::VERSION));
+        let velha = Some((ct_http::sync::SYNC_PROTOCOL_VERSION, "0.0.1"));
+        let outro_contrato = Some(("0.9", ct_core::VERSION));
+
+        // Igual: aceita nos dois.
+        let (s, _) = post_v(&st, "/sync/push", &tok, body.clone(), igual).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _) = get_v(&st, &tok, "env-a", igual).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(
+            st.hub.lock().list_envs().unwrap()[0].version.as_deref(),
+            Some(ct_core::VERSION)
+        );
+
+        // Diferente: recusado, com as duas versões na mensagem.
+        // Por último a versão antiga: é a que o hub grava ao fim do laço.
+        for v in [outro_contrato, velha] {
+            let (s, r) = post_v(&st, "/sync/push", &tok, body.clone(), v).await;
+            assert_eq!(s, StatusCode::UPGRADE_REQUIRED, "{r}");
+            assert_eq!(r["error"], "version_mismatch", "{r}");
+            assert_eq!(r["hub"]["version"], ct_core::VERSION, "{r}");
+            assert_eq!(r["env"]["version"], v.unwrap().1, "{r}");
+            let msg = r["message"].as_str().unwrap();
+            assert!(
+                msg.contains(ct_core::VERSION) && msg.contains(v.unwrap().1),
+                "{msg}"
+            );
+            let (s, r) = get_v(&st, &tok, "env-a", v).await;
+            assert_eq!(s, StatusCode::UPGRADE_REQUIRED, "{r}");
+            assert_eq!(r["error"], "version_mismatch", "{r}");
+        }
+        // O hub grava a versão recusada (desatualizado na sala de controle).
+        assert_eq!(
+            st.hub.lock().list_envs().unwrap()[0].version.as_deref(),
+            Some("0.0.1")
+        );
+
+        // Ausente (ambiente anterior ao handshake): recusado, sem `env`.
+        let (s, r) = post_v(&st, "/sync/push", &tok, body.clone(), None).await;
+        assert_eq!(s, StatusCode::UPGRADE_REQUIRED, "{r}");
+        assert!(r["env"].is_null(), "{r}");
+        assert!(
+            r["message"]
+                .as_str()
+                .unwrap()
+                .contains("não informou a versão"),
+            "{r}"
+        );
+        let (s, _) = get_v(&st, &tok, "env-a", None).await;
+        assert_eq!(s, StatusCode::UPGRADE_REQUIRED);
+        assert!(st.hub.lock().list_envs().unwrap()[0].version.is_none());
+
+        // Token sem versão ou com token errado: a autenticação vem antes e
+        // continua valendo (401, não 426).
+        let (s, _) = post_v(&st, "/sync/push", "errado", body.clone(), igual).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
     async fn get_with(
         st: &HubState,
         path: &str,
@@ -816,7 +1002,12 @@ mod tests {
     ) -> (StatusCode, Value) {
         let mut req = Request::get(path)
             .header("authorization", format!("Bearer {token}"))
-            .header("X-Ctower-Env-Id", env_id);
+            .header("X-Ctower-Env-Id", env_id)
+            .header(
+                ct_http::sync::PROTOCOL_HEADER,
+                ct_http::sync::SYNC_PROTOCOL_VERSION,
+            )
+            .header(ct_http::sync::VERSION_HEADER, ct_core::VERSION);
         if let Some(k) = pubkey {
             req = req.header("X-Ctower-Env-Pubkey", k);
         }
@@ -866,7 +1057,7 @@ mod tests {
         let tok = {
             let h = st.hub.lock();
             for repo in ["demo", "outro"] {
-                h.add_project(&ct_ledger::NewHubProject {
+                h.add_project(&ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: repo.into(),
                     name: repo.into(),

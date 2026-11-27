@@ -5,7 +5,7 @@
 
 use crate::envs::{EnvEntry, NotifyPrefs};
 use crate::notify;
-use ct_client::{Client, ClientEvent, ClientOptions, EnvConfig, Handshake};
+use ct_client::{Client, ClientError, ClientEvent, ClientOptions, EnvConfig, Handshake};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -38,6 +38,59 @@ pub struct EnvStatus {
     pub connected: bool,
     pub error: Option<String>,
     pub since: i64,
+}
+
+/// Códigos das falhas que a própria ponte tem (sem resposta do daemon). Os
+/// mesmos números que o hub usa para os casos equivalentes, para a UI tratar
+/// igual na web e no desktop (`ui/src/api/errors.ts`).
+pub const BRIDGE_ENV_OFFLINE: i64 = -32030;
+pub const BRIDGE_TIMEOUT: i64 = -32031;
+pub const BRIDGE_INVALID_PARAMS: i64 = -32602;
+pub const BRIDGE_INTERNAL: i64 = -32000;
+
+/// Erro de uma chamada pela ponte, como a UI o recebe: `code` é o do erro
+/// JSON-RPC do daemon/hub (ou um dos `BRIDGE_*` acima), `message` é o texto e
+/// `data` o que veio junto, se veio.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BridgeError {
+    pub code: i64,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+impl BridgeError {
+    fn local(code: i64, message: impl Into<String>) -> Self {
+        BridgeError {
+            code,
+            message: message.into(),
+            data: None,
+        }
+    }
+}
+
+impl From<ClientError> for BridgeError {
+    fn from(e: ClientError) -> Self {
+        let message = e.to_string();
+        match e {
+            ClientError::Rpc { code, data, .. } => BridgeError {
+                code,
+                message,
+                data,
+            },
+            ClientError::Disconnected => BridgeError::local(BRIDGE_ENV_OFFLINE, message),
+            ClientError::Timeout => BridgeError::local(BRIDGE_TIMEOUT, message),
+            ClientError::Incompatible { .. } => BridgeError::local(BRIDGE_INTERNAL, message),
+        }
+    }
+}
+
+/// Os comandos que ainda devolvem texto (`attach`, `input`...) seguem com
+/// `Result<_, String>`: o `?` deles aproveita esta conversão.
+impl From<BridgeError> for String {
+    fn from(e: BridgeError) -> String {
+        e.message
+    }
 }
 
 fn now_ms() -> i64 {
@@ -291,21 +344,21 @@ impl Bridge {
         self.conns.lock().unwrap().get(env).map(|c| c.entry.clone())
     }
 
-    fn client(&self, env: &str) -> Result<Client, String> {
+    fn client(&self, env: &str) -> Result<Client, BridgeError> {
         let conns = self.conns.lock().unwrap();
-        let c = conns
-            .get(env)
-            .ok_or_else(|| format!("ambiente desconhecido: {env}"))?;
+        let c = conns.get(env).ok_or_else(|| {
+            BridgeError::local(
+                BRIDGE_INVALID_PARAMS,
+                format!("ambiente desconhecido: {env}"),
+            )
+        })?;
         c.client
             .clone()
-            .ok_or_else(|| "ambiente desconectado".to_string())
+            .ok_or_else(|| BridgeError::local(BRIDGE_ENV_OFFLINE, "ambiente desconectado"))
     }
 
-    pub async fn call(&self, env: &str, method: &str, params: Value) -> Result<Value, String> {
-        self.client(env)?
-            .call(method, params)
-            .await
-            .map_err(|e| e.to_string())
+    pub async fn call(&self, env: &str, method: &str, params: Value) -> Result<Value, BridgeError> {
+        Ok(self.client(env)?.call(method, params).await?)
     }
 
     pub async fn attach(&self, env: &str, session: &str, sink: TermSink) -> Result<(), String> {
@@ -523,6 +576,62 @@ pub(crate) mod tests {
         assert_eq!(ev, PUSH_EVENT);
         assert_eq!(p["event"], "attach_lost");
         assert_eq!(p["data"]["session_id"], "s1");
+    }
+
+    #[test]
+    fn erro_do_daemon_chega_com_o_mesmo_codigo() {
+        let e = BridgeError::from(ClientError::Rpc {
+            code: -32052,
+            message: "aguardando aprovação: rótulo 'aprovada'".into(),
+            data: Some(json!({ "label": "aprovada" })),
+        });
+        assert_eq!(e.code, -32052);
+        assert_eq!(e.message, "aguardando aprovação: rótulo 'aprovada'");
+        assert_eq!(
+            serde_json::to_value(&e).unwrap(),
+            json!({
+                "code": -32052,
+                "message": "aguardando aprovação: rótulo 'aprovada'",
+                "data": { "label": "aprovada" },
+            })
+        );
+    }
+
+    #[test]
+    fn erro_sem_data_nao_leva_o_campo() {
+        let e = BridgeError::from(ClientError::Rpc {
+            code: -32601,
+            message: "método desconhecido".into(),
+            data: None,
+        });
+        assert_eq!(
+            serde_json::to_value(&e).unwrap(),
+            json!({ "code": -32601, "message": "método desconhecido" })
+        );
+    }
+
+    #[test]
+    fn falhas_locais_tem_codigo_da_ponte() {
+        let off = BridgeError::from(ClientError::Disconnected);
+        assert_eq!(off.code, BRIDGE_ENV_OFFLINE);
+        assert_eq!(off.message, "ambiente desconectado");
+        assert_eq!(BridgeError::from(ClientError::Timeout).code, BRIDGE_TIMEOUT);
+        let inc = BridgeError::from(ClientError::Incompatible {
+            daemon: "1.0".into(),
+        });
+        assert_eq!(inc.code, BRIDGE_INTERNAL);
+        assert_eq!(String::from(off), "ambiente desconectado");
+    }
+
+    #[tokio::test]
+    async fn chamada_a_ambiente_desconhecido_leva_codigo() {
+        let (b, _) = bridge();
+        let e = b
+            .call("nao-existe", "env.info", json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, BRIDGE_INVALID_PARAMS);
+        assert!(e.message.contains("nao-existe"), "{e:?}");
     }
 
     #[tokio::test]

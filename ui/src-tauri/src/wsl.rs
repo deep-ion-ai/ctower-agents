@@ -59,11 +59,13 @@ pub fn read_token(distro: &str) -> Result<String, String> {
 }
 
 /// Token do GitHub da distro, para o updater do app (releases de repositório
-/// privado): o mesmo do daemon (`github.token`) ou o login do `gh`. Nunca vai
-/// para o JavaScript. `None` = sem token (a busca segue sem autenticação).
+/// privado): o mesmo do daemon (`github.token`, ou `github-env.token` depois
+/// da migração para a sobrescrita da conexão, #276) ou o login do `gh`. Nunca
+/// vai para o JavaScript. `None` = sem token (a busca segue sem autenticação).
 pub fn read_github_token(distro: &str) -> Option<String> {
-    const SCRIPT: &str =
-        "cat \"$HOME/.config/ctower/github.token\" 2>/dev/null || gh auth token 2>/dev/null";
+    const SCRIPT: &str = "cat \"$HOME/.config/ctower/github.token\" 2>/dev/null \
+         || cat \"$HOME/.config/ctower/github-env.token\" 2>/dev/null \
+         || gh auth token 2>/dev/null";
     let raw = if cfg!(windows) {
         let mut c = wsl(distro);
         c.args(["--exec", "sh", "-c", SCRIPT]);

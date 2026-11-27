@@ -116,10 +116,74 @@ export const matches = (n: ViewNode, f: TreeFilters, me?: string | null) =>
   matchesSprint(n.issue, f.sprint ?? ALL_SPRINTS) &&
   matchesMine(n, f, me);
 
-/** Atividade mais recente do nó e das filhas (null = sem work item/atividade). */
+/** O mínimo para percorrer a árvore: o número e as filhas. */
+export interface TreeShape {
+  issue: { gh_number: number };
+  children: readonly TreeShape[];
+}
+
+/**
+ * Descendentes do nó em profundidade (filhas, netas…), sem o próprio nó, na
+ * ordem da árvore. Protegido contra ciclo no `parent_number`: um nó já
+ * visitado (pelo número) não é visitado de novo (#217).
+ */
+export function descendants<T extends TreeShape>(n: T): T[] {
+  const out: T[] = [];
+  const seen = new Set<number>([n.issue.gh_number]);
+  const walk = (x: T) => {
+    for (const c of x.children as T[]) {
+      if (seen.has(c.issue.gh_number)) continue;
+      seen.add(c.issue.gh_number);
+      out.push(c);
+      walk(c);
+    }
+  };
+  walk(n);
+  return out;
+}
+
+/** Todos os nós da árvore (raízes e descendentes), cada número uma vez só. */
+export function flattenTree<T extends TreeShape>(roots: readonly T[]): T[] {
+  const out: T[] = [];
+  const seen = new Set<number>();
+  for (const r of roots) {
+    for (const x of [r, ...descendants(r)]) {
+      if (seen.has(x.issue.gh_number)) continue;
+      seen.add(x.issue.gh_number);
+      out.push(x);
+    }
+  }
+  return out;
+}
+
+/**
+ * Caminho da raiz até o nó `gh` (inclusive), ou `null` fora da árvore:
+ * `[épico, sub-épico, neta]`. Protegido contra ciclo como `descendants`.
+ */
+export function pathTo<T extends TreeShape>(roots: readonly T[], gh: number): T[] | null {
+  const seen = new Set<number>();
+  const walk = (x: T, path: T[]): T[] | null => {
+    if (seen.has(x.issue.gh_number)) return null;
+    seen.add(x.issue.gh_number);
+    const here = [...path, x];
+    if (x.issue.gh_number === gh) return here;
+    for (const c of x.children as T[]) {
+      const found = walk(c, here);
+      if (found) return found;
+    }
+    return null;
+  };
+  for (const r of roots) {
+    const found = walk(r, []);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Atividade mais recente do nó e dos descendentes (null = sem work item/atividade). */
 export function lastActivity(n: ViewNode): number | null {
   let best: number | null = null;
-  for (const x of [n, ...n.children]) {
+  for (const x of [n, ...descendants(n)]) {
     const t = x.summary.last_activity_at;
     if (t !== null && (best === null || t > best)) best = t;
   }
@@ -166,8 +230,15 @@ export function sortNodes<T extends ViewNode>(list: readonly T[], sort: SortKey)
 
 export interface EpicView<T extends ViewNode> {
   epic: T;
-  /** Sub-issues a mostrar (todas, ou só as que casam com busca/chips). */
+  /** Filhas diretas a mostrar (todas, ou só as que casam com busca/chips). */
   shown: T[];
+  /**
+   * Visão de cada filha mostrada que é sub-épico (#217), pelo número: as
+   * mesmas regras valem em cada nível.
+   */
+  subs: Map<number, EpicView<T>>;
+  /** O próprio épico entra no Kanban (sem filtro, ou ele mesmo casa). */
+  hit: boolean;
 }
 
 export interface TreeView<T extends ViewNode> {
@@ -176,14 +247,17 @@ export interface TreeView<T extends ViewNode> {
 }
 
 /**
- * Aplica visibilidade, busca, chips e ordenação.
+ * Aplica visibilidade, busca, chips e ordenação, em qualquer profundidade
+ * (épico › sub-épico › sub-issues, #217).
  * Visibilidade: por padrão só itens em aberto; um épico aberto, ou com ao menos
- * uma sub-issue aberta, aparece completo. "Mostrar concluídos" (ou o chip
+ * um descendente aberto, aparece completo. "Mostrar concluídos" (ou o chip
  * "Concluído") traz avulsas
  * fechadas e épicos totalmente fechados; uma sprint escolhida (ou a ativa)
  * também, para mostrar a sprint inteira.
- * "Só minhas" (`me`, o "eu" do rastreador): o épico aparece se ele ou uma
- * filha for minha, e só com as filhas minhas.
+ * Busca e chips: uma neta que casa mantém o sub-épico e o épico acima dela;
+ * um épico (ou sub-épico) que casa com a busca traz todos os descendentes.
+ * "Só minhas" (`me`, o "eu" do rastreador): o épico aparece se ele ou um
+ * descendente for meu, e só com os descendentes meus.
  */
 export function buildView<T extends ViewNode>(roots: readonly T[], f: TreeFilters, me?: string | null): TreeView<T> {
   const epics: EpicView<T>[] = [];
@@ -191,20 +265,47 @@ export function buildView<T extends ViewNode>(roots: readonly T[], f: TreeFilter
   // O chip "Concluído" pede os encerrados: sem isso o filtro nunca mostraria nada.
   const sprint = f.sprint ?? ALL_SPRINTS;
   const showDone = f.showDone || f.chips.has("concluido") || sprintShowsDone(sprint);
-  for (const r of roots) {
-    const kids = r.children as T[];
-    if (kids.length > 0) {
-      if (!showDone && !isOpen(r) && !kids.some(isOpen)) continue;
-      let shown = kids;
-      if (narrowing(f)) {
-        // Épico que casa com a busca (sem chips nem sprint) traz todas as
-        // filhas; com "Só minhas", todas as minhas.
-        const byEpic = matchesQuery(r, f.query) && f.chips.size === 0 && sprint === ALL_SPRINTS;
-        const hits = kids.filter((c) => (byEpic ? matchesMine(c, f, me) : matches(c, f, me)));
-        if (!matches(r, f, me) && hits.length === 0) continue;
-        shown = hits;
+  const narrow = narrowing(f);
+  // Números já postos na visão: um ciclo no `parent_number` não repete nó.
+  const seen = new Set<number>();
+  const kidsOf = (n: T) => (n.children as T[]).filter((c) => !seen.has(c.issue.gh_number));
+
+  /**
+   * Visão do épico `e` (já marcado em `seen`), ou null se nada dele aparece.
+   * `byAncestor`: um épico acima casou com a busca e traz os descendentes
+   * (com "Só minhas", os meus).
+   */
+  const epicView = (e: T, byAncestor: boolean): EpicView<T> | null => {
+    // Épico que casa com a busca (sem chips nem sprint) traz todas as
+    // filhas; com "Só minhas", todas as minhas.
+    const byEpic = byAncestor || (matchesQuery(e, f.query) && f.chips.size === 0 && sprint === ALL_SPRINTS);
+    const self = byAncestor ? matchesMine(e, f, me) : matches(e, f, me);
+    const kids = kidsOf(e);
+    for (const c of kids) seen.add(c.issue.gh_number);
+    const shown: T[] = [];
+    const subs = new Map<number, EpicView<T>>();
+    for (const c of kids) {
+      if (kidsOf(c).length > 0) {
+        const sub = epicView(c, byEpic);
+        if (sub) {
+          shown.push(c);
+          subs.set(c.issue.gh_number, sub);
+        }
+      } else if (!narrow || (byEpic ? matchesMine(c, f, me) : matches(c, f, me))) {
+        shown.push(c);
       }
-      epics.push({ epic: r, shown: sortNodes(shown, f.sort) });
+    }
+    if (narrow && !self && shown.length === 0) return null;
+    return { epic: e, shown: sortNodes(shown, f.sort), subs, hit: !narrow || self };
+  };
+
+  for (const r of roots) {
+    if (seen.has(r.issue.gh_number)) continue;
+    seen.add(r.issue.gh_number);
+    if (kidsOf(r).length > 0) {
+      if (!showDone && !isOpen(r) && !descendants(r).some(isOpen)) continue;
+      const v = epicView(r, false);
+      if (v) epics.push(v);
     } else if ((showDone || isOpen(r)) && matches(r, f, me)) {
       loose.push(r);
     }
@@ -221,21 +322,27 @@ export function buildView<T extends ViewNode>(roots: readonly T[], f: TreeFilter
 
 export interface BoardItem<T extends ViewNode> {
   node: T;
-  /** Número do épico pai (sub-issue); null em épico e avulsa. */
+  /** Número do épico pai direto (sub-issue ou sub-épico); null em épico raiz e avulsa. */
   epicOf: number | null;
 }
 
 /**
  * Itens do Kanban a partir da mesma visão da árvore (visibilidade, busca, chips):
  * o épico entra como card (sempre, sem filtro; com filtro, só se ele mesmo casa),
- * seguido das sub-issues mostradas e das avulsas. A ordem de cada coluna é a da árvore.
+ * seguido das sub-issues mostradas (com as netas dos sub-épicos, #217) e das
+ * avulsas. A ordem de cada coluna é a da árvore.
  */
-export function boardItems<T extends ViewNode>(view: TreeView<T>, f: TreeFilters, me?: string | null): BoardItem<T>[] {
+export function boardItems<T extends ViewNode>(view: TreeView<T>): BoardItem<T>[] {
   const items: BoardItem<T>[] = [];
-  for (const { epic, shown } of view.epics) {
-    if (!narrowing(f) || matches(epic, f, me)) items.push({ node: epic, epicOf: null });
-    for (const c of shown) items.push({ node: c, epicOf: epic.issue.gh_number });
-  }
+  const walk = (ev: EpicView<T>, epicOf: number | null) => {
+    if (ev.hit) items.push({ node: ev.epic, epicOf });
+    for (const c of ev.shown) {
+      const sub = ev.subs.get(c.issue.gh_number);
+      if (sub) walk(sub, ev.epic.issue.gh_number);
+      else items.push({ node: c, epicOf: ev.epic.issue.gh_number });
+    }
+  };
+  for (const ev of view.epics) walk(ev, null);
   for (const l of view.loose) items.push({ node: l, epicOf: null });
   return items;
 }
@@ -244,9 +351,9 @@ export function boardItems<T extends ViewNode>(view: TreeView<T>, f: TreeFilters
 export const boardColumns = (f: TreeFilters): WorkItemStatus[] =>
   STATUS_ORDER.filter((k) => f.chips.size === 0 || f.chips.has(k));
 
-/** Sessão viva no épico ou em alguma filha (`isLive` vem de cada tela). */
+/** Sessão viva no épico ou em algum descendente (`isLive` vem de cada tela). */
 export const familyLive = <T extends ViewNode>(n: T, isLive: (n: T) => boolean) =>
-  [n, ...(n.children as T[])].some(isLive);
+  [n, ...descendants(n)].some(isLive);
 
 /**
  * Expansão do épico: com busca/chips ativos fica expandido; senão vale a escolha

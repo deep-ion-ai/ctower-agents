@@ -8,9 +8,9 @@ use ct_ledger::{Event, Ledger, NewEvent, Session, WorkItem};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 /// Prompt sugerido ao retomar (editável pela UI).
 pub const RESUME_PROMPT: &str = "A sessão foi interrompida antes de terminar. \
@@ -263,12 +263,21 @@ fn worktree_status(dir: &Path) -> Option<String> {
     if !dir.is_dir() {
         return None;
     }
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["status", "--short", "--branch"])
-        .output()
-        .ok()?;
+    // Só leitura, com o prazo local do git (`git_local_timeout_secs`).
+    let args = [
+        OsString::from("-C"),
+        dir.as_os_str().to_owned(),
+        OsString::from("status"),
+        OsString::from("--short"),
+        OsString::from("--branch"),
+    ];
+    let out = ct_proc::process::exec(
+        std::ffi::OsStr::new("git"),
+        &args,
+        ct_proc::process::Job::default(),
+        ct_git::deadlines().local,
+    )
+    .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -528,7 +537,10 @@ mod tests {
             }),
             epics: vec![],
         };
-        let gh = (ct_core::TrackerConfig::Github, ct_core::ForgeConfig::Github);
+        let gh = (
+            ct_core::TrackerConfig::Github(Default::default()),
+            ct_core::ForgeConfig::Github(Default::default()),
+        );
         env.assign_with_rules(gh.0.clone(), gh.1.clone(), false, 1, regras(1, "antiga"));
         env.mirror_issues(&[(1, None, false)]);
         let t = env.tmp.path().join("t.jsonl");

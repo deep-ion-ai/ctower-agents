@@ -1,7 +1,9 @@
 //! Cliente do GitHub (spec §7.5): leitura com ETag e paginação, e uma única
 //! escrita, a remoção de branch da limpeza de issues concluídas ([`refs`],
-//! #286). Token: o configurado pela UI (`github.token`, 0600, spec §11) ou,
-//! na falta dele, o do `gh auth token`, obtido sob demanda.
+//! #286). Token: o de um [`TokenProvider`] (no hub e no ambiente, o
+//! resolvedor de credencial a partir da conexão `github` do projeto, #275),
+//! um token fixo ou, sem nenhum dos dois, o do `gh auth token`, obtido sob
+//! demanda.
 //! Síncrono; quem chama roda fora do runtime assíncrono.
 
 pub mod refs;
@@ -15,11 +17,10 @@ pub mod fake;
 
 use serde::Serialize;
 use serde_json::Value;
-use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::io::Read;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Prazo padrão para o `gh auth token` ([`GhConfig::token_timeout`]).
@@ -29,16 +30,15 @@ pub const DEFAULT_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct GhConfig {
     /// Raiz da API, sem barra no fim (`https://api.github.com`).
     pub api_url: String,
-    /// Binário do `gh` (fonte do token).
+    /// Binário do `gh`: o `gh auth token` do cliente sem [`TokenProvider`]
+    /// e a fonte `cli` das conexões (`<gh_bin> auth token`).
     pub gh_bin: String,
     pub timeout: Duration,
     /// Prazo para o `gh auth token` terminar (padrão
     /// [`DEFAULT_TOKEN_TIMEOUT`]); passado dele, o `gh` é morto.
     pub token_timeout: Duration,
-    /// Token configurado (`~/.config/ctower/github.token`); tem prioridade sobre o `gh`.
-    pub token_file: Option<PathBuf>,
-    /// Token fixo (o exclusivo da sessão de release, #204): tem prioridade
-    /// sobre o arquivo e nunca cai para o `gh auth token`.
+    /// Token fixo (o exclusivo da sessão de release, #204): nunca cai para o
+    /// `gh auth token`.
     pub token: Option<String>,
 }
 
@@ -49,7 +49,6 @@ impl GhConfig {
             gh_bin: gh_bin.to_string(),
             timeout: Duration::from_secs(30),
             token_timeout: DEFAULT_TOKEN_TIMEOUT,
-            token_file: None,
             token: None,
         }
     }
@@ -60,15 +59,37 @@ impl GhConfig {
         self
     }
 
-    pub fn with_token_file(mut self, path: PathBuf) -> Self {
-        self.token_file = Some(path);
-        self
-    }
-
     pub fn with_token_timeout(mut self, timeout: Duration) -> Self {
         self.token_timeout = timeout;
         self
     }
+
+    /// Comando da fonte `cli` das conexões: o `gh auth token` do `gh`
+    /// configurado, com o caminho como palavra do shell.
+    pub fn cli_cmd(&self) -> String {
+        format!("{} auth token", ct_core::provider::shell_word(&self.gh_bin))
+    }
+}
+
+/// De onde o cliente tira o token (#275): no hub e no ambiente, o
+/// resolvedor de credencial com a fonte da conexão `github` do projeto. O
+/// cache é de quem implementa; o cliente pede o token a cada requisição.
+pub trait TokenProvider: Send + Sync {
+    /// O token de agora (do cache ou resolvido agora). O erro não leva o
+    /// valor.
+    fn token(&self) -> Result<String, GhError>;
+    /// O GitHub recusou o token (`401`): a próxima chamada resolve de novo.
+    fn invalidate(&self);
+}
+
+/// Origem do token de um [`GhClient`].
+#[derive(Clone)]
+enum Auth {
+    /// [`GhConfig::token`].
+    Fixed(String),
+    /// `gh auth token` do [`GhConfig::gh_bin`], guardado aqui.
+    Gh(Arc<Mutex<Option<String>>>),
+    Provider(Arc<dyn TokenProvider>),
 }
 
 /// Resposta de um GET condicional.
@@ -99,14 +120,21 @@ pub enum GhError {
     Parse(String),
 }
 
+/// Cliente da API. Clonar compartilha a conexão HTTP e o cache de logins;
+/// [`GhClient::with_provider`] dá um cliente com outra origem de token.
+#[derive(Clone)]
 pub struct GhClient {
     cfg: GhConfig,
     agent: ureq::Agent,
-    token: Mutex<Option<String>>,
-    /// `(token, login)` do último `GET /user` que deu certo (#149): o login
-    /// só é pedido de novo quando o token muda.
-    login: Mutex<Option<(String, String)>>,
+    auth: Auth,
+    /// Token → login dos `GET /user` que deram certo (#149): o login só é
+    /// pedido de novo quando o token muda. Compartilhado entre os clientes
+    /// derivados (um por projeto, #275).
+    login: Arc<Mutex<HashMap<String, String>>>,
 }
+
+/// Teto de logins guardados: passou, o cache recomeça.
+const MAX_LOGINS: usize = 32;
 
 struct Page {
     body: Value,
@@ -117,11 +145,24 @@ struct Page {
 impl GhClient {
     pub fn new(cfg: GhConfig) -> Self {
         let agent = ureq::AgentBuilder::new().timeout(cfg.timeout).build();
+        let auth = match &cfg.token {
+            Some(t) => Auth::Fixed(t.clone()),
+            None => Auth::Gh(Arc::new(Mutex::new(None))),
+        };
         GhClient {
             cfg,
             agent,
-            token: Mutex::new(None),
-            login: Mutex::new(None),
+            auth,
+            login: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// O mesmo cliente (API, conexão HTTP e cache de logins) com o token de
+    /// `provider` (#275).
+    pub fn with_provider(&self, provider: Arc<dyn TokenProvider>) -> GhClient {
+        GhClient {
+            auth: Auth::Provider(provider),
+            ..self.clone()
         }
     }
 
@@ -194,7 +235,7 @@ impl GhClient {
             match self.request("GET", &url)?.call() {
                 Ok(r) => break r,
                 Err(ureq::Error::Status(401, _)) if !renewed => {
-                    *self.token.lock().unwrap() = None;
+                    self.discard_token();
                     renewed = true;
                 }
                 Err(ureq::Error::Status(404 | 410, _)) => return Ok(None),
@@ -230,7 +271,7 @@ impl GhClient {
             return match self.request("DELETE", &url)?.call() {
                 Ok(_) => Ok(true),
                 Err(ureq::Error::Status(401, _)) if !renewed => {
-                    *self.token.lock().unwrap() = None;
+                    self.discard_token();
                     renewed = true;
                     continue;
                 }
@@ -272,7 +313,7 @@ impl GhClient {
             return match self.request(method, &url)?.send_json(body) {
                 Ok(r) => json_or_null(r),
                 Err(ureq::Error::Status(401, _)) if !renewed => {
-                    *self.token.lock().unwrap() = None;
+                    self.discard_token();
                     renewed = true;
                     continue;
                 }
@@ -339,7 +380,7 @@ impl GhClient {
             return match self.request("POST", url)?.send_json(body) {
                 Ok(r) => json_or_null(r),
                 Err(ureq::Error::Status(401, _)) if !renewed => {
-                    *self.token.lock().unwrap() = None;
+                    self.discard_token();
                     renewed = true;
                     continue;
                 }
@@ -403,7 +444,7 @@ impl GhClient {
                     Ok(Some(Page { body, etag, next }))
                 }
                 Err(ureq::Error::Status(401, _)) if !renewed => {
-                    *self.token.lock().unwrap() = None;
+                    self.discard_token();
                     renewed = true;
                     continue;
                 }
@@ -413,36 +454,31 @@ impl GhClient {
         }
     }
 
-    /// Token em memória ou, se ainda não há, do arquivo configurado e, na
-    /// falta dele, do `gh auth token`.
-    fn token(&self) -> Result<String, GhError> {
-        let mut t = self.token.lock().unwrap();
-        if let Some(tok) = t.as_ref() {
-            return Ok(tok.clone());
+    /// Token da origem do cliente: o fixo, o do provedor ou o do `gh auth
+    /// token` (guardado até um `401`).
+    pub fn token(&self) -> Result<String, GhError> {
+        match &self.auth {
+            Auth::Fixed(t) => Ok(t.clone()),
+            Auth::Provider(p) => p.token(),
+            Auth::Gh(cache) => {
+                let mut t = cache.lock().unwrap();
+                if let Some(tok) = t.as_ref() {
+                    return Ok(tok.clone());
+                }
+                let tok = gh_token(&self.cfg.gh_bin, self.cfg.token_timeout)?;
+                *t = Some(tok.clone());
+                Ok(tok)
+            }
         }
-        if let Some(tok) = &self.cfg.token {
-            return Ok(tok.clone());
-        }
-        let tok = match self.file_token() {
-            Some(tok) => tok,
-            None => gh_token(&self.cfg.gh_bin, self.cfg.token_timeout)?,
-        };
-        *t = Some(tok.clone());
-        Ok(tok)
     }
 
-    /// Token do arquivo configurado, se houver.
-    fn file_token(&self) -> Option<String> {
-        let path = self.cfg.token_file.as_ref()?;
-        let t = std::fs::read_to_string(path).ok()?;
-        let t = t.trim();
-        (!t.is_empty()).then(|| t.to_string())
-    }
-
-    /// Token configurado para ferramentas externas (`GH_TOKEN` do `gh repo
-    /// clone`); `None` = usar o login do próprio `gh`.
-    pub fn configured_token(&self) -> Option<String> {
-        self.file_token()
+    /// O GitHub recusou o token (`401`): a próxima requisição pede outro.
+    fn discard_token(&self) {
+        match &self.auth {
+            Auth::Fixed(_) => {}
+            Auth::Provider(p) => p.invalidate(),
+            Auth::Gh(cache) => *cache.lock().unwrap() = None,
+        }
     }
 
     /// Login da conta do token em uso: o "eu" do GitHub no filtro "só
@@ -450,18 +486,21 @@ impl GhClient {
     /// só quando o token muda; a falha não fica guardada.
     pub fn login(&self) -> Result<String, GhError> {
         let token = self.token()?;
-        if let Some((t, l)) = self.login.lock().unwrap().as_ref() {
-            if *t == token {
-                return Ok(l.clone());
-            }
+        if let Some(l) = self.login.lock().unwrap().get(&token) {
+            return Ok(l.clone());
         }
         let login = self.login_of(&token)?;
-        *self.login.lock().unwrap() = Some((token, login.clone()));
+        let mut cache = self.login.lock().unwrap();
+        if cache.len() >= MAX_LOGINS {
+            cache.clear();
+        }
+        cache.insert(token, login.clone());
         Ok(login)
     }
 
-    /// Login da conta dona de `token` (GET /user).
-    fn login_of(&self, token: &str) -> Result<String, GhError> {
+    /// Login da conta dona de `token` (GET /user): confere um token antes
+    /// de gravá-lo.
+    pub fn login_of(&self, token: &str) -> Result<String, GhError> {
         let r = self
             .agent
             .get(&format!("{}/user", self.cfg.api_url))
@@ -479,72 +518,6 @@ impl GhClient {
             Err(ureq::Error::Transport(t)) => Err(GhError::Network(t.to_string())),
         }
     }
-
-    /// Valida `token` no GitHub e, se valer, grava no arquivo configurado
-    /// (0600) e passa a usá-lo. Devolve o login da conta.
-    pub fn set_token(&self, token: &str) -> Result<String, GhError> {
-        let token = token.trim();
-        if token.is_empty() || token.contains(char::is_whitespace) {
-            return Err(GhError::Token("token vazio ou com espaços".into()));
-        }
-        let path = self
-            .cfg
-            .token_file
-            .as_ref()
-            .ok_or_else(|| GhError::Token("daemon sem arquivo de token configurado".into()))?;
-        let login = self.login_of(token)?;
-        write_private(path, token).map_err(|e| GhError::Token(e.to_string()))?;
-        *self.token.lock().unwrap() = Some(token.to_string());
-        Ok(login)
-    }
-
-    /// Apaga o token configurado; volta a usar o `gh auth token`.
-    pub fn clear_token(&self) -> Result<(), GhError> {
-        if let Some(path) = &self.cfg.token_file {
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(GhError::Token(e.to_string())),
-            }
-        }
-        *self.token.lock().unwrap() = None;
-        Ok(())
-    }
-
-    /// De onde vem o token e de qual conta ele é (nunca o token).
-    pub fn status(&self) -> TokenStatus {
-        let source = if self.file_token().is_some() {
-            "token"
-        } else {
-            "gh"
-        };
-        match self.token().and_then(|t| self.login_of(&t)) {
-            Ok(login) => TokenStatus {
-                source: source.into(),
-                login: Some(login),
-                error: None,
-            },
-            Err(e) => TokenStatus {
-                source: if matches!(e, GhError::Token(_)) {
-                    "none".into()
-                } else {
-                    source.into()
-                },
-                login: None,
-                error: Some(e.to_string()),
-            },
-        }
-    }
-}
-
-/// Situação do token do GitHub para a UI.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct TokenStatus {
-    /// `token` (configurado no Control Tower), `gh` (`gh auth token`) ou `none`.
-    pub source: String,
-    pub login: Option<String>,
-    pub error: Option<String>,
 }
 
 /// Comentário criado por [`GhClient::comment_pr`] (`github.pr.comment`).
@@ -554,23 +527,6 @@ pub struct PrComment {
     pub id: i64,
     /// `html_url` do comentário.
     pub url: String,
-}
-
-/// Grava `contents` em `path` com permissão 0600 (temporário + rename).
-fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("tmp");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    f.write_all(contents.as_bytes())?;
-    f.sync_all()?;
-    std::fs::rename(&tmp, path)
 }
 
 /// Os últimos `max` bytes de `r`, em fluxo, a partir do começo de uma
@@ -743,89 +699,100 @@ mod tests {
     use crate::fake::{fake_gh, fake_gh_calls, FakeGitHub};
     use serde_json::json;
 
+    /// Provedor de token de teste: devolve o token da vez e conta os
+    /// descartes.
+    struct Provedor {
+        token: Mutex<String>,
+        descartes: Mutex<usize>,
+    }
+
+    impl Provedor {
+        fn new(token: &str) -> Arc<Self> {
+            Arc::new(Provedor {
+                token: Mutex::new(token.into()),
+                descartes: Mutex::new(0),
+            })
+        }
+    }
+
+    impl TokenProvider for Provedor {
+        fn token(&self) -> Result<String, GhError> {
+            Ok(self.token.lock().unwrap().clone())
+        }
+        fn invalidate(&self) {
+            *self.descartes.lock().unwrap() += 1;
+        }
+    }
+
     /// #149: o login do token é pedido uma vez e de novo só quando o token
-    /// muda; a falha não fica guardada.
+    /// muda; a falha não fica guardada. O cache vale entre os clientes
+    /// derivados (#275).
     #[test]
     fn login_do_token_em_cache() {
-        let d = tempfile::tempdir().unwrap();
-        let gh = FakeGitHub::start("tok-a");
-        let file = d.path().join("github.token");
-        std::fs::write(&file, "tok-a").unwrap();
-        let bin = fake_gh(d.path(), "tok-do-gh");
-        let c = GhClient::new(
-            GhConfig::new(&gh.url(), bin.to_str().unwrap())
-                .with_token_timeout(crate::fake::FAKE_GH_TOKEN_TIMEOUT)
-                .with_token_file(file),
-        );
+        let gh = FakeGitHub::start("ghp_ficticio_a");
+        let base = GhClient::new(GhConfig::new(&gh.url(), "/nao/existe/gh"));
+        let p = Provedor::new("ghp_ficticio_a");
+        let c = base.with_provider(p.clone());
         assert!(c.login().is_err(), "sem /user publicado");
         gh.set("/user", json!({ "login": "fulano" }));
         assert_eq!(c.login().unwrap(), "fulano");
         assert_eq!(c.login().unwrap(), "fulano");
+        let outro = base.with_provider(Provedor::new("ghp_ficticio_a"));
+        assert_eq!(outro.login().unwrap(), "fulano");
         let users = || gh.requests().iter().filter(|(p, _)| p == "/user").count();
         assert_eq!(users(), 2, "a falha e o primeiro sucesso");
-        *c.token.lock().unwrap() = Some("tok-b".into());
+        *p.token.lock().unwrap() = "ghp_ficticio_b".into();
         assert!(c.login().is_err(), "token novo: pede de novo");
         assert_eq!(users(), 3);
     }
 
+    /// #275: o cliente derivado usa o token do provedor, não o `gh`, e o
+    /// `401` descarta o token no provedor e tenta uma vez mais.
     #[test]
-    fn token_configurado_tem_prioridade_e_gh_e_reserva() {
-        use std::os::unix::fs::PermissionsExt;
+    fn provedor_de_token_e_401() {
         let d = tempfile::tempdir().unwrap();
-        // O GitHub falso só aceita o token configurado; o `gh` dá outro.
-        let gh = FakeGitHub::start("tok-arquivo");
-        gh.set("/user", json!({ "login": "octocat" }));
-        gh.set("/repos/o/r/issues", json!([]));
-        let file = d.path().join("cfg/github.token");
-        let bin = fake_gh(d.path(), "tok-do-gh");
-        let c = GhClient::new(
+        let gh = FakeGitHub::start("ghp_ficticio_conexao");
+        gh.set("/repos/acme/acme-web/issues", json!([]));
+        let bin = fake_gh(d.path(), "ghp_ficticio_do_gh");
+        let base = GhClient::new(
             GhConfig::new(&gh.url(), bin.to_str().unwrap())
-                .with_token_timeout(crate::fake::FAKE_GH_TOKEN_TIMEOUT)
-                .with_token_file(file.clone()),
+                .with_token_timeout(crate::fake::FAKE_GH_TOKEN_TIMEOUT),
         );
-        let st = c.status();
-        assert_eq!(st.source, "gh");
-        assert!(st.login.is_none() && st.error.unwrap().contains("401"));
+        let p = Provedor::new("ghp_ficticio_conexao");
+        let c = base.with_provider(p.clone());
+        assert!(c.get_all("/repos/acme/acme-web/issues", None).is_ok());
+        assert_eq!(fake_gh_calls(d.path()), 0, "o gh não é consultado");
+        assert_eq!(*p.descartes.lock().unwrap(), 0);
 
-        // Token inválido não é gravado.
-        assert!(c.set_token("errado").is_err());
-        assert!(!file.exists());
-        assert!(c.set_token("  ").is_err());
+        gh.fail_next("/repos/acme/acme-web/issues", 401, &[]);
+        assert!(c.get_all("/repos/acme/acme-web/issues", None).is_ok());
+        assert_eq!(*p.descartes.lock().unwrap(), 1);
 
-        assert_eq!(c.set_token("tok-arquivo").unwrap(), "octocat");
-        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-        assert!(c.get_all("/repos/o/r/issues", None).is_ok());
-        assert_eq!(c.configured_token().as_deref(), Some("tok-arquivo"));
-        let st = c.status();
-        assert_eq!(
-            (st.source.as_str(), st.login.as_deref()),
-            ("token", Some("octocat"))
-        );
-        // Um cliente novo (daemon reiniciado) lê o arquivo antes do gh.
-        let c2 = GhClient::new(
-            GhConfig::new(&gh.url(), bin.to_str().unwrap())
-                .with_token_timeout(crate::fake::FAKE_GH_TOKEN_TIMEOUT)
-                .with_token_file(file.clone()),
-        );
-        assert!(c2.get_all("/repos/o/r/issues", None).is_ok());
-        assert_eq!(fake_gh_calls(d.path()), 1, "só o status inicial usou o gh");
-
-        c.clear_token().unwrap();
-        assert!(!file.exists());
-        assert_eq!(c.configured_token(), None);
-        assert_eq!(c.status().source, "gh");
-        c.clear_token().unwrap();
+        // Token recusado sempre: um descarte por chamada, e o 401 volta.
+        *p.token.lock().unwrap() = "ghp_ficticio_velho".into();
+        let err = c.get_all("/repos/acme/acme-web/issues", None).unwrap_err();
+        assert!(matches!(err, GhError::Http { status: 401, .. }), "{err}");
+        assert_eq!(*p.descartes.lock().unwrap(), 2);
+        // O cliente base segue com o `gh`.
+        assert!(base.get_all("/repos/acme/acme-web/issues", None).is_err());
+        assert_eq!(fake_gh_calls(d.path()), 2);
     }
 
     #[test]
-    fn sem_gh_e_sem_token_status_none() {
+    fn sem_gh_o_token_falha() {
         let gh = FakeGitHub::start("tok");
         let c = GhClient::new(GhConfig::new(&gh.url(), "/nao/existe/gh"));
-        let st = c.status();
-        assert_eq!(st.source, "none");
-        assert!(st.error.is_some());
-        assert!(c.set_token("tok").is_err(), "sem arquivo configurado");
+        assert!(matches!(c.token(), Err(GhError::Token(_))));
+        assert!(matches!(c.get_all("/x", None), Err(GhError::Token(_))));
+    }
+
+    #[test]
+    fn comando_da_fonte_cli_usa_o_gh_configurado() {
+        assert_eq!(GhConfig::new("x", "gh").cli_cmd(), "gh auth token");
+        assert_eq!(
+            GhConfig::new("x", "/opt/acme tools/gh").cli_cmd(),
+            "'/opt/acme tools/gh' auth token"
+        );
     }
 
     #[test]

@@ -240,7 +240,7 @@ describe("projeto Jira + GitLab", () => {
     expect(within(modal).getByText("PROJ-5460")).toBeInTheDocument();
     expect(within(modal).getByRole("button", { name: /Voltar para PROJ-5400/ })).toBeInTheDocument();
     // Prompt do template de issue do Jira (#351), com o jira-cli e o glab
-    // pelo comando de credencial do cadastro.
+    // pelo comando de credencial da conexão.
     const prompt = within(modal).getByLabelText(/Prompt inicial · template de issue do Jira/) as HTMLTextAreaElement;
     expect(prompt.value).toContain("Trabalhe na issue PROJ-5460 do Jira (https://jira.example.com/browse/PROJ-5460): Ajustar o build.");
     expect(prompt.value).toContain('`JIRA_API_TOKEN="$(pass show jira | head -1)" jira issue view PROJ-5460 --comments 20 --plain`');
@@ -267,7 +267,7 @@ describe("projeto Jira + GitLab", () => {
     const modal = screen.getByRole("dialog");
     const note = await within(modal).findByRole("status", { name: "Prontidão do Jira e do GitLab" });
     expect(note).toHaveTextContent("O Jira ou o GitLab não estão prontos em");
-    expect(note).toHaveTextContent('comando de credencial do Jira ok: falta (rode "pass show jira | head -1" num terminal do ambiente');
+    expect(note).toHaveTextContent("credencial do Jira ok: falta (confira a credencial da conexão do Jira (Hub › Conexões)");
     expect(note).toHaveTextContent("jira me ok: falta");
     expect(note).toHaveTextContent("glab instalado: falta");
     expect(note).toHaveTextContent("pass: gpg-agent sem a chave");
@@ -437,7 +437,6 @@ describe("projeto Jira + GitLab", () => {
     };
     const api = envApi()
       .on("env.info", { ...ENV_INFO, commit: "", env_id: "id-wsl", env_name: "wsl", hub_sync: null, hub_config: HUB_CONFIG_UNLINKED, update: null })
-      .on("github.status", { source: "gh", login: "x", error: null })
       .on("cleanup.status", st);
     render(<App api={api} initial={{ name: "maintenance", section: "cleanup" }} />);
     const pend = await screen.findByRole("list", { name: /Limpezas pendentes em/ });
@@ -473,7 +472,6 @@ function hubApi(opts: { projects?: HubProjectView[]; health?: unknown; proposals
     .onHub("hub.dashboard.get", hubDash)
     .onHub("hub.proposals.list", opts.proposals ?? NO_PROPOSALS)
     .onHub("hub.health.get", opts.health ?? NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 0, recovery_configured: true }, items: [], delivery: [] })
     .onHub("hub.recovery.status", recoveryStatus());
 }

@@ -69,6 +69,10 @@ impl Output {
 struct ExitState {
     /// `Some(código)` após a saída; código `None` = morto por sinal.
     status: Option<Option<i32>>,
+    /// O processo já foi colhido (`wait`), antes mesmo do dreno da saída e
+    /// do `status`: daqui em diante o pid pode ser de outro processo e
+    /// nenhum sinal sai.
+    reaped: bool,
     callbacks: Vec<ExitCallback>,
 }
 
@@ -80,6 +84,8 @@ struct Inner {
     out: Mutex<Output>,
     /// Avisa o descarregador da cauda do mascaramento (par de `out`).
     pending: Condvar,
+    /// Prazo da cauda pendente: [`MASK_HOLD`] fora dos testes.
+    mask_hold: Duration,
     exit: Mutex<ExitState>,
     exited: Condvar,
 }
@@ -92,6 +98,23 @@ pub struct PtySession {
 
 impl PtySession {
     pub fn spawn(spec: SpawnSpec, scrollback: usize) -> io::Result<Self> {
+        Self::spawn_held(spec, scrollback, MASK_HOLD)
+    }
+
+    /// [`PtySession::spawn`] com outro prazo para a cauda do mascaramento.
+    /// Só os testes trocam o prazo: o que junta um valor partido não pode
+    /// depender de o agendador entregar a segunda escrita em 50 ms (#293).
+    /// Fora deste crate, só com a feature `test-support` (#313).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn spawn_with_hold(
+        spec: SpawnSpec,
+        scrollback: usize,
+        mask_hold: Duration,
+    ) -> io::Result<Self> {
+        Self::spawn_held(spec, scrollback, mask_hold)
+    }
+
+    fn spawn_held(spec: SpawnSpec, scrollback: usize, mask_hold: Duration) -> io::Result<Self> {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: spec.rows,
@@ -128,6 +151,7 @@ impl PtySession {
                 closed: false,
             }),
             pending: Condvar::new(),
+            mask_hold,
             exit: Mutex::new(ExitState::default()),
             exited: Condvar::new(),
         });
@@ -149,6 +173,7 @@ impl PtySession {
                 Ok(st) => Some(st.exit_code() as i32),
                 Err(_) => None,
             };
+            waiting.exit.lock().unwrap().reaped = true;
             let _ = drained_rx.recv_timeout(DRAIN_GRACE);
             let callbacks = {
                 let mut ex = waiting.exit.lock().unwrap();
@@ -202,11 +227,46 @@ impl PtySession {
             .map_err(io::Error::other)
     }
 
+    /// `SIGHUP`, como fechar a janela do terminal. O processo pode não
+    /// sair: ignorar o sinal, ou recebê-lo numa janela em que o descarta
+    /// (o `bash -i` ainda inicializando, #294). Para garantir a saída, use
+    /// [`PtySession::terminate`].
     pub fn kill(&self) -> io::Result<()> {
-        if self.exit_status().is_some() {
+        if self.inner.exit.lock().unwrap().reaped {
             return Ok(());
         }
         self.inner.killer.lock().unwrap().kill()
+    }
+
+    /// `SIGKILL`: o processo não tem como ignorar.
+    pub fn force_kill(&self) -> io::Result<()> {
+        let ex = self.inner.exit.lock().unwrap();
+        let Some(pid) = self.inner.pid.filter(|_| !ex.reaped) else {
+            return Ok(());
+        };
+        let pid = libc::pid_t::try_from(pid).map_err(io::Error::other)?;
+        // SAFETY: só manda um sinal; o pid é do filho ainda não colhido.
+        if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::ESRCH) {
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
+    /// [`PtySession::kill`] agora e, se o processo não tiver saído depois de
+    /// `grace`, [`PtySession::force_kill`]. Não bloqueia: a escalada roda
+    /// numa thread à parte, e a saída chega pelo [`PtySession::on_exit`].
+    pub fn terminate(&self, grace: Duration) -> io::Result<()> {
+        self.kill()?;
+        let pty = self.clone();
+        std::thread::spawn(move || {
+            if pty.wait_timeout(grace).is_none() {
+                let _ = pty.force_kill();
+            }
+        });
+        Ok(())
     }
 
     /// Snapshot do scrollback e receptor da saída ao vivo, obtidos sob a mesma
@@ -301,8 +361,9 @@ fn read_loop(mut reader: Box<dyn Read + Send>, inner: &Inner) {
     inner.pending.notify_all();
 }
 
-/// Libera a cauda pendente do mascaramento que passou de [`MASK_HOLD`] sem
-/// nova leitura. Só roda em sessões com valores a mascarar.
+/// Libera a cauda pendente do mascaramento que passou do prazo
+/// (`mask_hold`, [`MASK_HOLD`] em produção) sem nova leitura. Só roda em
+/// sessões com valores a mascarar.
 fn flush_loop(inner: &Inner) {
     let mut out = inner.out.lock().unwrap();
     loop {
@@ -316,7 +377,7 @@ fn flush_loop(inner: &Inner) {
         let gen = out.pending_gen;
         let (o, timeout) = inner
             .pending
-            .wait_timeout_while(out, MASK_HOLD, |o| {
+            .wait_timeout_while(out, inner.mask_hold, |o| {
                 !o.closed && o.pending_gen == gen && o.masker.has_pending()
             })
             .unwrap();
@@ -458,6 +519,31 @@ mod tests {
     }
 
     #[test]
+    fn terminate_mata_quem_ignora_o_sighup() {
+        let p = PtySession::spawn(sh("trap '' HUP; echo pronto; read x"), 1024).unwrap();
+        let (snap, rx) = p.attach();
+        read_until(&rx, snap, "pronto");
+        // Só o SIGHUP não basta: o processo segue vivo.
+        p.kill().unwrap();
+        assert_eq!(p.wait_timeout(Duration::from_millis(300)), None);
+        p.terminate(Duration::from_millis(100)).unwrap();
+        assert_eq!(p.wait_timeout(T), Some(None), "morto por sinal");
+        // Depois da saída, nada mais é sinalizado.
+        p.force_kill().unwrap();
+        p.terminate(Duration::ZERO).unwrap();
+    }
+
+    #[test]
+    fn terminate_nao_escala_quem_sai_com_o_sighup() {
+        let p = PtySession::spawn(sh("echo pronto; read x"), 1024).unwrap();
+        let (snap, rx) = p.attach();
+        read_until(&rx, snap, "pronto");
+        // A escalada ficaria para bem depois do prazo: quem encerra é o SIGHUP.
+        p.terminate(Duration::from_secs(600)).unwrap();
+        assert_eq!(p.wait_timeout(T), Some(None));
+    }
+
+    #[test]
     fn on_exit_roda_antes_e_depois_da_saida() {
         let p = PtySession::spawn(sh("exit 7"), 1024).unwrap();
         let (tx, rx) = mpsc::channel();
@@ -489,17 +575,35 @@ mod tests {
         s
     }
 
+    /// Prazo da cauda que nenhum teste alcança.
+    const HOLD_LONGO: Duration = Duration::from_secs(3600);
+
+    /// Sessão com a cauda do mascaramento retida até a próxima leitura ou o
+    /// fim do processo: o resultado não depende de o agendador entregar as
+    /// leituras dentro de [`MASK_HOLD`] (#293). Só
+    /// `cauda_pendente_sai_depois_do_prazo` usa o prazo de verdade.
+    fn spawn_sem_prazo(spec: SpawnSpec, scrollback: usize) -> PtySession {
+        PtySession::spawn_with_hold(spec, scrollback, HOLD_LONGO).unwrap()
+    }
+
     #[test]
     fn mascara_no_scrollback_e_no_assinante_mesmo_partido() {
-        // O valor sai em duas escritas: chega em leituras separadas.
-        let p = PtySession::spawn(
-            masked("read x; printf 'a=sk-abc'; sleep 0.01; printf '123456 b=sk-abc123456\\n'"),
+        // O valor sai em duas escritas, e a segunda só vem depois que o teste
+        // vê a primeira chegar com a cauda retida: as leituras são separadas
+        // com certeza, e o intervalo entre elas não importa. Sem eco, o `\n`
+        // que libera a segunda escrita não entra no meio do valor.
+        let p = spawn_sem_prazo(
+            masked(
+                "stty -echo; read x; printf 'a=sk-abc'; read y; printf '123456 b=sk-abc123456\\n'",
+            ),
             DEFAULT_SCROLLBACK,
-        )
-        .unwrap();
+        );
         let (snap, rx) = p.attach();
         p.write(b"\n").unwrap();
-        let live = read_until(&rx, snap, "b=***API_TOKEN***");
+        let first = read_until(&rx, snap, "a=");
+        assert!(!first.contains("sk-"), "{first}");
+        p.write(b"\n").unwrap();
+        let live = read_until(&rx, first.into_bytes(), "b=***API_TOKEN***");
         assert!(
             live.contains("a=***API_TOKEN*** b=***API_TOKEN***"),
             "{live}"
@@ -526,18 +630,18 @@ mod tests {
 
     #[test]
     fn prefixo_no_fim_do_processo_e_descarregado() {
-        let p = PtySession::spawn(masked("printf 'fim=sk-abc'"), 1024).unwrap();
+        // Sem prazo: quem descarrega a cauda é o fim do processo.
+        let p = spawn_sem_prazo(masked("printf 'fim=sk-abc'"), 1024);
         assert_eq!(p.wait(), Some(0));
         assert!(String::from_utf8_lossy(&p.snapshot()).contains("fim=sk-abc"));
     }
 
     #[test]
     fn conjunto_trocado_no_ar_mascara_o_valor_novo_e_o_antigo() {
-        let p = PtySession::spawn(
+        let p = spawn_sem_prazo(
             masked("read x; printf 'a=sk-abc123456\\n'; read y; printf 'b=sk-novo987654 c=sk-abc123456\\n'; read z"),
             DEFAULT_SCROLLBACK,
-        )
-        .unwrap();
+        );
         let (snap, rx) = p.attach();
         p.write(b"\n").unwrap();
         let live = read_until(&rx, snap, "a=***API_TOKEN***");
@@ -565,7 +669,7 @@ mod tests {
 
     #[test]
     fn sessao_sem_conjunto_passa_a_mascarar() {
-        let p = PtySession::spawn(sh("read x; printf 'v=sk-abc123456\\n'"), 1024).unwrap();
+        let p = spawn_sem_prazo(sh("read x; printf 'v=sk-abc123456\\n'"), 1024);
         let (snap, rx) = p.attach();
         p.set_mask(MaskSet::new([(
             "API_TOKEN".to_string(),

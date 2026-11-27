@@ -92,7 +92,19 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// de dependências do piloto automático, só no ambiente do modo autônomo), o
 /// texto do `session.continue` também nela e a ferramenta MCP
 /// `autopilot_set_dependencies`.
-pub const PROTOCOL_VERSION: &str = "2.24";
+/// 2.25 (#299): `epic_plan` (número do épico) no `session.start_project`
+/// (a sessão de plano da execução de épico) e a ferramenta MCP
+/// `epic_set_plan`, só nela.
+/// 2.26 (#298): `epic_run: { base }` no `session.start` (sub-issue da
+/// execução de épico, que sai da `wip` do épico e aceita texto no
+/// `session.continue`) e `worktree.remove { owner, repo, gh_number }` (também
+/// pelo canal do hub).
+/// 2.27 (#301): o evento `human_input` (teclado da UI numa sessão da
+/// execução de épico, no máximo um por minuto), que o hub usa para marcar a
+/// sub-issue como assumida.
+/// 2.28 (#300): a ferramenta MCP `epic_report_blocker`, só na sessão de
+/// sub-issue da execução de épico.
+pub const PROTOCOL_VERSION: &str = "2.28";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -215,7 +227,7 @@ pub(crate) mod test_util {
     pub const HOOK: &str = "hook-secreto";
 
     /// `cthubd` (o hub de verdade) servindo `hub` em `listener`.
-    pub async fn serve_hub(hub: ct_ledger::SharedHub, listener: tokio::net::TcpListener) {
+    pub async fn serve_hub(hub: ct_hub_store::SharedHub, listener: tokio::net::TcpListener) {
         serve_hub_state(
             cthubd::HubState::new(hub, "ui-do-hub", "hub", "hub-id"),
             listener,
@@ -335,8 +347,7 @@ pub(crate) mod test_util {
             let bin = ct_gh::fake::fake_gh(srv.env.tmp.path(), "tok");
             let client = ct_gh::GhClient::new(
                 ct_gh::GhConfig::new(&gh.url(), bin.to_str().unwrap())
-                    .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT)
-                    .with_token_file(srv.env.tmp.path().join("github.token")),
+                    .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
             );
             gh.set(&issues_path("deep-ion-ai", "demo", "open", None), json!([]));
             gh.set(

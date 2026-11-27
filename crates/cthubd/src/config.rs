@@ -2,6 +2,7 @@
 //! `~/.config/cthub/config.toml` e `~/.local/share/cthub/`, separados do
 //! `ctowerd`.
 
+use ct_core::provider::{ProviderDescriptor, GITHUB};
 use serde::Deserialize;
 use std::io;
 use std::path::PathBuf;
@@ -137,7 +138,8 @@ pub struct HubConfig {
     pub gh_sync_interval_secs: u64,
     /// Raiz da API do GitHub.
     pub gh_api_url: String,
-    /// `gh` de onde vem o token na falta de `github.token` (`gh auth token`).
+    /// `gh` da fonte `cli` das conexões GitHub e da falta de conexão
+    /// `github` no hub (`gh auth token`, #275).
     pub gh_bin: String,
     /// Snapshots do `hub.db`; vazio = `<data>/backups`. Ponha em outro disco.
     pub backup_dir: String,
@@ -169,7 +171,7 @@ pub struct HubConfig {
     /// instala, #421); `0` desliga (o `hub.update.check` continua).
     pub update_check_interval_hours: u64,
     /// Limiares dos sinais de saúde (`[health]`, spec do gestor §5.2).
-    pub health: ct_ledger::HealthThresholds,
+    pub health: ct_hub_store::HealthThresholds,
     /// Dias até o lembrete para verificar de novo a chave de recuperação
     /// (#169); `0` desliga o lembrete.
     pub recovery_reverify_days: u64,
@@ -296,7 +298,7 @@ impl Default for HubConfig {
             bind: "127.0.0.1".into(),
             test_mode: false,
             gh_sync_interval_secs: 180,
-            gh_api_url: "https://api.github.com".into(),
+            gh_api_url: GITHUB.default_endpoint().unwrap_or_default().into(),
             gh_bin: "gh".into(),
             backup_dir: String::new(),
             backup_interval_hours: 6,
@@ -309,7 +311,7 @@ impl Default for HubConfig {
             update_repo: "https://github.com/deep-ion-ai/ctower-agents.git".into(),
             update_ref: "main".into(),
             update_check_interval_hours: 6,
-            health: ct_ledger::HealthThresholds::default(),
+            health: ct_hub_store::HealthThresholds::default(),
             recovery_reverify_days: crate::secrets::DEFAULT_REVERIFY_DAYS,
             web: WebConfig::default(),
             logs: Default::default(),

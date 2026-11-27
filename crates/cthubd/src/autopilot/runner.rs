@@ -23,7 +23,7 @@ use super::plan::{
 use crate::HubState;
 use ct_core::{AutonomyState, PrState, SessionState, WorkItemStatus};
 use ct_http::rpc::{invalid, str_param, RpcResult};
-use ct_ledger::{
+use ct_hub_store::{
     AutonomyWip, AutopilotEvent, AutopilotSession, AutopilotSettings, Hub, ParkedSession,
     RankingFilter, SharedHub, RANKING_MAX,
 };
@@ -100,7 +100,7 @@ pub trait EnvPort: Send + Sync {
 
 /// O canal de verdade, pelo `call_env` do `/ws` (limite de trabalho em
 /// andamento e modelo da issue aplicados lá).
-struct HubPort(HubState);
+pub(crate) struct HubPort(pub(crate) HubState);
 
 impl EnvPort for HubPort {
     fn online(&self, env_id: &str) -> bool {
@@ -243,7 +243,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
     let projects = hub.list_projects()?;
     // Fechamento autônomo (#184): o PR aberto da issue contra a branch de
     // integração, de cada sessão autônoma ociosa.
-    let closes: std::collections::BTreeMap<i64, ct_ledger::CloseState> = hub
+    let closes: std::collections::BTreeMap<i64, ct_hub_store::CloseState> = hub
         .autopilot_close_states()?
         .into_iter()
         .map(|c| (c.work_item_id, c))
@@ -309,13 +309,15 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
             priority: None,
         };
         let meta = hub.autopilot_issue_meta(p.id)?;
+        // Sub-issues de épico em execução (#303): o motor do épico as dirige.
+        let epic_run = hub.epic_run_numbers(p.id)?;
         let mut items = Vec::new();
         for r in hub.ranking(&filter, RANKING_MAX)?.items {
             let model = hub
                 .issue_agent(&p.gh_owner, &p.gh_repo, r.number)?
                 .and_then(|a| a.model);
             let (updated_at, labels) = meta.get(&r.number).cloned().unwrap_or_default();
-            let fingerprint = ct_ledger::issue_fingerprint(
+            let fingerprint = ct_hub_store::issue_fingerprint(
                 r.title.as_deref().unwrap_or_default(),
                 updated_at,
                 r.priority.map(|p| p.as_str()),
@@ -330,6 +332,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
                 model,
                 approved: hub.is_approved(&p.gh_owner, &p.gh_repo, r.number)?,
                 fingerprint,
+                epic_run: epic_run.contains(&r.number),
             });
         }
         // Dependências (#215): as arestas e a situação de cada bloqueante
@@ -342,7 +345,7 @@ pub fn snapshot(hub: &Hub, port: &dyn EnvPort, now: i64) -> ct_ledger::Result<Sn
             .map(|d| d.blocker)
             .collect();
         let tracker_hint = match &p.tracker {
-            ct_core::TrackerConfig::Github => {
+            ct_core::TrackerConfig::Github(_) => {
                 format!("`gh issue view <número> -R {}/{}`", p.gh_owner, p.gh_repo)
             }
             ct_core::TrackerConfig::Jira(_) => "`jira issue view <chave>`".to_string(),
@@ -448,7 +451,7 @@ fn set_protocol(e: &mut plan::EnvSnap, protocol: Option<(u32, u32)>) {
 
 /// O protocolo do ambiente, pelo `env.info`; `None` = não respondeu agora.
 /// Sem o campo (ou ilegível) conta como `0.0`: anterior a tudo.
-async fn env_protocol(port: &dyn EnvPort, env_id: &str) -> Option<(u32, u32)> {
+pub(crate) async fn env_protocol(port: &dyn EnvPort, env_id: &str) -> Option<(u32, u32)> {
     let v = port
         .call(env_id.to_string(), "env.info", json!({}))
         .await
@@ -761,7 +764,7 @@ pub async fn tick_with(
                             || c == ct_http::sync::CHANNEL_TIMEOUT => {}
                     // A sessão não aceitou: falha, e outra inicia depois.
                     Err((_, m)) => {
-                        let failed = ct_ledger::AnalysisRound {
+                        let failed = ct_hub_store::AnalysisRound {
                             session_id: None,
                             pending: Default::default(),
                             failed_at: Some(now),
@@ -966,7 +969,7 @@ async fn start_analysis(
     {
         Ok(v) => {
             let sid = v.get("id").and_then(Value::as_str).map(String::from);
-            let round = ct_ledger::AnalysisRound {
+            let round = ct_hub_store::AnalysisRound {
                 session_id: sid.clone(),
                 failed_at: None,
                 ..a.round
@@ -1002,7 +1005,7 @@ async fn start_analysis(
             Ok(Vec::new())
         }
         Err((code, m)) => {
-            let round = ct_ledger::AnalysisRound {
+            let round = ct_hub_store::AnalysisRound {
                 session_id: None,
                 pending: Default::default(),
                 failed_at: Some(now),
@@ -1251,9 +1254,9 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     let number = int("number")?;
                     let blocker = int("blocker")?;
                     let edit = match str_param(&p, "action")? {
-                        "add" => ct_ledger::ManualEdit::Add,
-                        "remove" => ct_ledger::ManualEdit::Remove,
-                        "reset" => ct_ledger::ManualEdit::Reset,
+                        "add" => ct_hub_store::ManualEdit::Add,
+                        "remove" => ct_hub_store::ManualEdit::Remove,
+                        "reset" => ct_hub_store::ManualEdit::Reset,
                         a => {
                             return Err(invalid(format!(
                                 "action inválida: {a} (use add, remove ou reset)"
@@ -1271,9 +1274,9 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                             err => e(err),
                         })?;
                     let what = match edit {
-                        ct_ledger::ManualEdit::Add => "adicionada",
-                        ct_ledger::ManualEdit::Remove => "removida",
-                        ct_ledger::ManualEdit::Reset => "devolvida à análise",
+                        ct_hub_store::ManualEdit::Add => "adicionada",
+                        ct_hub_store::ManualEdit::Remove => "removida",
+                        ct_hub_store::ManualEdit::Reset => "devolvida à análise",
                     };
                     let (o, r) = (&proj.gh_owner, &proj.gh_repo);
                     hub.record_autopilot_event(&AutopilotEvent {
@@ -1314,29 +1317,31 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     }
                     // Confere todos antes de gravar qualquer um.
                     if max.is_some_and(|n| {
-                        !(1..=ct_ledger::AUTOPILOT_MAX_PER_ENV_CEILING).contains(&n)
+                        !(1..=ct_hub_store::AUTOPILOT_MAX_PER_ENV_CEILING).contains(&n)
                     }) {
                         return Err(invalid(format!(
                             "sessões autônomas por ambiente: de 1 a {}",
-                            ct_ledger::AUTOPILOT_MAX_PER_ENV_CEILING
+                            ct_hub_store::AUTOPILOT_MAX_PER_ENV_CEILING
                         )));
                     }
-                    if idle.is_some_and(|n| n > ct_ledger::AUTOPILOT_IDLE_TIMEOUT_MAX_MIN) {
+                    if idle.is_some_and(|n| n > ct_hub_store::AUTOPILOT_IDLE_TIMEOUT_MAX_MIN) {
                         return Err(invalid(format!(
                             "minutos de sessão ociosa: de 0 a {}",
-                            ct_ledger::AUTOPILOT_IDLE_TIMEOUT_MAX_MIN
+                            ct_hub_store::AUTOPILOT_IDLE_TIMEOUT_MAX_MIN
                         )));
                     }
-                    if attempts.is_some_and(|n| n > ct_ledger::AUTOPILOT_MAX_CI_ATTEMPTS_CEILING) {
+                    if attempts.is_some_and(|n| n > ct_hub_store::AUTOPILOT_MAX_CI_ATTEMPTS_CEILING)
+                    {
                         return Err(invalid(format!(
                             "tentativas de correção do CI: de 0 a {}",
-                            ct_ledger::AUTOPILOT_MAX_CI_ATTEMPTS_CEILING
+                            ct_hub_store::AUTOPILOT_MAX_CI_ATTEMPTS_CEILING
                         )));
                     }
-                    if waiting.is_some_and(|n| n > ct_ledger::AUTOPILOT_WAITING_TIMEOUT_MAX_MIN) {
+                    if waiting.is_some_and(|n| n > ct_hub_store::AUTOPILOT_WAITING_TIMEOUT_MAX_MIN)
+                    {
                         return Err(invalid(format!(
                             "minutos em \"Aguardando você\": de 0 a {}",
-                            ct_ledger::AUTOPILOT_WAITING_TIMEOUT_MAX_MIN
+                            ct_hub_store::AUTOPILOT_WAITING_TIMEOUT_MAX_MIN
                         )));
                     }
                     let mut s = hub.autopilot_settings().map_err(e)?;
@@ -1372,7 +1377,8 @@ mod tests {
     use ct_core::plan::budget::BudgetPolicy;
     use ct_core::plan::{EnvPlanReport, PlanAccount, PlanReading, PlanWindow};
     use ct_core::{ApprovalConfig, AutonomyConfig, Priority};
-    use ct_ledger::{GithubSnapshot, HubProjectPatch, IssueAgent, IssueRow, NewHubProject};
+    use ct_hub_store::{HubProjectPatch, IssueAgent, NewHubProject};
+    use ct_ledger::{GithubSnapshot, IssueRow};
     use std::sync::Mutex;
 
     /// Sábado, 2026-11-14 12:00 em GMT-3: fim de semana, faixa aberta.
@@ -2427,8 +2433,8 @@ mod tests {
         assert!(port.calls.lock().unwrap().is_empty());
 
         // A sessão grava (o que a rota de agente faz): a 123 inicia.
-        let set = ct_ledger::DependencySet {
-            items: vec![ct_ledger::DependencyInput {
+        let set = ct_hub_store::DependencySet {
+            items: vec![ct_hub_store::DependencyInput {
                 number: 123,
                 blocked_by: vec![],
             }],

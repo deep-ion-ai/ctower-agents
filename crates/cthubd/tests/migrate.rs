@@ -3,7 +3,7 @@
 //! (`tests/fixtures`).
 
 use assert_cmd::Command;
-use ct_ledger::{AssignmentFilter, Hub, SharedHub};
+use ct_hub_store::{AssignmentFilter, Hub, SharedHub};
 use cthubd::config::Dirs;
 use cthubd::migrate::{migrate, migrate_files, MigrateOpts};
 use predicates::str::contains;
@@ -115,9 +115,12 @@ fn serve(hub: Hub) -> String {
 }
 
 fn pull(url: &str, token: &str, env_id: &str) -> Result<Value, u16> {
+    let local = ct_http::sync::VersionInfo::local();
     match ureq::get(&format!("{url}/sync/config"))
         .set("Authorization", &format!("Bearer {}", token.trim()))
         .set("X-Ctower-Env-Id", env_id)
+        .set(ct_http::sync::PROTOCOL_HEADER, &local.protocol)
+        .set(ct_http::sync::VERSION_HEADER, &local.version)
         .call()
     {
         Ok(r) => Ok(r.into_json().unwrap()),
@@ -265,11 +268,14 @@ fn migra_preservando_projetos_atribuicoes_decisoes_e_tokens() {
 
     // O cthubd migrado aceita o token antigo do notebook e o novo do local.
     let url = serve(Hub::open(&db).unwrap());
+    let local = ct_http::sync::VersionInfo::local();
     let r: Value = ureq::post(&format!("{url}/sync/push"))
         .set(
             "Authorization",
             &format!("Bearer {}", NOTEBOOK_TOKEN.trim()),
         )
+        .set(ct_http::sync::PROTOCOL_HEADER, &local.protocol)
+        .set(ct_http::sync::VERSION_HEADER, &local.version)
         .send_json(json!({ "env_id": NOTEBOOK, "entries": [], "pending": 0 }))
         .unwrap()
         .into_json()
@@ -338,7 +344,10 @@ fn fixtures_antigas_viram_projetos_github() {
     }
     let hub = Hub::open(&db).unwrap();
     for p in hub.list_projects().unwrap() {
-        assert_eq!(p.tracker, ct_core::TrackerConfig::Github);
+        assert_eq!(
+            p.tracker,
+            ct_core::TrackerConfig::Github(Default::default())
+        );
         assert_eq!(p.item_ref(7), format!("{}/{}#7", p.gh_owner, p.gh_repo));
     }
     // O pull leva os padrões do GitHub.
@@ -358,8 +367,11 @@ fn fixtures_antigas_viram_projetos_github() {
     let ps = l.list_all_projects().unwrap();
     assert!(!ps.is_empty());
     for p in ps {
-        assert_eq!(p.tracker, ct_core::TrackerConfig::Github);
-        assert_eq!(p.forge, ct_core::ForgeConfig::Github);
+        assert_eq!(
+            p.tracker,
+            ct_core::TrackerConfig::Github(Default::default())
+        );
+        assert_eq!(p.forge, ct_core::ForgeConfig::Github(Default::default()));
         assert!(p.attribution && !p.sync_role);
         assert_eq!(p.effective_branch_pattern(), "{prefix}/{n}-{slug}");
     }

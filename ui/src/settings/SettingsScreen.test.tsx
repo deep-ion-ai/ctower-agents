@@ -18,8 +18,7 @@ function setup(initial: Screen = { name: "settings" }) {
   ])
     .on("dashboard.get", dashboard({ sync: [sync({ last_ok_at: NOW })] }))
     .on("env.info", { protocol: "2.0", version: "0.1.0", hostname: "ct", worktrees_root: "/home/user/worktrees" })
-    .on("sync.now", [])
-    .on("github.status", { source: "gh", login: "octocat", error: null });
+    .on("sync.now", []);
   render(<App api={api} initial={initial} />);
   return { api, user: userEvent.setup() };
 }
@@ -170,36 +169,6 @@ test("ambiente ligado a um hub sem a conexão na UI: aviso", async () => {
   act(() => api.push("wsl", "session_started"));
   expect(await screen.findByText(/Há ambientes ligados a um hub, mas a conexão com ele não está configurada/)).toBeInTheDocument();
   expect(screen.getByText(/Conexão com o hub não configurada: projetos/)).toBeInTheDocument();
-});
-
-test("token do GitHub: mostra conta e origem, nunca o token", async () => {
-  const { api, user } = setup(ENV);
-  expect(await screen.findByText("@octocat")).toBeInTheDocument();
-  expect(screen.getByText(/login do gh na distro/)).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Remover token" })).not.toBeInTheDocument();
-  api.on("github.set_token", { source: "token", login: "octocat", error: null });
-  const campo = screen.getByLabelText("Novo token (personal access token)");
-  expect(campo).toHaveAttribute("type", "password");
-  await user.type(campo, "ghp_segredo123");
-  await user.click(screen.getByRole("button", { name: "Salvar token" }));
-  await waitFor(() => expect(api.callsTo("github.set_token")[0].params).toEqual({ token: "ghp_segredo123" }));
-  expect(await screen.findByText(/token configurado no Control Tower/)).toBeInTheDocument();
-  expect(campo).toHaveValue("");
-  expect(document.body.textContent).not.toContain("ghp_segredo123");
-  api.on("github.clear_token", { source: "gh", login: "octocat", error: null });
-  await user.click(screen.getByRole("button", { name: "Remover token" }));
-  await waitFor(() => expect(api.callsTo("github.clear_token")).toHaveLength(1));
-  expect(await screen.findByText(/login do gh na distro/)).toBeInTheDocument();
-});
-
-test("token recusado mostra o erro", async () => {
-  const { api, user } = setup(ENV);
-  api.on("github.set_token", () => {
-    throw "GitHub respondeu 401: Bad credentials";
-  });
-  await user.type(await screen.findByLabelText("Novo token (personal access token)"), "errado");
-  await user.click(screen.getByRole("button", { name: "Salvar token" }));
-  expect(await screen.findByText("GitHub respondeu 401: Bad credentials")).toBeInTheDocument();
 });
 
 test("preferência do Remote Control vai para session.remote_control no ui.json (#197)", async () => {
@@ -786,59 +755,111 @@ test("Plano da conta (#108): limiares padrão e por conta com validação, prazo
   await waitFor(() => expect(api.uiConfig.plan?.notify).toBe(false));
 });
 
-/** `env.credentials.get|set` em memória (#143): um projeto Jira + GitLab. */
-function withCredentials(api: FakeDaemonApi) {
-  let row = {
-    owner: "acme",
-    repo: "web",
-    name: "acme-web",
-    tracker: "jira",
-    forge: "gitlab",
-    project_tracker_cmd: "/opt/homebrew/bin/pass show jira | head -1",
-    project_forge_cmd: "/opt/homebrew/bin/pass show gitlab | head -1",
-    tracker_cmd: "",
-    forge_cmd: "",
-    readiness: null,
-    sync: { project_id: 1, last_attempt_at: NOW, last_ok_at: null, last_error: "comando de credencial do Jira não imprimiu nada", failures: 4, failing_since: NOW },
-  };
+/** `env.connections.get|set` em memória (#276): Jira com sobrescrita a fazer, GitHub com arquivo do hub ausente. */
+function withConnections(api: FakeDaemonApi) {
+  let rows = [
+    {
+      name: "github",
+      kind: "github",
+      endpoint: "",
+      hub_source: { kind: "file", detail: "~/.config/cthub/github.token" },
+      credential_cmd: "",
+      in_hub: true,
+      projects: ["acme-api"],
+      file_missing: true,
+    },
+    {
+      name: "jira-acme",
+      kind: "jira",
+      endpoint: "https://jira.example.com",
+      hub_source: { kind: "secret", detail: "JIRA_TOKEN_ACME" },
+      credential_cmd: "",
+      in_hub: true,
+      projects: ["acme-web"],
+      file_missing: false,
+    },
+    {
+      name: "jira-antigo",
+      kind: null,
+      endpoint: "",
+      hub_source: null,
+      credential_cmd: "pass show antigo",
+      in_hub: false,
+      projects: [],
+      file_missing: false,
+    },
+  ];
   api
-    .on("env.credentials.get", () => [row])
-    .on("env.credentials.set", ({ tracker_cmd, forge_cmd }: { tracker_cmd: string; forge_cmd: string }) => {
-      if (tracker_cmd.includes("\n")) throw new Error("uma linha só");
-      row = { ...row, tracker_cmd, forge_cmd };
-      return [row];
+    .on("env.connections.get", () => rows)
+    .on("env.connections.set", ({ name, credential_cmd }: { name: string; credential_cmd: string }) => {
+      if (credential_cmd.includes("\n")) throw new Error("uma linha só");
+      rows = rows
+        .filter((r) => r.in_hub || credential_cmd !== "" || r.name !== name)
+        .map((r) =>
+          r.name === name ? { ...r, credential_cmd, file_missing: r.hub_source?.kind === "file" && credential_cmd === "" } : r,
+        );
+      return rows;
     });
   act(() => api.push("wsl", "session_started"));
 }
 
-test("credencial do Jira por ambiente: mostra a do cadastro, o sync falhando, grava e volta ao cadastro (#143)", async () => {
-  const { api, user } = setup(ENV);
-  withCredentials(api);
-  const sec = await screen.findByRole("region", {
-    name: "Credenciais do Jira e GitLab: Comandos de credencial deste ambiente",
-  });
-  const campo = await within(sec).findByLabelText("Comando do Jira de acme-web");
-  expect(within(sec).getByText("/opt/homebrew/bin/pass show jira | head -1")).toBeInTheDocument();
-  expect(within(sec).getByRole("status")).toHaveTextContent(/sync falhando há 4 ciclo\(s\)/);
-  expect(within(sec).getByRole("button", { name: "Salvar" })).toBeDisabled();
+const conexoes = () =>
+  screen.findByRole("region", { name: "Credenciais das conexões: Comando de credencial deste ambiente" });
 
-  await user.type(campo, "/usr/bin/pass show jira | head -1");
-  await user.click(within(sec).getByRole("button", { name: "Salvar" }));
+test("sobrescrita por conexão: fonte do hub sem valor, grava e volta à do hub (#276)", async () => {
+  const { api, user } = setup(ENV);
+  withConnections(api);
+  const sec = await conexoes();
+  const jira = await within(sec).findByRole("group", { name: "Credencial de jira-acme" });
+  expect(within(jira).getByText(/secret do hub JIRA_TOKEN_ACME/)).toBeInTheDocument();
+  expect(within(jira).getByText(/usada por acme-web/)).toBeInTheDocument();
+  expect(within(jira).getByRole("button", { name: "Salvar" })).toBeDisabled();
+  expect(within(jira).getByRole("button", { name: "Usar a do hub" })).toBeDisabled();
+
+  const campo = within(jira).getByLabelText("Comando de jira-acme neste ambiente");
+  await user.type(campo, "pass show acme/jira");
+  await user.click(within(jira).getByRole("button", { name: "Salvar" }));
   await waitFor(() =>
-    expect(api.calls.filter((c) => c.method === "env.credentials.set").map((c) => c.params)).toEqual([
-      { owner: "acme", repo: "web", tracker_cmd: "/usr/bin/pass show jira | head -1", forge_cmd: "" },
+    expect(api.calls.filter((c) => c.method === "env.connections.set").map((c) => c.params)).toEqual([
+      { name: "jira-acme", credential_cmd: "pass show acme/jira" },
     ]),
   );
   await waitFor(() => expect(within(sec).getByText("alterada")).toBeInTheDocument());
 
-  await user.click(within(sec).getByRole("button", { name: "Usar o do cadastro" }));
+  await user.click(within(jira).getByRole("button", { name: "Usar a do hub" }));
   await waitFor(() =>
-    expect(api.calls.filter((c) => c.method === "env.credentials.set").slice(-1)[0]?.params).toEqual({
-      owner: "acme",
-      repo: "web",
-      tracker_cmd: "",
-      forge_cmd: "",
+    expect(api.calls.filter((c) => c.method === "env.connections.set").slice(-1)[0]?.params).toEqual({
+      name: "jira-acme",
+      credential_cmd: "",
     }),
   );
   await waitFor(() => expect(campo).toHaveValue(""));
+});
+
+test("conexão GitHub com arquivo do hub ausente pede o comando deste ambiente; a órfã só apaga (#276)", async () => {
+  const { api, user } = setup(ENV);
+  withConnections(api);
+  const sec = await conexoes();
+  const gh = await within(sec).findByRole("group", { name: "Credencial de github" });
+  expect(within(gh).getByRole("alert")).toHaveTextContent(/não existe neste ambiente.*gh auth token/);
+  await user.type(within(gh).getByLabelText("Comando de github neste ambiente"), "gh auth token");
+  await user.click(within(gh).getByRole("button", { name: "Salvar" }));
+  await waitFor(() => expect(within(gh).queryByRole("alert")).not.toBeInTheDocument());
+
+  const orfa = within(sec).getByRole("group", { name: "Credencial de jira-antigo" });
+  expect(within(orfa).getByRole("alert")).toHaveTextContent(/não existe no hub/);
+  expect(within(orfa).queryByRole("button", { name: "Salvar" })).not.toBeInTheDocument();
+  await user.click(within(orfa).getByRole("button", { name: "Apagar" }));
+  await waitFor(() => expect(within(sec).queryByRole("group", { name: "Credencial de jira-antigo" })).not.toBeInTheDocument());
+  expect(api.calls.filter((c) => c.method === "env.connections.set").slice(-1)[0]?.params).toEqual({
+    name: "jira-antigo",
+    credential_cmd: "",
+  });
+});
+
+test("o ambiente não tem mais o token do GitHub próprio (#276)", async () => {
+  const { api } = setup(ENV);
+  await screen.findByRole("region", { name: /GitHub: Intervalo de sincronização/ });
+  expect(screen.queryByLabelText("Novo token (personal access token)")).not.toBeInTheDocument();
+  expect(api.calls.filter((c) => c.method.startsWith("github.") || c.method.startsWith("env.credentials"))).toEqual([]);
 });

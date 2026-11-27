@@ -6,6 +6,8 @@
 //! A exceção é `POST /agent/v1/autopilot/dependencies` (#215): a sessão de
 //! análise da rodada (e só ela) grava as dependências entre as issues da
 //! fila do piloto automático, que valem na hora (a pessoa corrige na UI).
+//! E `POST /agent/v1/epic/plan` (#299): a sessão de plano da execução de
+//! épico (e só ela) grava o rascunho do plano, que espera a aprovação.
 //!
 //! O ambiente manda `X-Ctower-Env-Id`; um `env_id` diferente do preso ao
 //! token de sync do mesmo ambiente dá `403`, como no sync.
@@ -17,10 +19,12 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ct_http::bearer_token;
 use ct_http::sync::ENV_ID_HEADER;
-use ct_ledger::{
-    AgentDecisionFilter, DecisionScope, HealthFilter, Hub, LedgerError, NewProposal,
-    ProposalFilter, RankingFilter, Severity, AGENT_TOKEN_PREFIX, RANKING_LIMIT,
+use ct_hub_store::{
+    AgentDecisionFilter, HealthFilter, Hub, NewProposal, ProposalFilter, RankingFilter, Severity,
+    AGENT_TOKEN_PREFIX, RANKING_LIMIT,
 };
+use ct_ledger::DecisionScope;
+use ct_ledger::LedgerError;
 use serde::Deserialize;
 
 /// Sessão do gestor que fez a chamada (gravada na proposta).
@@ -373,7 +377,7 @@ pub(crate) struct DependenciesBody {
     owner: String,
     repo: String,
     #[serde(flatten)]
-    set: ct_ledger::DependencySet,
+    set: ct_hub_store::DependencySet,
 }
 
 /// `POST /agent/v1/autopilot/dependencies` (#215): o resultado da sessão de
@@ -437,7 +441,7 @@ pub(crate) async fn set_dependencies(
             .autopilot_blocker_states(p.id, p.autonomy.branch(), &cited)
             .map_err(internal)?
             .into_iter()
-            .filter(|(_, s)| *s == ct_ledger::BlockerState::Unknown)
+            .filter(|(_, s)| *s == ct_hub_store::BlockerState::Unknown)
             .map(|(n, _)| n)
             .collect();
         let slug = format!("{}/{}", p.gh_owner, p.gh_repo);
@@ -446,7 +450,7 @@ pub(crate) async fn set_dependencies(
         } else {
             "reanálise gravada"
         };
-        h.record_autopilot_event(&ct_ledger::AutopilotEvent {
+        h.record_autopilot_event(&ct_hub_store::AutopilotEvent {
             at: now,
             kind: crate::autopilot::plan::EV_ANALYSIS_DONE.into(),
             scope: format!("project:{slug}"),
@@ -490,13 +494,234 @@ pub(crate) async fn set_dependencies(
     resp
 }
 
+#[derive(Deserialize)]
+struct EpicPlanBody {
+    owner: String,
+    repo: String,
+    epic: i64,
+    #[serde(flatten)]
+    input: ct_hub_store::EpicPlanSessionInput,
+}
+
+/// `POST /agent/v1/epic/plan` (#299): o plano da sessão de plano da
+/// execução ativa do épico, no ambiente da execução. Recusa (400) nó fora
+/// do épico e ciclo no grafo efetivo (as arestas informadas, menos as que
+/// a pessoa removeu à mão, mais as manuais).
+pub(crate) async fn set_epic_plan(
+    State(st): State<HubState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let session = headers
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    with_env(st, headers, move |h, env_id| {
+        let b: EpicPlanBody =
+            serde_json::from_slice(&body).map_err(|e| bad(format!("plano inválido: {e}")))?;
+        let p = h
+            .find_project(&b.owner, &b.repo)
+            .map_err(internal)?
+            .ok_or_else(|| not_found(format!("projeto {}/{} não cadastrado", b.owner, b.repo)))?;
+        let forbidden = |m: String| (StatusCode::FORBIDDEN, m);
+        let Some(run) = h.active_epic_run(p.id, b.epic).map_err(internal)? else {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("o épico #{} não tem execução ativa", b.epic),
+            ));
+        };
+        if run.env_id != env_id {
+            return Err(forbidden(format!(
+                "a execução do épico #{} roda em outro ambiente",
+                b.epic
+            )));
+        }
+        let Some(session) = session.filter(|s| run.plan_session.as_ref() == Some(s)) else {
+            return Err(forbidden(
+                "só a sessão de plano da execução grava o plano".into(),
+            ));
+        };
+        // Ciclo no grafo efetivo.
+        let numbers: std::collections::BTreeSet<i64> =
+            b.input.nodes.iter().map(|n| n.node.number).collect();
+        let deps = h.autopilot_dependencies(p.id).map_err(internal)?;
+        let mut graph: std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>> =
+            Default::default();
+        for n in &b.input.nodes {
+            for x in &n.blocked_by {
+                let removed = deps.iter().any(|d| {
+                    d.number == n.node.number
+                        && d.blocker == x.number
+                        && d.removed
+                        && d.source == ct_hub_store::DEP_SOURCE_MANUAL
+                });
+                if !removed && x.number != n.node.number {
+                    graph.entry(n.node.number).or_default().insert(x.number);
+                }
+            }
+        }
+        for d in deps.iter().filter(|d| {
+            !d.removed && d.source == ct_hub_store::DEP_SOURCE_MANUAL && numbers.contains(&d.number)
+        }) {
+            graph.entry(d.number).or_default().insert(d.blocker);
+        }
+        let cycle = crate::autopilot::deps::cycle_members(&graph);
+        if !cycle.is_empty() {
+            let list: Vec<String> = cycle.iter().map(|n| format!("#{n}")).collect();
+            return Err(bad(format!(
+                "o plano tem um ciclo de dependências entre {}: corrija blocked_by (as \
+                 dependências corrigidas à mão pelo desenvolvedor também contam)",
+                list.join(", ")
+            )));
+        }
+        let now = ct_core::now_ms();
+        let plan = h
+            .save_epic_plan_from_session(run.id, &b.input, &session, now)
+            .map_err(|e| match e {
+                LedgerError::Invalid(m) => bad(m),
+                LedgerError::Conflict(m) => (StatusCode::CONFLICT, m),
+                e => internal(e),
+            })?;
+        h.add_epic_run_event(&ct_hub_store::EpicRunEvent {
+            run_id: run.id,
+            at: now,
+            kind: "plan_saved".into(),
+            message: format!(
+                "plano v{} gravado pela sessão de plano ({} {})",
+                plan.version,
+                plan.nodes.len(),
+                if plan.nodes.len() == 1 {
+                    "sub-issue"
+                } else {
+                    "sub-issues"
+                }
+            ),
+            ..Default::default()
+        })
+        .map_err(internal)?;
+        Ok(Json(serde_json::json!({
+            "version": plan.version,
+            "nodes": plan.nodes.len(),
+            "edges": plan.edges.len(),
+            "status": ct_core::EpicRunStatus::AguardandoAprovacao,
+            "message": "plano gravado: ele aguarda a aprovação do desenvolvedor. Encerre a sessão.",
+        }))
+        .into_response())
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct EpicBlockerBody {
+    owner: String,
+    repo: String,
+    number: i64,
+    reason: String,
+    #[serde(default)]
+    suggestion: String,
+}
+
+/// `POST /agent/v1/epic/blocker` (#300): a sessão de uma sub-issue da
+/// execução de épico avisa que o plano está errado. Só a sessão do nó, no
+/// ambiente da execução: o nó fica `bloqueada` e entra o pedido
+/// `plano_errado` (aguardar ou replanejar).
+pub(crate) async fn report_epic_blocker(
+    State(st): State<HubState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let session = headers
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let notify = st.clone();
+    let resp = with_env(st, headers, move |h, env_id| {
+        let b: EpicBlockerBody =
+            serde_json::from_slice(&body).map_err(|e| bad(format!("bloqueio inválido: {e}")))?;
+        let reason = b.reason.trim();
+        if reason.is_empty() {
+            return Err(bad("reason vazio"));
+        }
+        let forbidden = |m: String| (StatusCode::FORBIDDEN, m);
+        let found = match &session {
+            Some(sid) => h.epic_node_by_session(sid).map_err(internal)?,
+            None => None,
+        };
+        let Some((run, node)) = found.filter(|(r, n)| {
+            r.owner.eq_ignore_ascii_case(&b.owner)
+                && r.repo.eq_ignore_ascii_case(&b.repo)
+                && n.number == b.number
+        }) else {
+            return Err(forbidden(
+                "só a sessão da sub-issue numa execução de épico ativa avisa o bloqueio".into(),
+            ));
+        };
+        if run.env_id != env_id {
+            return Err(forbidden("a execução roda em outro ambiente".into()));
+        }
+        let now = ct_core::now_ms();
+        let suggestion = b.suggestion.trim();
+        let text = if suggestion.is_empty() {
+            format!("#{}: {reason}", b.number)
+        } else {
+            format!("#{}: {reason} Sugestão: {suggestion}", b.number)
+        };
+        if node.state.can_transition(ct_core::EpicNodeState::Bloqueada) {
+            h.set_epic_node_state(
+                run.id,
+                b.number,
+                ct_core::EpicNodeState::Bloqueada,
+                Some("plano_errado"),
+                now,
+            )
+            .map_err(internal)?;
+        }
+        let d = h
+            .add_epic_decision(
+                run.id,
+                Some(b.number),
+                ct_core::EpicDecisionOrigin::PlanoErrado,
+                &text,
+                now,
+            )
+            .map_err(internal)?;
+        h.add_epic_run_event(&ct_hub_store::EpicRunEvent {
+            run_id: run.id,
+            at: now,
+            kind: "decision_requested".into(),
+            number: Some(b.number),
+            reason: Some("plano_errado".into()),
+            message: text,
+            ..Default::default()
+        })
+        .map_err(internal)?;
+        Ok(Json(serde_json::json!({
+            "decision_id": d.id,
+            "message": "bloqueio registrado: a sub-issue fica parada até o desenvolvedor decidir \
+                        (aguardar ou replanejar). Pare e espere.",
+        }))
+        .into_response())
+    })
+    .await;
+    if resp.status().is_success() {
+        notify.epic_runs_changed();
+        notify.push_kick();
+    }
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{router, HubState};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use ct_core::{DecisionOrigin, WorkItemKind};
-    use ct_ledger::{GithubSnapshot, Hub, IssueRow, Ledger, NewDecision, NewProject, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
+    use ct_ledger::{GithubSnapshot, IssueRow, Ledger, NewDecision, NewProject};
     use http_body_util::BodyExt;
     use serde_json::{json, Value};
     use tower::ServiceExt;
@@ -537,7 +762,7 @@ mod tests {
         let l = Ledger::open_in_memory().unwrap();
         let (sync, agent) = {
             let h = st.hub.lock();
-            h.add_project(&ct_ledger::NewHubProject {
+            h.add_project(&ct_hub_store::NewHubProject {
                 owner: "deep-ion-ai".into(),
                 repo: "demo".into(),
                 name: "demo".into(),
@@ -988,7 +1213,7 @@ mod tests {
             h.update_project(
                 "deep-ion-ai",
                 "demo",
-                &ct_ledger::HubProjectPatch {
+                &ct_hub_store::HubProjectPatch {
                     autonomy: Some(ct_core::AutonomyConfig {
                         enabled: true,
                         env_id: Some(f.env_id.clone()),
@@ -1004,7 +1229,7 @@ mod tests {
         let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
         assert_eq!(s, StatusCode::CONFLICT, "{v}");
         // Rodada de outra sessão.
-        let mut round = ct_ledger::AnalysisRound {
+        let mut round = ct_hub_store::AnalysisRound {
             project_id: pid,
             session_id: Some("s-outra".into()),
             env_id: f.env_id.clone(),
@@ -1035,5 +1260,190 @@ mod tests {
         let ev = h.list_autopilot_events(5, None).unwrap();
         assert_eq!(ev[0].kind, "analysis_done");
         assert_eq!(ev[0].session_id.as_deref(), Some("s-gestor"));
+    }
+
+    /// #299: só a sessão de plano da execução ativa, no ambiente dela,
+    /// grava o plano; nó fora do épico e ciclo são recusados com a causa.
+    #[tokio::test]
+    async fn plano_so_da_sessao_de_plano_da_execucao() {
+        let f = fx();
+        let path = "/agent/v1/epic/plan";
+        let node = |n: i64, bs: &[i64]| {
+            json!({ "number": n, "model": "sonnet", "areas": ["crates/x/"],
+                    "reason": "r", "blocked_by": bs.iter()
+                        .map(|b| json!({ "number": b, "reason": "antes" }))
+                        .collect::<Vec<_>>() })
+        };
+        let body = json!({ "owner": "deep-ion-ai", "repo": "demo", "epic": 10,
+                           "summary": "resumo",
+                           "nodes": [node(11, &[]), node(12, &[11])],
+                           "proposals": [{ "kind": "nova", "title": "Faltou a doc" }] });
+        // Sem execução ativa.
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{v}");
+        let (pid, run) = {
+            let h = f.st.hub.lock();
+            let pid = h.find_project("deep-ion-ai", "demo").unwrap().unwrap().id;
+            let r = h
+                .create_epic_run(
+                    &ct_hub_store::NewEpicRun {
+                        project_id: pid,
+                        epic: 10,
+                        env_id: f.env_id.clone(),
+                        started_by: "fulano".into(),
+                        max_parallel: None,
+                        plan_model: None,
+                        plan_effort: None,
+                    },
+                    1,
+                )
+                .unwrap();
+            (pid, r.id)
+        };
+        // Sem a sessão de plano (o `post` manda `s-gestor`).
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+        f.st.hub
+            .lock()
+            .set_epic_run_plan_session(run, Some("s-gestor"), 2)
+            .unwrap();
+        // Fora do épico.
+        let mut fora = body.clone();
+        fora["nodes"] = json!([node(11, &[]), node(20, &[])]);
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, fora).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert!(
+            v.as_str().unwrap().contains("fora do épico #10: #20"),
+            "{v}"
+        );
+        // Ciclo, inclusive com uma aresta manual.
+        f.st.hub
+            .lock()
+            .set_dependency_manual(pid, 11, 12, ct_hub_store::ManualEdit::Add, "", 2)
+            .unwrap();
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert!(
+            v.as_str()
+                .unwrap()
+                .contains("ciclo de dependências entre #11, #12"),
+            "{v}"
+        );
+        assert!(f.st.hub.lock().latest_epic_plan(run).unwrap().is_none());
+        f.st.hub
+            .lock()
+            .set_dependency_manual(pid, 11, 12, ct_hub_store::ManualEdit::Reset, "", 3)
+            .unwrap();
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(
+            (v["version"].as_i64(), v["nodes"].as_i64()),
+            (Some(1), Some(2))
+        );
+        let h = f.st.hub.lock();
+        let r = h.epic_run(run).unwrap().unwrap();
+        assert_eq!(r.status, ct_core::EpicRunStatus::AguardandoAprovacao);
+        let plan = h.latest_epic_plan(run).unwrap().unwrap();
+        assert_eq!(plan.summary, "resumo");
+        assert_eq!(plan.proposals[0].title, "Faltou a doc");
+        assert_eq!(plan.nodes[1].areas, vec!["crates/x/".to_string()]);
+        assert_eq!(plan.nodes[1].model.as_deref(), Some("sonnet"));
+        assert_eq!(
+            plan.edges
+                .iter()
+                .map(|e| (e.number, e.blocker, e.source.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(12, 11, "analysis")]
+        );
+        let ev = h.epic_run_events(run, 0, 10).unwrap();
+        assert_eq!(ev[0].kind, "plan_saved");
+    }
+
+    /// #300: só a sessão do nó numa execução ativa avisa o bloqueio; o nó
+    /// fica bloqueado e entra o pedido `plano_errado`.
+    #[tokio::test]
+    async fn bloqueio_so_da_sessao_do_no() {
+        let f = fx();
+        let path = "/agent/v1/epic/blocker";
+        let body = json!({ "owner": "deep-ion-ai", "repo": "demo", "number": 11,
+                           "reason": "falta a tabela", "suggestion": "esperar a #20" });
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body.clone()).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+        let run = {
+            let h = f.st.hub.lock();
+            let pid = h.find_project("deep-ion-ai", "demo").unwrap().unwrap().id;
+            let r = h
+                .create_epic_run(
+                    &ct_hub_store::NewEpicRun {
+                        project_id: pid,
+                        epic: 10,
+                        env_id: f.env_id.clone(),
+                        started_by: "fulano".into(),
+                        max_parallel: None,
+                        plan_model: None,
+                        plan_effort: None,
+                    },
+                    1,
+                )
+                .unwrap();
+            h.save_epic_plan_draft(
+                r.id,
+                &ct_hub_store::EpicPlanDraft {
+                    nodes: vec![ct_hub_store::EpicPlanNodeInput {
+                        number: 11,
+                        model: Some("haiku".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+            h.approve_epic_plan(
+                r.id,
+                &ct_hub_store::EpicApproval {
+                    version: 1,
+                    approved_by: "fulano".into(),
+                    max_parallel: 2,
+                    code_review: false,
+                    fingerprints: Default::default(),
+                },
+                1,
+            )
+            .unwrap();
+            for to in [
+                ct_core::EpicNodeState::Pronta,
+                ct_core::EpicNodeState::EmExecucao,
+            ] {
+                h.set_epic_node_state(r.id, 11, to, None, 1).unwrap();
+            }
+            // O `post` manda a sessão `s-gestor`.
+            h.update_epic_node(
+                r.id,
+                11,
+                &ct_hub_store::EpicNodePatch {
+                    session_id: Some(Some("s-gestor".into())),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+            r.id
+        };
+        let mut outro = body.clone();
+        outro["number"] = json!(12);
+        let (s, _) = post(&f.st, path, &f.agent, &f.env_id, outro).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, v) = post(&f.st, path, &f.agent, &f.env_id, body).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let h = f.st.hub.lock();
+        assert_eq!(
+            h.epic_node(run, 11).unwrap().unwrap().state,
+            ct_core::EpicNodeState::Bloqueada
+        );
+        let d = h.epic_decisions(run, true).unwrap();
+        assert_eq!(d[0].origin, ct_core::EpicDecisionOrigin::PlanoErrado);
+        assert_eq!(d[0].options, vec!["aguardar", "replanejar"]);
+        assert!(d[0].text.contains("Sugestão: esperar a #20"), "{:?}", d[0]);
     }
 }

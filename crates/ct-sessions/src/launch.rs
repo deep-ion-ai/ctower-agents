@@ -10,7 +10,7 @@ use ct_core::{
 };
 use ct_git::{ensure_worktree, WorktreeSpec};
 use ct_ledger::{Ledger, NewEvent, NewSession, Project, Session, WorkItem};
-use ct_pty::{PtySession, SpawnSpec};
+use ct_pty::SpawnSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -31,6 +31,18 @@ pub struct StartRequest {
     /// work item. Só a UI manda, depois da confirmação da pessoa; o gestor e
     /// as automações (o agendador do piloto automático, #183) nunca.
     pub override_approval: bool,
+}
+
+/// De onde sai a worktree de uma sessão de issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartBase<'a> {
+    /// A base do projeto.
+    Project,
+    /// Sessão autônoma (#181): sai da branch de integração (já alinhada com
+    /// a base) e grava [`crate::autonomy::AUTONOMY_SESSION`].
+    Autonomy(&'a str, &'a str),
+    /// Sub-issue da execução de épico (#298): sai da `wip` do épico.
+    EpicRun(&'a str),
 }
 
 /// Modelo e modo de execução do agente, escolhidos ao iniciar a sessão.
@@ -345,18 +357,29 @@ impl Sessions {
 
     /// Inicia uma sessão nova para o work item, criando worktree e branch se preciso.
     pub fn start(&self, req: StartRequest) -> Result<Session> {
-        self.start_with_base(req, None)
+        self.start_with_base(req, StartBase::Project)
     }
 
-    /// [`Sessions::start`] com outra base para a worktree: `Some((branch,
-    /// base))` = sessão autônoma (#181), que sai da branch de integração
-    /// `branch` (já alinhada com `base`) e grava o evento
-    /// [`crate::autonomy::AUTONOMY_SESSION`] no work item.
-    pub(crate) fn start_with_base(
-        &self,
-        req: StartRequest,
-        autonomy: Option<(&str, &str)>,
-    ) -> Result<Session> {
+    /// Sessão de sub-issue da execução de épico (#298): sai da branch
+    /// `base` (a `wip` do épico) e grava o evento
+    /// [`crate::epic_run::EPIC_RUN_SESSION`] no work item (a sessão aceita
+    /// texto no `session.continue`).
+    pub fn start_epic_run(&self, req: StartRequest, base: &str) -> Result<Session> {
+        if base.trim().is_empty() {
+            return Err(SessionsError::Invalid(
+                "epic_run.base: a branch do épico".into(),
+            ));
+        }
+        self.start_with_base(req, StartBase::EpicRun(base.trim()))
+    }
+
+    /// [`Sessions::start`] com outra base para a worktree (veja
+    /// [`StartBase`]).
+    pub(crate) fn start_with_base(&self, req: StartRequest, how: StartBase<'_>) -> Result<Session> {
+        let autonomy = match how {
+            StartBase::Autonomy(b, base) => Some((b, base)),
+            _ => None,
+        };
         if req.gh_number <= PROJECT_WORK_ITEM {
             return Err(SessionsError::Invalid(format!(
                 "número de issue inválido: {} (sessão sem issue: start_project)",
@@ -412,9 +435,21 @@ impl Sessions {
         ensure_worktree(&WorktreeSpec {
             repo_path: Path::new(&project.repo_path),
             branch: &branch,
-            base: autonomy.map_or(project.base_branch.as_str(), |(b, _)| b),
+            base: match how {
+                StartBase::Project => project.base_branch.as_str(),
+                StartBase::Autonomy(b, _) | StartBase::EpicRun(b) => b,
+            },
             worktree_path: &worktree,
         })?;
+        if let StartBase::EpicRun(base) = how {
+            self.ledger().append_event(NewEvent {
+                project_id: project.id,
+                work_item_id: Some(wi.id),
+                session_id: None,
+                kind: crate::epic_run::EPIC_RUN_SESSION,
+                payload: json!({ "base": base }),
+            })?;
+        }
         if let Some((integration, base)) = autonomy {
             self.ledger().append_event(NewEvent {
                 project_id: project.id,
@@ -568,7 +603,16 @@ impl Sessions {
                 .as_bytes(),
         )?;
         if let Some(claude_json) = &cfg.claude_json {
-            self.pre_trust(claude_json, project, wi, &session.id, cwd)?;
+            // A pasta de docs vai no mesmo `--add-dir` abaixo: sem a
+            // confiança, o Claude Code pergunta por ela em toda sessão (#222).
+            self.pre_trust(
+                claude_json,
+                project,
+                wi,
+                &session.id,
+                cwd,
+                docs.project.as_deref(),
+            )?;
         }
 
         let tool_session_id = mode.tool_session_id();
@@ -608,6 +652,7 @@ impl Sessions {
                     Some((
                         crate::autonomy::agent_instruction(
                             project,
+                            &self.project_connections(project),
                             branch,
                             e.payload["base"].as_str()?,
                         ),
@@ -643,9 +688,9 @@ impl Sessions {
         let docs_line = (!docs_line.is_empty()).then(|| docs_line.join("\n\n"));
         args.extend(agent.args(gestor, rules.as_deref(), docs_line.as_deref()));
         if !prompt.is_empty() {
-            // Os comandos de credencial deste ambiente no lugar dos do
-            // cadastro (`[credentials]`, #143).
-            args.push(cfg.credentials.snapshot().rewrite_prompt(
+            // Os comandos de credencial deste ambiente no lugar dos da
+            // conexão do hub (`[credentials]`, #143; `[connections]`, #274).
+            args.push(cfg.credentials.rewrite_prompt(
                 &project.gh_owner,
                 &project.gh_repo,
                 &project.tracker,
@@ -699,7 +744,12 @@ impl Sessions {
             // em PR com base na branch de integração.
             env.push((ct_core::autonomy::AUTONOMY_BRANCH_ENV.to_string(), branch));
         }
-        env.extend(provider_env(project, wi, gestor));
+        env.extend(provider_env(
+            project,
+            &self.project_connections(project),
+            wi,
+            gestor,
+        ));
         env.extend(docs.env());
         if docs.unreachable {
             self.docs_unreachable(project, wi, &session.id)?;
@@ -708,19 +758,16 @@ impl Sessions {
             self.epic_unresolved(project, wi, &session.id, reason)?;
         }
         self.set_session_token(&session_token, &session.id);
-        let spawned = PtySession::spawn(
-            SpawnSpec {
-                program: cfg.claude_bin.clone(),
-                args,
-                cwd: PathBuf::from(cwd),
-                env,
-                env_remove: Vec::new(),
-                cols: size.cols,
-                rows: size.rows,
-                mask: pty_mask,
-            },
-            cfg.scrollback,
-        );
+        let spawned = self.spawn_pty(SpawnSpec {
+            program: cfg.claude_bin.clone(),
+            args,
+            cwd: PathBuf::from(cwd),
+            env,
+            env_remove: Vec::new(),
+            cols: size.cols,
+            rows: size.rows,
+            mask: pty_mask,
+        });
         let pty = match spawned {
             Ok(p) => p,
             Err(e) => {
@@ -759,6 +806,7 @@ impl Sessions {
             .lock()
             .unwrap()
             .insert(session.id.clone(), pty.clone());
+        self.sync_pty_mask(&session.id, &pty);
         if remote_name.is_some() {
             // Confirmação inicial e link na saída (§6.4, §6.6).
             self.watch_remote_control(&session.id, &pty, true);
@@ -825,7 +873,8 @@ impl Sessions {
         Ok(())
     }
 
-    /// Pré-aceita a confiança na raiz do repositório e no worktree. Falha
+    /// Pré-aceita a confiança na raiz do repositório, no worktree e, se a
+    /// sessão recebe, na pasta de docs do projeto (`--add-dir`, #222). Falha
     /// vira alerta (a sessão segue; o humano responde ao diálogo).
     fn pre_trust(
         &self,
@@ -834,11 +883,12 @@ impl Sessions {
         wi: &WorkItem,
         session_id: &str,
         cwd: &str,
+        docs: Option<&Path>,
     ) -> Result<()> {
-        let (kind, payload) = match crate::trust::ensure_trusted(
-            claude_json,
-            &[project.repo_path.as_str(), cwd],
-        ) {
+        let docs = docs.map(|d| d.to_string_lossy().into_owned());
+        let mut dirs = vec![project.repo_path.as_str(), cwd];
+        dirs.extend(docs.as_deref());
+        let (kind, payload) = match crate::trust::ensure_trusted(claude_json, &dirs) {
             Ok(changed) if changed.is_empty() => return Ok(()),
             Ok(changed) => ("trust_granted", json!({ "paths": changed })),
             Err(e) => {
@@ -934,10 +984,17 @@ pub(crate) fn mcp_config(port: u16, hook_token: &str, session_id: &str) -> Value
 /// - GitHub: `CTOWER_ISSUE` na sessão de issue, para o `ctower hook` exigir
 ///   `Closes #n` no `gh pr create` (#375).
 /// - Jira: `CTOWER_TRACKER=jira` (perfil Jira do hook) e, na sessão de issue
-///   ou de épico, `CTOWER_ISSUE_KEY` (`PROJ-5450`); `JIRA_CONFIG_FILE` se
-///   configurado. Sem `CTOWER_ISSUE`: o `Closes #n` é do GitHub.
-/// - GitLab: `GITLAB_HOST`.
-fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, String)> {
+///   ou de épico, `CTOWER_ISSUE_KEY` (`PROJ-5450`); `JIRA_CONFIG_FILE` se a
+///   conexão do Jira diz um. Sem `CTOWER_ISSUE`: o `Closes #n` é do GitHub.
+/// - GitLab: `GITLAB_HOST`, o host da conexão do GitLab.
+///
+/// O arquivo e o host vêm das conexões do projeto neste ambiente (#277).
+fn provider_env(
+    project: &Project,
+    conns: &ct_core::ResolvedConnections,
+    wi: &WorkItem,
+    gestor: bool,
+) -> Vec<(String, String)> {
     let mut env = Vec::new();
     if gestor {
         return env;
@@ -945,12 +1002,12 @@ fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, 
     // Sessão do projeto (#0) e de release (#-1) não têm issue.
     let item = wi.gh_number > PROJECT_WORK_ITEM;
     match &project.tracker {
-        ct_core::TrackerConfig::Github => {
+        ct_core::TrackerConfig::Github(_) => {
             if item && wi.kind == WorkItemKind::Issue {
                 env.push(("CTOWER_ISSUE".to_string(), wi.gh_number.to_string()));
             }
         }
-        ct_core::TrackerConfig::Jira(j) => {
+        ct_core::TrackerConfig::Jira(_) => {
             env.push(("CTOWER_TRACKER".to_string(), "jira".to_string()));
             if item {
                 env.push((
@@ -958,17 +1015,16 @@ fn provider_env(project: &Project, wi: &WorkItem, gestor: bool) -> Vec<(String, 
                     ct_core::item_key(&project.tracker_ref(), wi.gh_number),
                 ));
             }
-            if !j.config_file.trim().is_empty() {
-                env.push((
-                    "JIRA_CONFIG_FILE".to_string(),
-                    j.config_file.trim().to_string(),
-                ));
+            let config_file = conns.jira_config_file();
+            if !config_file.is_empty() {
+                env.push(("JIRA_CONFIG_FILE".to_string(), config_file));
             }
         }
     }
-    if let Some(g) = project.forge.gitlab() {
-        if !g.host.trim().is_empty() {
-            env.push(("GITLAB_HOST".to_string(), g.host.trim().to_string()));
+    if project.forge.gitlab().is_some() {
+        let host = conns.gitlab_host();
+        if !host.is_empty() {
+            env.push(("GITLAB_HOST".to_string(), host));
         }
     }
     env
@@ -1042,6 +1098,8 @@ mod tests {
             let l = env.sessions.ledger();
             let p = l.get_project(env.project_id).unwrap();
             let cfg = ct_ledger::ConfigResponse {
+                connections: None,
+                connection_names: None,
                 config_rev: rev,
                 config_epoch: 1,
                 changed: true,
@@ -1063,7 +1121,7 @@ mod tests {
                         project_key: "PROJ".into(),
                         ..Default::default()
                     }),
-                    forge: ct_core::ForgeConfig::Github,
+                    forge: ct_core::ForgeConfig::Github(Default::default()),
                     branch_pattern: pattern.map(String::from),
                     attribution: true,
                     sync: false,
@@ -1114,30 +1172,67 @@ mod tests {
     const GITLAB_CMD: &str = "printf 'token-do-%s' gitlab";
 
     fn assign_jira_gitlab(env: &TestEnv, attribution: bool) {
+        use ct_core::provider::CredentialSource;
+        assign_jira_gitlab_with(
+            env,
+            attribution,
+            CredentialSource::Command {
+                cmd: JIRA_CMD.into(),
+            },
+            CredentialSource::Command {
+                cmd: GITLAB_CMD.into(),
+            },
+        );
+    }
+
+    /// O projeto Jira + GitLab do exemplo, com as conexões 7 (Jira) e 8
+    /// (GitLab) e as fontes dadas (#277).
+    fn assign_jira_gitlab_with(
+        env: &TestEnv,
+        attribution: bool,
+        jira: ct_core::provider::CredentialSource,
+        gitlab: ct_core::provider::CredentialSource,
+    ) {
+        use crate::test_support::connection;
+        use ct_core::provider::ProviderKind;
         env.assign_config(1, |p| {
             p.owner = "grupo/projeto".into();
             p.repo = "app".into();
             p.name = "app".into();
             p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.example.com".into(),
                 project_key: "PROJ".into(),
-                credential_cmd: JIRA_CMD.into(),
-                config_file: "/home/u/.config/.jira/jira.yml".into(),
+                connection: Some(7),
                 ..Default::default()
             });
             p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                host: "gitlab.example.com".into(),
+                connection: Some(8),
                 path: "grupo/projeto/app".into(),
                 clone_url: "https://gitlab.example.com/grupo/projeto/app.git".into(),
-                credential_cmd: GITLAB_CMD.into(),
             });
             p.branch_pattern = Some("{key}".into());
             p.attribution = attribution;
         });
+        env.connect(vec![
+            ct_core::provider::Connection {
+                options: json!({ "config_file": "/etc/acme/jira.yml" }),
+                ..connection(7, ProviderKind::Jira, "https://jira.example.com", jira)
+            },
+            connection(8, ProviderKind::Gitlab, "gitlab.example.com", gitlab),
+        ]);
+    }
+
+    /// Os prefixos como o hub os monta (a fonte da conexão, sem as
+    /// sobrescritas do ambiente): o que a UI renderiza no template.
+    fn hub_prefixes(env: &TestEnv, p: &Project) -> (String, String) {
+        let (conns, _) = env.cfg.credentials.connections();
+        let (r, _) = ct_core::provider::resolve_connections(&p.tracker, &p.forge, &conns, |c| {
+            c.credential.clone()
+        });
+        (r.jira_prefix(), r.glab_prefix())
     }
 
     /// `[credentials]` do ambiente (#143): o prompt que a UI montou com os
-    /// comandos do cadastro chega ao agente com os deste ambiente; o
+    /// comandos da conexão do hub chega ao agente com os deste ambiente; o
     /// cadastro no ledger não muda.
     #[test]
     fn prompt_usa_a_credencial_do_ambiente() {
@@ -1154,8 +1249,7 @@ mod tests {
             )]
             .into(),
         ));
-        let jira = ct_core::jira_cli_prefix(p.tracker.jira().unwrap());
-        let glab = ct_core::glab_cli_prefix(p.forge.gitlab().unwrap());
+        let (jira, glab) = hub_prefixes(&env, &p);
         let prompt = format!("Leia com `{jira} issue view PROJ-1`. MR com `{glab} mr create`.");
         let s = env
             .sessions
@@ -1176,20 +1270,20 @@ mod tests {
             sent.contains(&format!("GITLAB_TOKEN=\"$({GITLAB_CMD})\" glab")),
             "{sent}"
         );
+        // O cadastro no ledger só referencia a conexão.
         assert_eq!(
-            jira_gitlab_project(&env)
-                .tracker
-                .jira()
-                .unwrap()
-                .credential_cmd,
-            JIRA_CMD
+            jira_gitlab_project(&env).tracker.jira().unwrap().connection,
+            Some(7)
         );
-        let (eff, applied) = env.sessions.with_env_credentials(p);
-        assert!(applied.tracker && !applied.forge);
+        let jira = env.sessions.jira_source(&p).unwrap();
+        assert!(jira.from_env);
         assert_eq!(
-            eff.tracker.jira().unwrap().credential_cmd,
-            "/usr/bin/pass show jira | head -1"
+            jira.source,
+            ct_core::provider::CredentialSource::Command {
+                cmd: "/usr/bin/pass show jira | head -1".into()
+            }
         );
+        assert!(!env.sessions.gitlab_source(&p).unwrap().from_env);
     }
 
     fn jira_gitlab_project(env: &TestEnv) -> Project {
@@ -1237,8 +1331,8 @@ mod tests {
         let env = TestEnv::new(FakeClaude::exit(0));
         assign_jira_gitlab(&env, false);
         let p = jira_gitlab_project(&env);
-        let jira = ct_core::jira_cli_prefix(p.tracker.jira().unwrap());
-        let glab = ct_core::glab_cli_prefix(p.forge.gitlab().unwrap());
+        let conns = env.sessions.project_connections(&p);
+        let (jira, glab) = (conns.jira_prefix(), conns.glab_prefix());
         // O que a UI manda depois de renderizar o template `jira_issue`.
         let prompt = format!(
             "Trabalhe na issue PROJ-5450 do Jira.\n\
@@ -1269,7 +1363,7 @@ mod tests {
         assert!(out.contains("CTOWER_ISSUE_KEY=PROJ-5450\n"), "{out}");
         assert!(out.contains("GITLAB_HOST=gitlab.example.com\n"), "{out}");
         assert!(
-            out.contains("JIRA_CONFIG_FILE=/home/u/.config/.jira/jira.yml\n"),
+            out.contains("JIRA_CONFIG_FILE=/etc/acme/jira.yml\n"),
             "{out}"
         );
         assert!(!out.contains("CTOWER_ISSUE="), "{out}");
@@ -1282,6 +1376,88 @@ mod tests {
         assert_eq!(settings["attribution"], json!({ "commit": "", "pr": "" }));
         assert_eq!(settings["includeCoAuthoredBy"], false);
         assert_eq!(settings["hooks"], hook_settings("ctower")["hooks"]);
+    }
+
+    /// #277: com `Secret` no Jira e `File` no GitLab, o prefixo da sessão
+    /// sai da conexão (o `ctower secret get` e a leitura do arquivo), o
+    /// endereço e o `config_file` também, e a sobrescrita do ambiente troca
+    /// o comando no prompt que a UI montou com os prefixos do hub.
+    #[test]
+    fn prefixo_da_sessao_com_secret_e_arquivo_vem_da_conexao() {
+        use ct_core::provider::{file_cmd, CredentialSource};
+        let env = TestEnv::new(FakeClaude::exit(0));
+        assign_jira_gitlab_with(
+            &env,
+            true,
+            CredentialSource::Secret {
+                name: "JIRA_TOKEN_ACME".into(),
+            },
+            CredentialSource::File {
+                path: "~/.acme/gitlab".into(),
+            },
+        );
+        let p = jira_gitlab_project(&env);
+        let conns = env.sessions.project_connections(&p);
+        assert_eq!(
+            conns.jira_prefix(),
+            r#"JIRA_CONFIG_FILE=/etc/acme/jira.yml JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira"#
+        );
+        assert_eq!(
+            conns.glab_prefix(),
+            format!(
+                r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$({})" glab"#,
+                file_cmd("~/.acme/gitlab")
+            )
+        );
+        // O que a UI recebe junto do projeto (`endpoints`).
+        let e = env.sessions.with_endpoints(p.clone()).endpoints.unwrap();
+        assert_eq!(e.jira_url, "https://jira.example.com");
+        assert_eq!(e.gitlab_host, "gitlab.example.com");
+        assert_eq!(
+            (e.jira_cli, e.glab_cli),
+            (conns.jira_prefix(), conns.glab_prefix())
+        );
+
+        // A sobrescrita do GitLab neste ambiente vale no prompt.
+        let (hub, _) = env.cfg.credentials.connections();
+        env.cfg.credentials.set_connections(
+            hub,
+            ct_core::ConnectionOverrides(
+                [(
+                    "gitlab-acme".to_string(),
+                    ct_core::ConnectionOverride {
+                        credential_cmd: "pass show acme/gitlab".into(),
+                    },
+                )]
+                .into(),
+            ),
+        );
+        let (jira, glab) = hub_prefixes(&env, &p);
+        let s = env
+            .sessions
+            .start(StartRequest {
+                project_id: p.id,
+                prompt: format!("Leia com `{jira} issue view PROJ-1`. MR com `{glab} mr create`."),
+                ..env.request(1, "Um")
+            })
+            .unwrap();
+        let sent = s.launch_cmd.last().unwrap();
+        assert!(
+            sent.contains(
+                r#"JIRA_API_TOKEN="$(ctower secret get JIRA_TOKEN_ACME)" jira issue view"#
+            ),
+            "{sent}"
+        );
+        assert!(
+            sent.contains(r#"GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show acme/gitlab)" glab mr create"#),
+            "{sent}"
+        );
+        let out = env.wait_fake_output(&s.id);
+        assert!(
+            out.contains("JIRA_CONFIG_FILE=/etc/acme/jira.yml\n"),
+            "{out}"
+        );
+        assert!(out.contains("GITLAB_HOST=gitlab.example.com\n"), "{out}");
     }
 
     /// Épico e sessão do projeto num projeto Jira: o épico também tem a
@@ -1543,8 +1719,8 @@ mod tests {
     fn regras_do_projeto_e_do_epico_chegam_na_ordem_ao_system_prompt() {
         let env = TestEnv::new(FakeClaude::exit(0));
         env.assign_with_rules(
-            ct_core::TrackerConfig::Github,
-            ct_core::ForgeConfig::Github,
+            ct_core::TrackerConfig::Github(Default::default()),
+            ct_core::ForgeConfig::Github(Default::default()),
             false,
             1,
             rules(
@@ -1879,7 +2055,7 @@ mod tests {
                 project_key: "PROJ".into(),
                 ..Default::default()
             }),
-            ct_core::ForgeConfig::Github,
+            ct_core::ForgeConfig::Github(Default::default()),
             false,
             1,
             rules(None, &[(5014, 2, "Avise se a demanda for só de frontend.")]),
@@ -1894,8 +2070,8 @@ mod tests {
         );
         // Sem regras em nenhum escopo: nada de --append-system-prompt.
         env.assign_with_rules(
-            ct_core::TrackerConfig::Github,
-            ct_core::ForgeConfig::Github,
+            ct_core::TrackerConfig::Github(Default::default()),
+            ct_core::ForgeConfig::Github(Default::default()),
             false,
             2,
             Default::default(),
@@ -2089,6 +2265,51 @@ mod tests {
             .list_events(s.work_item_id, 100)
             .unwrap();
         assert!(evs.iter().any(|e| e.kind == "trust_granted"));
+    }
+
+    /// #222: a pasta de docs do projeto (o `--add-dir`) também fica
+    /// confiável; sem `docs_root` no ar, o `.claude.json` recebe só as
+    /// pastas de sempre e o evento `trust_granted` não cita a de docs.
+    #[test]
+    fn pre_aceita_confianca_na_pasta_de_docs() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        docs_ligados(&env);
+        let root = env.docs_root_up();
+        let s = env.sessions.start(env.request(2, "Docs")).unwrap();
+        let cj: Value = serde_json::from_str(
+            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let proj = root.join("deep-ion-ai__demo").to_string_lossy().to_string();
+        assert_eq!(cj["projects"][&proj]["hasTrustDialogAccepted"], true);
+        let evs = env
+            .sessions
+            .ledger()
+            .list_events(s.work_item_id, 100)
+            .unwrap();
+        let granted = evs.iter().find(|e| e.kind == "trust_granted").unwrap();
+        assert!(granted.payload.to_string().contains(&proj));
+    }
+
+    #[test]
+    fn sem_docs_nao_pre_aceita_pasta_de_docs() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        docs_ligados(&env);
+        let s = env.sessions.start(env.request(2, "Sem docs")).unwrap();
+        let cj: Value = serde_json::from_str(
+            &std::fs::read_to_string(env.cfg.claude_json.as_ref().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let projects = cj["projects"].as_object().unwrap();
+        assert_eq!(
+            projects
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            [env.repo.to_string_lossy().to_string(), s.cwd.clone()]
+                .into_iter()
+                .collect()
+        );
     }
 
     #[test]
@@ -2430,6 +2651,8 @@ mod tests {
         // Um pull bem-sucedido, mesmo sem mudança, prova que o cache está em
         // dia: vale o `config_pulled_at`, e o aviso some.
         let cfg = ct_ledger::ConfigResponse {
+            connections: None,
+            connection_names: None,
             config_rev: 1,
             config_epoch: 1,
             changed: false,
@@ -2453,14 +2676,16 @@ mod tests {
     #[test]
     fn secrets_impressos_saem_mascarados_no_scrollback_e_no_broadcast() {
         use ct_secrets::Kind;
-        // O valor sai partido em duas escritas. As metades vêm de builtins do
-        // bash (`${T_TOKEN:0:5}`), não de `| head`/`| tail`: o fork e o exec
-        // de dois pipelines num runner carregado passavam do `MASK_HOLD`
-        // (50ms), a cauda "token" saía como está e o teste esperava um
-        // `***T_TOKEN***` que nunca vinha.
+        // O valor sai partido em duas escritas, e a segunda só vem depois que
+        // o teste vê a primeira linha com a cauda ("token") retida. A cauda
+        // fica retida até a próxima leitura (prazo longo, #313): o resultado
+        // não depende de o agendador entregar a segunda escrita dentro do
+        // `MASK_HOLD` (50 ms), o que falhava em runner carregado. Sem eco, o
+        // `\n` que libera cada passo não entra no meio do valor.
         let env = TestEnv::new(FakeClaude::script(
-            "echo \"antes=$T_TOKEN\"; read x; printf 'depois=%s/%s/%s\\n' \"$T_TOKEN\" \"$T_CURTO\" \"$T_VAR\"; printf '%s' \"${T_TOKEN:0:5}\"; sleep 0.01; printf '%s\\n' \"${T_TOKEN:5}\"; read y",
+            "stty -echo; echo \"antes=$T_TOKEN\"; read x; printf 'depois=%s/%s/%s\\n' \"$T_TOKEN\" \"$T_CURTO\" \"$T_VAR\"; printf '%s' \"${T_TOKEN:0:5}\"; read y; printf '%s\\n' \"${T_TOKEN:5}\"; read z",
         ));
+        env.sessions.set_mask_hold(Duration::from_secs(3600));
         env.write_secrets_cache_kinds(&[
             (None, "T_TOKEN", Kind::Secret, "token-muito-secreto"),
             (None, "T_CURTO", Kind::Secret, "curto7x"),
@@ -2474,12 +2699,22 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let (snap, rx) = pty.attach();
+        let read_until = |mut acc: Vec<u8>, needle: &str| {
+            while !String::from_utf8_lossy(&acc).contains(needle) {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                acc.extend(rx.recv_timeout(left).expect("sem broadcast"));
+            }
+            acc
+        };
         pty.write(b"\n").unwrap();
-        let mut live = Vec::new();
-        while !String::from_utf8_lossy(&live).contains("***T_TOKEN***\r\n") {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            live.extend(rx.recv_timeout(left).expect("sem broadcast"));
-        }
+        let first = read_until(Vec::new(), "variavel-visivel\r\n");
+        let first = String::from_utf8_lossy(&first).to_string();
+        // A primeira parte ("token") segue retida, por mais que a segunda
+        // demore: pode ser começo do valor.
+        assert!(first.ends_with("variavel-visivel\r\n"), "{first:?}");
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        pty.write(b"\n").unwrap();
+        let live = read_until(first.into_bytes(), "***T_TOKEN***\r\n");
         let live = String::from_utf8_lossy(&live).to_string();
         assert!(
             live.contains("depois=***T_TOKEN***/curto7x/variavel-visivel"),
@@ -2507,6 +2742,53 @@ mod tests {
         env.sessions.kill(&s.id).unwrap();
         env.wait_state(&s.id, SessionState::Exited);
         assert!(env.sessions.kill(&s.id).is_err());
+    }
+
+    /// Espera `needle` no terminal da sessão.
+    fn wait_output(env: &TestEnv, sid: &str, needle: &str) {
+        let pty = env.sessions.pty(sid).expect("sessão viva");
+        let deadline = std::time::Instant::now() + T;
+        while !String::from_utf8_lossy(&pty.snapshot()).contains(needle) {
+            assert!(std::time::Instant::now() < deadline, "sem {needle:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// #312: o agente que ignora o `SIGHUP` segue vivo durante o prazo e sai
+    /// com o `SIGKILL` depois dele; a sessão fica `exited`, como em todo
+    /// `kill` pedido.
+    #[test]
+    fn kill_mata_o_agente_que_ignora_o_sighup_depois_do_prazo() {
+        let env = TestEnv::new(FakeClaude::script(
+            "trap '' HUP; echo pronto-$((1+1)); read x",
+        ));
+        let s = env.sessions.start(env.request(4, "Teimosa")).unwrap();
+        wait_output(&env, &s.id, "pronto-2");
+        let pty = env.sessions.pty(&s.id).unwrap();
+        let t0 = std::time::Instant::now();
+        env.sessions.kill(&s.id).unwrap();
+        assert_eq!(pty.wait_timeout(Duration::from_millis(500)), None);
+        let ended = env.wait_state(&s.id, SessionState::Exited);
+        assert!(t0.elapsed() >= crate::KILL_GRACE, "{:?}", t0.elapsed());
+        assert_eq!(pty.exit_status(), Some(None), "morto por sinal");
+        assert_eq!(ended.exit_code, None);
+    }
+
+    /// #312: o agente que sai sozinho depois do `SIGHUP` (aqui, depois de
+    /// "gravar o transcript") não leva `SIGKILL`: o código de saída é o dele.
+    #[test]
+    fn kill_deixa_o_agente_sair_sozinho_com_o_sighup() {
+        let env = TestEnv::new(FakeClaude::script(
+            "trap 'sleep 0.5; echo transcript-gravado; exit 0' HUP; echo pronto-$((1+1)); read x",
+        ));
+        let s = env.sessions.start(env.request(4, "Educada")).unwrap();
+        wait_output(&env, &s.id, "pronto-2");
+        let pty = env.sessions.pty(&s.id).unwrap();
+        env.sessions.kill(&s.id).unwrap();
+        let ended = env.wait_state(&s.id, SessionState::Exited);
+        assert_eq!(pty.exit_status(), Some(Some(0)));
+        assert_eq!(ended.exit_code, Some(0));
+        assert!(String::from_utf8_lossy(&pty.snapshot()).contains("transcript-gravado"));
     }
 
     /// Rótulo de aprovação (#124): com a exigência ligada, a issue sem o

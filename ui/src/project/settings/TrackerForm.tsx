@@ -6,6 +6,9 @@ import {
   type JiraForm,
 } from "../../hub/tracker";
 import type { JiraFieldInfo } from "../../protocol/hub-gen";
+import type { Connection, ProviderKind } from "../../protocol/gen";
+import { connectionLabel, connectionsOfKind } from "../../hub/connections";
+import { providerOf } from "../../hub/providers";
 import type { ProjectForm } from "./form";
 import { JiraExtraFields } from "./JiraExtraFields";
 
@@ -13,6 +16,64 @@ interface FieldsProps {
   form: ProjectForm;
   onChange: (f: ProjectForm) => void;
   prefix: string;
+  /** Conexões do hub (`hub.connections.list`); `null` = ainda não carregou ou web. */
+  connections?: Connection[] | null;
+}
+
+/**
+ * Seletor da conexão do projeto (#238): a URL e a credencial vêm dela. Sem
+ * conexão do tipo, aponta a tela de Conexões. No tipo com conexão padrão
+ * (o GitHub, #275), a escolha é opcional: vazio = a padrão.
+ */
+function ConnectionSelect({
+  id,
+  kind,
+  value,
+  connections,
+  onChange,
+}: {
+  id: string;
+  kind: ProviderKind;
+  value: string;
+  connections: Connection[] | null | undefined;
+  onChange: (v: string) => void;
+}) {
+  const { label: kindLabel, default_connection: fallback } = providerOf(kind);
+  const label = `Conexão do ${kindLabel}`;
+  if (connections === null || connections === undefined) {
+    return (
+      <div className="field hub-wide">
+        <span className="label">{label}</span>
+        <span className="muted hint">Conexões indisponíveis aqui: cadastre e escolha o projeto pelo app desktop.</span>
+      </div>
+    );
+  }
+  const options = connectionsOfKind(connections, kind);
+  // Conexão que o projeto usa e que sumiu do hub: mostra o id, para não perder o valor sem aviso.
+  const missing = value && !options.some((c) => String(c.id) === value);
+  return (
+    <div className="field hub-wide">
+      <label htmlFor={id}>{label}</label>
+      <select id={id} value={value} aria-describedby={`${id}-hint`} onChange={(e) => onChange(e.target.value)}>
+        <option value="">
+          {fallback ? `Padrão (conexão ${fallback})` : options.length ? "Escolha uma conexão" : "Nenhuma conexão do tipo"}
+        </option>
+        {options.map((c) => (
+          <option key={c.id} value={String(c.id)}>
+            {connectionLabel(c)}
+          </option>
+        ))}
+        {missing && <option value={value}>Conexão {value} (não existe mais no hub)</option>}
+      </select>
+      <span id={`${id}-hint`} className="hint muted">
+        {fallback
+          ? `O token do ${kindLabel} vem da conexão; sem escolha, da conexão ${fallback}. Crie ou edite conexões em Hub › Conexões.`
+          : options.length
+            ? "A URL e a credencial vêm da conexão. Crie ou edite conexões em Hub › Conexões."
+            : `Cadastre uma conexão do ${kindLabel} em Hub › Conexões antes de salvar o projeto.`}
+      </span>
+    </div>
+  );
 }
 
 /** Campo de texto do Jira + GitLab, guardado em `f.jira`. */
@@ -46,12 +107,31 @@ function JiraText({
   );
 }
 
-/** Campos do GitLab (#348): a URL de clone e o comando de credencial. */
+/** Conexão do GitHub do projeto (#275), para o rastreador e a forja. */
+export function GithubFields(p: FieldsProps) {
+  return (
+    <ConnectionSelect
+      id={`${p.prefix}-github_conn`}
+      kind="github"
+      value={p.form.github_conn}
+      connections={p.connections}
+      onChange={(github_conn) => p.onChange({ ...p.form, github_conn })}
+    />
+  );
+}
+
+/** Campos do GitLab (#348): a URL de clone e a conexão (host e credencial). */
 export function GitlabFields(p: FieldsProps) {
   return (
     <>
       <JiraText {...p} k="gitlab_url" label="URL do repositório no GitLab (HTTPS ou SSH)" placeholder="https://gitlab.exemplo.com/grupo/projeto.git" wide />
-      <JiraText {...p} k="gitlab_cmd" label="Comando de credencial do GitLab" placeholder="pass show gitlab/token | head -1" wide />
+      <ConnectionSelect
+        id={`${p.prefix}-gitlab_conn`}
+        kind="gitlab"
+        value={p.form.jira.gitlab_conn}
+        connections={p.connections}
+        onChange={(gitlab_conn) => p.onChange({ ...p.form, jira: { ...p.form.jira, gitlab_conn } })}
+      />
     </>
   );
 }
@@ -75,7 +155,13 @@ export function JiraFields({
   const preview = branchPreview(pattern, j.jira_key.trim().toUpperCase() || "PROJ");
   return (
     <>
-      <JiraText {...p} k="jira_url" label="URL do Jira" placeholder="https://jira.exemplo.com" />
+      <ConnectionSelect
+        id={`${prefix}-jira_conn`}
+        kind="jira"
+        value={j.jira_conn}
+        connections={p.connections}
+        onChange={(jira_conn) => setJ({ jira_conn })}
+      />
       <JiraText {...p} k="jira_key" label="Chave do projeto no Jira" placeholder="PROJ" />
       <div className="field hub-wide">
         <label className="ctl" htmlFor={`${prefix}-active_sprint_only`}>
@@ -123,7 +209,6 @@ export function JiraFields({
           </div>
         </>
       )}
-      <JiraText {...p} k="jira_cmd" label="Comando de credencial do Jira" placeholder="pass show jira/token | head -1" wide />
       <div className="field">
         <label htmlFor={`${prefix}-branch_pattern`}>Padrão de branch</label>
         <input
@@ -172,8 +257,8 @@ export function JiraFields({
         onChange={(extra_fields) => setJ({ extra_fields })}
       />
       <p className="muted hint hub-wide">
-        O hub não alcança o Jira nem o GitLab: guarda só os comandos de credencial, que rodam no ambiente de sync.
-        Ele confere tudo no primeiro ciclo de sync e relata aqui.
+        O hub não alcança o Jira nem o GitLab: a conexão diz onde e com qual credencial, e o ambiente de sync confere
+        tudo no primeiro ciclo e relata aqui.
       </p>
     </>
   );

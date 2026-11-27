@@ -5,7 +5,8 @@
 //! projetos legados atribuídos mantêm o `id` local e são aplicados, e o
 //! legado que o hub não conhece fica "fora do hub" (`unassigned_at`).
 
-use ct_ledger::{AssignmentFilter, AssignmentState, Hub, Ledger, SharedHub};
+use ct_hub_store::{AssignmentFilter, AssignmentState, Hub, SharedHub};
+use ct_ledger::Ledger;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;

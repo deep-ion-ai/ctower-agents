@@ -7,10 +7,6 @@ import type { JiraTypeRole } from "./JiraTypeRole";
  */
 export type JiraConfig = { 
 /**
- * URL do servidor, sem barra final (`https://jira.example.com`).
- */
-url: string, 
-/**
  * Chave do projeto Jira (`PROJ`).
  */
 project_key: string, 
@@ -33,15 +29,6 @@ active_sprint_only?: boolean,
  */
 max_issues?: number, 
 /**
- * Comando que imprime a senha (`pass show jira | head -1`). Texto do
- * cadastro, não secret: roda no ambiente.
- */
-credential_cmd: string, 
-/**
- * Configuração do jira-cli; vazio = `~/.config/.jira/.config.yml`.
- */
-config_file: string, 
-/**
  * Campo do Epic Link (`customfield_10601`).
  */
 epic_link_field: string, 
@@ -63,4 +50,11 @@ type_map: { [key in string]?: JiraTypeRole },
  * Campos próprios do projeto na tela da issue, depois dos 5 padrão e
  * na ordem do cadastro. Ausente (cadastro anterior) = nenhum.
  */
-extra_fields?: Array<JiraExtraField>, };
+extra_fields?: Array<JiraExtraField>, 
+/**
+ * Conexão do hub com o Jira (`tracker.connection`, #235). URL,
+ * credencial e `config_file` do jira-cli vêm dela
+ * ([`crate::provider::resolve_connections`]); o cadastro do projeto
+ * exige uma (#277).
+ */
+connection?: number, };

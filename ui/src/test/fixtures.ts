@@ -77,6 +77,17 @@ export function project(p: Partial<Project> = {}): Project {
 }
 
 /** Projeto Jira + GitLab do exemplo no ambiente (#352); a barra final da URL do Jira é de propósito. */
+/**
+ * Endereços e prefixos das conexões 7 (Jira) e 8 (GitLab) do exemplo, como
+ * o ambiente e o hub os mandam junto do projeto (#277).
+ */
+export const JIRA_GITLAB_ENDPOINTS = {
+  jira_url: "https://jira.example.com",
+  gitlab_host: "gitlab.example.com",
+  jira_cli: 'JIRA_API_TOKEN="$(pass show jira | head -1)" jira',
+  glab_cli: 'GITLAB_HOST=gitlab.example.com GITLAB_TOKEN="$(pass show gitlab | head -1)" glab',
+};
+
 export function jiraProject(p: Partial<Project> = {}): Project {
   return project({
     id: 7,
@@ -86,22 +97,20 @@ export function jiraProject(p: Partial<Project> = {}): Project {
     repo_path: "/home/user/projetos/app",
     tracker: {
       kind: "jira",
-      url: "https://jira.example.com/",
       project_key: "PROJ",
       jql: "",
-      credential_cmd: "pass show jira | head -1",
-      config_file: "",
       epic_link_field: "customfield_10601",
       epic_name_field: "customfield_10604",
       type_map: { Epic: "epic", Bug: "bug" },
+      connection: 7,
     },
     forge: {
       kind: "gitlab",
-      host: "gitlab.example.com",
       path: "grupo/projeto/app",
       clone_url: "https://gitlab.example.com/grupo/projeto/app.git",
-      credential_cmd: "pass show gitlab | head -1",
+      connection: 8,
     },
+    endpoints: JIRA_GITLAB_ENDPOINTS,
     branch_pattern: "{key}",
     attribution: false,
     sync_role: true,
@@ -132,6 +141,7 @@ export function envInfo(p: Partial<EnvInfo> = {}): EnvInfo {
   return {
     protocol: "2.8",
     version: "0.14.0",
+    capabilities: ["version-handshake"],
     commit: "",
     hostname: "wsl",
     worktrees_root: "/home/wsl/worktrees",
@@ -245,7 +255,7 @@ export const HUB_DOCS_BACKUP: DocsBackupStatus = {
 };
 
 export function hubInfo(p: Partial<HubInfo> = {}): HubInfo {
-  return { protocol: "1.0", version: "0.3.0", commit: "", name: "mac-mini", config_rev: 7, backup: HUB_BACKUP, docs_dir: null, ...p };
+  return { protocol: "1.0", version: "0.3.0", capabilities: ["version-handshake"], commit: "", name: "mac-mini", config_rev: 7, backup: HUB_BACKUP, docs_dir: null, ...p };
 }
 
 export const NO_PROPOSALS: HubProposals = { proposals: [], truncated: false };
@@ -352,22 +362,20 @@ export function jiraHubProject(p: Partial<HubProject> = {}): HubProject {
     name: "app",
     tracker: {
       kind: "jira",
-      url: "https://jira.example.com",
       project_key: "PROJ",
       jql: "",
-      credential_cmd: "pass show jira | head -1",
-      config_file: "",
       epic_link_field: "customfield_10601",
       epic_name_field: "customfield_10604",
       type_map: { Epic: "epic", Bug: "bug" },
+      connection: 7,
     },
     forge: {
       kind: "gitlab",
-      host: "gitlab.example.com",
       path: "grupo/projeto/app",
       clone_url: "https://gitlab.example.com/grupo/projeto/app.git",
-      credential_cmd: "pass show gitlab | head -1",
+      connection: 8,
     },
+    endpoints: JIRA_GITLAB_ENDPOINTS,
     branch_pattern: "{key}",
     attribution: false,
     sync_env_id: "daemon-wsl",
@@ -403,7 +411,7 @@ export function hubProjectView(
 }
 
 export function hubEnv(e: Partial<HubEnv> = {}): HubEnv {
-  return { env_id: "daemon-wsl", name: "wsl-pc", created_at: 0, last_seen_at: NOW - MIN, last_seq: 10, pending: 0, cleanup: null, online: false, autonomous: false, ...e };
+  return { env_id: "daemon-wsl", name: "wsl-pc", created_at: 0, last_seen_at: NOW - MIN, last_seq: 10, pending: 0, cleanup: null, online: false, autonomous: false, protocol: null, version: null, ...e };
 }
 
 export const HUB_DASHBOARD: HubDashboard = {

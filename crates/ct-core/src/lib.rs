@@ -7,6 +7,7 @@ pub mod branch;
 mod clock;
 mod credentials;
 pub mod docs;
+pub mod epic_run;
 pub mod files;
 pub mod guard;
 mod logs;
@@ -14,6 +15,7 @@ pub mod plan;
 pub mod release;
 #[macro_use]
 mod model;
+pub mod provider;
 mod repo_url;
 pub mod session_templates;
 pub mod tracker;
@@ -23,20 +25,26 @@ pub use approval::{ApprovalConfig, APPROVAL_REFUSAL_PREFIX, DEFAULT_APPROVAL_LAB
 pub use autonomy::{AlignStrategy, AutonomyConfig, AutonomyReport, AutonomyState};
 pub use clock::{civil_from_days, hlc, now_ms, parse_iso8601, utc_stamp};
 pub use credentials::{
-    CredentialApplied, CredentialOverride, CredentialOverrides, SharedCredentials,
+    convert_credentials, ConnectionOverride, ConnectionOverrides, CredentialOverride,
+    CredentialOverrides, EnvSource, ProjectConnections, SharedCredentials,
 };
 pub use docs::DocsConfig;
+pub use epic_run::{
+    area_overlaps, areas_overlap, normalize_area, normalize_areas, EPIC_AREAS_MAX,
+    EPIC_AREA_MAX_CHARS, EPIC_RUN_PARALLEL_CEILING, EPIC_RUN_PARALLEL_DEFAULT,
+};
 pub use logs::LogsConfig;
 pub use model::*;
+pub use provider::{ProjectEndpoints, ResolvedConnections};
 pub use release::{
     ReleaseConfig, ReleaseStatus, ReleaseStep, RELEASE_SESSION_KIND, RELEASE_WORK_ITEM,
 };
 pub use repo_url::{github_repo_from_url, repo_from_url, RepoRef};
 pub use session_templates::SessionTemplates;
 pub use tracker::{
-    change_label, change_ref, change_short, change_url, default_type_map, glab_cli_prefix,
-    is_assignee, issue_view_cmd, item_key, item_ref, item_short, item_url, jira_cli_prefix,
-    same_identity, supported_combination, ForgeConfig, ForgeKind, GitlabConfig, GitlabReadiness,
+    change_label, change_ref, change_short, change_url, default_type_map, github_connection,
+    is_assignee, issue_view_cmd, item_key, item_ref, item_short, item_url, same_identity,
+    supported_combination, ForgeConfig, ForgeKind, GithubConfig, GitlabConfig, GitlabReadiness,
     JiraConfig, JiraExtraField, JiraFieldInfo, JiraReadiness, JiraTypeRole, Sprint, SprintState,
     TrackerConfig, TrackerKind, TrackerProgress, TrackerReadiness, TrackerRef, ACTIVE_SPRINT_JQL,
     DEFAULT_MAX_ISSUES, MAX_ISSUES_CEILING, MAX_JIRA_EXTRA_FIELDS,

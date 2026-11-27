@@ -17,6 +17,8 @@
 //! - `issues/<KEY>.json`: o JSON da API do `issue view <KEY> --raw`;
 //! - `issues/<KEY>.401`: o `issue view <KEY>` dá o 401 (senha recusada no
 //!   meio do ciclo);
+//! - `issues/<KEY>.403`: o `issue view <KEY>` dá o 403 (a senha vale, mas
+//!   não vê a issue);
 //! - falhas por arquivo: `fail-401` (o Jira recusa a senha), `fail-me`,
 //!   `no-config` (configuração ausente) e `sleep` (segundos antes de
 //!   responder, para o prazo).
@@ -106,6 +108,11 @@ impl FakeJira {
     /// O `issue view` da chave dá o 401 (`on`) ou volta ao normal.
     pub fn fail_view_401(&self, key: &str, on: bool) {
         self.flag(&format!("issues/{key}.401"), on);
+    }
+
+    /// O `issue view` da chave dá o 403 (`on`) ou volta ao normal.
+    pub fn fail_view_403(&self, key: &str, on: bool) {
+        self.flag(&format!("issues/{key}.403"), on);
     }
 
     /// O `issue list` com exatamente este `-q` devolve só estas issues (na
@@ -367,6 +374,10 @@ case "$1" in
       view)
         if [ -f "$d/issues/$3.401" ]; then
           printf '\njira: Received unexpected response '"'"'401 Unauthorized'"'"'.\n' >&2
+          exit 1
+        fi
+        if [ -f "$d/issues/$3.403" ]; then
+          printf '\njira: Received unexpected response '"'"'403 Forbidden'"'"'.\n' >&2
           exit 1
         fi
         f="$d/issues/$3.json"

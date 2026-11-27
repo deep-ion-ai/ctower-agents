@@ -21,4 +21,15 @@ online: boolean,
  * Marcado como ambiente autônomo (#181): pode rodar as sessões
  * autônomas de um projeto. Ausente num hub anterior: não.
  */
-autonomous: boolean, };
+autonomous: boolean, 
+/**
+ * Versão do contrato (`protocol`) que o ambiente informou no handshake
+ * (#227); `None` = nunca informou.
+ */
+protocol: string | null, 
+/**
+ * Versão do build que o ambiente informou no handshake (#227); `None` =
+ * nunca informou. Diferente da do hub: a sala de controle mostra
+ * "desatualizado".
+ */
+version: string | null, };

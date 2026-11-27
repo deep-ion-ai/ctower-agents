@@ -47,6 +47,7 @@ import { cachedTree } from "./ui-store";
 import { rcRequested } from "../web/envActions";
 import { PlanConfirm, PlanEnvChoices, PlanStartNote, usePlanGate } from "../plan/PlanStart";
 import { wipOf, wipReason } from "./wip";
+import { descendants, flattenTree } from "./tree-view";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -289,7 +290,7 @@ function ItemStartModal({
   }, [gh]);
   const dialog = useRef<HTMLElement>(null);
 
-  const all = useMemo(() => (roots ?? []).flatMap((r) => [r, ...r.children]), [roots]);
+  const all = useMemo(() => flattenTree(roots ?? []), [roots]);
   const node = gh !== undefined ? all.find((x) => x.issue.gh_number === gh) : undefined;
   // Fora da árvore (ainda carregando, ou fora do espelho): o work item do ambiente basta.
   const known = gh !== undefined && !node ? clones.flatMap((c) => c.items).find((w) => w.gh_number === gh) : undefined;
@@ -373,7 +374,7 @@ function ItemStartModal({
   useEffect(() => {
     if (!web || !cloneEnv || webInfos[cloneEnv]) return;
     let alive = true;
-    api.call<EnvInfo>(cloneEnv, "env.info").then(
+    api.call(cloneEnv, "env.info").then(
       (i) => alive && setWebInfos((all) => ({ ...all, [cloneEnv]: i })),
       () => {},
     );
@@ -426,6 +427,7 @@ function ItemStartModal({
           base: project.base_branch,
           tracker: project.tracker,
           forge: project.forge,
+          endpoints: project.endpoints,
         }) + (gh === target.ghNumber ? (target.note ?? "") : "")
       : "";
   // Prévia do "Criar release" (#204): `hub.release.status`, com o token do hub.
@@ -472,7 +474,7 @@ function ItemStartModal({
   );
   const subsTodo =
     issue?.has_sub_issues && node
-      ? node.children.filter((c) => c.issue.state === "open" && (c.work_item?.status ?? "backlog") === "backlog")
+      ? descendants(node).filter((c) => c.issue.state === "open" && (c.work_item?.status ?? "backlog") === "backlog")
       : [];
   const repoText = project ? `${project.gh_owner}/${project.gh_repo}` : where?.view === "hub" ? `${where.owner}/${where.repo}` : "";
   const name = project?.name ?? (where?.view === "hub" ? where.repo : "projeto");
@@ -543,7 +545,7 @@ function ItemStartModal({
     try {
       await killReplaced(tower, target);
       const s = issue
-        ? await api.call<Session>(clone.env, "session.start", {
+        ? await api.call(clone.env, "session.start", {
             ...tgt,
             gh_number: issue.gh_number,
             // Labels só da árvore: o work item não as tem.
@@ -556,8 +558,8 @@ function ItemStartModal({
             ...(unapproved && overrideApproval ? { override_approval: true } : {}),
           })
         : releaseMode
-          ? await api.call<Session>(clone.env, "session.start_release", { ...tgt, prompt, ...agent, ...size })
-          : await api.call<Session>(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
+          ? await api.call(clone.env, "session.start_release", { ...tgt, prompt, ...agent, ...size })
+          : await api.call(clone.env, "session.start_project", { ...tgt, prompt, ...agent, ...size });
       // Web: o painel da sessão espera o id do Remote Control e abre o link.
       if (web && withRemote) rcRequested(s.id);
       onStarted(
@@ -1074,7 +1076,7 @@ function GestorStartModal({
     setError(null);
     try {
       await killReplaced(tower, target);
-      const s = await api.call<Session>(env, "session.start_gestor", {
+      const s = await api.call(env, "session.start_gestor", {
         scope,
         prompt,
         ...(model ? { model } : {}),

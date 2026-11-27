@@ -23,7 +23,9 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 pub use ct_http::sync::{DecisionsQuery, DecisionsReply, PushRequest, PushResponse};
-use ct_ledger::{HubDecision, OutboxEntry};
+use ct_http::sync::{VersionInfo, VersionRefusal};
+use ct_ledger::HubDecision;
+use ct_ledger::OutboxEntry;
 use ct_sessions::Sessions;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -203,6 +205,9 @@ pub struct HubSender {
     /// Relatório do plano da conta (#106); `None` = não informa (testes).
     plan_source: Option<PlanSource>,
     plan: Mutex<PlanSlot>,
+    /// Versão que o envio informa no handshake (#227): a deste build, salvo
+    /// nos testes, que simulam um ambiente de outra versão.
+    version: VersionInfo,
 }
 
 /// Monta o relatório do plano do ambiente (conta, statusline, leitura).
@@ -246,7 +251,15 @@ impl HubSender {
             cleanup_dirty: AtomicBool::new(false),
             plan_source: None,
             plan: Mutex::default(),
+            version: VersionInfo::local(),
         }
+    }
+
+    /// Troca a versão informada no handshake (testes do #227).
+    #[cfg(test)]
+    pub(crate) fn with_version(mut self, version: VersionInfo) -> Self {
+        self.version = version;
+        self
     }
 
     /// Informa o plano da conta ao hub (#106): o relatório é remontado a
@@ -552,6 +565,8 @@ impl HubSender {
             .post(&format!("{}/sync/push", url.trim_end_matches('/')))
             .set("Authorization", &format!("Bearer {token}"))
             .set("Content-Type", "application/json")
+            .set(ct_http::sync::PROTOCOL_HEADER, &self.version.protocol)
+            .set(ct_http::sync::VERSION_HEADER, &self.version.version)
             .send_string(&body);
         match resp {
             Ok(r) => r
@@ -696,6 +711,11 @@ pub(crate) fn status_error(code: u16, body: &str) -> String {
                 no hub e grave com `ctower hub set-token`"
             .into(),
         403 => format!("hub recusou o token de sync (403): {body}"),
+        // Handshake de versão (#227): o corpo é a `VersionRefusal` do hub.
+        426 => match serde_json::from_str::<VersionRefusal>(body) {
+            Ok(r) => format!("hub recusou a versão (426): {}", r.message),
+            Err(_) => format!("hub recusou a versão (426): {body}"),
+        },
         _ if body.is_empty() => format!("hub respondeu {code}"),
         _ => format!("hub respondeu {code}: {body}"),
     }
@@ -772,7 +792,8 @@ mod tests {
     use crate::test_util::{serve_hub, DeadHub, Srv};
     use axum::body::Bytes;
     use ct_core::WorkItemKind;
-    use ct_ledger::{DecisionScope, Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
+    use ct_ledger::DecisionScope;
     use ct_sessions::test_support::FakeClaude;
 
     fn sender(srv: &Srv, target: HubTarget) -> Arc<HubSender> {
@@ -788,6 +809,67 @@ mod tests {
             url: url.to_string(),
             token: token.to_string(),
         }
+    }
+
+    fn sender_com_versao(srv: &Srv, target: HubTarget, v: VersionInfo) -> Arc<HubSender> {
+        Arc::new(
+            HubSender::new(srv.env.sessions.clone(), target, Duration::from_secs(5))
+                .with_version(v),
+        )
+    }
+
+    /// Handshake de versão (#227): ambiente de outra versão é recusado com o
+    /// motivo (as duas versões) e o hub guarda a versão dele; atualizado (o
+    /// processo reinicia com a versão deste build), o próximo envio passa sem
+    /// intervenção.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn versao_diferente_e_recusada_e_volta_ao_atualizar() {
+        let hub = new_hub();
+        let tok = hub.lock().add_legacy_env_token("a").unwrap();
+        let url = hub_up(&hub).await;
+        let a = env_with_changes();
+        // Um envio com a versão deste build, para o hub conhecer o ambiente.
+        let sa = sender(&a, remote(&url, &tok));
+        assert!(sync_now(&sa).await.ok);
+        let env = hub.lock().list_envs().unwrap();
+        assert_eq!(env[0].version.as_deref(), Some(ct_core::VERSION));
+        assert_eq!(
+            env[0].protocol.as_deref(),
+            Some(ct_http::sync::SYNC_PROTOCOL_VERSION)
+        );
+
+        // Ambiente ainda na versão anterior: recusado, o outbox fica.
+        a.env
+            .sessions
+            .ledger()
+            .ensure_work_item(a.env.project_id, 11, WorkItemKind::Issue)
+            .unwrap();
+        let antiga = VersionInfo {
+            protocol: ct_http::sync::SYNC_PROTOCOL_VERSION.into(),
+            version: "0.0.1".into(),
+        };
+        let velha = sender_com_versao(&a, remote(&url, &tok), antiga);
+        let antes = velha.status().pending;
+        let r = sync_now(&velha).await;
+        assert!(!r.ok, "{r:?}");
+        let erro = r.error.unwrap();
+        assert!(
+            erro.contains("0.0.1") && erro.contains(ct_core::VERSION),
+            "{erro}"
+        );
+        assert_eq!((r.sent, r.pending), (0, antes));
+        assert_eq!(velha.status().failures, 1);
+        // O hub grava a versão recusada: a sala de controle mostra desatualizado.
+        let env = hub.lock().list_envs().unwrap();
+        assert_eq!(env[0].version.as_deref(), Some("0.0.1"));
+
+        // Reiniciado com a versão deste build: o envio passa e leva o outbox.
+        let nova = sender(&a, remote(&url, &tok));
+        let r = sync_now(&nova).await;
+        assert!(r.ok, "{r:?}");
+        assert_eq!((r.sent, r.pending), (antes, 0));
+        let env = hub.lock().list_envs().unwrap();
+        assert_eq!(env[0].version.as_deref(), Some(ct_core::VERSION));
     }
 
     async fn push(s: &Arc<HubSender>) -> Result<usize, String> {
@@ -989,7 +1071,7 @@ mod tests {
     /// partir de um push).
     fn new_hub() -> SharedHub {
         let hub = Hub::open_in_memory().unwrap();
-        hub.add_project(&ct_ledger::NewHubProject {
+        hub.add_project(&ct_hub_store::NewHubProject {
             owner: "deep-ion-ai".into(),
             repo: "demo".into(),
             name: "demo".into(),

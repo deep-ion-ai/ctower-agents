@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import { defineConfig, type Plugin } from "vite";
+import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { pwaFiles } from "./pwa/plugin.mjs";
 
@@ -53,5 +54,7 @@ export default defineConfig(({ mode }) => ({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     css: false,
+    // Testes da ponte do desktop importam `@tauri-apps/*`, que o modo web proíbe.
+    exclude: mode === "web" ? [...configDefaults.exclude, "src/api/sensitive.test.ts"] : configDefaults.exclude,
   },
 }));

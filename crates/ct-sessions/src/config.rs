@@ -1,6 +1,7 @@
 //! `config.toml` do daemon (spec §13), com padrões para tudo.
 
 use crate::paths::Dirs;
+use ct_core::provider::{ProviderDescriptor, GITHUB};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::PathBuf;
@@ -89,6 +90,13 @@ pub struct DaemonConfig {
     /// glab dos projetos GitLab (MRs e branch remota; nome no `PATH` ou
     /// caminho absoluto).
     pub glab_bin: String,
+    /// Prazo, em segundos, de cada operação git local (status, diff, merge,
+    /// worktree, config). Passou disso, o git é morto e a operação falha com
+    /// erro de prazo; `0` vira 1 s.
+    pub git_local_timeout_secs: u64,
+    /// Prazo, em segundos, das operações git que falam com o remoto (fetch,
+    /// push, clone). Um remoto que não responde não prende o daemon além disso.
+    pub git_network_timeout_secs: u64,
     /// Repositório de onde vêm as atualizações do ctowerd/ctower (build local).
     pub update_repo: String,
     /// Branch ou tag seguida pelas atualizações (canal).
@@ -101,9 +109,15 @@ pub struct DaemonConfig {
     pub cleanup: CleanupConfig,
     /// Log em arquivo, que a tela Logs da UI lê (`[logs]`, #65).
     pub logs: ct_core::LogsConfig,
-    /// Comandos de credencial do Jira e do GitLab só deste ambiente
-    /// (`[credentials."owner/repo"]`, #143), no lugar dos do cadastro.
+    /// Legado (#143): comandos de credencial do Jira e do GitLab só deste
+    /// ambiente, por projeto (`[credentials."owner/repo"]`), no lugar da
+    /// fonte da conexão. O pull converte o que dá em `[connections]`.
     pub credentials: ct_core::CredentialOverrides,
+    /// Conexões do hub com comando de credencial só deste ambiente
+    /// (`[connections."nome"]`, #237), depois da conversão de `[credentials]`.
+    /// O `ctowerd` as carrega no boot (`SharedCredentials::set_connections`,
+    /// #274); o pull (ct-server, `hub_config`) relê o arquivo a cada vez.
+    pub connections: ct_core::ConnectionOverrides,
 }
 
 /// `[cleanup]` do `config.toml` (épico #284): o job de verificação das
@@ -173,19 +187,22 @@ impl Default for DaemonConfig {
             scrollback_bytes: 4 * 1024 * 1024,
             pre_trust_worktrees: true,
             gh_sync_interval_secs: 180,
-            gh_api_url: "https://api.github.com".into(),
+            gh_api_url: GITHUB.default_endpoint().unwrap_or_default().into(),
             gh_bin: "gh".into(),
             jira_sync_interval_secs: 300,
             jira_bin: "jira".into(),
             jira_list_timeout_secs: 120,
             jira_view_timeout_secs: 30,
             glab_bin: "glab".into(),
+            git_local_timeout_secs: 30,
+            git_network_timeout_secs: 120,
             update_repo: "https://github.com/deep-ion-ai/ctower-agents.git".into(),
             update_ref: "main".into(),
             update_check_interval_hours: 6,
             cleanup: CleanupConfig::default(),
             logs: Default::default(),
             credentials: Default::default(),
+            connections: Default::default(),
         }
     }
 }
@@ -232,6 +249,14 @@ impl DaemonConfig {
         match self.gestor_dir.trim() {
             "" => dirs.data.join("gestor"),
             d => expand_home(d),
+        }
+    }
+
+    /// Prazos do git deste daemon (`ct_git::configure`, no boot).
+    pub fn git_deadlines(&self) -> ct_git::Deadlines {
+        ct_git::Deadlines {
+            local: std::time::Duration::from_secs(self.git_local_timeout_secs),
+            network: std::time::Duration::from_secs(self.git_network_timeout_secs),
         }
     }
 
@@ -407,6 +432,25 @@ mod tests {
         assert_eq!(c.gh_sync_interval_secs, 0);
         assert_eq!(c.gh_api_url, "http://127.0.0.1:9");
         assert_eq!(c.gh_bin, "/opt/gh");
+    }
+
+    #[test]
+    fn prazos_do_git() {
+        let d = tempfile::tempdir().unwrap();
+        let c = DaemonConfig::load(&dirs(d.path())).unwrap();
+        assert_eq!(
+            (c.git_local_timeout_secs, c.git_network_timeout_secs),
+            (30, 120)
+        );
+        std::fs::write(
+            d.path().join("config.toml"),
+            "git_local_timeout_secs = 45\ngit_network_timeout_secs = 300\n",
+        )
+        .unwrap();
+        let c = DaemonConfig::load(&dirs(d.path())).unwrap();
+        let prazos = c.git_deadlines();
+        assert_eq!(prazos.local, std::time::Duration::from_secs(45));
+        assert_eq!(prazos.network, std::time::Duration::from_secs(300));
     }
 
     #[test]

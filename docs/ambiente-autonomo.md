@@ -138,7 +138,7 @@ No Compose recente, `docker compose up` e `docker compose start` **sem os logins
 
 ### Mais de um dono no GitHub
 
-Um token fine-grained cobre um dono só (um usuário ou uma organização). As operações do próprio `ctowerd` no GitHub (clonar, criar a `wip/autonoma`, abrir o PR em rascunho, o alinhamento) usam o `GH_TOKEN` único do container. Um secret `GH_TOKEN` do projeto no hub só vale dentro do processo da sessão, não no `ctowerd`. Por isso, projetos de donos diferentes pedem **um container por dono**:
+Um token fine-grained cobre um dono só (um usuário ou uma organização). As operações do próprio `ctowerd` no GitHub usam o `GH_TOKEN` único do container: criar a `wip/autonoma` e o alinhamento são `git push` pelo helper do `gh`, e clonar e abrir o PR em rascunho usam o token da conexão GitHub do projeto (#275), que é o mesmo `GH_TOKEN` quando a conexão tem a fonte `cli` ou a sobrescrita `gh auth token` neste ambiente (Configurações › Ambiente › Credenciais das conexões). Um secret `GH_TOKEN` do projeto no hub só vale dentro do processo da sessão, não no `ctowerd`. Por isso, projetos de donos diferentes pedem **um container por dono**:
 
 ```sh
 cp .env acme.env && $EDITOR acme.env     # CT_ENV_NAME=linux-autonomo-acme, CT_AUTONOMO_PORT=17881

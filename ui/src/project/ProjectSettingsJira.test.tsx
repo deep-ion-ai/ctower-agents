@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { FakeDaemonApi } from "../api/fake";
 import type { HubProjectView, HubTrackerStatus } from "../protocol/hub-gen";
+import type { Connection } from "../protocol/gen";
 import {
   HUB_DASHBOARD,
   NO_HEALTH,
@@ -20,6 +21,29 @@ import type { ProjectSettingsSection } from "./sections";
 
 const NOW = Date.now();
 const JIRA = jiraHubProject();
+/** Conexões do hub (#238): o projeto escolhe a do Jira e a do GitLab, sem URL nem credencial. */
+const CONNECTIONS: Connection[] = [
+  {
+    id: 7,
+    name: "jira-empresa",
+    kind: "jira",
+    endpoint: "https://jira.example.com",
+    credential: { kind: "command", cmd: "pass show jira | head -1" },
+    options: {},
+    created_at: 1,
+    updated_at: 1,
+  },
+  {
+    id: 8,
+    name: "gitlab-empresa",
+    kind: "gitlab",
+    endpoint: "gitlab.example.com",
+    credential: { kind: "command", cmd: "pass show gitlab | head -1" },
+    options: {},
+    created_at: 1,
+    updated_at: 1,
+  },
+];
 const ASSIGNMENTS = [
   hubAssignment({ project_id: 7, gh_owner: "grupo/projeto", gh_repo: "app" }),
   hubAssignment({ project_id: 7, gh_owner: "grupo/projeto", gh_repo: "app", env_id: "daemon-mac", env_name: "mac-mini" }),
@@ -74,8 +98,8 @@ function setup(opts: { projects?: HubProjectView[]; at?: Screen; protocol?: stri
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
     .onHub("hub.proposals.list", NO_PROPOSALS)
     .onHub("hub.health.get", NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
-    .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 0, recovery_configured: true }, items: [], delivery: [] });
+    .onHub("hub.secrets.list", { status: { entries: 0, store_rev: 0, recovery_configured: true }, items: [], delivery: [] })
+    .onHub("hub.connections.list", CONNECTIONS);
   const at = opts.at ?? (projects.length === 0 ? { name: "project" } : settingsAt("general"));
   render(<App api={api} initial={at} />);
   return { api, user: userEvent.setup(), setProjects: (p: HubProjectView[]) => (projects = p) };
@@ -94,7 +118,7 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
   expect(within(form).queryByLabelText("URL do GitHub")).not.toBeInTheDocument();
   const submit = within(form).getByRole("button", { name: "Cadastrar" });
   expect(submit).toBeDisabled();
-  await user.type(within(form).getByLabelText("URL do Jira"), "https://jira.example.com");
+  await user.selectOptions(within(form).getByLabelText("Conexão do Jira"), "7");
   await user.type(within(form).getByLabelText("Chave do projeto no Jira"), "PROJ");
   // Projeto novo: sprint ativa marcada, sem JQL nem limite; desmarcar mostra os dois.
   const sprint = within(form).getByLabelText("Sincronizar somente a sprint ativa");
@@ -111,12 +135,11 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
   expect(limit).toHaveAccessibleDescription(/Só as 100 issues mais recentes do JQL .* além das que têm work item/);
   await user.clear(limit);
   await user.type(limit, "250");
-  await user.type(within(form).getByLabelText("Comando de credencial do Jira"), "pass show jira | head -1");
   await user.type(
     within(form).getByLabelText("URL do repositório no GitLab (HTTPS ou SSH)"),
     "https://gitlab.example.com/grupo/projeto/app.git",
   );
-  await user.type(within(form).getByLabelText("Comando de credencial do GitLab"), "pass show gitlab | head -1");
+  await user.selectOptions(within(form).getByLabelText("Conexão do GitLab"), "8");
   expect(within(form).getByLabelText("Campo da sprint (opcional)")).toHaveAttribute(
     "placeholder",
     "customfield_10600 (vazio = detectar)",
@@ -133,13 +156,11 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
   expect(api.hubCallsTo("hub.projects.add")[0].params).toEqual({
     tracker: {
       kind: "jira",
-      url: "https://jira.example.com",
       project_key: "PROJ",
       active_sprint_only: false,
       jql: "component = web",
       max_issues: 250,
-      credential_cmd: "pass show jira | head -1",
-      config_file: "",
+      connection: 7,
       epic_link_field: "",
       epic_name_field: "",
       sprint_field: "customfield_10600",
@@ -149,7 +170,7 @@ test("cadastrar Jira + GitLab: campos do Jira e do GitLab, padrão com prévia, 
     forge: {
       kind: "gitlab",
       clone_url: "https://gitlab.example.com/grupo/projeto/app.git",
-      credential_cmd: "pass show gitlab | head -1",
+      connection: 8,
     },
     branch_pattern: "{key}",
     attribution: false,
@@ -163,14 +184,13 @@ async function jiraForm(user: ReturnType<typeof userEvent.setup>) {
   const form = screen.getByRole("form", { name: "Novo projeto" });
   await user.selectOptions(within(form).getByLabelText("Repositório do código-fonte"), "gitlab");
   await user.selectOptions(within(form).getByLabelText("Repositório de demandas (issues)"), "jira");
-  await user.type(within(form).getByLabelText("URL do Jira"), "https://jira.exemplo.com");
+  await user.selectOptions(within(form).getByLabelText("Conexão do Jira"), "7");
   await user.type(within(form).getByLabelText("Chave do projeto no Jira"), "PROJ");
-  await user.type(within(form).getByLabelText("Comando de credencial do Jira"), "pass show jira/token | head -1");
   await user.type(
     within(form).getByLabelText("URL do repositório no GitLab (HTTPS ou SSH)"),
     "https://gitlab.exemplo.com/grupo/projeto.git",
   );
-  await user.type(within(form).getByLabelText("Comando de credencial do GitLab"), "pass show gitlab/token | head -1");
+  await user.selectOptions(within(form).getByLabelText("Conexão do GitLab"), "8");
   return form;
 }
 
@@ -322,13 +342,13 @@ test("cadastro: combinação não suportada avisa e não deixa cadastrar", async
   await user.selectOptions(within(form).getByLabelText("Repositório de demandas (issues)"), "jira");
   // Código no GitHub, issues no Jira: a URL do GitHub e os campos do Jira aparecem, mas o hub recusaria.
   expect(within(form).getByLabelText("URL do GitHub")).toBeInTheDocument();
-  expect(within(form).getByLabelText("URL do Jira")).toBeInTheDocument();
-  expect(within(form).queryByLabelText("Comando de credencial do GitLab")).not.toBeInTheDocument();
+  expect(within(form).getByLabelText("Conexão do Jira")).toBeInTheDocument();
+  expect(within(form).queryByLabelText("Conexão do GitLab")).not.toBeInTheDocument();
   expect(within(form).getByRole("note")).toHaveTextContent(
     "Combinação ainda não suportada: use GitHub + GitHub ou GitLab + Jira.",
   );
   await user.type(within(form).getByLabelText("URL do GitHub"), "https://github.com/o/r");
-  await user.type(within(form).getByLabelText("URL do Jira"), "https://jira.exemplo.com");
+  await user.selectOptions(within(form).getByLabelText("Conexão do Jira"), "7");
   await user.type(within(form).getByLabelText("Chave do projeto no Jira"), "PROJ");
   expect(within(form).getByRole("button", { name: "Cadastrar" })).toBeDisabled();
   // GitLab + GitHub também não.
@@ -365,7 +385,7 @@ test("editar projeto Jira: os dois repositórios mostram o atual, sem trocar", a
   expect(issues).toHaveValue("jira");
   expect(code).toBeDisabled();
   expect(issues).toBeDisabled();
-  expect(within(form).getByLabelText("URL do Jira")).toHaveValue("https://jira.example.com");
+  expect(within(form).getByLabelText("Conexão do Jira")).toHaveValue("7");
   expect(within(form).getByLabelText("URL do repositório no GitLab (HTTPS ou SSH)")).toHaveValue(
     "https://gitlab.example.com/grupo/projeto/app.git",
   );
@@ -379,9 +399,10 @@ test("padrão de branch inválido e mapa de tipos inválido não vão ao hub", a
   await user.selectOptions(within(form).getByLabelText("Repositório de demandas (issues)"), "jira");
   await user.type(within(form).getByLabelText("Padrão de branch"), "{{prefix}/{{slug}");
   expect(within(form).getByText(/Padrão inválido/)).toBeInTheDocument();
-  await user.type(within(form).getByLabelText("URL do Jira"), "https://jira.example.com");
+  await user.selectOptions(within(form).getByLabelText("Conexão do Jira"), "7");
   await user.type(within(form).getByLabelText("Chave do projeto no Jira"), "PROJ");
   await user.type(within(form).getByLabelText("URL do repositório no GitLab (HTTPS ou SSH)"), "git@gitlab.example.com:a/b.git");
+  await user.selectOptions(within(form).getByLabelText("Conexão do GitLab"), "8");
   const map = within(form).getByLabelText("Mapa de tipos do Jira (Tipo=papel)");
   await user.clear(map);
   await user.type(map, "Tarefa=trabalho");
@@ -397,9 +418,9 @@ test("Configurações do projeto Jira: Jira e GitLab, sem GitHub, e aguardando o
   const g = await screen.findByRole("group", { name: "Geral" });
   expect(g).not.toHaveTextContent(/GitHub/);
   expect(within(g).queryByRole("link", { name: /github\.com/ })).not.toBeInTheDocument();
-  expect(g).toHaveTextContent("https://jira.example.com · projeto PROJ");
+  expect(g).toHaveTextContent("jira-empresa (https://jira.example.com) · projeto PROJ");
   expect(g).toHaveTextContent("https://gitlab.example.com/grupo/projeto/app.git");
-  expect(g).toHaveTextContent("pass show jira | head -1");
+  expect(g).toHaveTextContent("gitlab-empresa (gitlab.example.com)");
   expect(g).toHaveTextContent("sem linhas de atribuição");
   // Repositório e rastreador: o ambiente de sync, aguardando o relato.
   await user.click(within(nav).getByRole("button", { name: "Repositório e rastreador" }));
@@ -448,7 +469,7 @@ test("prontidão do ambiente de sync: o que falta, com a instrução", async () 
   const r = within(g).getByLabelText("Prontidão de wsl-pc");
   expect(r).toHaveTextContent(/2 item\(ns\) a configurar/);
   expect(within(r).getByRole("list", { name: "Jira" })).toHaveTextContent(
-    'rode "pass show jira | head -1" num terminal do ambiente',
+    "confira a credencial da conexão do Jira (Hub › Conexões) ou a sobrescrita dela no ambiente",
   );
   expect(within(r).getByRole("list", { name: "Jira" })).toHaveTextContent("1.7.0");
   expect(within(r).getByRole("list", { name: "GitLab" })).not.toHaveTextContent(/falta/);

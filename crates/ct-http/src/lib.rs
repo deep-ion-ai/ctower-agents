@@ -3,6 +3,7 @@
 //! contrato do sync ambiente → hub (spec do hub como plano de controle §2).
 
 pub mod logs;
+pub mod methods;
 pub mod rpc;
 pub mod sync;
 

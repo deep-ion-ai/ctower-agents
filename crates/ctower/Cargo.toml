@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 ct-core.workspace = true
 ct-gh.workspace = true
+ct-hub-store.workspace = true
 ct-ledger.workspace = true
 ct-secrets.workspace = true
 ct-sessions.workspace = true

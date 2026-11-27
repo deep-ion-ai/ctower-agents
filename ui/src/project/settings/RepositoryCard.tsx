@@ -1,10 +1,17 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useTower } from "../../state/tower";
 import type { HubProjectView } from "../../protocol/hub-gen";
+import type { Connection } from "../../protocol/gen";
+import { connectionLabel } from "../../hub/connections";
+import { useHubConnections } from "../../hub/useConnections";
 import {
+  DEFAULT_GITHUB_CONNECTION,
   GITHUB_BRANCH_PATTERN,
   JIRA_BRANCH_PATTERN,
   branchPreview,
+  connectionId,
+  githubConnOf,
+  githubParams,
   gitlabOf,
   hostsOf,
   isJira,
@@ -33,6 +40,7 @@ export function projectEditForm(p: HubProjectView): ProjectForm {
     base_branch: pr.base_branch,
     protected: pr.protected_branches.join(", "),
     jira: jiraFormOf(pr),
+    github_conn: String(githubConnOf(pr) ?? ""),
     docs: docsFormOf(pr),
   };
 }
@@ -66,6 +74,7 @@ export function RepositoryCard({
   const jira = jiraOf(pr);
   const gitlab = gitlabOf(pr);
   const sync = syncText(p.sync, now);
+  const { connections } = useHubConnections();
   const syncName = pr.sync_env_id ? (p.assignments.find((a) => a.env_id === pr.sync_env_id)?.env_name ?? pr.sync_env_id) : null;
   return (
     <section className="hub-card" aria-labelledby={`pc-repo-${pr.id}`}>
@@ -81,7 +90,7 @@ export function RepositoryCard({
               <div>
                 <dt>Jira</dt>
                 <dd>
-                  <span className="mono">{jira.url}</span> · projeto <span className="mono">{jira.project_key}</span>
+                  {connText(jira.connection, connections)} · projeto <span className="mono">{jira.project_key}</span>
                   {jira.active_sprint_only ? (
                     <span className="hub-card-sub">Sync: somente a sprint ativa</span>
                   ) : (
@@ -93,15 +102,16 @@ export function RepositoryCard({
                 </dd>
               </div>
               <div>
-                <dt>GitLab</dt>
-                <dd className="mono">{gitlab ? gitlab.clone_url || `${gitlab.host}/${gitlab.path}` : "—"}</dd>
+                <dt>Conexão do Jira</dt>
+                <dd>{connText(jira.connection, connections)}</dd>
               </div>
               <div>
-                <dt>Credenciais (no ambiente)</dt>
-                <dd>
-                  <span className="mono">{jira.credential_cmd}</span>
-                  {gitlab && <span className="hub-card-sub mono">{gitlab.credential_cmd}</span>}
-                </dd>
+                <dt>GitLab</dt>
+                <dd className="mono">{gitlab ? gitlab.clone_url || gitlab.path : "—"}</dd>
+              </div>
+              <div>
+                <dt>Conexão do GitLab</dt>
+                <dd>{connText(gitlab?.connection, connections)}</dd>
               </div>
               {(jira.extra_fields ?? []).length > 0 && (
                 <div>
@@ -126,6 +136,12 @@ export function RepositoryCard({
                 </dd>
               </div>
             </>
+          )}
+          {!jira && (
+            <div>
+              <dt>Conexão do GitHub</dt>
+              <dd>{githubConnText(githubConnOf(pr), connections)}</dd>
+            </div>
           )}
           {!jira && pr.branch_pattern && pr.branch_pattern !== GITHUB_BRANCH_PATTERN && (
             <div>
@@ -176,6 +192,21 @@ export function RepositoryCard({
   );
 }
 
+/** A conexão do projeto: nome e endereço, ou o aviso de cadastro anterior (sem conexão). */
+function connText(id: number | undefined, connections: Connection[] | null): ReactNode {
+  if (id === undefined) {
+    return <span className="state-off">sem conexão (cadastro anterior): edite o projeto e escolha uma</span>;
+  }
+  const c = connections?.find((x) => x.id === id);
+  return <span className="mono">{c ? connectionLabel(c) : `conexão ${id}`}</span>;
+}
+
+/** A conexão GitHub do projeto (#275): a escolhida ou a padrão. */
+function githubConnText(id: number | null, connections: Connection[] | null): ReactNode {
+  if (id === null) return <span className="muted">padrão (conexão {DEFAULT_GITHUB_CONNECTION})</span>;
+  return connText(id, connections);
+}
+
 function RepositoryEdit({
   project: p,
   settings,
@@ -206,7 +237,7 @@ function RepositoryEdit({
       const j = f.jira;
       const same = (keys: (keyof JiraForm)[]) => keys.every((k) => String(j[k]).trim() === String(was[k]).trim());
       if (
-        !same(["jira_url", "jira_key", "active_sprint_only", "jql", "max_issues", "jira_cmd", "type_map", "epic_link_field", "epic_name_field", "sprint_field", "gitlab_url", "gitlab_cmd"]) ||
+        !same(["jira_conn", "jira_key", "active_sprint_only", "jql", "max_issues", "type_map", "epic_link_field", "epic_name_field", "sprint_field", "gitlab_url", "gitlab_conn"]) ||
         extraFieldsChanged(j.extra_fields, was.extra_fields)
       ) {
         const pv = providerParams(j);
@@ -218,6 +249,9 @@ function RepositoryEdit({
       }
       if (j.branch_pattern.trim() !== was.branch_pattern.trim()) patch.branch_pattern = j.branch_pattern.trim();
       if (j.attribution !== was.attribution) patch.attribution = j.attribution;
+    } else if (connectionId(f.github_conn) !== githubConnOf(cur)) {
+      // GitHub (#275): a conexão vai no rastreador e na forja.
+      Object.assign(patch, githubParams(f.github_conn));
     }
     // Docs (#444): o objeto inteiro, se mudou; hub sem `docs` não recebe.
     const docs = docsPatch(f.docs, cur);

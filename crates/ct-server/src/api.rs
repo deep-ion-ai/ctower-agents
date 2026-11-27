@@ -14,6 +14,8 @@ pub struct EnvInfo {
     /// Versão do protocolo (`major.minor`); a UI recusa major diferente.
     pub protocol: String,
     pub version: String,
+    /// Capacidades do ambiente, para gating por recurso (#227).
+    pub capabilities: Vec<String>,
     /// Commit do build; vazio se compilado fora do git.
     pub commit: String,
     pub hostname: String,
@@ -136,11 +138,12 @@ mod export {
         crate::hub_sync::HubSyncStatus::export_all_to(&dir).unwrap();
         crate::update::UpdateStatus::export_all_to(&dir).unwrap();
         crate::env_config::ConfigItem::export_all_to(&dir).unwrap();
-        crate::env_config::EnvCredential::export_all_to(&dir).unwrap();
+        crate::env_config::EnvConnection::export_all_to(&dir).unwrap();
         crate::permissions::PermissionRequest::export_all_to(&dir).unwrap();
         crate::hub_sync::HubSyncResult::export_all_to(&dir).unwrap();
         crate::cleanup::CleanupStatus::export_all_to(&dir).unwrap();
         ct_sessions::cleanup::CleanupRun::export_all_to(&dir).unwrap();
+        ct_sessions::epic_run::WorktreeRemoval::export_all_to(&dir).unwrap();
         // Os tipos do /ws do hub ficam em ui/src/protocol/hub-gen (cthubd).
         Dashboard::export_all_to(&dir).unwrap();
         Review::export_all_to(&dir).unwrap();
@@ -156,6 +159,12 @@ mod export {
         // Uso por sessão e plano da conta (#106).
         ct_sessions::SessionUsage::export_all_to(&dir).unwrap();
         ct_sessions::StatuslineInstall::export_all_to(&dir).unwrap();
+        // Conexões externas (#234): tipo, fonte de credencial e descritor.
+        ct_core::provider::Connection::export_all_to(&dir).unwrap();
+        ct_core::provider::Capabilities::export_all_to(&dir).unwrap();
+        ct_core::provider::Readiness::export_all_to(&dir).unwrap();
+        // Os dados dos descritores (#278), para o registro da UI.
+        ct_core::provider::ProviderInfo::export_all_to(&dir).unwrap();
         crate::plan::EnvAccount::export_all_to(&dir).unwrap();
         ct_sessions::ProjectSync::export_all_to(&dir).unwrap();
         ct_sessions::GestorScope::export_all_to(&dir).unwrap();
@@ -170,7 +179,6 @@ mod export {
         ct_git::diff::DiffSummary::export_all_to(&dir).unwrap();
         ct_git::diff::DiffPatch::export_all_to(&dir).unwrap();
         ct_git::diff::BranchCommits::export_all_to(&dir).unwrap();
-        ct_gh::TokenStatus::export_all_to(&dir).unwrap();
         ct_gh::PrComment::export_all_to(&dir).unwrap();
         // Rastreador e forja (#347): os tipos soltos, além dos de `Project`.
         ct_core::TrackerKind::export_all_to(&dir).unwrap();
@@ -204,5 +212,84 @@ mod export {
             format!("// Gerado por `cargo test -p ct-server --features ts export_ts`.\n{index}"),
         )
         .unwrap();
+        write_methods(&dir, &names);
+        write_providers(&dir);
+    }
+
+    /// `providers.ts`: `PROVIDER_INFOS`, os dados dos descritores
+    /// (`ct_core::provider::PROVIDERS`, #278) na ordem do registro. A UI
+    /// completa com os textos do formulário (`ui/src/hub/providers.ts`), sem
+    /// repetir a regra das formas de credencial aceitas. Fora do
+    /// `index.ts`, que só lista tipos.
+    fn write_providers(dir: &Path) {
+        let infos = serde_json::to_string_pretty(&ct_core::provider::provider_infos()).unwrap();
+        fs::write(
+            dir.join("providers.ts"),
+            format!(
+                "// Gerado por `cargo test -p ct-server --features ts export_ts`.\n\
+                 import type {{ ProviderInfo }} from \"./ProviderInfo\";\n\n\
+                 export const PROVIDER_INFOS: ProviderInfo[] = {infos};\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// `methods.ts`: `DaemonMethods` (parâmetros e resultado por método) e
+    /// `METHOD_SCOPES`, do registro `ct_http::methods` (#228). Os nomes de
+    /// tipo usados nas expressões têm de ser tipos exportados acima: um nome
+    /// sem arquivo quebra o teste. Fora do `index.ts`, que só lista tipos.
+    fn write_methods(dir: &Path, names: &[(String, String)]) {
+        use ct_http::methods::{Scope, METHODS};
+        use std::collections::BTreeSet;
+        let known: std::collections::BTreeMap<&str, &str> = names
+            .iter()
+            .map(|(n, p)| (n.as_str(), p.as_str()))
+            .collect();
+        let mut imports: BTreeSet<(&str, &str)> = BTreeSet::new();
+        for m in METHODS {
+            for expr in [m.params, m.result] {
+                for word in expr.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+                    if !word.starts_with(|c: char| c.is_ascii_uppercase()) {
+                        continue;
+                    }
+                    let path: &str = known
+                        .get(word)
+                        .copied()
+                        .unwrap_or_else(|| panic!("tipo sem export em {}: {word}", m.name));
+                    imports.insert((word, path));
+                }
+            }
+        }
+        let mut ts = String::from(
+            "// Gerado por `cargo test -p ct-server --features ts export_ts` a partir de\n\
+             // `ct_http::methods`. Não editar à mão.\n",
+        );
+        for (word, path) in &imports {
+            ts += &format!("import type {{ {word} }} from \"./{path}\";\n");
+        }
+        let scope_list = |scope: Scope| -> String {
+            let mut out = String::new();
+            for m in METHODS.iter().filter(|m| m.scopes.contains(&scope)) {
+                out += &format!("    \"{}\",\n", m.name);
+            }
+            out
+        };
+        ts += "\n/** Métodos por escopo: `ui` (o /ws), `web` e `channel` (o canal do hub). */\n";
+        ts += "export const METHOD_SCOPES = {\n";
+        ts += &format!("  ui: [\n{}  ],\n", scope_list(Scope::Ui));
+        ts += &format!("  web: [\n{}  ],\n", scope_list(Scope::Web));
+        ts += &format!("  channel: [\n{}  ],\n", scope_list(Scope::Channel));
+        ts += "} as const;\n\n";
+        ts += "/** Parâmetros (`null`: nenhum) e resultado de cada método do ambiente. */\n";
+        ts += "export interface DaemonMethods {\n";
+        for m in METHODS {
+            ts += &format!(
+                "  \"{}\": {{ params: {}; result: {} }};\n",
+                m.name, m.params, m.result
+            );
+        }
+        ts += "}\n\n";
+        ts += "export type DaemonMethod = keyof DaemonMethods;\n";
+        fs::write(dir.join("methods.ts"), ts).unwrap();
     }
 }

@@ -328,9 +328,14 @@ step5_start_hub() {
     || die "127.0.0.1:$port/healthz não é do cthubd (sem \"role\":\"hub\")."
   [[ -s "$CT_CONF/env_id" ]] || die "falta $CT_CONF/env_id."
   say "+ curl -s -H \"Authorization: Bearer \$(cat $CT_CONF/hub.token)\" -H \"X-Ctower-Env-Id: \$(cat $CT_CONF/env_id)\" http://127.0.0.1:$port/sync/config"
+  # Handshake de versão (#227): hub e ambiente precisam ter a mesma versão. A
+  # versão do hub vem do /healthz; o protocolo é o SYNC_PROTOCOL_VERSION.
+  ver="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' <<<"$body")"
   body="$(curl -fsS --max-time 10 \
     -H "Authorization: Bearer $(tr -d '[:space:]' < "$CT_CONF/hub.token")" \
     -H "X-Ctower-Env-Id: $(tr -d '[:space:]' < "$CT_CONF/env_id")" \
+    -H "X-Ctower-Protocol: 1.0" \
+    -H "X-Ctower-Version: $ver" \
     "http://127.0.0.1:$port/sync/config" 2>&1)" \
     || die "o cthubd recusou o hub.token do ctowerd daqui em /sync/config: $body"
   say "$body"

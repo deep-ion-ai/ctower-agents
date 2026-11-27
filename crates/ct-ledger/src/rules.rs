@@ -304,6 +304,8 @@ mod tests {
     fn pull(l: &Ledger, rev: i64, rules: ConfigRules) {
         l.apply_hub_config(
             &ConfigResponse {
+                connections: None,
+                connection_names: None,
                 config_rev: rev,
                 config_epoch: 1,
                 changed: true,

@@ -43,7 +43,22 @@ import {
   saveSprintChoice,
   sprintLabel,
 } from "./sprints";
-import { EMPTY_ACTIVE_SPRINT, EMPTY_FILTERED, EMPTY_OPEN, SPRINTS_UNREAD, buildView, isExpanded, mineFilters, narrowing, priorityOf, statusKey } from "./tree-view";
+import {
+  EMPTY_ACTIVE_SPRINT,
+  EMPTY_FILTERED,
+  EMPTY_OPEN,
+  SPRINTS_UNREAD,
+  buildView,
+  descendants,
+  flattenTree,
+  isExpanded,
+  mineFilters,
+  narrowing,
+  pathTo,
+  priorityOf,
+  statusKey,
+  type EpicView,
+} from "./tree-view";
 import { useProjectUi } from "./ui-store";
 import { SyncHead } from "./SyncNow";
 import type { ProjectSyncInfo, SyncAddr } from "./sync-now";
@@ -51,7 +66,6 @@ import { AddIssueDialog } from "./AddIssueDialog";
 import { ADD_ISSUE_LABEL, addIssue, addIssueState, takeAddIssueRequest, useAddIssueRequest } from "./add-issue";
 import { docsFilesState, docsFolderState, type DocsCandidate } from "./docs";
 import { DocsFilesDialog } from "../files/DocsFilesDialog";
-import type { DocsDir } from "../protocol/gen";
 import { useViewChoice } from "./view-choice";
 import { PlayIcon, WorkItemPanel, type LiveRef, type PanelNode } from "./WorkItemPanel";
 
@@ -165,7 +179,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   const [viewMode, setViewMode] = useViewChoice();
   const [menu, setMenu] = useState<{ x: number; y: number; n: T; origin: HTMLElement } | null>(null);
   const roots = p.roots;
-  const all = (roots ?? []).flatMap((r) => [r, ...(r.children as T[])]);
+  const all = flattenTree(roots ?? []);
   // Sprints só no projeto Jira: as conhecidas vêm das issues do espelho, e
   // a sprint guardada que não existe mais vale como "todas".
   const jira = p.project?.tracker?.kind === "jira";
@@ -190,24 +204,25 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     if (addRequested && addKey && takeAddIssueRequest(addKey)) setAdding(true);
   }, [addRequested, addKey]);
   const node = focus !== null ? all.find((x) => x.issue.gh_number === focus) : undefined;
-  const parent = node ? roots?.find((r) => r.children.some((c) => c.issue.gh_number === focus)) : undefined;
+  // Épicos acima do item, da raiz ao pai direto (#217: épico › sub-épico).
+  const ancestors = node && focus !== null ? (pathTo(roots ?? [], focus)?.slice(0, -1) ?? []) : [];
 
-  // Item pedido (aba do item, paleta): abre o épico pai uma vez por pedido.
+  // Item pedido (aba do item, paleta): abre o caminho até ele uma vez por pedido.
   const shown = useRef<ItemIntent | undefined>(undefined);
   useEffect(() => {
     const item = p.item;
     if (!roots || !item || shown.current === item) return;
-    const root = roots.find(
-      (r) => r.issue.gh_number === item.ghNumber || r.children.some((c) => c.issue.gh_number === item.ghNumber),
-    );
-    if (!root) return;
+    const path = pathTo(roots, item.ghNumber);
+    if (!path) return;
     shown.current = item;
-    if (root.issue.gh_number !== item.ghNumber) setUi((u) => ({ ...u, open: { ...u.open, [root.issue.gh_number]: true } }));
+    const above = path.slice(0, -1);
+    if (above.length > 0)
+      setUi((u) => ({ ...u, open: { ...u.open, ...Object.fromEntries(above.map((a) => [a.issue.gh_number, true])) } }));
   }, [roots, p.item, setUi]);
 
   const isLive = (n: T) => p.liveText(n) !== null || (p.whereOf?.(n).length ?? 0) > 0;
   const familyText = (e: T) => {
-    const envs = [e, ...(e.children as T[])].flatMap((x) => p.liveText(x)?.split(", ") ?? p.whereOf?.(x) ?? []);
+    const envs = [e, ...descendants(e)].flatMap((x) => p.liveText(x)?.split(", ") ?? p.whereOf?.(x) ?? []);
     return envs.length > 0 ? [...new Set(envs)].join(", ") : null;
   };
   const canStartNode = (n: ProjectNode) => p.canStart && !isClosed(n);
@@ -225,7 +240,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     if (!docs?.enabled) return;
     setDocsError(null);
     void api
-      .call<DocsDir>(docs.env, "docs.dir", { project_id: docs.projectId, ...(epic !== undefined ? { epic } : {}) })
+      .call(docs.env, "docs.dir", { project_id: docs.projectId, ...(epic !== undefined ? { epic } : {}) })
       .then((d) => api.openFolder(docs.env, d.path))
       .catch((e) => setDocsError(`Não foi possível abrir a pasta de docs: ${e instanceof Error ? e.message : String(e)}`));
   };
@@ -358,6 +373,21 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
   };
 
   const view = buildView(roots ?? [], filters, me);
+  // Linhas do épico e, expandido, das filhas; um sub-épico (#217) repete as
+  // mesmas regras um nível abaixo. "N de M" conta só as filhas diretas.
+  const epicRows = (ev: EpicView<T>, depth: number): ReturnType<typeof row>[] => {
+    const e = ev.epic;
+    const done = e.children.filter((c) => statusKey(c) === "concluido").length;
+    const expanded = isExpanded(e, filters, ui.open[e.issue.gh_number], now, isLive);
+    if (!expanded) return [row(e, depth, { expanded, done })];
+    return [
+      row(e, depth, { expanded, done }),
+      ...ev.shown.flatMap((c) => {
+        const sub = ev.subs.get(c.issue.gh_number);
+        return sub ? epicRows(sub, depth + 1) : [row(c, depth + 1)];
+      }),
+    ];
+  };
   const nEpics = view.epics.length;
   const empty =
     roots && roots.length === 0
@@ -456,11 +486,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     <>
       {nEpics > 0 && (
         <SideGroup title="Épicos" count={nEpics}>
-          {view.epics.flatMap(({ epic: e, shown: kids }) => {
-            const done = e.children.filter((c) => statusKey(c) === "concluido").length;
-            const expanded = isExpanded(e, filters, ui.open[e.issue.gh_number], now, isLive);
-            return [row(e, 0, { expanded, done }), ...(expanded ? kids.map((c) => row(c, 1)) : [])];
-          })}
+          {view.epics.flatMap((ev) => epicRows(ev, 0))}
         </SideGroup>
       )}
       {view.loose.length > 0 && (
@@ -577,17 +603,17 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
                     {p.name}
                   </button>
                 </li>
-                <li>
-                  {parent ? (
-                    <button type="button" className="linklike" onClick={() => openItem(parent.issue.gh_number)}>
-                      Épico {ref(parent.issue.gh_number)}
-                    </button>
-                  ) : node.children.length > 0 ? (
-                    "Épicos"
-                  ) : (
-                    "Issues avulsas"
-                  )}
-                </li>
+                {ancestors.length > 0 ? (
+                  ancestors.map((a) => (
+                    <li key={a.issue.gh_number}>
+                      <button type="button" className="linklike" onClick={() => openItem(a.issue.gh_number)}>
+                        Épico {ref(a.issue.gh_number)}
+                      </button>
+                    </li>
+                  ))
+                ) : (
+                  <li>{node.children.length > 0 ? "Épicos" : "Issues avulsas"}</li>
+                )}
                 <li aria-current="page">{ref(focus)}</li>
               </ol>
             }
@@ -625,7 +651,6 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
     <Board
       view={view}
       filters={filters}
-      me={me}
       now={now}
       focus={null}
       project={prov}
@@ -738,7 +763,7 @@ export function ProjectView<T extends ProjectNode>(p: ProjectViewProps<T>) {
             {roots && (
               <ul className="pj-stats" aria-label="Resumo do projeto">
                 <li>
-                  <strong>{(roots ?? []).filter((r) => r.children.length > 0 && !isClosed(r)).length}</strong>
+                  <strong>{all.filter((x) => x.children.length > 0 && !isClosed(x)).length}</strong>
                   <span className="muted">épicos abertos</span>
                 </li>
                 <li>

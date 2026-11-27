@@ -351,6 +351,11 @@ impl Conn {
     }
 
     async fn call(&mut self, method: &str, p: &Value) -> RpcResult {
+        // Só despacha o que está no registro `ct_http::methods` com escopo
+        // da UI (#228): fora dele, nem chega ao `match`.
+        if !ct_http::methods::allowed_in(method, ct_http::methods::Scope::Ui) {
+            return Err((-32601, format!("método desconhecido: {method}")));
+        }
         let sessions = self.st.sessions.clone();
         match method {
             "env.info" => {
@@ -384,6 +389,7 @@ impl Conn {
                 Ok(json!(EnvInfo {
                     protocol: PROTOCOL_VERSION.into(),
                     version: ct_core::VERSION.into(),
+                    capabilities: vec![ct_http::sync::CAPABILITY_VERSION_HANDSHAKE.into()],
                     commit: ct_core::BUILD_COMMIT.into(),
                     hostname: hostname(),
                     worktrees_root: sessions.config().worktrees_root.display().to_string(),
@@ -443,64 +449,51 @@ impl Conn {
                     .map_err(|e| (-32603, e.to_string()))?
                     .map(|v| json!(v))
             }
-            "env.credentials.get" | "env.credentials.set" => {
+            // Sobrescrita de credencial por conexão (#276): vale no próximo
+            // uso, sem restart (o `SharedCredentials`, de onde saem a fonte
+            // e o prefixo da sessão, e o cache do resolvedor).
+            "env.connections.get" | "env.connections.set" => {
                 let Some(c) = self.st.env_config.clone() else {
                     return Err(invalid("edição do config.toml desativada neste ambiente"));
                 };
-                if method == "env.credentials.set" {
-                    let owner = str_param(p, "owner")?.to_string();
-                    let repo = str_param(p, "repo")?.to_string();
-                    let text = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-                    let (tracker_cmd, forge_cmd) = (text("tracker_cmd"), text("forge_cmd"));
-                    let c = Arc::clone(&c);
-                    tokio::task::spawn_blocking(move || {
-                        c.set_credentials(&owner, &repo, &tracker_cmd, &forge_cmd)
+                if method == "env.connections.set" {
+                    let name = str_param(p, "name")?.to_string();
+                    let cmd = p
+                        .get("credential_cmd")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let known = blocking(&sessions, |s| {
+                        let (conns, names) = s.ledger().hub_connections()?;
+                        let mut known = names;
+                        known.extend(conns.into_iter().map(|c| c.name));
+                        Ok(known)
                     })
-                    .await
-                    .map_err(|e| (-32603, e.to_string()))??;
+                    .await?;
+                    let c = Arc::clone(&c);
+                    let n = name.clone();
+                    let overrides =
+                        tokio::task::spawn_blocking(move || c.set_connection(&n, &cmd, &known))
+                            .await
+                            .map_err(|e| (-32603, e.to_string()))??;
+                    blocking(&sessions, move |s| {
+                        for w in s.ledger().connection_warnings(&overrides)? {
+                            tracing::warn!("conexões: {w}");
+                        }
+                        s.invalidate_connection(&name)?;
+                        Ok(())
+                    })
+                    .await?;
                 }
-                let readiness = self
-                    .st
-                    .tracker
-                    .as_ref()
-                    .map(|t| t.readiness())
-                    .unwrap_or_default();
                 let linked = self.linked();
                 let rows = blocking(&sessions, move |s| {
-                    let overrides = c.credentials().unwrap_or_default();
+                    let (_, overrides) = s.config().credentials.connections();
                     let l = s.ledger();
-                    let mut rows = Vec::new();
-                    for x in assigned_projects(&l, linked)? {
-                        let (jira, gitlab) = (x.tracker.jira(), x.forge.gitlab());
-                        if jira.is_none() && gitlab.is_none() {
-                            continue;
-                        }
-                        let o = overrides
-                            .get(&x.gh_owner, &x.gh_repo)
-                            .cloned()
-                            .unwrap_or_default();
-                        rows.push(crate::env_config::EnvCredential {
-                            tracker: x.tracker.kind(),
-                            forge: x.forge.kind(),
-                            project_tracker_cmd: jira
-                                .map(|j| j.credential_cmd.clone())
-                                .unwrap_or_default(),
-                            project_forge_cmd: gitlab
-                                .map(|g| g.credential_cmd.clone())
-                                .unwrap_or_default(),
-                            tracker_cmd: o.tracker_cmd,
-                            forge_cmd: o.forge_cmd,
-                            readiness: readiness
-                                .iter()
-                                .find(|r| r.owner == x.gh_owner && r.repo == x.gh_repo)
-                                .cloned(),
-                            sync: l.sync_state(x.id)?,
-                            owner: x.gh_owner,
-                            repo: x.gh_repo,
-                            name: x.name,
-                        });
-                    }
-                    Ok(rows)
+                    let (conns, names) = l.hub_connections()?;
+                    let projects = assigned_projects(&l, linked)?;
+                    Ok(crate::env_config::connection_rows(
+                        &conns, &names, &overrides, &projects,
+                    ))
                 })
                 .await?;
                 Ok(json!(rows))
@@ -516,12 +509,19 @@ impl Conn {
                 let unassigned = p.get("unassigned").and_then(Value::as_bool) == Some(true);
                 let linked = self.linked();
                 let v = blocking(&sessions, move |s| {
-                    let l = s.ledger();
-                    Ok(if unassigned {
-                        l.list_unassigned_projects()?
-                    } else {
-                        assigned_projects(&l, linked)?
-                    })
+                    let ps = {
+                        let l = s.ledger();
+                        if unassigned {
+                            l.list_unassigned_projects()?
+                        } else {
+                            assigned_projects(&l, linked)?
+                        }
+                    };
+                    // Endereços e prefixos das conexões deste ambiente (#277).
+                    Ok(ps
+                        .into_iter()
+                        .map(|p| s.with_endpoints(p))
+                        .collect::<Vec<_>>())
                 })
                 .await?;
                 Ok(json!(v))
@@ -621,6 +621,17 @@ impl Conn {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(invalid("override_approval deve ser true ou false")),
                 };
+                // Sub-issue da execução de épico (#298): sai da `wip` do épico.
+                let epic_base = match p.get("epic_run") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => match v.get("base").and_then(Value::as_str).map(str::trim) {
+                        Some(b) if !b.is_empty() => Some(b.to_string()),
+                        _ => return Err(invalid("epic_run deve ser { base: <branch do épico> }")),
+                    },
+                };
+                if autonomous && epic_base.is_some() {
+                    return Err(invalid("autonomous e epic_run não vão juntos"));
+                }
                 // Sessão autônoma sem `prompt` (#191): o ambiente monta com o
                 // template do projeto, depois de decidir a branch.
                 let prompt = if autonomous && matches!(p.get("prompt"), None | Some(Value::Null)) {
@@ -692,7 +703,9 @@ impl Conn {
                 };
                 // Sessão autônoma (#181): alinha a branch de integração e sai
                 // dela; conflito = `AUTONOMY_CONFLICT`, e a issue não começa.
-                let v = if autonomous {
+                let v = if let Some(base) = epic_base {
+                    blocking(&sessions, move |s| s.start_epic_run(req, &base)).await?
+                } else if autonomous {
                     let gh = self.st.github.clone();
                     blocking(&sessions, move |s| {
                         let pr = gh
@@ -732,8 +745,22 @@ impl Conn {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(invalid("analysis deve ser true ou false")),
                 };
+                // Sessão de plano da execução de épico (#299): o número do
+                // épico; só ela vê `epic_set_plan`.
+                let epic_plan = match p.get("epic_plan") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => match v.as_i64().filter(|n| *n > 0) {
+                        Some(n) => Some(n),
+                        None => return Err(invalid("epic_plan deve ser o número do épico")),
+                    },
+                };
+                if analysis && epic_plan.is_some() {
+                    return Err(invalid("analysis e epic_plan não vão juntos"));
+                }
                 let v = blocking(&sessions, move |s| {
-                    if analysis {
+                    if let Some(epic) = epic_plan {
+                        s.start_epic_plan(project_id, epic, &prompt, size, &agent)
+                    } else if analysis {
                         s.start_analysis(project_id, &prompt, size, &agent)
                     } else {
                         s.start_project(project_id, &prompt, size, &agent)
@@ -782,6 +809,8 @@ impl Conn {
                 Ok(json!(v))
             }
             // Projeto Jira vai ao sync do jira-cli; os demais, ao do GitHub.
+            // No Jira, o `sync_now` roda o comando de credencial de novo,
+            // para a prontidão mostrar o estado dele agora (#268).
             "sync.now" => {
                 let gh = self.st.github.clone();
                 let tracker = self.st.tracker.clone();
@@ -791,7 +820,7 @@ impl Conn {
                 let project = p.get("project_id").and_then(Value::as_i64);
                 let v = tokio::task::spawn_blocking(move || match project {
                     Some(id) => match (tracker.filter(|t| t.handles(id)), gh) {
-                        (Some(t), _) => t.sync_project(id).map(|r| vec![r]),
+                        (Some(t), _) => t.sync_now(Some(id)),
                         (None, Some(g)) => g.sync_project(id).map(|r| vec![r]),
                         (None, None) => Err(ct_sessions::SessionsError::Invalid(
                             "sincronização com o GitHub desativada".into(),
@@ -803,7 +832,7 @@ impl Conn {
                             None => Vec::new(),
                         };
                         if let Some(t) = &tracker {
-                            all.extend(t.sync_all()?);
+                            all.extend(t.sync_now(None)?);
                         }
                         Ok(all)
                     }
@@ -868,34 +897,6 @@ impl Conn {
                 .map(|r| json!(r))
                 .map_err(from_sessions)
             }
-            "github.status" | "github.set_token" | "github.clear_token" => {
-                let gh = self
-                    .st
-                    .github
-                    .clone()
-                    .ok_or_else(|| (-32000, "integração com o GitHub desativada".into()))?;
-                let token = match method {
-                    "github.set_token" => Some(str_param(p, "token")?.to_string()),
-                    _ => None,
-                };
-                let method = method.to_string();
-                // O token nunca volta na resposta: só conta e origem.
-                tokio::task::spawn_blocking(move || {
-                    let c = gh.client();
-                    match method.as_str() {
-                        "github.set_token" => {
-                            c.set_token(&token.unwrap_or_default())?;
-                        }
-                        "github.clear_token" => c.clear_token()?,
-                        _ => {}
-                    }
-                    Ok::<_, ct_gh::GhError>(c.status())
-                })
-                .await
-                .map_err(|e| (-32603, e.to_string()))?
-                .map(|st| json!(st))
-                .map_err(|e| (-32000, e.to_string()))
-            }
             // Comentário na conversa do PR, com o token do GitHub do
             // ambiente (Revisão, #328).
             "github.pr.comment" => {
@@ -915,8 +916,12 @@ impl Conn {
                 })
                 .await?;
                 tokio::task::spawn_blocking(move || {
-                    gh.client()
-                        .comment_pr(&project.gh_owner, &project.gh_repo, pr, &body)
+                    gh.client_for(&project).comment_pr(
+                        &project.gh_owner,
+                        &project.gh_repo,
+                        pr,
+                        &body,
+                    )
                 })
                 .await
                 .map_err(|e| (-32603, e.to_string()))?
@@ -1163,6 +1168,7 @@ impl Conn {
                     .ok_or_else(|| invalid("sessão não está rodando"))?;
                 pty.write(data.as_bytes())
                     .map_err(|e| (-32000, e.to_string()))?;
+                note_human_input(&sessions, id);
                 Ok(json!({}))
             }
             "session.resize" => {
@@ -1174,6 +1180,29 @@ impl Conn {
                 pty.resize(cols, rows)
                     .map_err(|e| (-32000, e.to_string()))?;
                 Ok(json!({}))
+            }
+            // Remoção do worktree da sub-issue da execução de épico já
+            // mesclada na `wip` (#298), pedida pelo hub.
+            "worktree.remove" => {
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let n = i64_param(p, "gh_number")?;
+                let id = blocking(&sessions, move |s| {
+                    Ok(s.ledger().find_work_item(project_id, n)?)
+                })
+                .await?
+                .ok_or_else(|| invalid(format!("work item #{n} não está neste ambiente")))?
+                .id;
+                let cfg = self
+                    .st
+                    .cleanup
+                    .as_ref()
+                    .map(|c| c.config().clone())
+                    .unwrap_or_default();
+                let v = blocking(&sessions, move |s| {
+                    s.remove_epic_worktree(id, &cfg, ct_core::now_ms())
+                })
+                .await?;
+                Ok(json!(v))
             }
             // Limpeza após a conclusão do work item (issue #287).
             "cleanup.status" | "cleanup.plan" | "cleanup.run" => {
@@ -1257,10 +1286,23 @@ impl Conn {
         let Some((CHANNEL_INPUT, id, data)) = parse_frame(bytes) else {
             return;
         };
-        if let Some(pty) = self.st.sessions.terminal(&id.to_string()) {
+        let id = id.to_string();
+        if let Some(pty) = self.st.sessions.terminal(&id) {
             let _ = pty.write(data);
+            note_human_input(&self.st.sessions, &id);
         }
     }
+}
+
+/// Teclado da UI numa sessão (#301): a da execução de épico fica assumida
+/// no hub. Em segundo plano, sem atrasar a digitação.
+fn note_human_input(sessions: &Sessions, id: &str) {
+    let (s, id) = (sessions.clone(), id.to_string());
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = s.note_human_input(&id, ct_core::now_ms()) {
+            tracing::debug!("entrada humana na sessão {id}: {e}");
+        }
+    });
 }
 
 fn dashboard(s: &Sessions, linked: bool) -> Result<Value, SessionsError> {
@@ -1283,7 +1325,8 @@ fn dashboard(s: &Sessions, linked: bool) -> Result<Value, SessionsError> {
             });
         }
         projects.push(DashboardProject {
-            project,
+            // Endereços e prefixos das conexões deste ambiente (#277).
+            project: s.with_endpoints(project),
             work_items,
         });
     }
@@ -1333,9 +1376,14 @@ fn hostname() -> String {
         .or_else(|_| std::fs::read_to_string("/etc/hostname"))
         .or_else(|_| {
             // macOS não tem os arquivos acima.
-            std::process::Command::new("hostname")
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            ct_proc::process::exec(
+                std::ffi::OsStr::new("hostname"),
+                &[],
+                ct_proc::process::Job::default(),
+                Duration::from_secs(5),
+            )
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .map_err(std::io::Error::other)
         })
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
@@ -1864,20 +1912,43 @@ mod tests {
         assert_eq!(v["error"]["code"], -32602, "{v}");
     }
 
-    /// #143: `env.credentials.get|set` lista os projetos Jira/GitLab com o
-    /// comando do cadastro e o deste ambiente, grava no config.toml e vale
-    /// na hora para as sessões (o `SharedCredentials` delas).
+    /// #276: `env.connections.get|set` lista as conexões do hub com a
+    /// sobrescrita deste ambiente e grava no config.toml; a mudança vale no
+    /// próximo uso, sem restart: a fonte do resolvedor e o prefixo da sessão
+    /// (#277: lidos da conexão, não do cadastro).
     #[tokio::test(flavor = "multi_thread")]
-    async fn credencial_do_ambiente_editavel_pelo_ws() {
+    async fn sobrescrita_da_conexao_editavel_pelo_ws() {
         let mut srv = Srv::linked(FakeClaude::exit(0));
-        srv.env.assign_config(1, |p| {
-            p.tracker = ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                url: "https://jira.example.com".into(),
-                project_key: "ACME".into(),
-                credential_cmd: "pass show jira | head -1".into(),
-                ..Default::default()
-            });
-        });
+        let cfg: ct_ledger::ConfigResponse = serde_json::from_value(json!({
+            "config_rev": 2,
+            "config_epoch": 1,
+            "changed": true,
+            "projects": [{
+                "owner": "deep-ion-ai", "repo": "demo", "name": "demo",
+                "base_branch": "develop", "protected_branches": [],
+                "repo_path": srv.env.repo.display().to_string(), "rev": 2,
+                "tracker": { "kind": "jira", "project_key": "ACME",
+                             "jql": "labels = acme-web", "connection": 1 }
+            }],
+            "removed": [],
+            "connections": [{
+                "id": 1, "name": "jira-acme", "kind": "jira",
+                "endpoint": "https://jira.example.com",
+                "credential": { "kind": "command", "cmd": "pass show hub/jira" },
+                "options": {}, "created_at": 0, "updated_at": 0
+            }],
+            "connection_names": ["jira-acme"]
+        }))
+        .unwrap();
+        {
+            let l = srv.env.sessions.ledger();
+            l.apply_hub_config(&cfg, |p| p.repo_path.clone()).unwrap();
+            let (conns, _) = l.hub_connections().unwrap();
+            srv.env
+                .cfg
+                .credentials
+                .set_connections(conns, Default::default());
+        }
         let path = srv.env.tmp.path().join("config.toml");
         srv.state.env_config = Some(Arc::new(
             crate::env_config::EnvConfig::new(path.clone(), 180, None)
@@ -1885,47 +1956,85 @@ mod tests {
         ));
         let url = spawn_server(&srv).await;
         let mut ui = Ui::new(&url).await;
-        let v = ui.call("env.credentials.get", json!({})).await;
+        let v = ui.call("env.connections.get", json!({})).await;
         let rows = v["result"].as_array().unwrap_or_else(|| panic!("{v}"));
         assert_eq!(rows.len(), 1, "{v}");
-        assert_eq!(rows[0]["tracker"], "jira");
-        assert_eq!(rows[0]["project_tracker_cmd"], "pass show jira | head -1");
-        assert_eq!(rows[0]["tracker_cmd"], "");
-        let (owner, repo) = (rows[0]["owner"].clone(), rows[0]["repo"].clone());
+        assert_eq!(rows[0]["name"], "jira-acme");
+        assert_eq!(rows[0]["kind"], "jira");
+        assert_eq!(
+            rows[0]["hub_source"],
+            json!({ "kind": "command", "detail": null })
+        );
+        assert_eq!(rows[0]["credential_cmd"], "");
+        assert_eq!(rows[0]["projects"], json!(["demo"]));
 
         let v = ui
             .call(
-                "env.credentials.set",
-                json!({ "owner": owner, "repo": repo,
-                        "tracker_cmd": "/usr/bin/pass show jira | head -1" }),
+                "env.connections.set",
+                json!({ "name": "jira-acme", "credential_cmd": "pass show acme/jira" }),
             )
             .await;
         assert_eq!(
-            v["result"][0]["tracker_cmd"], "/usr/bin/pass show jira | head -1",
+            v["result"][0]["credential_cmd"], "pass show acme/jira",
             "{v}"
         );
         assert!(std::fs::read_to_string(&path)
             .unwrap()
-            .contains("tracker_cmd = \"/usr/bin/pass show jira | head -1\""));
+            .contains("credential_cmd = \"pass show acme/jira\""));
         let p = srv
             .env
             .sessions
             .ledger()
             .get_project(srv.env.project_id)
             .unwrap();
-        let (eff, applied) = srv.env.sessions.with_env_credentials(p);
-        assert!(applied.tracker);
         assert_eq!(
-            eff.tracker.jira().unwrap().credential_cmd,
-            "/usr/bin/pass show jira | head -1"
+            srv.env.sessions.jira_source(&p).unwrap().source,
+            ct_core::provider::CredentialSource::Command {
+                cmd: "pass show acme/jira".into()
+            }
         );
+        assert_eq!(
+            srv.env.sessions.project_connections(&p).jira_prefix(),
+            r#"JIRA_API_TOKEN="$(pass show acme/jira)" jira"#,
+            "prefixo da sessão"
+        );
+        // A UI recebe o prefixo deste ambiente junto do projeto (#277).
+        let v = ui.call("projects.list", json!({})).await;
+        assert_eq!(
+            v["result"][0]["endpoints"],
+            json!({
+                "jira_url": "https://jira.example.com",
+                "gitlab_host": "",
+                "jira_cli": r#"JIRA_API_TOKEN="$(pass show acme/jira)" jira"#,
+                "glab_cli": "",
+            }),
+            "{v}"
+        );
+
+        // Vazio volta à fonte do hub.
         let v = ui
-            .call(
-                "env.credentials.set",
-                json!({ "owner": owner, "repo": repo, "tracker_cmd": "a\nb" }),
-            )
+            .call("env.connections.set", json!({ "name": "jira-acme" }))
             .await;
-        assert_eq!(v["error"]["code"], -32602, "{v}");
+        assert_eq!(v["result"][0]["credential_cmd"], "", "{v}");
+        let p = srv
+            .env
+            .sessions
+            .ledger()
+            .get_project(srv.env.project_id)
+            .unwrap();
+        assert_eq!(
+            srv.env.sessions.project_connections(&p).jira_prefix(),
+            r#"JIRA_API_TOKEN="$(pass show hub/jira)" jira"#
+        );
+
+        for params in [
+            json!({ "name": "jira-outra", "credential_cmd": "pass show x" }),
+            json!({ "name": "jira-acme", "credential_cmd": "a\nb" }),
+            json!({ "credential_cmd": "pass show x" }),
+        ] {
+            let v = ui.call("env.connections.set", params).await;
+            assert_eq!(v["error"]["code"], -32602, "{v}");
+        }
     }
 
     /// `POST /hooks/permission` como o `ctower hook`, sem esperar a resposta.
@@ -2134,6 +2243,50 @@ mod tests {
         assert!(connect(&url, UI).await.is_ok());
     }
 
+    /// Os braços do `match` de `Conn::call` são o registro de
+    /// `ct_http::methods` (#228): método sem braço ou braço sem registro
+    /// quebra este teste.
+    #[test]
+    fn bracos_do_despacho_sao_o_registro() {
+        use std::collections::BTreeSet;
+        let src = include_str!("ws.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        let start = code.find("async fn call(&mut self").unwrap();
+        let end = start + code[start..].find("fn attach(").unwrap();
+        let mut arms = BTreeSet::new();
+        for line in code[start..end].lines() {
+            let t = line.trim_start();
+            if !t.starts_with('"') || !t.contains("=>") {
+                continue;
+            }
+            let head = t.split("=>").next().unwrap();
+            for lit in head.split('"').skip(1).step_by(2) {
+                arms.insert(lit.to_string());
+            }
+        }
+        assert!(arms.len() > 60, "{arms:?}");
+        let registry: BTreeSet<String> = ct_http::methods::METHODS
+            .iter()
+            .map(|m| m.name.to_string())
+            .collect();
+        assert_eq!(arms, registry, "braços do despacho x ct_http::methods");
+    }
+
+    /// Método fora do registro não é despachado: a resposta é a de método
+    /// desconhecido, antes de qualquer efeito (#228).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metodo_fora_do_registro_nao_e_despachado() {
+        let srv = Srv::new(FakeClaude::exit(0));
+        let url = spawn_server(&srv).await;
+        let mut ui = Ui::new(&url).await;
+        let v = ui.call("env.inventado", json!({})).await;
+        assert_eq!(v["error"]["code"], -32601, "{v}");
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("desconhecido"));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn metodos_de_controle() {
         let srv = Srv::new(FakeClaude::exit(0));
@@ -2141,6 +2294,7 @@ mod tests {
         let mut ui = Ui::new(&url).await;
         let v = ui.call("env.info", json!({})).await;
         assert_eq!(v["result"]["protocol"], PROTOCOL_VERSION);
+        assert_eq!(v["result"]["capabilities"], json!(["version-handshake"]));
         assert_eq!(
             v["result"]["worktrees_root"],
             srv.env.cfg.worktrees_root.display().to_string()
@@ -2720,6 +2874,8 @@ mod tests {
             .ledger()
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
+                    connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,
@@ -2738,14 +2894,12 @@ mod tests {
                         repo_path,
                         rev: 1,
                         tracker: ct_core::TrackerConfig::Jira(ct_core::JiraConfig {
-                            url: FAKE_SERVER.into(),
                             project_key: "PROJ".into(),
-                            credential_cmd: "printf 'senha-de-teste\\n'".into(),
-                            config_file: fake.config_file().display().to_string(),
                             type_map: ct_core::default_type_map(),
+                            connection: Some(1),
                             ..Default::default()
                         }),
-                        forge: ct_core::ForgeConfig::Github,
+                        forge: ct_core::ForgeConfig::Github(Default::default()),
                         branch_pattern: None,
                         attribution: true,
                         sync: false,
@@ -2756,6 +2910,22 @@ mod tests {
                 |p| p.repo_path.clone(),
             )
             .unwrap();
+        // URL, credencial e `config_file` vêm da conexão do Jira (#277).
+        srv.env.cfg.credentials.set_connections(
+            vec![ct_core::provider::Connection {
+                id: 1,
+                name: "jira-acme".into(),
+                kind: ct_core::provider::ProviderKind::Jira,
+                endpoint: FAKE_SERVER.into(),
+                credential: ct_core::provider::CredentialSource::Command {
+                    cmd: "printf 'senha-de-teste\\n'".into(),
+                },
+                options: json!({ "config_file": fake.config_file().display().to_string() }),
+                created_at: 0,
+                updated_at: 0,
+            }],
+            Default::default(),
+        );
         fake.set_issues(&[
             api_issue("PROJ-1", "Épico", "new"),
             api_issue("PROJ-2", "Tarefa", "done"),
@@ -3068,31 +3238,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn token_do_github_configuravel_sem_expor_o_token() {
-        let (srv, gh) = Srv::with_github(FakeClaude::exit(0));
-        gh.set("/user", json!({ "login": "octocat" }));
-        let url = spawn_server(&srv).await;
-        let mut ui = Ui::new(&url).await;
-        let v = ui.call("github.status", json!({})).await;
-        assert_eq!(v["result"]["source"], "gh", "{v}");
-        assert_eq!(v["result"]["login"], "octocat");
-        let v = ui
-            .call("github.set_token", json!({ "token": "invalido" }))
-            .await;
-        assert_eq!(v["error"]["code"], -32000, "{v}");
-        let v = ui.call("github.set_token", json!({ "token": "tok" })).await;
-        assert_eq!(v["result"]["source"], "token", "{v}");
-        assert!(!v.to_string().contains("\"tok\""), "{v}");
-        let file = srv.env.tmp.path().join("github.token");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "tok");
-        let v = ui.call("github.clear_token", json!({})).await;
-        assert_eq!(v["result"]["source"], "gh", "{v}");
-        assert!(!file.exists());
-        let v = ui.call("github.set_token", json!({})).await;
-        assert_eq!(v["error"]["code"], -32602);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn comenta_no_pr_pelo_projeto() {
         let (mut srv, gh) = Srv::with_github(FakeClaude::exit(0));
         srv.link();
@@ -3202,6 +3347,8 @@ mod tests {
             .ledger()
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
+                    connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,

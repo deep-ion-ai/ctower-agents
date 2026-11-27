@@ -39,6 +39,12 @@ fn ct_vars(vars: impl Iterator<Item = String>) -> Vec<String> {
 /// Quanto a limpeza espera cada shell sair depois do `SIGHUP`.
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
+/// Depois do `SIGHUP`, quanto esperar o shell sair antes do `SIGKILL`. O
+/// `bash -i` que recebe o `SIGHUP` ainda inicializando o descarta e segue
+/// no prompt (#294); um shell com `trap '' HUP` também não sai. Menor que
+/// [`CLOSE_WAIT`]: a limpeza do worktree não fica com shell vivo.
+const KILL_GRACE: Duration = Duration::from_secs(2);
+
 /// Shell de `shell.open` e `shell.list`.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -231,19 +237,21 @@ impl Sessions {
             .map(|s| s.pty.clone())
     }
 
-    /// Encerra o shell (`SIGHUP`, como fechar a janela do terminal); o push
-    /// `shell_exited` vem quando o processo sai.
+    /// Encerra o shell (`SIGHUP`, como fechar a janela do terminal, e
+    /// `SIGKILL` se ele não sair em [`KILL_GRACE`]); o push `shell_exited`
+    /// vem quando o processo sai.
     pub fn close_shell(&self, shell_id: &str) -> Result<()> {
         match self.shell_pty(shell_id) {
-            Some(p) => Ok(p.kill()?),
+            Some(p) => Ok(p.terminate(KILL_GRACE)?),
             None => Err(SessionsError::Invalid(format!(
                 "shell {shell_id} não está aberto neste daemon"
             ))),
         }
     }
 
-    /// Encerra os shells com `cwd` em `dir` (ou abaixo) e espera cada um
-    /// sair (até [`CLOSE_WAIT`]); devolve quantos. A limpeza do worktree
+    /// Encerra os shells com `cwd` em `dir` (ou abaixo), como
+    /// [`Sessions::close_shell`], e espera cada um sair (até
+    /// [`CLOSE_WAIT`]); devolve quantos. A limpeza do worktree
     /// (#287) chama antes de remover a pasta.
     pub fn close_shells_in(&self, dir: &str) -> usize {
         let ptys: Vec<PtySession> = self
@@ -256,7 +264,7 @@ impl Sessions {
             .map(|s| s.pty.clone())
             .collect();
         for p in &ptys {
-            let _ = p.kill();
+            let _ = p.terminate(KILL_GRACE);
         }
         for p in &ptys {
             if p.wait_timeout(CLOSE_WAIT).is_none() {
@@ -365,6 +373,25 @@ mod tests {
         env.wait_notice(|n, d| n == "shell_exited" && d["shell_id"] == sh.id.as_str());
         assert!(env.sessions.list_shells().is_empty());
         assert!(env.sessions.close_shell(&sh.id).is_err());
+    }
+
+    /// #294: o shell que não sai com o `SIGHUP` (aqui, com `trap '' HUP`; no
+    /// CI, o `bash -i` que recebeu o sinal ainda inicializando) sai com o
+    /// `SIGKILL`, e o `shell_exited` chega.
+    #[test]
+    fn fechar_o_shell_que_ignora_o_sighup_o_encerra_mesmo_assim() {
+        let env = TestEnv::new(FakeClaude::exit(0));
+        let wi = com_worktree(&env, 7);
+        let sh = env.sessions.open_shell(wi.id, None).unwrap();
+        let pty = env.sessions.terminal(&sh.id).unwrap();
+        let (snap, rx) = pty.attach();
+        pty.write(b"trap '' HUP; echo hup-$((1+1))\n").unwrap();
+        read_until(&rx, snap, "hup-2");
+        env.sessions.close_shell(&sh.id).unwrap();
+        let n = env.wait_notice(|n, d| n == "shell_exited" && d["shell_id"] == sh.id.as_str());
+        let (_, d) = n.iter().find(|(n, _)| n == "shell_exited").unwrap();
+        assert!(d["code"].is_null(), "morto por sinal: {d}");
+        assert!(env.sessions.list_shells().is_empty());
     }
 
     #[test]

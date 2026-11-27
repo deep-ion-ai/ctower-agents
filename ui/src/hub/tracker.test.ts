@@ -1,9 +1,12 @@
-import type { HubTrackerStatus } from "../protocol/hub-gen";
+import type { HubTrackerStatus, TrackerReadiness } from "../protocol/hub-gen";
 import { jiraHubProject } from "../test/fixtures";
 import {
   DEFAULT_TYPE_MAP,
   EMPTY_JIRA,
   branchPreview,
+  connectionId,
+  githubConnOf,
+  githubParams,
   hostsOf,
   hubSupportsJira,
   extraFieldErrors,
@@ -14,9 +17,37 @@ import {
   kindOf,
   parseTypeMap,
   providerParams,
+  readinessChecks,
   searchJiraFields,
   typedFieldId,
 } from "./tracker";
+
+/** Formulário com as duas conexões escolhidas (#238): sem elas, o cadastro não vai ao hub. */
+const CONNECTED = { ...EMPTY_JIRA, jira_conn: "7", gitlab_conn: "8" };
+
+test("conexão do projeto: o id do seletor, ou nenhum", () => {
+  expect(connectionId("7")).toBe(7);
+  expect(connectionId(" 12 ")).toBe(12);
+  expect(connectionId("")).toBeNull();
+  expect(connectionId("0")).toBeNull();
+  expect(connectionId("jira-empresa")).toBeNull();
+});
+
+test("cadastro sem conexão não vai ao hub: a URL e a credencial vêm da conexão", () => {
+  expect(providerParams(EMPTY_JIRA)).toEqual({ error: "escolha a conexão do Jira (Hub › Conexões)" });
+  expect(providerParams({ ...EMPTY_JIRA, jira_conn: "7" })).toEqual({
+    error: "escolha a conexão do GitLab (Hub › Conexões)",
+  });
+  const params = providerParams(CONNECTED);
+  expect(params).toMatchObject({
+    tracker: { kind: "jira", connection: 7 },
+    forge: { kind: "gitlab", connection: 8 },
+  });
+  // O projeto só referencia a conexão (#277): sem URL, host nem comando.
+  const { tracker, forge } = params as { tracker: Record<string, unknown>; forge: Record<string, unknown> };
+  for (const k of ["url", "credential_cmd", "config_file"]) expect(tracker).not.toHaveProperty(k);
+  for (const k of ["host", "credential_cmd"]) expect(forge).not.toHaveProperty(k);
+});
 
 test("prévia do padrão de branch como o daemon gera", () => {
   expect(branchPreview("{prefix}/{key}-{slug}", "PROJ")).toBe("feat/PROJ-5450-portar-o-plugin");
@@ -38,17 +69,17 @@ test("formulário do cadastro ida e volta", () => {
   const legado = jiraFormOf(jiraHubProject());
   expect(legado).toMatchObject({ active_sprint_only: false, jql: "", max_issues: "100" });
   expect(providerParams(legado)).toHaveProperty("error");
-  const f = { ...legado, jql: "labels = web" };
+  const f = { ...legado, jql: "labels = web", jira_conn: "7", gitlab_conn: "8" };
   expect(f).toMatchObject({ jira_key: "PROJ", branch_pattern: "{key}", attribution: false, type_map: "Epic=epic, Bug=bug" });
   const pv = providerParams(f);
   expect(pv).toMatchObject({
-    tracker: { kind: "jira", project_key: "PROJ", epic_link_field: "customfield_10601", jql: "labels = web", max_issues: 100 },
-    forge: { kind: "gitlab", clone_url: "https://gitlab.example.com/grupo/projeto/app.git" },
+    tracker: { kind: "jira", project_key: "PROJ", epic_link_field: "customfield_10601", jql: "labels = web", max_issues: 100, connection: 7 },
+    forge: { kind: "gitlab", clone_url: "https://gitlab.example.com/grupo/projeto/app.git", connection: 8 },
   });
-  expect(providerParams({ ...EMPTY_JIRA, type_map: "x" })).toHaveProperty("error");
+  expect(providerParams({ ...CONNECTED, type_map: "x" })).toHaveProperty("error");
   // Projeto novo: sprint ativa, sem JQL.
-  expect(providerParams(EMPTY_JIRA)).toMatchObject({ tracker: { active_sprint_only: true, jql: "", max_issues: 100 } });
-  expect(providerParams({ ...EMPTY_JIRA, active_sprint_only: false, jql: "x", max_issues: "5001" })).toHaveProperty("error");
+  expect(providerParams(CONNECTED)).toMatchObject({ tracker: { active_sprint_only: true, jql: "", max_issues: 100 } });
+  expect(providerParams({ ...CONNECTED, active_sprint_only: false, jql: "x", max_issues: "5001" })).toHaveProperty("error");
 });
 
 test("kindOf: só GitHub + GitHub e GitLab + Jira são tipos de projeto", () => {
@@ -121,7 +152,7 @@ test("campos do projeto: ida e volta no formulário e validação como no hub", 
   if (p.tracker?.kind === "jira") {
     Object.assign(p.tracker, { extra_fields: [{ id: "customfield_10099", label: "Implementação" }] });
   }
-  const f = { ...jiraFormOf(p), jql: "x" };
+  const f = { ...jiraFormOf(p), jql: "x", jira_conn: "7", gitlab_conn: "8" };
   expect(f.extra_fields).toEqual([{ id: "customfield_10099", label: "Implementação" }]);
   const extra = [
     { id: " customfield_10099 ", label: " Implementação " },
@@ -168,4 +199,47 @@ test("campos do projeto: ida e volta no formulário e validação como no hub", 
   expect(extraFieldsChanged([{ id: "a ", label: "b" }], [{ id: "a", label: " b" }])).toBe(false);
   expect(extraFieldsChanged([{ id: "a", label: "b" }], [{ id: "a", label: "c" }])).toBe(true);
   expect(extraFieldsChanged([], [{ id: "a", label: "b" }])).toBe(true);
+});
+
+test("prontidão: credencial vinda do cache aparece como tal (#268)", () => {
+  const r = (cached: boolean): TrackerReadiness => ({
+    owner: "acme",
+    repo: "acme-web",
+    checked_at: 1,
+    jira: {
+      cli: "1.7.0",
+      config_present: true,
+      server_matches: true,
+      credential_ok: true,
+      credential_cached: cached,
+      me_ok: true,
+      server_version: "8.5.2",
+      error: null,
+      custom_fields: [],
+    },
+    gitlab: { cli: "1.124.0", credential_ok: true, credential_cached: cached, api_ok: true, error: null },
+  });
+  const cred = (c: ReturnType<typeof readinessChecks>) => [
+    c.jira.find((i) => i.label === "credencial do Jira ok"),
+    c.gitlab.find((i) => i.label === "credencial do GitLab ok"),
+  ];
+  for (const item of cred(readinessChecks(r(true)))) {
+    expect(item?.ok).toBe(true);
+    expect(item?.value).toBe('token em cache; "Buscar issues agora" resolve de novo');
+  }
+  for (const item of cred(readinessChecks(r(false)))) expect(item?.value).toBeUndefined();
+});
+
+test("conexão GitHub do projeto e parâmetros (#275)", () => {
+  expect(githubConnOf({ tracker: { kind: "github" }, forge: { kind: "github" } })).toBeNull();
+  expect(githubConnOf({ tracker: { kind: "github" }, forge: { kind: "github", connection: 4 } })).toBe(4);
+  expect(githubConnOf({ tracker: { kind: "github", connection: 3 }, forge: { kind: "github", connection: 4 } })).toBe(3);
+  expect(githubParams("3")).toEqual({
+    tracker: { kind: "github", connection: 3 },
+    forge: { kind: "github", connection: 3 },
+  });
+  expect(githubParams("")).toEqual({
+    tracker: { kind: "github", connection: null },
+    forge: { kind: "github", connection: null },
+  });
 });

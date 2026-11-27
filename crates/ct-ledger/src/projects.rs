@@ -18,7 +18,7 @@ pub struct NewProject {
 /// Campos a alterar num projeto local legado; `None` mantém o valor atual.
 /// O ambiente não edita projetos (vêm do hub, #178): só os testes simulam
 /// ambientes antigos que ainda editavam.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Default)]
 pub struct ProjectPatch {
     pub name: Option<String>,
@@ -89,6 +89,13 @@ pub struct Project {
     /// Configuração de release, como veio do hub (#204); desligada no
     /// projeto local legado e num hub anterior.
     pub release: ct_core::ReleaseConfig,
+    /// Endereços e prefixos das conexões do projeto (#277), derivados por
+    /// quem responde à UI (`projects.list`, `dashboard.get`) com as conexões
+    /// e as sobrescritas deste ambiente. Não é cadastro: `None` no que sai
+    /// do banco.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub endpoints: Option<ct_core::ProjectEndpoints>,
 }
 
 impl Default for Project {
@@ -120,6 +127,7 @@ impl Default for Project {
             autonomy_report: None,
             approval: ct_core::ApprovalConfig::default(),
             release: ct_core::ReleaseConfig::default(),
+            endpoints: None,
         }
     }
 }
@@ -197,11 +205,12 @@ pub(crate) fn row_to_project(r: &Row) -> rusqlite::Result<Project> {
             .and_then(|s| serde_json::from_str(&s).ok()),
         approval: json_col(r, 26)?,
         release: json_col(r, 27)?,
+        endpoints: None,
     })
 }
 
 /// O cache vindo do hub é somente leitura: atributos de projeto vêm do hub.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn refuse_hub_row(p: &Project, action: &str) -> Result<()> {
     if p.from_hub() {
         return Err(LedgerError::Conflict(format!(
@@ -242,8 +251,9 @@ impl Ledger {
 
     /// Altera só os campos presentes em `patch`; dono e repositório no GitHub
     /// não mudam. Só nos testes (ambiente anterior à #178).
-    #[cfg(test)]
-    pub(crate) fn update_project(&self, id: i64, patch: &ProjectPatch) -> Result<Project> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn update_project(&self, id: i64, patch: &ProjectPatch) -> Result<Project> {
         if let Ok(p) = self.get_project(id) {
             refuse_hub_row(&p, "edite")?;
         }
@@ -481,6 +491,8 @@ mod gestor_tests {
             .any(|e| matches!(&e.change, crate::SyncChange::Project(p) if p.owner == "_ctower")));
         // O pull do hub (sem o sentinela) não o desatribui.
         let cfg = ConfigResponse {
+            connections: None,
+            connection_names: None,
             config_rev: 1,
             config_epoch: 1,
             changed: true,

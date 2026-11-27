@@ -117,6 +117,16 @@ async fn connect(url: &str, token: &str, env_id: &str) -> Result<Ws, String> {
         ENV_ID_HEADER,
         HeaderValue::from_str(env_id).map_err(|e| e.to_string())?,
     );
+    // Handshake de versão (#227): o hub recusa com 426 se não for a mesma.
+    let local = ct_http::sync::VersionInfo::local();
+    h.insert(
+        ct_http::sync::PROTOCOL_HEADER,
+        HeaderValue::from_str(&local.protocol).map_err(|e| e.to_string())?,
+    );
+    h.insert(
+        ct_http::sync::VERSION_HEADER,
+        HeaderValue::from_str(&local.version).map_err(|e| e.to_string())?,
+    );
     match tokio_tungstenite::connect_async(req).await {
         Ok((ws, _)) => Ok(ws),
         Err(WsError::Http(resp)) => {
@@ -222,7 +232,7 @@ mod tests {
     use crate::test_util::{serve_hub_state, DeadHub, Srv};
     use axum::extract::ws::{Message as AxMsg, WebSocketUpgrade};
     use ct_http::sync::{CHANNEL_ENV_OFFLINE, CHANNEL_METHOD_UNAVAILABLE};
-    use ct_ledger::{Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
     use ct_sessions::test_support::FakeClaude;
     use serde_json::json;
     use std::sync::Arc;
@@ -358,36 +368,70 @@ mod tests {
         let url = hub_up(&hub).await;
         let (mut srv, id) = env(&url, Some(&hub), None);
         let fake = FakeJira::new(srv.env.tmp.path(), "senha-de-teste");
+        // A URL, a credencial e o `config_file` vêm da conexão (#277).
+        let jira_conn = ct_core::provider::Connection {
+            id: 0,
+            name: "jira-acme".into(),
+            kind: ct_core::provider::ProviderKind::Jira,
+            endpoint: FAKE_SERVER.into(),
+            credential: ct_core::provider::CredentialSource::Command {
+                cmd: "printf 'senha-de-teste\\n'".into(),
+            },
+            options: json!({ "config_file": fake.config_file().display().to_string() }),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let (jira_conn, gitlab_id) = {
+            let h = hub.hub.lock();
+            let j = h
+                .add_connection(&ct_hub_store::NewConnection {
+                    name: jira_conn.name.clone(),
+                    kind: jira_conn.kind,
+                    endpoint: jira_conn.endpoint.clone(),
+                    credential: jira_conn.credential.clone(),
+                    options: jira_conn.options.clone(),
+                })
+                .unwrap();
+            let g = h
+                .add_connection(&ct_hub_store::NewConnection {
+                    name: "gitlab-acme".into(),
+                    kind: ct_core::provider::ProviderKind::Gitlab,
+                    endpoint: "gitlab.example.com".into(),
+                    credential: ct_core::provider::CredentialSource::Command {
+                        cmd: "pass show gitlab".into(),
+                    },
+                    options: json!({}),
+                })
+                .unwrap();
+            (j, g.id)
+        };
         let jira = ct_core::JiraConfig {
-            url: FAKE_SERVER.into(),
             project_key: "PROJ".into(),
             jql: "labels = web".into(),
-            credential_cmd: "printf 'senha-de-teste\\n'".into(),
-            config_file: fake.config_file().display().to_string(),
             epic_link_field: "customfield_10601".into(),
             type_map: ct_core::default_type_map(),
+            connection: Some(jira_conn.id),
             ..Default::default()
         };
         {
             let h = hub.hub.lock();
             h.add_project_with(
-                &ct_ledger::NewHubProject {
+                &ct_hub_store::NewHubProject {
                     owner: "deep-ion-ai".into(),
                     repo: "demo".into(),
                     name: "demo".into(),
                     base_branch: "develop".into(),
                     protected_branches: vec![],
                 },
-                &ct_ledger::ProjectProvider {
+                &ct_hub_store::ProjectProvider {
                     docs: Default::default(),
                     session_templates: Default::default(),
                     approval: Default::default(),
                     tracker: ct_core::TrackerConfig::Jira(jira.clone()),
                     forge: ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
-                        host: "gitlab.example.com".into(),
+                        connection: Some(gitlab_id),
                         path: "deep-ion-ai/demo".into(),
                         clone_url: "https://gitlab.example.com/deep-ion-ai/demo.git".into(),
-                        credential_cmd: "pass show gitlab".into(),
                     }),
                     branch_pattern: None,
                     attribution: true,
@@ -404,6 +448,8 @@ mod tests {
             .ledger()
             .apply_hub_config(
                 &ct_ledger::ConfigResponse {
+                    connections: None,
+                    connection_names: None,
                     config_rev: 1,
                     config_epoch: 1,
                     changed: true,
@@ -422,7 +468,7 @@ mod tests {
                         repo_path,
                         rev: 1,
                         tracker: ct_core::TrackerConfig::Jira(jira),
-                        forge: ct_core::ForgeConfig::Github,
+                        forge: ct_core::ForgeConfig::Github(Default::default()),
                         branch_pattern: None,
                         attribution: true,
                         sync: true,
@@ -433,6 +479,11 @@ mod tests {
                 |p| p.repo_path.clone(),
             )
             .unwrap();
+        // As conexões em uso no ambiente, como o pull as deixa.
+        srv.env
+            .cfg
+            .credentials
+            .set_connections(vec![jira_conn], Default::default());
         let mut sete = api_issue("PROJ-7", "Tarefa", "new");
         sete["fields"]["customfield_10601"] = "PROJ-8".into();
         fake.set_view(&sete);

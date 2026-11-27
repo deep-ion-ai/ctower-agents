@@ -31,6 +31,7 @@ const NOW = Date.now();
 function info(): EnvInfo {
   return {
     protocol: "2.0",
+    capabilities: ["version-handshake"],
     version: "0.1.0",
     commit: "",
     hostname: "wsl",
@@ -95,7 +96,6 @@ function setup(
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
     .onHub("hub.proposals.list", () => opts.proposals?.() ?? NO_PROPOSALS)
     .onHub("hub.health.get", opts.health ?? NO_HEALTH)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.backup.get", {
       remote: { kind: "none", encrypt: true, bucket: "", prefix: "", region: "us-east-1", endpoint: "", drive_folder_id: "" },
       status: HUB_BACKUP,
@@ -149,7 +149,7 @@ test("hub fora: aviso e as sessões seguem nos ambientes", async () => {
   expect(api.calls.filter((c) => c.env === "hub")).toHaveLength(0);
 });
 
-test("informações, avisos de hub.status e token do GitHub do hub", async () => {
+test("informações, avisos de hub.status e o token do GitHub do hub em Conexões", async () => {
   const { api, user } = setup({
     status: hubStatus({
       warnings: [
@@ -181,11 +181,11 @@ test("informações, avisos de hub.status e token do GitHub do hub", async () =>
   expect(screen.getByRole("tab", { name: "Manutenção · Backup e snapshots" })).toHaveAttribute("aria-selected", "true");
   expect(await screen.findByRole("heading", { name: "Backup do hub" })).toBeInTheDocument();
   await user.click(screen.getByRole("tab", { name: "Hub · Visão geral" }));
-  // O token do GitHub é o do hub, não o de um ambiente.
-  await user.click(sideRow("Token do GitHub"));
-  expect(await screen.findByText("@hub-bot")).toBeInTheDocument();
-  expect(api.hubCallsTo("github.status")).toHaveLength(1);
-  expect(api.calls.filter((c) => c.method === "github.status" && c.env !== "hub")).toHaveLength(0);
+  // O token do GitHub do hub vem da conexão `github` (#263): sem seção própria nem RPC `github.*`.
+  expect(screen.queryByRole("button", { name: /Token do GitHub/ })).not.toBeInTheDocument();
+  await user.click(sideRow("Conexões"));
+  expect(await screen.findByText(/O token do GitHub do hub/)).toHaveTextContent("edite a credencial dela aqui");
+  expect(api.calls.filter((c) => c.method.startsWith("github."))).toHaveLength(0);
 });
 
 test("atribuições com estado; a mensagem só aparece no estado de erro", async () => {
@@ -253,6 +253,37 @@ test("editar manda só o que mudou", async () => {
     owner: "deep-ion-ai",
     repo: "ctower-agents",
     base_branch: "main",
+  });
+});
+
+test("conexão do GitHub do projeto (#275): a padrão sem escolha; escolher manda rastreador e forja", async () => {
+  const conn = (id: number, name: string) => ({
+    id,
+    name,
+    kind: "github",
+    endpoint: "",
+    credential: { kind: "cli" },
+    options: {},
+    created_at: 1,
+    updated_at: 1,
+  });
+  const { api, user } = setup({ at: settingsOf("general") });
+  api.onHub("hub.connections.list", [conn(1, "github"), conn(2, "github-acme")]);
+  api.onHub("hub.projects.update", CT);
+  const ct = await screen.findByRole("group", { name: "Geral" });
+  expect(await within(ct).findByText("padrão (conexão github)")).toBeInTheDocument();
+  await user.click(within(ct).getByRole("button", { name: "Editar ctower-agents" }));
+  const form = screen.getByRole("form", { name: "Editar ctower-agents" });
+  const sel = await within(form).findByLabelText("Conexão do GitHub");
+  await within(sel).findByRole("option", { name: /github-acme/ });
+  await user.selectOptions(sel, "2");
+  await user.click(within(form).getByRole("button", { name: "Salvar projeto" }));
+  await waitFor(() => expect(api.hubCallsTo("hub.projects.update")).toHaveLength(1));
+  expect(api.hubCallsTo("hub.projects.update")[0].params).toEqual({
+    owner: "deep-ion-ai",
+    repo: "ctower-agents",
+    tracker: { kind: "github", connection: 2 },
+    forge: { kind: "github", connection: 2 },
   });
 });
 
@@ -537,7 +568,7 @@ test("contadores do painel lateral batem com avisos, propostas, sinais e quarent
   // Projetos e atribuições saiu do Hub (#18): o Cadastro fica só com Ambientes.
   expect(screen.queryByRole("button", { name: "Projetos e atribuições" })).not.toBeInTheDocument();
   expect(sideRow("Ambientes")).toHaveAccessibleDescription("3 ambientes");
-  expect(sideRow("Token do GitHub")).toHaveAccessibleDescription("");
+  expect(sideRow("Conexões")).toHaveAccessibleDescription("");
   // Os mesmos números nos títulos da Visão geral.
   expect(section(/^Avisos · 3/)).toBeInTheDocument();
   expect(section(/^Propostas do gestor · 2/)).toBeInTheDocument();

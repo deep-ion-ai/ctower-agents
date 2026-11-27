@@ -93,8 +93,11 @@ fn spawn_hub(p: &std::path::Path, token: &str, env_id: &str) -> Option<(Daemon, 
         if let Ok(r) = ureq::get(&format!("{url}/healthz")).call() {
             let health: Value = r.into_json().unwrap();
             // Outro serviço na porta não aceitaria o token deste hub.
+            let local = ct_http::sync::VersionInfo::local();
             let mine = ureq::post(&format!("{url}/sync/push"))
                 .set("Authorization", &format!("Bearer {token}"))
+                .set(ct_http::sync::PROTOCOL_HEADER, &local.protocol)
+                .set(ct_http::sync::VERSION_HEADER, &local.version)
                 .send_json(json!({ "env_id": env_id, "entries": [], "pending": 0 }))
                 .is_ok();
             return mine.then_some((d, url, health));
@@ -146,14 +149,23 @@ fn serve_recebe_push_e_cria_os_arquivos_proprios() {
         .send_json(json!({ "env_id": "e1", "entries": [], "pending": 0 }))
         .unwrap_err();
     assert!(matches!(e, ureq::Error::Status(403, _)));
-    // Lote vazio do ambiente: aceito.
+    // Lote vazio do ambiente com a versão deste build (#227): aceito.
+    let local = ct_http::sync::VersionInfo::local();
     let r: Value = ureq::post(&format!("{url}/sync/push"))
         .set("Authorization", &format!("Bearer {token}"))
+        .set(ct_http::sync::PROTOCOL_HEADER, &local.protocol)
+        .set(ct_http::sync::VERSION_HEADER, &local.version)
         .send_json(json!({ "env_id": env_id, "entries": [], "pending": 0 }))
         .unwrap()
         .into_json()
         .unwrap();
     assert_eq!(r["last_seq"], 0);
+    // Sem a versão (ambiente anterior ao handshake): 426 com o motivo.
+    let e = ureq::post(&format!("{url}/sync/push"))
+        .set("Authorization", &format!("Bearer {token}"))
+        .send_json(json!({ "env_id": env_id, "entries": [], "pending": 0 }))
+        .unwrap_err();
+    assert!(matches!(e, ureq::Error::Status(426, _)), "{e:?}");
     let e = ureq::post(&format!("{url}/sync/push"))
         .set("Authorization", "Bearer errado")
         .send_json(json!({ "env_id": env_id, "entries": [] }))

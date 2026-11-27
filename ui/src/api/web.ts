@@ -8,8 +8,10 @@
 // `@tauri-apps/*`.
 
 import type { DaemonApi } from "./daemon";
+import { ApiError } from "./errors";
 import type { EnvStatus, EnvView, HubConnView, PushEvent, UiConfig, UiUpdate, Unsubscribe } from "./types";
 import type { HubEnv, HubInfo } from "../protocol/hub-gen";
+import { METHOD_SCOPES } from "../protocol/gen/methods";
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
 import { OFFLINE, envStatusesFromHub, envViewsFromHub } from "../web/hubData";
 
@@ -23,49 +25,12 @@ export const CLOSE_SESSION_ENDED = 4401;
 /** Major do protocolo do hub que esta UI fala (o mesmo do app desktop). */
 export const HUB_PROTOCOL_MAJOR = 1;
 /**
- * Métodos do ambiente que a web chama pelo hub (`hub.env.call`): a lista do
- * canal reverso (`ct_http::sync::CHANNEL_METHODS`, spec §5.2). O hub confere
- * de novo; aqui só evita a ida. `file.read`, `files.shared` e `docs.list`:
- * visualizador de markdown (#167). `git.diff`, `git.diff_file` e
- * `git.commits`: visualizador de diff (#168). Sem comentários dentro da lista: o teste
- * do `cthubd` a compara com a do canal.
+ * Métodos do ambiente que a web chama pelo hub (`hub.env.call`): o escopo
+ * `web` do registro `ct_http::methods` (gerado em `protocol/gen/methods.ts`),
+ * que é a lista do canal reverso (spec §5.2). O hub confere de novo; aqui só
+ * evita a ida.
  */
-export const ENV_METHODS: ReadonlySet<string> = new Set([
-  "env.info",
-  "projects.list",
-  "dashboard.get",
-  "tree.get",
-  "review.get",
-  "events.list",
-  "review.mark_reviewed",
-  "recovery.list",
-  "recovery.archived",
-  "transcript.tail",
-  "session.context",
-  "session.usage",
-  "session.get",
-  "session.start",
-  "session.start_project",
-  "session.start_gestor",
-  "session.start_release",
-  "session.resume",
-  "session.continue",
-  "session.kill",
-  "session.archive",
-  "session.remote_control.enable",
-  "hub.sync.now",
-  "hub.config.changed",
-  "tracker.issue_body",
-  "tracker.add_issue",
-  "logs.tail",
-  "file.read",
-  "files.shared",
-  "docs.list",
-  "git.diff",
-  "git.diff_file",
-  "git.commits",
-  "autonomy.align",
-]);
+export const ENV_METHODS: ReadonlySet<string> = new Set(METHOD_SCOPES.web);
 
 /** O método do ambiente existe na web? */
 export const envMethodOnWeb = (method: string) => ENV_METHODS.has(method);
@@ -217,7 +182,7 @@ export class WebDaemonApi implements DaemonApi, WebAuth {
   }
 
   private failPending(reason: string) {
-    for (const p of this.pending.values()) p.reject(new Error(reason));
+    for (const p of this.pending.values()) p.reject(new ApiError(reason));
     this.pending.clear();
     this.queue = [];
   }
@@ -321,12 +286,15 @@ export class WebDaemonApi implements DaemonApi, WebAuth {
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
-    if (msg.error) p.reject(new Error(msg.error.message ?? "erro do hub"));
+    if (msg.error) {
+      const { code, message, data } = msg.error;
+      p.reject(new ApiError(message ?? "erro do hub", typeof code === "number" ? code : undefined, data));
+    }
     else p.resolve(msg.result);
   }
 
   private send<T>(method: string, params: object): Promise<T> {
-    if (!this.running) return Promise.reject(new Error("hub desconectado"));
+    if (!this.running) return Promise.reject(new ApiError("hub desconectado"));
     const id = ++this.next;
     const frame = JSON.stringify({ id, method, params });
     return new Promise<T>((resolve, reject) => {

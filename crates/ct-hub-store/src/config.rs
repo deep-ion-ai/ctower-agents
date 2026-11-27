@@ -1,0 +1,723 @@
+//! Projetos com origem no hub (spec do hub como plano de controle §3.1,
+//! §3.2, §3.4 e §5; issue #175): cadastro, edição, exclusão com lápide,
+//! `config_rev` e a quarentena de push.
+//!
+//! Toda mudança em projeto (inclusive a lápide) faz, na mesma transação,
+//! `config_rev = config_rev + 1` e grava o valor em `project.rev`. As
+//! atribuições (#176, `assignments.rs`) entram no mesmo contador.
+
+use super::{row_to_project, Hub, HubAssignment, HubProject, HubSession, PROJECT_COLS};
+use crate::sync::project_key;
+use crate::{LedgerError, Result, SyncChange};
+use ct_core::provider;
+use ct_core::{now_ms, ForgeConfig, TrackerConfig};
+use rusqlite::{params, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// Parâmetros de `hub.projects.add` depois do parse da URL e da validação
+/// no GitHub.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewHubProject {
+    pub owner: String,
+    pub repo: String,
+    pub name: String,
+    pub base_branch: String,
+    pub protected_branches: Vec<String>,
+}
+
+/// Rastreador, forja, padrão de branch e atribuição do cadastro (spec do
+/// Jira e GitLab §3, §4 e §9.3; issue #348). O padrão é o projeto GitHub
+/// de sempre.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectProvider {
+    pub tracker: TrackerConfig,
+    pub forge: ForgeConfig,
+    /// `None` = o padrão do rastreador.
+    pub branch_pattern: Option<String>,
+    pub attribution: bool,
+    /// Pasta de docs fora do repositório (#440).
+    pub docs: ct_core::DocsConfig,
+    /// Templates do prompt inicial do projeto (#166).
+    pub session_templates: ct_core::SessionTemplates,
+    /// Rótulo de aprovação do projeto (#124).
+    pub approval: ct_core::ApprovalConfig,
+}
+
+impl Default for ProjectProvider {
+    fn default() -> Self {
+        ProjectProvider {
+            tracker: TrackerConfig::default(),
+            forge: ForgeConfig::default(),
+            branch_pattern: None,
+            attribution: true,
+            docs: ct_core::DocsConfig::default(),
+            session_templates: ct_core::SessionTemplates::default(),
+            approval: ct_core::ApprovalConfig::default(),
+        }
+    }
+}
+
+impl ProjectProvider {
+    /// Confere o cadastro sem rede: combinação suportada (GitHub + GitHub
+    /// ou Jira + GitLab), campos obrigatórios do Jira e do GitLab e o padrão
+    /// de branch. O Jira e o GitLab em si só o ambiente de sync confere, no
+    /// primeiro ciclo (`tracker_status`).
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        self.validate_base()?;
+        provider::descriptor(self.tracker.provider()).validate_sync(&self.tracker)
+    }
+
+    /// [`ProjectProvider::validate`] sem o filtro do sync do Jira: a edição
+    /// que não mexe no rastreador (nome, ambiente de sync...) de um cadastro
+    /// anterior ao modo sprint ativa, ainda sem JQL, continua possível.
+    pub(crate) fn validate_base(&self) -> std::result::Result<(), String> {
+        let (tk, fk) = (self.tracker.kind(), self.forge.kind());
+        if !ct_core::supported_combination(tk, fk) {
+            return Err(format!(
+                "combinação de rastreador e forja não suportada: {tk} + {fk} (use github + \
+                 github ou jira + gitlab)"
+            ));
+        }
+        // Os descritores conferem o lado do projeto de cada tipo (#234,
+        // #278). Jira e GitLab exigem a conexão (#277): a credencial e a URL
+        // vêm dela e são conferidas em `Hub::check_project_connections`. O
+        // GitHub (#275) usa uma conexão só para o rastreador e a forja.
+        provider::validate_project(&self.tracker, &self.forge)?;
+        if let Some(pat) = &self.branch_pattern {
+            ct_core::branch::validate_branch_pattern(pat).map_err(|e| e.to_string())?;
+        }
+        self.docs.validate()?;
+        self.session_templates.validate()?;
+        self.approval.validate()
+    }
+}
+
+/// Campos de `hub.projects.update`; `None` = não muda.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HubProjectPatch {
+    pub name: Option<String>,
+    pub base_branch: Option<String>,
+    pub protected_branches: Option<Vec<String>>,
+    /// Configuração nova do rastreador, do mesmo tipo (o tipo não muda
+    /// depois do cadastro).
+    pub tracker: Option<TrackerConfig>,
+    /// Configuração nova da forja, do mesmo tipo e do mesmo repositório
+    /// (host e caminho, que dão o `owner/repo`).
+    pub forge: Option<ForgeConfig>,
+    /// `Some("")` = volta ao padrão do rastreador.
+    pub branch_pattern: Option<String>,
+    pub attribution: Option<bool>,
+    /// Ambiente de sync do projeto Jira (`env_id` ou nome), entre os
+    /// atribuídos (spec §5.1).
+    pub sync_env: Option<String>,
+    /// Docs do projeto (#440): o objeto inteiro substitui o anterior.
+    pub docs: Option<ct_core::DocsConfig>,
+    /// Templates do prompt inicial (#166): o objeto inteiro substitui o
+    /// anterior; chave vazia = volta ao global.
+    pub session_templates: Option<ct_core::SessionTemplates>,
+    /// Modo autônomo (#181): o objeto inteiro substitui o anterior. O
+    /// ambiente vai por `env_id` ou nome.
+    pub autonomy: Option<ct_core::AutonomyConfig>,
+    /// Limite de trabalho em andamento (#126): o objeto inteiro substitui o
+    /// anterior; `{}` = sem limite.
+    pub wip_limits: Option<ct_core::WipLimits>,
+    /// Rótulo de aprovação (#124): o objeto inteiro substitui o anterior;
+    /// rótulo vazio = desligado.
+    pub approval: Option<ct_core::ApprovalConfig>,
+    /// Configuração de release (#204): o objeto inteiro substitui o
+    /// anterior. Só projetos GitHub + GitHub.
+    pub release: Option<ct_core::ReleaseConfig>,
+}
+
+impl HubProjectPatch {
+    pub fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.base_branch.is_none()
+            && self.protected_branches.is_none()
+            && self.tracker.is_none()
+            && self.forge.is_none()
+            && self.branch_pattern.is_none()
+            && self.attribution.is_none()
+            && self.sync_env.is_none()
+            && self.docs.is_none()
+            && self.session_templates.is_none()
+            && self.autonomy.is_none()
+            && self.wip_limits.is_none()
+            && self.approval.is_none()
+            && self.release.is_none()
+    }
+}
+
+/// Resposta de `hub.projects.add`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ProjectAdded {
+    pub project: HubProject,
+    /// `config_rev` do cadastro.
+    pub rev: i64,
+    /// Linhas da quarentena reaplicadas pela ingestão normal.
+    pub reapplied: usize,
+    /// O cadastro reaproveitou a linha de uma lápide.
+    pub restored: bool,
+}
+
+/// O que a exclusão do projeto atinge (`hub.projects.delete` sem `confirm`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DeleteImpact {
+    pub project: HubProject,
+    /// Atribuições ativas (`assignment` sem `removed_at`).
+    pub assignments: Vec<HubAssignment>,
+    /// Sessões vivas relatadas pelos ambientes.
+    pub live_sessions: Vec<HubSession>,
+}
+
+/// Linhas em quarentena de um projeto vindas de um ambiente.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct QuarantineGroup {
+    /// `owner/repo` em minúsculas.
+    pub project_key: String,
+    pub env_id: String,
+    pub env_name: String,
+    pub rows: i64,
+    pub first_received_at: i64,
+    pub last_received_at: i64,
+}
+
+impl Hub {
+    /// `config_rev + 1`, na transação de quem chama. Nunca volta.
+    pub(super) fn bump_config_rev(&self) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "INSERT INTO hub_meta (key, value) VALUES ('config_rev', 1)
+             ON CONFLICT (key) DO UPDATE SET value = value + 1 RETURNING value",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// `config_rev + 1` para uma mudança no store de secrets e variáveis
+    /// (`ct-secrets`, issue #164), que vive fora do `hub.db`: o valor vira o
+    /// `rev` da entrada. Se a gravação do store falhar depois, sobra só um
+    /// `config_rev` sem mudança, o que é inofensivo.
+    pub fn bump_config_rev_for_secrets(&self) -> Result<i64> {
+        self.bump_config_rev()
+    }
+
+    /// `max(config_rev, min) + 1`: o `cthubd secrets restore` (#170) usa
+    /// para o `config_rev` passar do maior `rev` do store restaurado (um
+    /// `hub.db` novo começa em 0) e os ambientes receberem tudo de novo.
+    pub fn bump_config_rev_past(&self, min: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "INSERT INTO hub_meta (key, value) VALUES ('config_rev', max(?1, 0) + 1)
+             ON CONFLICT (key) DO UPDATE SET value = max(value, ?1) + 1 RETURNING value",
+            [min],
+            |r| r.get(0),
+        )?)
+    }
+
+    fn project_by_key(&self, key: &str) -> Result<HubProject> {
+        Ok(self.conn.query_row(
+            &format!("SELECT {PROJECT_COLS} FROM project WHERE key = ?1"),
+            [key],
+            row_to_project,
+        )?)
+    }
+
+    /// `config_rev` gravado no projeto pela última mudança.
+    pub fn project_rev(&self, owner: &str, repo: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT rev FROM project WHERE key = ?1",
+                [project_key(owner, repo)],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// `deleted_at` da lápide de `owner/repo`, se houver.
+    pub fn project_tombstone(&self, owner: &str, repo: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT deleted_at FROM project WHERE key = ?1",
+                [project_key(owner, repo)],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// Cadastra o projeto (`hub.projects.add`). Recadastrar um `owner/repo`
+    /// com lápide reaproveita a linha e limpa `deleted_at`. Na mesma
+    /// transação, a quarentena do projeto é reaplicada pela ingestão normal,
+    /// na ordem (`env_id`, `seq`), e as linhas reaplicadas saem dela.
+    pub fn add_project(&self, p: &NewHubProject) -> Result<ProjectAdded> {
+        self.add_project_with(p, &ProjectProvider::default())
+    }
+
+    /// [`Hub::add_project`] com rastreador, forja, padrão de branch e
+    /// atribuição (#348). Recusa combinação não suportada e padrão de branch
+    /// inválido ([`ProjectProvider::validate`]).
+    pub fn add_project_with(
+        &self,
+        p: &NewHubProject,
+        provider: &ProjectProvider,
+    ) -> Result<ProjectAdded> {
+        let pv = &ProjectProvider {
+            docs: provider.docs.normalized(),
+            session_templates: provider.session_templates.normalized(),
+            approval: provider.approval.normalized(),
+            ..provider.clone()
+        };
+        pv.validate().map_err(LedgerError::Conflict)?;
+        self.check_project_connections(pv)?;
+        let key = project_key(&p.owner, &p.repo);
+        let protected =
+            serde_json::to_string(&p.protected_branches).expect("Vec<String> serializa");
+        let tx = self.conn.unchecked_transaction()?;
+        let existing: Option<(String, Option<i64>)> = self
+            .conn
+            .query_row(
+                "SELECT name, deleted_at FROM project WHERE key = ?1",
+                [&key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let rev = self.bump_config_rev()?;
+        let now = now_ms();
+        let restored = match existing {
+            Some((name, None)) => {
+                return Err(LedgerError::Conflict(format!(
+                    "{}/{} já está cadastrado no hub como {name}",
+                    p.owner, p.repo
+                )))
+            }
+            Some((_, Some(_))) => {
+                // O recadastro leva o rastreador e a forja do cadastro novo,
+                // nunca os da lápide.
+                self.conn.execute(
+                    "UPDATE project SET gh_owner = ?2, gh_repo = ?3, name = ?4, base_branch = ?5,
+                            protected_branches = ?6, created_at = ?7, rev = ?8, deleted_at = NULL,
+                            tracker_kind = ?9, tracker_config = ?10,
+                            forge_kind = ?11, forge_config = ?12, branch_pattern = ?13,
+                            attribution = ?14, sync_env_id = NULL, docs_config = ?15,
+                            session_templates = ?16, approval_config = ?17
+                     WHERE key = ?1",
+                    params![
+                        key,
+                        p.owner,
+                        p.repo,
+                        p.name,
+                        p.base_branch,
+                        protected,
+                        now,
+                        rev,
+                        pv.tracker.kind().as_str(),
+                        pv.tracker.config_json(),
+                        pv.forge.kind().as_str(),
+                        pv.forge.config_json(),
+                        pv.branch_pattern,
+                        pv.attribution,
+                        pv.docs.config_json(),
+                        pv.session_templates.config_json(),
+                        pv.approval.config_json()
+                    ],
+                )?;
+                // A purga já apagou; garante o espelho zerado no recadastro
+                // mesmo assim.
+                for t in ["sync_state", "tracker_status"] {
+                    self.conn.execute(
+                        &format!(
+                            "DELETE FROM {t} WHERE project_id = (SELECT id FROM project WHERE key = ?1)"
+                        ),
+                        [&key],
+                    )?;
+                }
+                true
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO project (key, gh_owner, gh_repo, name, base_branch,
+                                          protected_branches, created_at, rev, tracker_kind,
+                                          tracker_config, forge_kind, forge_config,
+                                          branch_pattern, attribution, docs_config,
+                                          session_templates, approval_config)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                             ?16, ?17)",
+                    params![
+                        key,
+                        p.owner,
+                        p.repo,
+                        p.name,
+                        p.base_branch,
+                        protected,
+                        now,
+                        rev,
+                        pv.tracker.kind().as_str(),
+                        pv.tracker.config_json(),
+                        pv.forge.kind().as_str(),
+                        pv.forge.config_json(),
+                        pv.branch_pattern,
+                        pv.attribution,
+                        pv.docs.config_json(),
+                        pv.session_templates.config_json(),
+                        pv.approval.config_json()
+                    ],
+                )?;
+                false
+            }
+        };
+        let reapplied = self.reapply_quarantine(&key)?;
+        let project = self.project_by_key(&key)?;
+        tx.commit()?;
+        Ok(ProjectAdded {
+            project,
+            rev,
+            reapplied,
+            restored,
+        })
+    }
+
+    /// Reaplica a quarentena de `key` pela ingestão normal, na ordem
+    /// (`env_id`, `seq`), e apaga as linhas reaplicadas.
+    fn reapply_quarantine(&self, key: &str) -> Result<usize> {
+        let rows: Vec<(i64, String, String)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, env_id, payload FROM push_quarantine
+                 WHERE project_key = ?1 ORDER BY env_id, seq",
+            )?;
+            let rows = stmt.query_map([key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for (id, env, payload) in &rows {
+            let change: SyncChange = serde_json::from_str(payload).map_err(|e| {
+                LedgerError::Corrupt(format!("linha {id} da quarentena ilegível: {e}"))
+            })?;
+            self.apply(env, &change)?;
+        }
+        self.conn
+            .execute("DELETE FROM push_quarantine WHERE project_key = ?1", [key])?;
+        Ok(rows.len())
+    }
+
+    /// Edita nome, `base_branch`, protegidas, a configuração do rastreador e
+    /// da forja (sem mudar o tipo nem o repositório), padrão de branch,
+    /// atribuição e o ambiente de sync (`hub.projects.update`). Tudo numa
+    /// transação, com um `config_rev` só.
+    pub fn update_project(
+        &self,
+        owner: &str,
+        repo: &str,
+        patch: &HubProjectPatch,
+    ) -> Result<HubProject> {
+        let key = project_key(owner, repo);
+        let Some(cur) = self.find_project(owner, repo)? else {
+            return Err(LedgerError::NotFound(
+                "projeto",
+                format!("{owner}/{repo} não está no hub"),
+            ));
+        };
+        let provider = self.patched_provider(&cur, patch)?;
+        self.check_project_connections(&provider)?;
+        // O modo autônomo é conferido contra a base e as protegidas que o
+        // projeto terá depois desta edição; sem mudar o modo, a edição da
+        // base ou das protegidas também o confere (se estiver ligado).
+        let base = patch.base_branch.as_deref().unwrap_or(&cur.base_branch);
+        let protected_after = patch
+            .protected_branches
+            .as_deref()
+            .unwrap_or(&cur.protected_branches);
+        let autonomy = match &patch.autonomy {
+            Some(a) => self.checked_autonomy(&cur, a, base, protected_after)?,
+            None => {
+                if cur.autonomy.enabled {
+                    cur.autonomy
+                        .validate(base, protected_after)
+                        .map_err(LedgerError::Conflict)?;
+                }
+                cur.autonomy.clone()
+            }
+        };
+        let release = match &patch.release {
+            Some(r) => super::release::checked_release(&cur, r)?,
+            None => cur.release.clone(),
+        };
+        let sync_env = match patch.sync_env.as_deref() {
+            Some(e) => Some((self.resolve_env(e)?, e.trim().to_string())),
+            None => None,
+        };
+        let protected = patch
+            .protected_branches
+            .as_ref()
+            .map(|v| serde_json::to_string(v).expect("Vec<String> serializa"));
+        let tx = self.conn.unchecked_transaction()?;
+        let rev = self.bump_config_rev()?;
+        let changed = self.conn.execute(
+            "UPDATE project SET name = coalesce(?2, name),
+                    base_branch = coalesce(?3, base_branch),
+                    protected_branches = coalesce(?4, protected_branches), rev = ?5,
+                    tracker_config = ?6, forge_config = ?7, branch_pattern = ?8,
+                    attribution = ?9, docs_config = ?10, session_templates = ?11,
+                    autonomy_config = ?12, approval_config = ?13, release_config = ?14
+             WHERE key = ?1 AND deleted_at IS NULL",
+            params![
+                key,
+                patch.name,
+                patch.base_branch,
+                protected,
+                rev,
+                provider.tracker.config_json(),
+                provider.forge.config_json(),
+                provider.branch_pattern,
+                provider.attribution,
+                provider.docs.config_json(),
+                provider.session_templates.config_json(),
+                autonomy.config_json(),
+                provider.approval.config_json(),
+                release.config_json()
+            ],
+        )?;
+        if changed == 0 {
+            return Err(LedgerError::NotFound(
+                "projeto",
+                format!("{owner}/{repo} não está no hub"),
+            ));
+        }
+        if let Some((env_id, label)) = &sync_env {
+            self.set_sync_env_in_tx(&cur, env_id, label, rev)?;
+        }
+        if let Some(w) = &patch.wip_limits {
+            self.set_wip_limits_in_tx(&key, w)?;
+        }
+        let p = self.project_by_key(&key)?;
+        tx.commit()?;
+        Ok(p)
+    }
+
+    /// Rastreador, forja, padrão e atribuição do projeto com o `patch`
+    /// aplicado e conferido. O tipo do rastreador e da forja e o
+    /// repositório da forja (que dá o `owner/repo`) não mudam.
+    fn patched_provider(
+        &self,
+        cur: &HubProject,
+        patch: &HubProjectPatch,
+    ) -> Result<ProjectProvider> {
+        let refuse = |m: String| Err(LedgerError::Conflict(m));
+        let tracker = match &patch.tracker {
+            Some(t) if t.kind() != cur.tracker.kind() => {
+                return refuse(format!(
+                    "o rastreador não muda depois do cadastro ({} → {}): cadastre outro projeto",
+                    cur.tracker.kind(),
+                    t.kind()
+                ))
+            }
+            Some(t) => t.clone(),
+            None => cur.tracker.clone(),
+        };
+        let forge = match &patch.forge {
+            Some(f) if f.kind() != cur.forge.kind() => {
+                return refuse(format!(
+                    "a forja não muda depois do cadastro ({} → {}): cadastre outro projeto",
+                    cur.forge.kind(),
+                    f.kind()
+                ))
+            }
+            Some(ForgeConfig::Gitlab(g)) => {
+                let old = cur.forge.gitlab().expect("mesmo tipo");
+                // O repositório é o host da conexão e o caminho (#277). Trocar
+                // a conexão por outra do mesmo host vale; o projeto antigo
+                // sem conexão (cadastro que a migração não converteu) ganha
+                // uma.
+                let host = |id: Option<i64>| -> String {
+                    id.and_then(|id| self.connection(id).ok())
+                        .map(|c| c.endpoint.trim().to_string())
+                        .unwrap_or_default()
+                };
+                let (old_host, new_host) = (host(old.connection), host(g.connection));
+                let other_host =
+                    old.connection.is_some() && !new_host.eq_ignore_ascii_case(&old_host);
+                if other_host || !g.path.eq_ignore_ascii_case(&old.path) {
+                    return refuse(format!(
+                        "o repositório do projeto não muda ({}/{} → {}/{}): cadastre outro projeto",
+                        old_host, old.path, new_host, g.path
+                    ));
+                }
+                ForgeConfig::Gitlab(g.clone())
+            }
+            Some(f) => f.clone(),
+            None => cur.forge.clone(),
+        };
+        let branch_pattern = match patch.branch_pattern.as_deref().map(str::trim) {
+            Some("") => None,
+            Some(p) => Some(p.to_string()),
+            None => cur.branch_pattern.clone(),
+        };
+        let provider = ProjectProvider {
+            tracker,
+            forge,
+            branch_pattern,
+            attribution: patch.attribution.unwrap_or(cur.attribution),
+            docs: match &patch.docs {
+                Some(d) => d.normalized(),
+                None => cur.docs.clone(),
+            },
+            session_templates: match &patch.session_templates {
+                Some(t) => t.normalized(),
+                None => cur.session_templates.clone(),
+            },
+            approval: match &patch.approval {
+                Some(a) => a.normalized(),
+                None => cur.approval.clone(),
+            },
+        };
+        // O filtro do Jira só é conferido quando a edição manda o rastreador.
+        let checked = if patch.tracker.is_some() {
+            provider.validate()
+        } else {
+            provider.validate_base()
+        };
+        checked.map_err(LedgerError::Conflict)?;
+        Ok(provider)
+    }
+
+    /// O que a exclusão de `owner/repo` atinge: atribuições ativas e sessões
+    /// vivas relatadas (de qualquer ambiente, atribuído ou não). `None` se o
+    /// projeto não está cadastrado.
+    pub fn delete_impact(&self, owner: &str, repo: &str) -> Result<Option<DeleteImpact>> {
+        let Some(project) = self.find_project(owner, repo)? else {
+            return Ok(None);
+        };
+        let assignments = self.project_assignments(project.id)?;
+        let live_sessions = self.live_sessions(project.id, None)?;
+        Ok(Some(DeleteImpact {
+            project,
+            assignments,
+            live_sessions,
+        }))
+    }
+
+    /// Snapshot fora da rotação antes de uma exclusão:
+    /// `<dir>/hub-<AAAAMMDD-HHMM>-pre-delete.db` (UTC), com `-2`, `-3`... se
+    /// já existe um daquele minuto. Nunca sobrescreve.
+    pub fn snapshot_pre_delete(&self, dir: &Path, now_ms: i64) -> Result<PathBuf> {
+        std::fs::create_dir_all(dir).map_err(|e| LedgerError::Conflict(e.to_string()))?;
+        let stamp = ct_core::utc_stamp(now_ms);
+        let path = std::iter::once(format!("hub-{stamp}-pre-delete.db"))
+            .chain((2u32..).map(|n| format!("hub-{stamp}-pre-delete-{n}.db")))
+            .map(|n| dir.join(n))
+            .find(|p| !p.exists())
+            .expect("algum sufixo livre");
+        self.conn
+            .execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])?;
+        Ok(path)
+    }
+
+    /// Exclui o projeto (`hub.projects.delete`) numa transação: as
+    /// atribuições recebem `removed_at` e `rev`, o relato dos ambientes sai, o histórico do projeto (work items, sessões,
+    /// decisões, eventos, espelho do GitHub) é apagado com o projeto em
+    /// `purging`, e a linha de `project` fica como lápide (`deleted_at`,
+    /// `rev`). Devolve o `config_rev` da lápide. A confirmação e o snapshot
+    /// prévio são de quem chama (`cthubd`).
+    pub fn delete_project(&self, owner: &str, repo: &str) -> Result<i64> {
+        let Some(p) = self.find_project(owner, repo)? else {
+            return Err(LedgerError::NotFound(
+                "projeto",
+                format!("{owner}/{repo} não está no hub"),
+            ));
+        };
+        let tx = self.conn.unchecked_transaction()?;
+        let rev = self.bump_config_rev()?;
+        // As atribuições ficam como removidas, com o `rev` da lápide (o pull
+        // da #177 propaga a remoção). O relato dos ambientes é apagado com o
+        // histórico: no recadastro, o projeto começa sem localização, e o
+        // ambiente volta a relatar quando receber uma atribuição nova.
+        self.conn.execute(
+            "UPDATE assignment SET removed_at = ?2, rev = ?3
+             WHERE project_id = ?1 AND removed_at IS NULL",
+            params![p.id, now_ms(), rev],
+        )?;
+        self.conn
+            .execute("DELETE FROM project_location WHERE project_id = ?1", [p.id])?;
+        let wi = "SELECT id FROM work_item WHERE project_id = ?1";
+        self.conn
+            .execute("INSERT INTO purging (project_id) VALUES (?1)", [p.id])?;
+        for sql in [
+            "DELETE FROM event WHERE project_id = ?1".to_string(),
+            format!("DELETE FROM decision WHERE work_item_id IN ({wi})"),
+            "DELETE FROM pr_checks WHERE project_id = ?1".to_string(),
+            "DELETE FROM pr_cache WHERE project_id = ?1".to_string(),
+            format!("DELETE FROM session WHERE work_item_id IN ({wi})"),
+            format!("DELETE FROM work_item_location WHERE work_item_id IN ({wi})"),
+            "DELETE FROM work_item WHERE project_id = ?1".to_string(),
+            "DELETE FROM issue_cache WHERE project_id = ?1".to_string(),
+            "DELETE FROM sync_state WHERE project_id = ?1".to_string(),
+            "DELETE FROM tracker_status WHERE project_id = ?1".to_string(),
+            "DELETE FROM proposal WHERE project_id = ?1".to_string(),
+            "DELETE FROM agent_rules WHERE project_id = ?1".to_string(),
+            "DELETE FROM agent_rules_proposal WHERE project_id = ?1".to_string(),
+            // Execuções de épico (#296): o resto sai em cascata.
+            "DELETE FROM epic_run WHERE project_id = ?1".to_string(),
+            "DELETE FROM purging WHERE project_id = ?1".to_string(),
+        ] {
+            self.conn.execute(&sql, [p.id])?;
+        }
+        self.conn.execute(
+            "DELETE FROM gh_etag WHERE key LIKE ?1",
+            [format!("/repos/{}/{}/%", p.gh_owner, p.gh_repo)],
+        )?;
+        self.conn.execute(
+            "DELETE FROM push_quarantine WHERE project_key = ?1",
+            [project_key(owner, repo)],
+        )?;
+        self.conn.execute(
+            "UPDATE project SET deleted_at = ?2, rev = ?3, sync_env_id = NULL WHERE id = ?1",
+            params![p.id, now_ms(), rev],
+        )?;
+        tx.commit()?;
+        Ok(rev)
+    }
+
+    // --- quarentena -------------------------------------------------------
+
+    /// Quarentena agrupada por projeto e ambiente (`hub.quarantine.list` e
+    /// os avisos de `hub.status`).
+    pub fn quarantine_summary(&self) -> Result<Vec<QuarantineGroup>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT q.project_key, q.env_id, coalesce(e.name, q.env_id), count(*),
+                    min(q.received_at), max(q.received_at)
+             FROM push_quarantine q LEFT JOIN env e ON e.env_id = q.env_id
+             GROUP BY q.project_key, q.env_id ORDER BY q.project_key, 3",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(QuarantineGroup {
+                project_key: r.get(0)?,
+                env_id: r.get(1)?,
+                env_name: r.get(2)?,
+                rows: r.get(3)?,
+                first_received_at: r.get(4)?,
+                last_received_at: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Linhas em quarentena de `owner/repo`.
+    pub fn quarantine_count(&self, owner: &str, repo: &str) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM push_quarantine WHERE project_key = ?1",
+            [project_key(owner, repo)],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Descarta a quarentena de `owner/repo`. Devolve quantas linhas saíram.
+    pub fn discard_quarantine(&self, owner: &str, repo: &str) -> Result<usize> {
+        Ok(self.conn.execute(
+            "DELETE FROM push_quarantine WHERE project_key = ?1",
+            [project_key(owner, repo)],
+        )?)
+    }
+}

@@ -390,7 +390,7 @@ pub fn run(dirs: &Dirs, rollback: bool, force: bool) -> i32 {
             // do ack): o banco em uso fica num .pre-rollback-*, a época da
             // configuração muda e o rollback manual pede --force.
             after_db_restore: Some(Box::new(
-                |path| match ct_ledger::Hub::renew_config_epoch_at(path) {
+                |path| match ct_hub_store::Hub::renew_config_epoch_at(path) {
                     Ok(Some(_)) => Ok("config_epoch renovada: os ambientes recebem o \
                                        conjunto completo no próximo pull"
                         .into()),

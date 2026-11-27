@@ -421,6 +421,33 @@ END;
     r#"
 ALTER TABLE project ADD COLUMN release_config TEXT NOT NULL DEFAULT '{}';
 "#,
+    // 26: cache das conexões do hub (#237), como vieram no último pull com
+    // mudança (JSON de `Vec<Connection>`). Sem elas, as sobrescritas
+    // `[connections]` do ambiente não se aplicam num pull sem mudança.
+    r#"
+CREATE TABLE hub_connection_cache (
+  id   INTEGER PRIMARY KEY CHECK (id = 1),
+  json TEXT NOT NULL
+);
+"#,
+    // 27: nomes de todas as conexões do hub (#270), como vieram no último
+    // pull com mudança (JSON de `Vec<String>`). `NULL` = cache anterior: o
+    // próximo pull pede o conjunto completo, que os traz.
+    r#"
+ALTER TABLE hub_connection_cache ADD COLUMN names TEXT;
+"#,
+    // 28: os campos antigos do cadastro do Jira e do GitLab saem do cache
+    // dos projetos (#277). Até aqui o pull os preenchia a partir da conexão
+    // (materialização); agora o runtime lê a conexão, e o cadastro só a
+    // referencia.
+    r#"
+UPDATE project
+   SET tracker_config = json_remove(tracker_config, '$.url', '$.credential_cmd', '$.config_file')
+ WHERE tracker_kind = 'jira' AND json_valid(tracker_config);
+UPDATE project
+   SET forge_config = json_remove(forge_config, '$.host', '$.credential_cmd')
+ WHERE forge_kind = 'gitlab' AND json_valid(forge_config);
+"#,
 ];
 
 /// Aplica as migrações pendentes numa transação `IMMEDIATE`, relendo
@@ -433,7 +460,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     migrate_with(conn, MIGRATIONS)
 }
 
-pub(crate) fn migrate_with(conn: &Connection, migrations: &[&str]) -> Result<()> {
+pub fn migrate_with(conn: &Connection, migrations: &[&str]) -> Result<()> {
     conn.execute_batch("BEGIN IMMEDIATE")?;
     let result = apply_pending(conn, migrations)
         .and_then(|()| conn.execute_batch("COMMIT").map_err(Into::into));
@@ -710,6 +737,52 @@ mod tests {
         }];
         gh.upsert_issue(1, &i, 2).unwrap();
         assert_eq!(gh.list_issues(1).unwrap(), vec![i]);
+    }
+
+    /// Migração 28 (#277): o cache dos projetos perde os campos que a
+    /// materialização preenchia; o resto do JSON fica, e o projeto GitHub
+    /// não muda.
+    #[test]
+    fn migracao_28_tira_os_campos_antigos_do_cache() {
+        let conn = Connection::open_in_memory().unwrap();
+        super::migrate_with(&conn, &super::MIGRATIONS[..27]).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO project (name, gh_owner, gh_repo, repo_path, created_at,
+                 tracker_kind, tracker_config, forge_kind, forge_config)
+               VALUES ('web', 'acme', 'acme-web', '/x', 0, 'jira',
+                 '{"url":"https://jira.example.com","project_key":"ACME","credential_cmd":"pass show jira","config_file":"a.yml","connection":1}',
+                 'gitlab',
+                 '{"host":"gitlab.example.com","path":"acme/acme-web","clone_url":"u","credential_cmd":"pass show gl","connection":2}');
+               INSERT INTO project (name, gh_owner, gh_repo, repo_path, created_at)
+               VALUES ('gh', 'acme', 'acme-gh', '/y', 0);"#,
+        )
+        .unwrap();
+        super::migrate(&conn).unwrap();
+        let (t, f): (String, String) = conn
+            .query_row(
+                "SELECT tracker_config, forge_config FROM project WHERE name = 'web'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let t: serde_json::Value = serde_json::from_str(&t).unwrap();
+        let f: serde_json::Value = serde_json::from_str(&f).unwrap();
+        assert_eq!(
+            t,
+            serde_json::json!({ "project_key": "ACME", "connection": 1 })
+        );
+        assert_eq!(
+            f,
+            serde_json::json!({ "path": "acme/acme-web", "clone_url": "u", "connection": 2 })
+        );
+        let gh: (String, String) = conn
+            .query_row(
+                "SELECT tracker_config, forge_config FROM project WHERE name = 'gh'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(gh, ("{}".to_string(), "{}".to_string()));
     }
 
     /// Migração 16: as issues já espelhadas ficam sem metadados (`[]`) e a

@@ -69,7 +69,6 @@ function withHub(api: FakeDaemonApi, store: ReturnType<typeof hubStore>) {
     .onHub("hub.projects.list", [hubProjectView(hubProject())])
     .onHub("hub.envs.list", [hubEnv()])
     .onHub("hub.dashboard.get", HUB_DASHBOARD)
-    .onHub("github.status", { source: "token", login: "hub-bot", error: null })
     .onHub("hub.secrets.list", () => store.list())
     .onHub("hub.secrets.set", (p: any) => store.set(p))
     .onHub("hub.secrets.delete", (p: any) => store.del(p))

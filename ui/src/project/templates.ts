@@ -1,6 +1,6 @@
 // Prompt inicial a partir do template do tipo (spec §7.1) e do rastreador
 // do projeto (spec do Jira e GitLab §9, #351).
-import type { ForgeConfig, GitlabConfig, JiraConfig, SessionTemplates, TrackerConfig, WorkItemKind } from "../protocol/gen";
+import type { ForgeConfig, ProjectEndpoints, SessionTemplates, TrackerConfig, WorkItemKind } from "../protocol/gen";
 import type { Templates } from "../api/types";
 import { DEFAULT_UI_CONFIG } from "../settings/defaults";
 import type { TemplateKey } from "../settings/sections";
@@ -19,38 +19,17 @@ export interface TemplateVars {
   /** Rastreador e forja do projeto; ausentes = GitHub. */
   tracker?: TrackerConfig;
   forge?: ForgeConfig;
+  /**
+   * Endereços e prefixos das conexões do projeto, como o ambiente ou o hub
+   * os mandam junto do projeto (`endpoints`, #277): `{{jira_url}}`,
+   * `{{jira}}` e `{{glab}}` saem daqui, montados pelo descritor do provider
+   * no Rust (a UI não repete a regra do prefixo).
+   */
+  endpoints?: ProjectEndpoints | null;
 }
 
 type Jira = Extract<TrackerConfig, { kind: "jira" }>;
 type Gitlab = Extract<ForgeConfig, { kind: "gitlab" }>;
-
-/** Palavra do shell com aspas simples só quando precisa (espelho de `ct_core`). */
-function shellWord(s: string): string {
-  return /^[A-Za-z0-9/._\-~+=:,@%]+$/.test(s) ? s : `'${s.replaceAll("'", "'\\''")}'`;
-}
-
-/**
- * Prefixo do jira-cli nas sessões (`{{jira}}`, espelho de
- * `ct_core::jira_cli_prefix`): `JIRA_API_TOKEN="$(<comando>)" jira`, com
- * `JIRA_CONFIG_FILE` antes quando configurado. Leva o comando de credencial
- * do cadastro, nunca a senha.
- */
-export function jiraCliPrefix(j: Pick<JiraConfig, "credential_cmd" | "config_file">): string {
-  const parts: string[] = [];
-  if (j.config_file.trim()) parts.push(`JIRA_CONFIG_FILE=${shellWord(j.config_file.trim())}`);
-  if (j.credential_cmd.trim()) parts.push(`JIRA_API_TOKEN="$(${j.credential_cmd.trim()})"`);
-  parts.push("jira");
-  return parts.join(" ");
-}
-
-/** Prefixo do glab (`{{glab}}`, espelho de `ct_core::glab_cli_prefix`): `GITLAB_HOST=<host> GITLAB_TOKEN="$(<comando>)" glab`. */
-export function glabCliPrefix(g: Pick<GitlabConfig, "host" | "credential_cmd">): string {
-  const parts: string[] = [];
-  if (g.host.trim()) parts.push(`GITLAB_HOST=${shellWord(g.host.trim())}`);
-  if (g.credential_cmd.trim()) parts.push(`GITLAB_TOKEN="$(${g.credential_cmd.trim()})"`);
-  parts.push("glab");
-  return parts.join(" ");
-}
 
 /**
  * Troca `{{var}}` pelos valores; variável desconhecida fica como está. Além
@@ -71,10 +50,10 @@ export function renderTemplate(template: string, v: TemplateVars): string {
     key: jira ? `${jira.project_key}-${v.number}` : `#${v.number}`,
     title: v.title ?? "",
     base: v.base ?? "",
-    jira_url: jira ? jira.url.replace(/\/+$/, "") : "",
+    jira_url: jira ? (v.endpoints?.jira_url ?? "").replace(/\/+$/, "") : "",
     jira_project: jira?.project_key ?? "",
-    jira: jira ? jiraCliPrefix(jira) : "jira",
-    glab: gitlab ? glabCliPrefix(gitlab) : "glab",
+    jira: (jira && v.endpoints?.jira_cli) || "jira",
+    glab: (gitlab && v.endpoints?.glab_cli) || "glab",
     forge_path: gitlab?.path.replace(/^\/+|\/+$/g, "") || `${v.owner}/${v.repo}`,
   };
   return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (all, name: string) => values[name] ?? all);

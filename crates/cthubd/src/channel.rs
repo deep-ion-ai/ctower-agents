@@ -27,16 +27,18 @@
 //!   [`EnvChannels::call`]; a Web Push usa [`EnvChannels::states`] para o
 //!   `env_stale` em tempo real (spec da PWA §7.1).
 
+use crate::sync::{gate, refused, Gate};
 use crate::HubState;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use ct_http::rpc::RpcResult;
-use ct_http::sync::{channel_method_allowed, channel_push_allowed, ENV_ID_HEADER};
+use ct_http::sync::{channel_method_allowed, channel_push_allowed, VersionInfo, ENV_ID_HEADER};
 pub use ct_http::sync::{CHANNEL_ENV_OFFLINE, CHANNEL_METHOD_UNAVAILABLE, CHANNEL_TIMEOUT};
 use ct_http::{bearer_token, unauthorized};
-use ct_ledger::{HubEnv, LedgerError};
+use ct_hub_store::HubEnv;
+use ct_ledger::LedgerError;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -164,8 +166,8 @@ impl EnvChannels {
     /// canal aberto; `Some(t)` = fechado desde `t` (ms). Ambiente que não
     /// abriu canal desde que o hub subiu (`ctowerd` antigo) fica de fora e
     /// segue pelo último sync.
-    pub fn states(&self) -> ct_ledger::ChannelStates {
-        let mut out: ct_ledger::ChannelStates = self
+    pub fn states(&self) -> ct_hub_store::ChannelStates {
+        let mut out: ct_hub_store::ChannelStates = self
             .closed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -381,20 +383,18 @@ pub(crate) async fn upgrade(
     else {
         return (StatusCode::BAD_REQUEST, "falta o cabeçalho X-Ctower-Env-Id").into_response();
     };
+    let env_version = VersionInfo::from_headers(&headers);
     let hub = st.hub.clone();
     let id = env_id.clone();
-    let r = tokio::task::spawn_blocking(move || -> Result<Option<String>, LedgerError> {
+    let r = tokio::task::spawn_blocking(move || -> Result<Gate, LedgerError> {
         let hub = hub.lock();
-        let Some(env) = hub.authenticate(&token)? else {
-            return Ok(None);
-        };
-        hub.bind_env_token(&env.name, &id)?;
-        Ok(Some(env.name))
+        gate(&hub, &token, &id, env_version)
     })
     .await;
     let name = match r {
-        Ok(Ok(Some(name))) => name,
-        Ok(Ok(None)) => return unauthorized(),
+        Ok(Ok(Gate::Admitted(name))) => name,
+        Ok(Ok(Gate::Denied)) => return unauthorized(),
+        Ok(Ok(Gate::Refused(refusal))) => return refused(refusal),
         Ok(Err(LedgerError::Conflict(m))) => return (StatusCode::FORBIDDEN, m).into_response(),
         Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -453,7 +453,7 @@ async fn serve(socket: WebSocket, st: HubState, env_id: String, name: String) {
 mod tests {
     use super::*;
     use crate::router;
-    use ct_ledger::{Hub, SharedHub};
+    use ct_hub_store::{Hub, SharedHub};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::Message as WsMsg;
@@ -495,6 +495,15 @@ mod tests {
         if let Some(e) = env_id {
             h.insert(ENV_ID_HEADER, e.parse().unwrap());
         }
+        // Versão igual à do hub por padrão; `extra` troca (testes do handshake).
+        h.insert(
+            ct_http::sync::PROTOCOL_HEADER,
+            ct_http::sync::SYNC_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        h.insert(
+            ct_http::sync::VERSION_HEADER,
+            ct_core::VERSION.parse().unwrap(),
+        );
         for (k, v) in extra {
             h.insert(*k, v.parse().unwrap());
         }
@@ -564,6 +573,32 @@ mod tests {
         );
         assert!(st.channels.is_online("env-a") && st.channels.is_online("env-b"));
         drop((a, b));
+    }
+
+    /// Handshake de versão (#227) no canal: versão diferente não abre o canal
+    /// (426 com as duas versões) e o hub grava a versão do ambiente; a igual
+    /// abre (coberta pelos outros testes, que mandam a versão deste build).
+    #[tokio::test]
+    async fn versao_diferente_nao_abre_o_canal() {
+        let st = state(ChannelOptions::default());
+        let tok = st
+            .hub
+            .lock()
+            .issue_env_token_with_env_id("a", "env-a")
+            .unwrap()
+            .token;
+        let url = serve_hub(&st).await;
+        let velha = [(ct_http::sync::VERSION_HEADER, "0.0.1")];
+        assert_eq!(
+            open(&url, Some(&tok), Some("env-a"), &velha).await.err(),
+            Some(426)
+        );
+        let contrato = [(ct_http::sync::PROTOCOL_HEADER, "0.9")];
+        assert_eq!(
+            open(&url, Some(&tok), Some("env-a"), &contrato).await.err(),
+            Some(426)
+        );
+        assert!(!st.channels.is_online("env-a"));
     }
 
     #[tokio::test]
@@ -677,7 +712,7 @@ mod tests {
         assert_eq!(v[0]["online"], true);
         assert_eq!(
             st.channels.states(),
-            ct_ledger::ChannelStates::from([("env-a".into(), None)])
+            ct_hub_store::ChannelStates::from([("env-a".into(), None)])
         );
         let v = crate::ws::tests::tests_call(&st, "hub.dashboard.get").await;
         assert_eq!(v["envs"][0]["online"], true);
