@@ -13,6 +13,7 @@ import { dayItems, Footer } from "./Footer";
 import { DENSITIES, useGridPrefs, type ControlView } from "./grid";
 import { Health } from "./Health";
 import { useHubCounters } from "./hubCounters";
+import { useHubRoom } from "./hubRoom";
 import { Infra } from "./Infra";
 import { SessionUsageList } from "./SessionUsageList";
 import { Sidebar } from "./Sidebar";
@@ -59,6 +60,7 @@ export function ControlRoom() {
   const discard = useDiscard();
   const projects = useProjectRows();
   const hubCounters = useHubCounters();
+  const room = useHubRoom();
   const [view, setView] = useState<ControlView | null>(null);
   const [grid, setGrid] = useGridPrefs();
   const items = attention({
@@ -71,6 +73,7 @@ export function ControlRoom() {
     permissions: t.permissions,
     infos: t.infos,
     now,
+    room,
     hub: t.hub.conn
       ? { status: t.hub.status, warnings: t.hub.health?.warnings ?? [], update: t.hub.update }
       : undefined,

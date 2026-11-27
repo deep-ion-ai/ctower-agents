@@ -11,6 +11,8 @@ const TONE: Record<AttentionItem["kind"], string> = {
   waiting: "attention",
   failed: "error",
   interrupted: "error",
+  ci_failed: "error",
+  pilot_blocked: "error",
   env_down: "neutral",
   docs: "attention",
   hub: "attention",

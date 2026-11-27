@@ -3,7 +3,7 @@
 import type { EnvStatus, EnvView } from "../api/types";
 import type { Dashboard, DashboardWorkItem, EnvInfo, GestorScope, PermissionRequest, Project, Session } from "../protocol/gen";
 import { scopeText } from "../project/templates";
-import type { HubUpdateStatus, Warning } from "../protocol/hub-gen";
+import type { ControlRoomProject, DigestProject, HubUpdateStatus, Warning } from "../protocol/hub-gen";
 import { isBackupWarning, type MaintenanceSection } from "../maintenance/sections";
 import { askKey, type Alert, type Ask } from "../state/tower";
 import { duration } from "../util/time";
@@ -26,6 +26,8 @@ export type AttentionKind =
   | "waiting"
   | "failed"
   | "interrupted"
+  | "ci_failed"
+  | "pilot_blocked"
   | "env_down"
   | "docs"
   | "hub"
@@ -73,6 +75,21 @@ export interface AttentionItem {
   discard?: DiscardTarget;
 }
 
+/**
+ * O que a Sala de controle lê do hub para os dois tipos de #360: os PRs/MRs
+ * abertos por projeto (`hub.control_room.projects`, #354), as issues que o
+ * piloto vem corrigindo (sessões vivas de `hub.autopilot.status`) e as
+ * bloqueadas do resumo mais recente (`hub.autopilot.digest`, #184).
+ */
+export interface HubRoom {
+  projects: ControlRoomProject[];
+  /** Issues com sessão viva do piloto: o CI delas ainda está sendo corrigido. */
+  pilotSessions: { owner: string; repo: string; gh_number: number }[];
+  /** `blocked` dos projetos do resumo; `at` = quando o resumo saiu. */
+  blocked: Pick<DigestProject, "owner" | "repo" | "name" | "blocked">[];
+  blockedAt: number;
+}
+
 export interface AttentionInput {
   envs: EnvView[];
   status: Record<string, EnvStatus>;
@@ -96,6 +113,8 @@ export interface AttentionInput {
    * pedido pendente, ao painel da sessão (Remote Control).
    */
   web?: boolean;
+  /** Leitura do hub (#360); sem hub, não há `room` e os dois tipos não aparecem. */
+  room?: HubRoom;
 }
 
 /** Texto padrão do pedido pendente, sem a mensagem do agente. */
@@ -105,6 +124,8 @@ const ORDER: AttentionKind[] = [
   "waiting",
   "failed",
   "interrupted",
+  "ci_failed",
+  "pilot_blocked",
   "env_down",
   "docs",
   "hub",
@@ -204,8 +225,66 @@ export function issueRef(
     : null;
 }
 
+const issueUrl = (p: ControlRoomProject | undefined, owner: string, repo: string, n: number) =>
+  p?.tracker === "github" && p.forge === "github" ? `https://github.com/${owner}/${repo}/issues/${n}` : null;
+
+/** Check vermelho e bloqueada pelo piloto (#360). */
+function hubRoomItems(room: HubRoom, dashboards: Record<string, Dashboard>): AttentionItem[] {
+  const out: AttentionItem[] = [];
+  const piloting = (owner: string, repo: string, n: number) =>
+    room.pilotSessions.some((s) => s.owner === owner && s.repo === repo && s.gh_number === n);
+  for (const p of room.projects) {
+    for (const pr of p.prs) {
+      if (pr.checks.state !== "failure") continue;
+      // O piloto ainda corrige: só pede a pessoa quando bloquear a issue.
+      if (piloting(p.owner, p.repo, pr.issue)) continue;
+      const names = pr.checks.failed_names.join(", ");
+      out.push({
+        key: `ci:${p.project_id}:${pr.number}`,
+        kind: "ci_failed",
+        env: "hub",
+        label: "Check vermelho",
+        title: `${p.name} #${pr.number}${pr.title ? ` ${pr.title}` : ""}`,
+        project: p.name,
+        item: `#${pr.number}${pr.title ? ` ${pr.title}` : ""}`,
+        detail: `${names || pr.checks.text || "Check"} falhou no último push`,
+        // O espelho não guarda desde quando o check está vermelho: vale a leitura que o mudou.
+        since: pr.checks.synced_at ?? pr.updated_at,
+        actionLabel: "Abrir o check",
+        action: { to: "url", url: pr.url },
+      });
+    }
+  }
+  for (const b of room.blocked) {
+    const proj = room.projects.find((p) => p.owner === b.owner && p.repo === b.repo);
+    for (const i of b.blocked) {
+      // O resumo é diário: o dashboard do ambiente diz se a issue já saiu de bloqueada.
+      const wi = Object.values(dashboards)
+        .flatMap((d) => d.projects)
+        .find((x) => x.project.gh_owner === b.owner && x.project.gh_repo === b.repo)
+        ?.work_items.find((w) => w.gh_number === i.number);
+      if (wi && wi.status !== "bloqueado") continue;
+      const url = issueUrl(proj, b.owner, b.repo, i.number);
+      out.push({
+        key: `blocked:${b.owner}/${b.repo}#${i.number}`,
+        kind: "pilot_blocked",
+        env: "hub",
+        label: "Bloqueada pelo piloto",
+        title: `${b.name} #${i.number}${i.title ? ` ${i.title}` : ""}`,
+        project: b.name,
+        item: `#${i.number}${i.title ? ` ${i.title}` : ""}`,
+        detail: i.reason ?? "Sem motivo registrado",
+        since: room.blockedAt,
+        actionLabel: url ? "Abrir a issue" : "Ver hub",
+        action: url ? { to: "url", url } : { to: "hub" },
+      });
+    }
+  }
+  return out;
+}
+
 export function attention(input: AttentionInput): AttentionItem[] {
-  const { envs, status, dashboards, alerts, now, hub, asks, permissions, web, infos } = input;
+  const { envs, status, dashboards, alerts, now, hub, asks, permissions, web, infos, room } = input;
   const out: AttentionItem[] = [];
 
   if (hub?.status && !hub.status.connected) {
@@ -400,6 +479,8 @@ export function attention(input: AttentionInput): AttentionItem[] {
       });
     }
   }
+
+  if (hub && room) out.push(...hubRoomItems(room, dashboards));
 
   for (const a of alerts) {
     const d = dashboards[a.env];
