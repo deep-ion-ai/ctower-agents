@@ -23,6 +23,7 @@ import {
 } from "../../hub/autonomy";
 import type { SettingsRun } from "./run";
 import { DesktopOnly } from "../../web/DesktopOnly";
+import { ExternalLink } from "../../shell/ExternalLink";
 
 /**
  * Modo autônomo do projeto (#181): ligado, as sessões autônomas rodam num
@@ -164,9 +165,9 @@ export function AutonomyCard({
                     {report.pr_url && (
                       <>
                         {" · "}
-                        <a href={report.pr_url} target="_blank" rel="noreferrer">
+                        <ExternalLink href={report.pr_url}>
                           PR rascunho
-                        </a>
+                        </ExternalLink>
                       </>
                     )}
                     {report.message && report.state !== "conflict" && <span className="hub-card-sub">{report.message}</span>}

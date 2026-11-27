@@ -415,14 +415,20 @@ pub fn next_delay(interval: Duration, failures: u32) -> Duration {
 }
 
 /// Sync logo após o boot e depois a cada `interval`, com backoff enquanto
-/// algum projeto falhar.
-pub fn spawn_periodic(sync: Arc<HubGithub>, interval: Duration) {
+/// algum projeto falhar. `after` recebe o resultado de cada ciclo bem
+/// lido (o motor da execução de épico acorda com PR novo ou mesclado, #341).
+pub fn spawn_periodic(
+    sync: Arc<HubGithub>,
+    interval: Duration,
+    after: impl Fn(&[ProjectSync]) + Send + 'static,
+) {
     tokio::spawn(async move {
         let mut failures = 0u32;
         loop {
             let s = Arc::clone(&sync);
             let ok = match tokio::task::spawn_blocking(move || s.sync_all()).await {
                 Ok(Ok(r)) => {
+                    after(&r);
                     let changes: usize = r.iter().map(|p| p.status_changes).sum();
                     if changes > 0 {
                         tracing::info!("github: {changes} work item(s) mudaram de status");

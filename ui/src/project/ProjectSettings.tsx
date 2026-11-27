@@ -33,6 +33,7 @@ import {
 } from "./sections";
 import { DesktopOnly } from "../web/DesktopOnly";
 import { releaseSupported } from "../hub/release";
+import { ExternalLink } from "../shell/ExternalLink";
 
 /**
  * Aba Configurações do projeto pela visão do hub (#17): o índice das seções
@@ -134,9 +135,9 @@ export function ProjectSettings({
             <div>
               <dt>Repositório e issues</dt>
               <dd>
-                <a className="mono" href={`https://github.com/${keyOf(pr.gh_owner, pr.gh_repo)}`} target="_blank" rel="noreferrer">
+                <ExternalLink className="mono" href={`https://github.com/${keyOf(pr.gh_owner, pr.gh_repo)}`}>
                   github.com/{keyOf(pr.gh_owner, pr.gh_repo)}
-                </a>
+                </ExternalLink>
                 <span className="hub-card-sub">O hub sincroniza o espelho das issues direto do GitHub, com o token dele.</span>
               </dd>
             </div>

@@ -95,7 +95,7 @@ impl Env {
         let cwd = self.worktree.display().to_string();
         let dir = self
             .path("claude/projects")
-            .join(ct_sessions::cleanup::claude_project_slug(&cwd));
+            .join(ct_agent::claude::transcript::project_slug(&cwd));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("u-7.jsonl"), "{}\n").unwrap();
         let project = l.list_all_projects().unwrap().remove(0);

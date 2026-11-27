@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use ct_http::sync::{
     ConfigReply, DecisionsQuery, DecisionsReply, PushRequest, PushResponse, VersionInfo,
-    VersionRefusal, ENV_ID_HEADER, ENV_PUBKEY_HEADER,
+    VersionRefusal, AGENT_TOKEN_REQUEST_HEADER, ENV_ID_HEADER, ENV_PUBKEY_HEADER,
 };
 use ct_http::{bearer_token, unauthorized};
 use ct_hub_store::{Hub, IngestResult, AGENT_TOKEN_PREFIX};
@@ -193,6 +193,10 @@ pub(crate) struct ConfigParams {
 /// porque a chave mudou desde a última entrega —, ela leva em `secrets` o
 /// conjunto completo das entradas globais e dos projetos atribuídos, cifrado
 /// só para essa chave. Sem o cabeçalho, nada de secrets.
+///
+/// Token de agente (#341): com `X-Ctower-Agent-Token-Request: 1` e a chave
+/// pública, o hub gera um token de agente novo para o ambiente (o nome do
+/// token de sync) e o manda em `agent_token`, cifrado só para essa chave.
 pub(crate) async fn config(
     State(st): State<HubState>,
     headers: HeaderMap,
@@ -231,6 +235,10 @@ pub(crate) async fn config(
             }
         },
     };
+    let wants_agent_token = headers
+        .get(AGENT_TOKEN_REQUEST_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim() == "1");
     let hub = st.hub.clone();
     let secrets = st.secrets.clone();
     let r = tokio::task::spawn_blocking(
@@ -238,13 +246,23 @@ pub(crate) async fn config(
             // O lock do hub sai antes do store: `HubSecrets::set` pega o store e
             // depois o hub. Lido depois do `config_rev`, o store está pelo menos
             // tão novo quanto ele.
-            let (config, deliver_to) = {
+            let (config, deliver_to, agent_token) = {
                 let hub = hub.lock();
-                match gate(&hub, &token, &env_id, env_version)? {
+                let name = match gate(&hub, &token, &env_id, env_version)? {
                     Gate::Denied => return Ok(None),
                     Gate::Refused(r) => return Ok(Some(Err(r))),
-                    Gate::Admitted(_) => {}
-                }
+                    Gate::Admitted(name) => name,
+                };
+                // Token de agente pedido (#341): um novo, só para a chave do
+                // ambiente; o anterior deixa de valer. Sem chave, nada.
+                let agent_token = match &pubkey {
+                    Some(pk) if wants_agent_token => {
+                        let t = hub.add_agent_token(&name)?;
+                        tracing::info!("token de agente entregue ao ambiente {name}");
+                        Some(ct_secrets::seal_agent_token(&t, pk)?)
+                    }
+                    _ => None,
+                };
                 let key = match &pubkey {
                     Some(pk) => {
                         hub.set_env_pubkey(&env_id, &pk.to_string())?;
@@ -258,7 +276,7 @@ pub(crate) async fn config(
                 let force = key.as_ref().is_some_and(|k| k.needs_delivery());
                 let config = hub.env_config_with(&env_id, q.since, q.epoch, force)?;
                 let deliver_to = pubkey.filter(|_| config.changed);
-                (config, deliver_to)
+                (config, deliver_to, agent_token)
             };
             let secrets = match deliver_to {
                 None => None,
@@ -269,7 +287,11 @@ pub(crate) async fn config(
                     Some(b64)
                 }
             };
-            Ok(Some(Ok(ConfigReply { config, secrets })))
+            Ok(Some(Ok(ConfigReply {
+                config,
+                secrets,
+                agent_token,
+            })))
         },
     )
     .await;

@@ -16,6 +16,7 @@ import { projectAt } from "../project/sections";
 import { isJira } from "./tracker";
 import { DocsBackupReadOnly } from "../maintenance/DocsBackup";
 import { logsTab } from "../maintenance/sections";
+import { ExternalLink } from "../shell/ExternalLink";
 
 /** Quantas propostas e sinais a Visão geral lista; o resto fica na seção. */
 export const OVERVIEW_LIMIT = 6;
@@ -208,9 +209,9 @@ function MorningDigestCard({ now, open }: { now: number; open(s: HubSection): vo
                 )}
                 <span className="hub-card-sub muted">
                   {p.pr_url ? (
-                    <a href={p.pr_url} target="_blank" rel="noreferrer">
+                    <ExternalLink href={p.pr_url}>
                       PR {p.branch} → {p.base}
-                    </a>
+                    </ExternalLink>
                   ) : (
                     `PR ${p.branch} → ${p.base} ainda sem link`
                   )}{" "}

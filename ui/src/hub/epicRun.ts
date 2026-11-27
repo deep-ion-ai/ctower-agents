@@ -9,6 +9,7 @@ import type {
   EpicPlan,
   EpicRun,
   EpicRunStatus,
+  HubEnv,
 } from "../protocol/hub-gen";
 
 /** Protocolo do hub com a execução de épico (`hub.epic_run.*`). */
@@ -211,6 +212,7 @@ export const ORIGIN_TEXT: Record<EpicDecisionOrigin, string> = {
   sem_progresso: "a sessão parou sem progresso",
   conflito_rebase: "o rebase na wip não andou",
   issue_alterada: "a sub-issue mudou depois do plano",
+  plano_falhou: "a sessão de plano não gravou o plano",
 };
 
 /** Texto e explicação de cada resposta. */
@@ -227,6 +229,10 @@ export const OPTION_TEXT: Record<string, { label: string; hint: string }> = {
   mais_tentativas: { label: "Mais tentativas", hint: "Zera as tentativas de correção do CI e volta a acompanhar o PR." },
   reiniciar: { label: "Reiniciar a sessão", hint: "Encerra a sessão atual; a sub-issue começa de novo." },
   manter: { label: "Manter o plano", hint: "Aceita a mudança da sub-issue e segue com o plano aprovado." },
+  tentar_de_novo: {
+    label: "Tentar de novo",
+    hint: "Abre outra sessão de plano. Corrija antes o motivo; para desistir, cancele a execução.",
+  },
 };
 
 /** Sub-issues mescladas / total no plano. */
@@ -249,3 +255,49 @@ export function closesLines(run: Pick<EpicRun, "epic">, nodes: EpicNode[]): stri
 /** "14:05" no fuso local. */
 export const clock = (ms: number) =>
   new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+/**
+ * O ambiente da execução como o hub o vê: o motor só inicia, envia e retoma
+ * sessões com o canal aberto. `since`: último contato, fora do ar.
+ */
+export function envStatusOf(
+  env: Pick<HubEnv, "name" | "online" | "last_seen_at"> | undefined,
+  envId: string,
+): { name: string; known: boolean; online: boolean; text: string; tone: Tone; since: number | null } {
+  if (!env) return { name: envId, known: false, online: false, text: "Desconhecido no hub", tone: "error", since: null };
+  if (env.online) return { name: env.name, known: true, online: true, text: "Conectado", tone: "running", since: null };
+  return { name: env.name, known: true, online: false, text: "Fora do ar", tone: "error", since: env.last_seen_at };
+}
+
+const LIVE: EpicNodeState[] = ["em_execucao", "em_pr", "assumida", "estacionada"];
+
+/**
+ * A sub-issue ocupa uma vaga e as áreas dela, pela regra do motor: viva, ou
+ * bloqueada ainda com sessão ou PR (a sessão segue viva, o PR mexe nas
+ * áreas).
+ */
+export function occupies(n: Pick<EpicNode, "state" | "session_id" | "pr">): boolean {
+  return LIVE.includes(n.state) || (n.state === "bloqueada" && (n.session_id !== null || n.pr !== null));
+}
+
+/**
+ * Por que a sub-issue pronta ainda não começou, pela regra do motor: áreas
+ * em comum com uma sub-issue viva (não rodam juntas) ou o paralelismo
+ * cheio. `null` = nada a esperar (começa no próximo ciclo).
+ */
+export function readyWait(plan: EpicPlan, nodes: EpicNode[], number: number, maxParallel: number): string | null {
+  const live = nodes.filter(occupies).map((n) => n.number);
+  const shared = (overlaps(plan).get(number)?.with ?? []).filter((n) => live.includes(n));
+  if (shared.length > 0) return `aguarda ${shared.map((n) => `#${n}`).join(", ")} (áreas em comum)`;
+  if (live.length >= maxParallel) return "aguarda vaga no paralelismo";
+  return null;
+}
+
+/** Nome do projeto da execução no cadastro do hub; sem ele, `owner/repo`. */
+export function projectNameOf(
+  projects: { project: { gh_owner: string; gh_repo: string; name: string } }[],
+  run: Pick<EpicRun, "owner" | "repo">,
+): string {
+  const p = projects.find((x) => x.project.gh_owner === run.owner && x.project.gh_repo === run.repo)?.project;
+  return p?.name || `${run.owner}/${run.repo}`;
+}

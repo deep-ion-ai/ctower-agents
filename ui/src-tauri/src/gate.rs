@@ -77,6 +77,7 @@ pub const HUB_METHODS: &[&str] = &[
     "hub.epic_run.pause",
     "hub.epic_run.replan",
     "hub.epic_run.resume",
+    "hub.epic_run.set_code_review",
     "hub.epic_run.set_node",
     "hub.epic_run.set_parallel",
     "hub.epic_run.start",

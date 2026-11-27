@@ -33,6 +33,7 @@ import {
 } from "./autopilot";
 import { errText } from "./calls";
 import { hubTab } from "./sections";
+import { ExternalLink } from "../shell/ExternalLink";
 
 const WINDOW_TEXT: Record<string, string> = { five_hour: "janela de 5h", seven_day: "semanal" };
 const localNow = (ms: number) => localTime(ms, -new Date(ms).getTimezoneOffset());
@@ -395,9 +396,9 @@ function ProjectQueue({
           {wip.pr_url && (
             <>
               {" · "}
-              <a href={wip.pr_url} target="_blank" rel="noreferrer">
+              <ExternalLink href={wip.pr_url}>
                 PR {wip.branch} → {wip.base}
-              </a>{" "}
+              </ExternalLink>{" "}
               ({ciText(wip.ci)})
             </>
           )}

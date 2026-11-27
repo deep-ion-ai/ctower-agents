@@ -43,6 +43,7 @@ export type { DocsStatus } from "./DocsStatus";
 export type { EnvAccount } from "./EnvAccount";
 export type { EnvConnection } from "./EnvConnection";
 export type { EnvInfo } from "./EnvInfo";
+export type { EpicBranch } from "./EpicBranch";
 export type { Event } from "./Event";
 export type { ForgeConfig } from "./ForgeConfig";
 export type { ForgeKind } from "./ForgeKind";

@@ -266,7 +266,15 @@ pub struct EpicSessionInfo {
     /// Ociosa desde (vale com `state` = `idle`).
     pub idle_since: i64,
     pub cwd: String,
+    /// Último evento de estado da sessão (os hooks do agente).
+    pub last_event_at: i64,
 }
+
+/// Resposta do pedido que o próprio motor encerrou: a sub-issue foi
+/// mesclada (#341). Não é uma das opções do pedido.
+pub const DECISION_RESOLVED: &str = "resolvido";
+/// Quem responde o pedido encerrado pelo motor.
+pub const DECISION_BY_ENGINE: &str = "motor";
 
 /// Um pedido de decisão ao desenvolvedor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -589,6 +597,19 @@ impl Hub {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// As execuções ativas e as encerradas (concluídas ou canceladas) desde
+    /// `since` (ms), das mais novas para as mais antigas (#341): o índice
+    /// com o histórico.
+    pub fn epic_runs_with_history(&self, since: i64) -> Result<Vec<EpicRun>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {RUN_COLS} FROM {RUN_FROM}
+             WHERE r.{ACTIVE} OR r.ended_at >= ?1
+             ORDER BY r.id DESC"
+        ))?;
+        let rows = stmt.query_map([since], row_to_run)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Sub-issues presas a uma execução ativa do projeto (#303): os nós da
     /// execução, as do plano mais recente e as filhas do épico no espelho.
     /// O piloto automático não as inicia.
@@ -657,6 +678,15 @@ impl Hub {
              WHERE id = ?1",
             params![id, to.as_str(), reason, resume_at, now, to.is_terminal()],
         )?;
+        // Concluída ou cancelada, nada mais a decidir: os pedidos pendentes
+        // fecham com o status da execução, pelo motor (#341).
+        if to.is_terminal() {
+            self.conn.execute(
+                "UPDATE epic_decision SET answer = ?2, answered_at = ?3, answered_by = ?4
+                 WHERE run_id = ?1 AND answer IS NULL",
+                params![id, to.as_str(), now, DECISION_BY_ENGINE],
+            )?;
+        }
         tx.commit()?;
         self.require_epic_run(id)
     }
@@ -745,6 +775,31 @@ impl Hub {
         self.conn.execute(
             "UPDATE epic_run SET max_parallel = ?2, updated_at = ?3 WHERE id = ?1",
             params![id, n, now],
+        )?;
+        self.require_epic_run(id)
+    }
+
+    /// Liga ou desliga o `/code-review` da integração depois da aprovação
+    /// (#341). Só antes de a sessão de integração começar: ela recebe a
+    /// instrução no prompt de início.
+    pub fn set_epic_run_code_review(&self, id: i64, on: bool, now: i64) -> Result<EpicRun> {
+        let run = self.require_epic_run(id)?;
+        if run.status.is_terminal() {
+            return Err(LedgerError::Conflict(format!(
+                "a execução já terminou ({})",
+                run.status
+            )));
+        }
+        if run.integration_session.is_some() {
+            return Err(LedgerError::Conflict(
+                "a sessão de integração já começou com a escolha anterior; peça o /code-review \
+                 nela pelo terminal"
+                    .into(),
+            ));
+        }
+        self.conn.execute(
+            "UPDATE epic_run SET code_review = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, on, now],
         )?;
         self.require_epic_run(id)
     }
@@ -1379,7 +1434,7 @@ impl Hub {
                                     AND e.type = 'session_state'
                                     AND json_extract(e.payload, '$.to') = 'idle'),
                                  s.last_event_at),
-                        s.cwd
+                        s.cwd, s.last_event_at
                  FROM session s WHERE s.id = ?1",
                 [id],
                 |r| {
@@ -1387,6 +1442,7 @@ impl Hub {
                         state: enum_col(r, 0)?,
                         idle_since: r.get(1)?,
                         cwd: r.get(2)?,
+                        last_event_at: r.get(3)?,
                     })
                 },
             )
@@ -1401,6 +1457,42 @@ impl Hub {
             [session_id],
             |r| r.get(0),
         )?)
+    }
+
+    /// O último pedido do agente ao humano na sessão (evento `needs_human`
+    /// do hook `Notification`: permissão, pergunta): hora e mensagem (#341).
+    pub fn last_needs_human(&self, session_id: &str) -> Result<Option<(i64, String)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT ts, coalesce(json_extract(payload, '$.message'), '') FROM event
+                 WHERE session_id = ?1 AND type = 'needs_human' ORDER BY ts DESC, id DESC LIMIT 1",
+                [session_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    /// A última vez que a sessão passou a `running` (evento `session_state`
+    /// do ambiente): o agente pegou um texto e começou a trabalhar (#341).
+    pub fn last_session_running(&self, session_id: &str) -> Result<Option<i64>> {
+        Ok(self.conn.query_row(
+            "SELECT max(ts) FROM event WHERE session_id = ?1 AND type = 'session_state'
+               AND json_extract(payload, '$.to') = 'running'",
+            [session_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Devolvida ao motor (#341): o pedido de merge já enviado é esquecido,
+    /// para o motor pedir de novo (o anterior pode não ter chegado ao agente).
+    /// As tentativas e o pedido de correção ficam.
+    pub fn forget_close_merge(&self, work_item_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE autopilot_close SET merge_head = NULL WHERE work_item_id = ?1",
+            [work_item_id],
+        )?;
+        Ok(())
     }
 
     /// O último evento `kind` do nó na execução (ms).
@@ -1515,6 +1607,42 @@ impl Hub {
         )?;
         tx.commit()?;
         self.require_epic_decision(id)
+    }
+
+    /// Encerra os pedidos sem resposta das sub-issues já mescladas na `wip`
+    /// (#341): o merge resolve o que eles pediam (CI esgotado, sem
+    /// progresso, conflito de rebase...), e nenhuma opção deles serve mais.
+    /// Resposta [`DECISION_RESOLVED`], por [`DECISION_BY_ENGINE`]. Devolve os
+    /// pedidos encerrados.
+    pub fn resolve_merged_epic_decisions(
+        &self,
+        run_id: i64,
+        now: i64,
+    ) -> Result<Vec<EpicDecision>> {
+        let tx = self.tx()?;
+        let ids: Vec<i64> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT d.id FROM epic_decision d
+                 JOIN epic_node n ON n.run_id = d.run_id AND n.number = d.number
+                 WHERE d.run_id = ?1 AND d.answer IS NULL AND n.state = ?2
+                 ORDER BY d.id",
+            )?;
+            let rows = stmt.query_map(params![run_id, EpicNodeState::Mesclada.as_str()], |r| {
+                r.get(0)
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for id in &ids {
+            self.conn.execute(
+                "UPDATE epic_decision SET answer = ?2, answered_at = ?3, answered_by = ?4
+                 WHERE id = ?1 AND answer IS NULL",
+                params![id, DECISION_RESOLVED, now, DECISION_BY_ENGINE],
+            )?;
+        }
+        tx.commit()?;
+        ids.into_iter()
+            .map(|id| self.require_epic_decision(id))
+            .collect()
     }
 
     // --- eventos ---------------------------------------------------------
@@ -2161,6 +2289,94 @@ mod tests {
 
     /// Migração 46 num `hub.db` da 45: o projeto e as arestas do piloto
     /// ficam, e o épico do projeto aceita uma execução com plano.
+    /// #341: a migração 49 fecha os pedidos pendentes que ficaram em
+    /// execuções já encerradas antes da correção.
+    #[test]
+    fn migracao_49_fecha_pedidos_de_execucoes_encerradas() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("hub.db");
+        let (ativa, encerrada) = {
+            let hub = Hub::open(&db).unwrap();
+            let pid = hub
+                .add_project(&crate::NewHubProject {
+                    owner: "acme".into(),
+                    repo: "acme-web".into(),
+                    name: "acme-web".into(),
+                    base_branch: "develop".into(),
+                    protected_branches: vec![],
+                })
+                .unwrap()
+                .project
+                .id;
+            let a = hub.create_epic_run(&new_run(pid, 10, "env-a"), 1).unwrap();
+            let e = hub.create_epic_run(&new_run(pid, 20, "env-a"), 1).unwrap();
+            for r in [&a, &e] {
+                hub.add_epic_decision(r.id, None, EpicDecisionOrigin::PlanoFalhou, "x", 2)
+                    .unwrap();
+            }
+            // Como antes da correção: cancelada, com o pedido ainda pendente.
+            hub.conn
+                .execute_batch(&format!(
+                    "UPDATE epic_run SET status = 'cancelado', ended_at = 5 WHERE id = {};
+                     UPDATE epic_decision SET answer = NULL, answered_by = NULL, answered_at = NULL;
+                     PRAGMA user_version = {};",
+                    e.id,
+                    crate::HUB_MIGRATIONS.len() - 1
+                ))
+                .unwrap();
+            (a.id, e.id)
+        };
+        let hub = Hub::open(&db).unwrap();
+        assert_eq!(hub.epic_decisions(ativa, true).unwrap().len(), 1);
+        assert!(hub.epic_decisions(encerrada, true).unwrap().is_empty());
+        let d = &hub.epic_decisions(encerrada, false).unwrap()[0];
+        assert_eq!(
+            (d.answer.as_deref(), d.answered_by.as_deref(), d.answered_at),
+            (Some("cancelado"), Some("motor"), Some(5))
+        );
+    }
+
+    /// #341: cancelada (ou concluída), a execução fecha os pedidos
+    /// pendentes, pelo motor; os já respondidos ficam como estão.
+    #[test]
+    fn execucao_encerrada_fecha_os_pedidos_pendentes() {
+        let (hub, pid) = hub();
+        let run = hub.create_epic_run(&new_run(pid, 10, "env-a"), 1).unwrap();
+        let p = hub
+            .add_epic_decision(
+                run.id,
+                None,
+                EpicDecisionOrigin::PlanoFalhou,
+                "sem plano",
+                2,
+            )
+            .unwrap();
+        let r = hub
+            .add_epic_decision(
+                run.id,
+                Some(11),
+                EpicDecisionOrigin::IssueAlterada,
+                "mudou",
+                2,
+            )
+            .unwrap();
+        hub.answer_epic_decision(r.id, "manter", "fulano", 3)
+            .unwrap();
+        hub.set_epic_run_status(run.id, EpicRunStatus::Cancelado, None, None, 4)
+            .unwrap();
+        assert!(hub.epic_decisions(run.id, true).unwrap().is_empty());
+        let p = hub.epic_decision(p.id).unwrap().unwrap();
+        assert_eq!(
+            (p.answer.as_deref(), p.answered_by.as_deref(), p.answered_at),
+            (Some("cancelado"), Some(DECISION_BY_ENGINE), Some(4))
+        );
+        let r = hub.epic_decision(r.id).unwrap().unwrap();
+        assert_eq!(
+            (r.answer.as_deref(), r.answered_by.as_deref()),
+            (Some("manter"), Some("fulano"))
+        );
+    }
+
     #[test]
     fn migracao_46_sobe_um_banco_da_45() {
         let d = tempfile::tempdir().unwrap();

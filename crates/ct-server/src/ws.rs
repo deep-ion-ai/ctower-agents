@@ -350,6 +350,16 @@ impl Conn {
         self.st.hub_sender.is_some()
     }
 
+    /// Há token de agente, ou o hub acabou de entregar um (#341).
+    async fn agent_token_ready(&self) -> bool {
+        let Some(sender) = self.st.hub_sender.clone() else {
+            return false;
+        };
+        tokio::task::spawn_blocking(move || sender.ensure_agent_token().is_some())
+            .await
+            .unwrap_or(false)
+    }
+
     async fn call(&mut self, method: &str, p: &Value) -> RpcResult {
         // Só despacha o que está no registro `ct_http::methods` com escopo
         // da UI (#228): fora dele, nem chega ao `match`.
@@ -757,6 +767,15 @@ impl Conn {
                 if analysis && epic_plan.is_some() {
                     return Err(invalid("analysis e epic_plan não vão juntos"));
                 }
+                // A sessão de plano grava o plano com o token de agente: sem
+                // ele (nem entregue pelo hub agora), não adianta começar
+                // (#341).
+                if epic_plan.is_some() && !self.agent_token_ready().await {
+                    return Err((
+                        ct_http::sync::AGENT_TOKEN_MISSING,
+                        crate::hub_sync::NO_AGENT_TOKEN.into(),
+                    ));
+                }
                 let v = blocking(&sessions, move |s| {
                     if let Some(epic) = epic_plan {
                         s.start_epic_plan(project_id, epic, &prompt, size, &agent)
@@ -784,7 +803,7 @@ impl Conn {
                 if !self.linked() {
                     return Err((-32000, crate::hub_sync::NOT_LINKED.into()));
                 }
-                if crate::hub_sync::agent_token(&sessions.config().dirs).is_none() {
+                if !self.agent_token_ready().await {
                     return Err((-32000, crate::hub_sync::NO_AGENT_TOKEN.into()));
                 }
                 let scope: GestorScope =
@@ -1168,7 +1187,7 @@ impl Conn {
                     .ok_or_else(|| invalid("sessão não está rodando"))?;
                 pty.write(data.as_bytes())
                     .map_err(|e| (-32000, e.to_string()))?;
-                note_human_input(&sessions, id);
+                note_human_input(&sessions, id, data.as_bytes());
                 Ok(json!({}))
             }
             "session.resize" => {
@@ -1183,6 +1202,22 @@ impl Conn {
             }
             // Remoção do worktree da sub-issue da execução de épico já
             // mesclada na `wip` (#298), pedida pelo hub.
+            // Branch de integração do épico para a execução (#341): a do
+            // work item ou a do padrão, publicada no `origin` e registrada.
+            "epic_run.prepare" => {
+                let project_id = project_param(&sessions, self.linked(), p).await?;
+                let epic = i64_param(p, "epic")?;
+                let title = p
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let v = blocking(&sessions, move |s| {
+                    s.prepare_epic_branch(project_id, epic, &title)
+                })
+                .await?;
+                Ok(json!(v))
+            }
             "worktree.remove" => {
                 let project_id = project_param(&sessions, self.linked(), p).await?;
                 let n = i64_param(p, "gh_number")?;
@@ -1289,17 +1324,21 @@ impl Conn {
         let id = id.to_string();
         if let Some(pty) = self.st.sessions.terminal(&id) {
             let _ = pty.write(data);
-            note_human_input(&self.st.sessions, &id);
+            note_human_input(&self.st.sessions, &id, data);
         }
     }
 }
 
 /// Teclado da UI numa sessão (#301): a da execução de épico fica assumida
 /// no hub. Em segundo plano, sem atrasar a digitação.
-fn note_human_input(sessions: &Sessions, id: &str) {
-    let (s, id) = (sessions.clone(), id.to_string());
+fn note_human_input(sessions: &Sessions, id: &str, data: &[u8]) {
+    // Resposta automática do terminal: nem sai para o bloqueante (#341).
+    if ct_sessions::epic_run::is_terminal_reply(data) {
+        return;
+    }
+    let (s, id, data) = (sessions.clone(), id.to_string(), data.to_vec());
     tokio::task::spawn_blocking(move || {
-        if let Err(e) = s.note_human_input(&id, ct_core::now_ms()) {
+        if let Err(e) = s.note_human_input(&id, &data, ct_core::now_ms()) {
             tracing::debug!("entrada humana na sessão {id}: {e}");
         }
     });
@@ -3124,6 +3163,20 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("set-agent-token"),
+            "{v}"
+        );
+        // A sessão de plano do épico também não começa sem token (o hub fora
+        // do ar não entregou um): erro próprio, que o motor do hub trata
+        // (#341).
+        let v = ui
+            .call(
+                "session.start_project",
+                json!({ "project_id": srv.env.project_id, "prompt": "planeje", "epic_plan": 10 }),
+            )
+            .await;
+        assert_eq!(
+            v["error"]["code"],
+            ct_http::sync::AGENT_TOKEN_MISSING,
             "{v}"
         );
         std::fs::write(srv.env.cfg.dirs.hub_agent_token_file(), "cta_x\n").unwrap();

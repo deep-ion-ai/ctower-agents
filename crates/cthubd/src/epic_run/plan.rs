@@ -17,7 +17,8 @@
 //! - **Início:** só com a execução em `executando`, o ambiente online, a
 //!   conta sem janela esgotada, vaga em `max_parallel` (nós vivos:
 //!   [`EpicNodeState::is_live`]) e nenhuma área sobreposta à de outro nó
-//!   vivo ([`areas_overlap`]; nó sem áreas não conflita). Na ordem do plano,
+//!   vivo ([`areas_overlap`]; nó sem áreas não conflita; o `bloqueada` com
+//!   sessão ou PR conta como vivo). Na ordem do plano,
 //!   com o modelo e o esforço do nó. Nó com pedido de decisão pendente não
 //!   inicia.
 //! - **Fechamento:** o do #184 com a base `wip/<épico>`: CI falho pede
@@ -69,6 +70,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 /// Folga depois do `resets_at` antes de retomar: o relógio do hub e o da
 /// conta podem divergir.
 pub const RESUME_MARGIN_MS: i64 = 5 * 60_000;
+/// Sessão rodando parada num pedido ao humano (permissão, pergunta) por
+/// este tempo vira pedido de decisão (#341).
+pub const WAITING_HUMAN_MS: i64 = 5 * 60_000;
+/// Retomadas automáticas de sessão interrompida por nó, por hora (#341):
+/// além disso, a sessão que cai de novo vira pedido de decisão.
+pub const REVIVE_MAX_PER_HOUR: usize = 3;
 /// Nó iniciado cuja sessão o hub ainda não conhece conta como iniciando
 /// por este tempo; depois, sem progresso.
 pub const START_GRACE_MS: i64 = 10 * 60_000;
@@ -118,6 +125,11 @@ pub struct SessionSnap {
     pub idle_since: Option<i64>,
     /// Última entrada humana pelo teclado da UI (#301).
     pub human_input_at: Option<i64>,
+    /// O agente pediu algo ao humano (permissão, pergunta) e nada aconteceu
+    /// na sessão depois: desde quando e a mensagem (#341).
+    pub waiting: Option<(i64, String)>,
+    /// A última vez que a sessão passou a `running` (#341).
+    pub running_at: Option<i64>,
 }
 
 /// O que o hub sabe de uma sub-issue do plano.
@@ -174,6 +186,8 @@ pub struct Snapshot {
     /// disso não assume de novo.
     pub handback_at: BTreeMap<i64, i64>,
     pub integration: IntegrationSnap,
+    /// Retomadas automáticas de cada nó na última hora (#341).
+    pub revivals: BTreeMap<i64, usize>,
 }
 
 /// Uma ação do ciclo. `message` vai para os eventos da execução.
@@ -202,6 +216,14 @@ pub enum Action {
         title: String,
         model: String,
         effort: Option<String>,
+        message: String,
+    },
+    /// Retoma (`session.resume`) a sessão interrompida do nó (#341): o
+    /// ambiente reiniciou ou o processo caiu. O runner troca a sessão do nó
+    /// pela nova; a retomada recusada vira pedido `sem_progresso`.
+    Revive {
+        number: i64,
+        session_id: String,
         message: String,
     },
     /// Volta o nó estacionado ao estado de antes e retoma a sessão.
@@ -522,8 +544,13 @@ pub fn decide(s: &Snapshot) -> Outcome {
                     }
                 }
             }
+            // A bloqueada com sessão ou PR ainda ocupa a vaga e as áreas: a
+            // sessão continua viva e o PR aberto mexe nelas (#341).
             EpicNodeState::Assumida | EpicNodeState::Bloqueada => {
-                if node.state == EpicNodeState::Assumida {
+                if node.state == EpicNodeState::Assumida
+                    || node.session_id.is_some()
+                    || node.pr.is_some()
+                {
                     live.insert(number);
                 }
             }
@@ -858,6 +885,29 @@ fn node_step(
     let open = item.and_then(|i| i.open.as_ref());
     let session_live = sess.is_some_and(|(_, x)| x.state.is_live());
 
+    // Sessão interrompida (ambiente reiniciado, processo derrubado): retoma
+    // pela própria conversa, sem pedir decisão, até o limite (#341). Com o
+    // ambiente fora do ar, espera.
+    if let Some((id, x)) = sess {
+        if x.state == SessionState::Interrupted {
+            if !s.env_online {
+                return out;
+            }
+            let n = s.revivals.get(&number).copied().unwrap_or(0);
+            if n < REVIVE_MAX_PER_HOUR {
+                out.push(Action::Revive {
+                    number,
+                    session_id: id.to_string(),
+                    message: format!(
+                        "{slug}: a sessão foi interrompida (ambiente reiniciado ou processo \
+                         derrubado); retomada {} de {REVIVE_MAX_PER_HOUR} na hora",
+                        n + 1
+                    ),
+                });
+                return out;
+            }
+        }
+    }
     // Sessão sumida (ou que não apareceu depois do início).
     if !session_live {
         let known = sess.is_some();
@@ -884,7 +934,64 @@ fn node_step(
         }
         return out;
     }
-    let (session_id, _) = sess.expect("viva");
+    let (session_id, x) = sess.expect("viva");
+
+    // Parada esperando o humano (pedido de permissão, pergunta do agente): o
+    // motor não tem como responder, e a sessão segue `running` (#341).
+    if let Some((at, message)) = &x.waiting {
+        let answered = x.human_input_at.is_some_and(|h| h >= *at);
+        if !answered
+            && now - at >= WAITING_HUMAN_MS
+            && !s
+                .pending
+                .contains(&(Some(number), EpicDecisionOrigin::SemProgresso))
+        {
+            let what = if message.is_empty() {
+                "pediu uma resposta".to_string()
+            } else {
+                format!("pediu uma resposta (\"{message}\")")
+            };
+            out.push(Action::Ask {
+                number: Some(number),
+                origin: EpicDecisionOrigin::SemProgresso,
+                block: true,
+                text: format!(
+                    "{slug}: a sessão {what} e está parada esperando você. Assuma para responder \
+                     no terminal (depois devolva ao motor), reinicie a sessão ou replaneje."
+                ),
+            });
+            return out;
+        }
+    }
+
+    // O texto do motor (correção, merge, rebase) não chegou ao agente: a
+    // sessão segue ociosa, sem trabalhar desde o envio (um diálogo do próprio
+    // Claude Code na tela, por exemplo) (#341).
+    if let Some(sent) = open.and_then(|c| c.state.last_sent_at) {
+        let took =
+            x.running_at.is_some_and(|r| r >= sent) || x.human_input_at.is_some_and(|h| h >= sent);
+        if x.state == SessionState::Idle
+            && !took
+            && now - sent >= WAITING_HUMAN_MS
+            && !s
+                .pending
+                .contains(&(Some(number), EpicDecisionOrigin::SemProgresso))
+        {
+            out.push(Action::Ask {
+                number: Some(number),
+                origin: EpicDecisionOrigin::SemProgresso,
+                block: true,
+                text: format!(
+                    "{slug}: o motor enviou um pedido à sessão e ela não reagiu (segue ociosa \
+                     desde o envio). Algo na tela pode estar segurando o texto, como um diálogo \
+                     do Claude Code. Assuma para ver e fechar o que estiver na tela, depois \
+                     devolva ao motor (o pedido de merge sai de novo), reinicie a sessão ou \
+                     replaneje."
+                ),
+            });
+            return out;
+        }
+    }
 
     // PR aberto na `wip`.
     let Some(c) = open else {

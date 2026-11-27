@@ -10,6 +10,7 @@ import type { QuarantineDiscarded, QuarantineGroup } from "../protocol/hub-gen";
 import { SideContent, SideGroup, SidePanel, SideRow } from "../shell/SidePanel";
 import { useShell } from "../shell/Shell";
 import { Icon } from "../shell/icons";
+import { plural } from "../shell/summary";
 import { shortcutLabel } from "../shell/layout";
 import { HubEnvs } from "./HubEnvs";
 import { HubConnections } from "./ConnectionsPanel";
@@ -23,6 +24,8 @@ import { HubDevices } from "./HubDevices";
 import { HubAutopilot } from "./HubAutopilot";
 import { HubAutopilotPanel } from "./HubAutopilotPanel";
 import { EpicRuns } from "./EpicRuns";
+import { useEpicRuns } from "./useEpicRuns";
+import { RUN_STATUS_TEXT, projectNameOf, runTone, type Tone } from "./epicRun";
 import { hubSectionOnWeb } from "../web/mode";
 import { errText } from "./calls";
 import { settingsTab } from "../settings/sections";
@@ -30,6 +33,7 @@ import { splitProjectKey } from "../util/hub";
 import {
   HUB_GROUPS,
   HUB_SECTION_LABEL,
+  epicRunTab,
   hubCounts,
   hubGroupOf,
   hubTab,
@@ -136,13 +140,20 @@ export function HubScreen({ screen }: { screen: Extract<Screen, { name: "hub" }>
   return (
     <main className="hub-screen" aria-labelledby="hub-h1">
       <SideContent>
-        <HubSide section={section} counts={counts} now={now} />
+        <HubSide section={section} run={screen.run} counts={counts} now={now} />
       </SideContent>
       <nav className="hub-crumbs" aria-label="Trilha">
         <ol>
           <li>Hub</li>
           <li>{hubGroupOf(section)}</li>
-          <li aria-current="page">{HUB_SECTION_LABEL[section]}</li>
+          {section === "epic-runs" && screen.run !== undefined ? (
+            <>
+              <li>{HUB_SECTION_LABEL[section]}</li>
+              <li aria-current="page">Execução {screen.run}</li>
+            </>
+          ) : (
+            <li aria-current="page">{HUB_SECTION_LABEL[section]}</li>
+          )}
         </ol>
       </nav>
       {/* A Visão geral mostra o título; nas outras seções o painel já tem o seu. */}
@@ -214,14 +225,18 @@ function Section({
 /** Painel lateral do Hub: nome e conexão, seções por grupo com contador e, no rodapé, os dados do hub. */
 function HubSide({
   section,
+  run,
   counts,
   now,
 }: {
   section: HubSection;
+  /** Execução de épico da aba aberta. */
+  run?: number;
   counts: Partial<Record<HubSection, SectionCount>>;
   now: number;
 }) {
   const { hub, web } = useTower();
+  const epicRuns = useEpicRuns();
   const nav = useNav();
   const shell = useShell();
   const info = hub.info;
@@ -277,12 +292,12 @@ function HubSide({
             // Na web o grupo Segurança continua no índice (#26): a linha avisa que é
             // do desktop e abre a explicação (`hidden` em HubScreen), sem chamar o hub.
             const desktopOnly = web && !hubSectionOnWeb(s);
-            return (
+            const row = (
               <SideRow
                 key={s}
                 label={HUB_SECTION_LABEL[s]}
                 sub={desktopOnly ? "Só no app desktop" : undefined}
-                selected={s === section}
+                selected={s === section && !(s === "epic-runs" && run !== undefined)}
                 description={c?.text}
                 trailing={
                   c && (
@@ -294,12 +309,39 @@ function HubSide({
                 onClick={() => nav.openTab(hubTab(s))}
               />
             );
+            if (s !== "epic-runs" || !epicRuns.runs?.length) return row;
+            // Cada execução ativa é um item, que abre a própria aba (#341).
+            return [
+              row,
+              ...epicRuns.runs.map(({ run: r, title, pending }) => (
+                <SideRow
+                  key={`epic-run-${r.id}`}
+                  depth={1}
+                  label={`#${r.epic}${title ? ` ${title}` : ""}`}
+                  ariaLabel={`Épico #${r.epic}${title ? ` ${title}` : ""}`}
+                  sub={`${pending > 0 ? `${plural(pending, "decisão pendente", "decisões pendentes")} · ` : ""}${RUN_STATUS_TEXT[r.status]} · ${projectNameOf(hub.projects, r)}`}
+                  // Pedido de decisão pendente pede atenção, como no card (#341).
+                  tone={pending > 0 ? "attention" : SIDE_TONE[runTone(r.status)]}
+                  selected={section === "epic-runs" && run === r.id}
+                  onClick={() => nav.openTab(epicRunTab(r))}
+                />
+              )),
+            ];
           })}
         </SideGroup>
       ))}
     </SidePanel>
   );
 }
+
+/** Ponto de estado da linha da execução na árvore (`SideRow`). */
+const SIDE_TONE: Record<Tone, string> = {
+  attention: "attention",
+  running: "running",
+  done: "done",
+  error: "error",
+  idle: "neutral",
+};
 
 function Fact({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (

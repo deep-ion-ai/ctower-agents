@@ -4,6 +4,7 @@ import type { EpicNode } from "./EpicNode";
 import type { EpicPlan } from "./EpicPlan";
 import type { EpicRun } from "./EpicRun";
 import type { EpicRunEvent } from "./EpicRunEvent";
+import type { PrRow } from "./PrRow";
 
 /**
  * Resposta de `hub.epic_run.status`.
@@ -32,4 +33,9 @@ titles: { [key in number]?: string },
 /**
  * Último ciclo do motor (ms).
  */
-last_tick_at: number | null, };
+last_tick_at: number | null, 
+/**
+ * O PR do épico (`wip` → base), do espelho: o aberto ou, sem ele, o
+ * mais recente (#341). `None` = ainda não aberto.
+ */
+epic_pr: PrRow | null, };

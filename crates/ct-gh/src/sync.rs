@@ -63,14 +63,21 @@ pub struct SyncInput {
 impl SyncInput {
     pub fn load(l: &Ledger, project_id: i64, now_ms: i64) -> ct_ledger::Result<Self> {
         let project = l.get_project(project_id)?;
+        let open_prs = l.open_prs(project_id)?;
+        // O concluído com PR ainda aberto no espelho continua: a issue fechou
+        // antes de o PR ser relido (#341).
+        let open: BTreeSet<i64> = open_prs.iter().map(|p| p.work_item_id).collect();
         let work_items: Vec<WorkItem> = l
             .list_work_items(project_id)?
             .into_iter()
-            .filter(|w| w.branch.is_some() && w.status != WorkItemStatus::Concluido)
+            .filter(|w| {
+                w.branch.is_some()
+                    && (w.status != WorkItemStatus::Concluido || open.contains(&w.id))
+            })
             .collect();
         let mirror = Mirror {
             issues: l.list_issues(project_id)?,
-            open_prs: l.open_prs(project_id)?,
+            open_prs,
             checks: l.list_pr_checks(project_id)?,
         };
         Self::build(project, work_items, mirror, now_ms, |k| l.etag(k))
@@ -1258,6 +1265,46 @@ mod tests {
     }
 
     /// Com erro na rodada, a versão não é gravada: o ciclo seguinte relê.
+    /// #341: o work item concluído (a issue fechou pelo `Closes` do merge)
+    /// com o PR ainda aberto no espelho continua no sync, para o PR ser
+    /// relido; sem PR aberto, sai.
+    #[test]
+    fn concluido_com_pr_aberto_no_espelho_segue_no_sync() {
+        let e = Env::new();
+        let mut ids = vec![];
+        for n in [7, 9] {
+            let w =
+                e.l.ensure_work_item(e.project, n, WorkItemKind::Issue)
+                    .unwrap();
+            e.l.set_work_item_branch(w.id, &format!("feat/{n}-x"), "/wt")
+                .unwrap();
+            ids.push(w.id);
+        }
+        e.l.apply_github(&GithubSnapshot {
+            project_id: e.project,
+            prs: vec![PrRow {
+                number: 70,
+                work_item_id: ids[0],
+                head: "feat/7-x".into(),
+                base: "develop".into(),
+                state: PrState::Open,
+                url: "u".into(),
+                updated_at: 1,
+                head_sha: None,
+            }],
+            synced_at: now(),
+            ..GithubSnapshot::default()
+        })
+        .unwrap();
+        for id in &ids {
+            e.l.set_work_item_status(*id, WorkItemStatus::Concluido, "issue fechada")
+                .unwrap();
+        }
+        let input = SyncInput::load(&e.l, e.project, now()).unwrap();
+        let ws: Vec<i64> = input.work_items.iter().map(|w| w.gh_number).collect();
+        assert_eq!(ws, vec![7]);
+    }
+
     #[test]
     fn versao_do_espelho_so_grava_com_a_rodada_inteira() {
         let e = Env::new();

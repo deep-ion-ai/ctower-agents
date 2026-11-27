@@ -169,9 +169,8 @@ export function GestorLauncher({ project }: { project?: { owner: string; repo: s
           </p>
           {eligible.length === 0 ? (
             <p role="status" className="banner">
-              Nenhum ambiente conectado tem o token de agente do hub. No hub, rode{" "}
-              <span className="mono">cthubd agent-token &lt;ambiente&gt;</span> e grave no ambiente com{" "}
-              <span className="mono">ctower hub set-agent-token</span>.
+              Nenhum ambiente conectado tem o token de agente do hub ainda. O hub o entrega no próximo envio da
+              configuração; para adiantar, rode <span className="mono">ctower hub sync</span> no ambiente.
             </p>
           ) : (
             <>

@@ -66,7 +66,8 @@ pub struct DaemonConfig {
     /// `<data_dir>/gestor`. Fixa, para a retomada achar o mesmo `cwd`.
     pub gestor_dir: String,
     pub scrollback_bytes: usize,
-    /// Pré-aceita no `~/.claude.json` a confiança nas pastas das sessões (issue #16).
+    /// Pré-aceita no arquivo de configuração do agente a confiança nas pastas
+    /// das sessões (issue #16; `AgentRuntime::prepare_workspace`).
     pub pre_trust_worktrees: bool,
     /// Intervalo do sync com o GitHub em segundos; `0` desliga o laço
     /// (o `sync.now` da UI continua funcionando).
@@ -142,9 +143,9 @@ pub struct CleanupConfig {
     /// sessão viva nunca é encerrada sem ação explícita, e a etapa
     /// "sessões" fica bloqueada até alguém encerrá-la.
     pub end_idle_sessions_hours: u64,
-    /// Apaga `~/.claude/projects/<slug-do-worktree>` (transcripts do Claude
-    /// Code) depois que o worktree sai, e só se houver backup em
-    /// `<data>/transcripts` de todos os transcripts da pasta (#285).
+    /// Apaga as pastas de transcript do agente do worktree
+    /// (`AgentRuntime::transcript_dirs_for`) depois que ele sai, e só se
+    /// houver backup em `<data>/transcripts` de todos os transcripts da pasta (#285).
     pub remove_agent_transcripts: bool,
     /// Dias sem atividade antes de apagar só o `target/` de um worktree que
     /// fica (#265): o de work item ainda em andamento e o de concluído cujo

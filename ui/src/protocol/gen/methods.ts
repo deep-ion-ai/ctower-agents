@@ -16,6 +16,7 @@ import type { DocsFiles } from "./DocsFiles";
 import type { EnvAccount } from "./EnvAccount";
 import type { EnvConnection } from "./EnvConnection";
 import type { EnvInfo } from "./EnvInfo";
+import type { EpicBranch } from "./EpicBranch";
 import type { Event } from "./Event";
 import type { GestorScope } from "./GestorScope";
 import type { HubSyncResult } from "./HubSyncResult";
@@ -99,6 +100,7 @@ export const METHOD_SCOPES = {
     "session.resize",
     "cleanup.status",
     "worktree.remove",
+    "epic_run.prepare",
     "cleanup.plan",
     "cleanup.run",
     "logs.tail",
@@ -140,6 +142,7 @@ export const METHOD_SCOPES = {
     "session.archive",
     "session.kill",
     "worktree.remove",
+    "epic_run.prepare",
     "logs.tail",
     "hub.config.changed",
     "hub.sync.now",
@@ -177,6 +180,7 @@ export const METHOD_SCOPES = {
     "session.archive",
     "session.kill",
     "worktree.remove",
+    "epic_run.prepare",
     "logs.tail",
     "hub.config.changed",
     "hub.sync.now",
@@ -241,6 +245,7 @@ export interface DaemonMethods {
   "session.resize": { params: { session_id: string; cols: number; rows: number }; result: {} };
   "cleanup.status": { params: null; result: CleanupStatus };
   "worktree.remove": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; gh_number: number }; result: WorktreeRemoval };
+  "epic_run.prepare": { params: { project_id?: number | null; owner?: string | null; repo?: string | null; epic: number; title?: string | null }; result: EpicBranch };
   "cleanup.plan": { params: null; result: CleanupPlan };
   "cleanup.run": { params: { work_item_id?: number | null; step?: string | null; dry_run?: boolean | null } | null; result: CleanupRun };
   "logs.tail": { params: { level?: string | null; q?: string | null; since?: number | null; until?: number | null; limit?: number | null; before?: number | null }; result: unknown };

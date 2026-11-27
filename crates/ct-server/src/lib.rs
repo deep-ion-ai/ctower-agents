@@ -104,7 +104,12 @@ pub(crate) use ct_http::{bearer_ok, unauthorized};
 /// sub-issue como assumida.
 /// 2.28 (#300): a ferramenta MCP `epic_report_blocker`, só na sessão de
 /// sub-issue da execução de épico.
-pub const PROTOCOL_VERSION: &str = "2.28";
+/// 2.29 (#341): `epic_run.prepare { owner, repo, epic, title }` (também pelo
+/// canal do hub), que publica e registra a branch de integração do épico; o
+/// erro `AGENT_TOKEN_MISSING` (-32054) do `session.start_project` com
+/// `epic_plan` sem token de agente; e o pedido do token de agente ao hub no
+/// `GET /sync/config`.
+pub const PROTOCOL_VERSION: &str = "2.29";
 
 #[derive(Clone)]
 pub struct AppState {

@@ -104,6 +104,9 @@ impl EpicDecisionOrigin {
             SemProgresso => &["assumir", "reiniciar", "replanejar"],
             ConflitoRebase => &["assumir", "replanejar"],
             IssueAlterada => &["manter", "replanejar"],
+            // A sessão de plano não gravou o plano (#341): cancelar é a
+            // ação da execução.
+            PlanoFalhou => &["tentar_de_novo"],
         }
     }
 }
@@ -236,8 +239,15 @@ mod tests {
             EpicDecisionOrigin::PlanoErrado.options(),
             &["aguardar", "replanejar"]
         );
+        // Sem plano não há o que replanejar (#341).
+        assert_eq!(
+            EpicDecisionOrigin::PlanoFalhou.options(),
+            &["tentar_de_novo"]
+        );
         for o in EpicDecisionOrigin::ALL {
-            assert!(o.options().contains(&"replanejar"));
+            if *o != EpicDecisionOrigin::PlanoFalhou {
+                assert!(o.options().contains(&"replanejar"));
+            }
         }
     }
 

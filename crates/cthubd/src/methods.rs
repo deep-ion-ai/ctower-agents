@@ -294,7 +294,7 @@ pub const METHODS: &[MethodSpec] = &[
     // Execução de épico (#298): disparo, plano, controle e decisões.
     MethodSpec {
         name: "hub.epic_run.list",
-        params: "{ owner?: string | null; repo?: string | null; epic?: number | null } | null",
+        params: "{ owner?: string | null; repo?: string | null; epic?: number | null; ended_since?: number | null } | null",
         result: "EpicRun[]",
         scopes: UI_WEB,
     },
@@ -323,6 +323,7 @@ pub const METHODS: &[MethodSpec] = &[
     MethodSpec { name: "hub.epic_run.resume", params: "{ run_id: number }", result: "EpicRun", scopes: UI_WEB },
     MethodSpec { name: "hub.epic_run.cancel", params: "{ run_id: number }", result: "EpicRun", scopes: UI_WEB },
     MethodSpec { name: "hub.epic_run.set_parallel", params: "{ run_id: number; max_parallel: number }", result: "EpicRun", scopes: UI_WEB },
+    MethodSpec { name: "hub.epic_run.set_code_review", params: "{ run_id: number; code_review: boolean }", result: "EpicRun", scopes: UI_WEB },
     MethodSpec { name: "hub.epic_run.decide", params: "{ decision_id: number; answer: string; blocker?: number | null }", result: "EpicDecision", scopes: UI_WEB },
     MethodSpec {
         name: "hub.epic_run.set_node",

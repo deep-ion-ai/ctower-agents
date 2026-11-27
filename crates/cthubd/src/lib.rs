@@ -114,7 +114,12 @@ use tokio::sync::broadcast;
 /// approve|replan|pause|interrupt|resume|cancel|set_parallel|decide|handback`
 /// (também na web), o push `hub.epic_run.changed` e o skip `epic_run` do
 /// piloto (#303).
-pub const PROTOCOL_VERSION: &str = "1.26";
+/// 1.27 (#341): `ended_since` no `hub.epic_run.list` (as encerradas desde
+/// então, para o histórico), `hub.epic_run.set_code_review` (liga ou
+/// desliga o `/code-review` da integração depois da aprovação), `epic_pr`
+/// no `hub.epic_run.status`, a origem `plano_falhou` dos pedidos e os
+/// eventos `wip_ready`, `revived` e `plan_revived`.
+pub const PROTOCOL_VERSION: &str = "1.27";
 
 #[derive(Clone)]
 pub struct HubState {
