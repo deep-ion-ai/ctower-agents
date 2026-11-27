@@ -15,7 +15,7 @@ use super::prompt::{self, PlanIssue, PlanVars};
 use crate::autopilot::plan::{exhausted, Closing, ResumeVia, SendKind};
 use crate::autopilot::runner::{env_protocol, EnvPort};
 use crate::HubState;
-use ct_core::{EpicNodeState, EpicRunStatus, PrState};
+use ct_core::{EpicDecisionOrigin, EpicNodeState, EpicRunStatus, PrState};
 use ct_hub_store::{EpicNodePatch, EpicRun, EpicRunEvent, Hub, SharedHub};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -31,9 +31,17 @@ pub const PLAN_PROTOCOL: (u32, u32) = (2, 25);
 /// Protocolo do ambiente com `epic_run` no `session.start` e o
 /// `worktree.remove` (#298).
 pub const RUN_PROTOCOL: (u32, u32) = (2, 26);
+/// Protocolo do ambiente com `epic_run.prepare` e a recusa
+/// `AGENT_TOKEN_MISSING` da sessão de plano (#341).
+pub const PREPARE_PROTOCOL: (u32, u32) = (2, 29);
 /// Sessão de plano iniciada que o hub ainda não conhece conta como viva por
 /// este tempo.
 const PLAN_START_GRACE_MS: i64 = 10 * 60_000;
+
+/// Texto do `session.resume` da sessão de plano interrompida (#341).
+const PLAN_RESUME_PROMPT: &str =
+    "Sessão de plano do Control Tower: o ambiente reiniciou. Continue o \
+plano de onde parou e grave-o com epic_set_plan, sem perguntar.";
 
 /// Texto do `session.resume` da sessão estacionada que encerrou.
 const RESUME_PROMPT: &str =
@@ -279,12 +287,19 @@ pub(crate) fn snapshot(
     for id in nodes.iter().filter_map(|n| n.session_id.clone()) {
         if let Some(i) = h.epic_session_info(&id)? {
             let human_input_at = h.last_human_input(&id)?;
+            let running_at = h.last_session_running(&id)?;
+            // O pedido ao humano vale se nada veio depois dele (#341).
+            let waiting = h.last_needs_human(&id)?.filter(|(at, _)| {
+                i.state == ct_core::SessionState::Running && *at >= i.last_event_at - 1_000
+            });
             sessions.insert(
                 id,
                 SessionSnap {
                     state: i.state,
                     idle_since: (i.state == ct_core::SessionState::Idle).then_some(i.idle_since),
                     human_input_at,
+                    waiting,
+                    running_at,
                 },
             );
         }
@@ -312,6 +327,8 @@ pub(crate) fn snapshot(
                 state: i.state,
                 idle_since: (i.state == ct_core::SessionState::Idle).then_some(i.idle_since),
                 human_input_at: None,
+                waiting: None,
+                running_at: None,
             });
         }
     }
@@ -339,7 +356,17 @@ pub(crate) fn snapshot(
             handback_at.insert(n.number, at);
         }
     }
+    // Retomadas automáticas da última hora, por nó (#341).
+    let mut revivals = BTreeMap::new();
+    for e in h.epic_run_events_tail(run.id, 500)? {
+        if e.kind == "revived" && now - e.at < 3_600_000 {
+            if let Some(n) = e.number {
+                *revivals.entry(n).or_insert(0) += 1;
+            }
+        }
+    }
     Ok(Some(Snapshot {
+        revivals,
         integration,
         handback_at,
         now,
@@ -437,25 +464,43 @@ async fn tick_run(
         }
         Ok(())
     };
-    let Some(wip) = ctx.wip.clone() else {
-        rec(
-            EpicRunEvent {
-                reason: Some("sem_wip".into()),
-                ..ev(
-                    run,
-                    now,
-                    "refused",
-                    None,
-                    format!(
-                        "o épico {} ainda não tem branch de integração no hub: inicie uma \
-                         sessão do épico uma vez",
-                        slug(run.epic)
-                    ),
-                )
-            },
-            &mut out,
-        )?;
-        return Ok(out);
+    // Pedidos de sub-issues já mescladas: o merge os resolveu (#341).
+    {
+        let h = hub.lock();
+        for d in h
+            .resolve_merged_epic_decisions(run.id, now)
+            .map_err(ledger_err)?
+        {
+            if record(
+                &h,
+                EpicRunEvent {
+                    reason: Some(d.origin.as_str().into()),
+                    ..ev(
+                        run,
+                        now,
+                        "decided",
+                        d.number,
+                        format!(
+                            "pedido {} ({}) encerrado pelo motor: a sub-issue foi mesclada",
+                            d.id, d.origin
+                        ),
+                    )
+                },
+            )
+            .map_err(ledger_err)?
+            {
+                out.changed += 1;
+            }
+        }
+    }
+    // Sem a `wip` no hub, o ambiente a prepara (#341): publica no `origin`
+    // e registra no work item do épico, sem sessão.
+    let wip = match ctx.wip.clone() {
+        Some(w) => w,
+        None => match prepare_wip(hub, port, ctx, protocol, now, &mut out).await? {
+            Some(w) => w,
+            None => return Ok(out),
+        },
     };
 
     // Sessão de plano.
@@ -649,6 +694,67 @@ async fn tick_run(
                     )?,
                 }
             }
+            Action::Revive {
+                number,
+                session_id,
+                message,
+            } => {
+                let params = json!({ "session_id": session_id, "prompt": RESUME_PROMPT });
+                match port.call(env.clone(), "session.resume", params).await {
+                    Err((c, _)) if transient(c) => {}
+                    Ok(v) => {
+                        set_node_session(hub, run, number, &v, now)?;
+                        rec(ev(run, now, "revived", Some(number), message), &mut out)?;
+                    }
+                    // Sem como retomar (transcript perdido, worktree sumido):
+                    // o desenvolvedor decide.
+                    Err((_, m)) => {
+                        let text = format!(
+                            "{}: a sessão foi interrompida e a retomada falhou ({m}). Assumir, \
+                             reiniciar a sessão ou replanejar?",
+                            slug(number)
+                        );
+                        let h = hub.lock();
+                        let fresh = !h
+                            .epic_decisions(run.id, true)
+                            .map_err(ledger_err)?
+                            .iter()
+                            .any(|d| d.number == Some(number));
+                        h.add_epic_decision(
+                            run.id,
+                            Some(number),
+                            EpicDecisionOrigin::SemProgresso,
+                            &text,
+                            now,
+                        )
+                        .map_err(ledger_err)?;
+                        if h.epic_node(run.id, number)
+                            .map_err(ledger_err)?
+                            .is_some_and(|x| x.state.can_transition(EpicNodeState::Bloqueada))
+                        {
+                            h.set_epic_node_state(
+                                run.id,
+                                number,
+                                EpicNodeState::Bloqueada,
+                                Some(EpicDecisionOrigin::SemProgresso.as_str()),
+                                now,
+                            )
+                            .map_err(ledger_err)?;
+                        }
+                        drop(h);
+                        if fresh {
+                            out.decisions += 1;
+                            rec(
+                                EpicRunEvent {
+                                    reason: Some(EpicDecisionOrigin::SemProgresso.as_str().into()),
+                                    ..ev(run, now, "decision_requested", Some(number), text)
+                                },
+                                &mut out,
+                            )?;
+                        }
+                    }
+                }
+            }
             Action::Unpark {
                 number,
                 session_id,
@@ -666,7 +772,12 @@ async fn tick_run(
                 };
                 match port.call(env.clone(), method, params).await {
                     Err((c, _)) if transient(c) => continue,
-                    Ok(_) => {}
+                    // A retomada é outra sessão (#341): o nó segue nela.
+                    Ok(v) => {
+                        if via == ResumeVia::Resume {
+                            set_node_session(hub, run, number, &v, now)?;
+                        }
+                    }
                     Err((_, m)) => {
                         rec(
                             ev(
@@ -1020,6 +1131,183 @@ async fn tick_run(
     Ok(out)
 }
 
+/// O nó passa à sessão devolvida pelo `session.resume` (outro id; a antiga
+/// fica arquivada no ambiente).
+fn set_node_session(
+    hub: &SharedHub,
+    run: &EpicRun,
+    number: i64,
+    v: &Value,
+    now: i64,
+) -> Result<(), String> {
+    let Some(id) = v.get("id").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    hub.lock()
+        .update_epic_node(
+            run.id,
+            number,
+            &EpicNodePatch {
+                session_id: Some(Some(id.to_string())),
+                ..Default::default()
+            },
+            now,
+        )
+        .map_err(ledger_err)?;
+    Ok(())
+}
+
+/// Sessões de plano seguidas que terminam sem plano antes do pedido de
+/// decisão `plano_falhou` (#341).
+pub const PLAN_MAX_ATTEMPTS: usize = 2;
+
+/// Sessões de plano iniciadas desde o último marco da execução (o disparo,
+/// uma decisão respondida, o plano gravado, a aprovação ou o pedido de
+/// replanejamento): as tentativas seguidas sem plano.
+fn plan_attempts(h: &Hub, run_id: i64) -> ct_ledger::Result<usize> {
+    let mut n = 0;
+    for e in h.epic_run_events_tail(run_id, 200)?.iter().rev() {
+        match e.kind.as_str() {
+            "plan_started" => n += 1,
+            "created" | "decided" | "plan_saved" | "plan_approved" | "replan_requested" => break,
+            _ => {}
+        }
+    }
+    Ok(n)
+}
+
+/// Abre o pedido `plano_falhou` (da execução, sem sub-issue) com o evento.
+fn ask_plan_decision(
+    h: &Hub,
+    run: &EpicRun,
+    now: i64,
+    text: String,
+    out: &mut TickResult,
+) -> ct_ledger::Result<()> {
+    let pending = h
+        .epic_decisions(run.id, true)?
+        .iter()
+        .any(|d| d.origin == EpicDecisionOrigin::PlanoFalhou);
+    if pending {
+        return Ok(());
+    }
+    let d = h.add_epic_decision(run.id, None, EpicDecisionOrigin::PlanoFalhou, &text, now)?;
+    h.add_epic_run_event(&EpicRunEvent {
+        reason: Some(EpicDecisionOrigin::PlanoFalhou.as_str().into()),
+        ..ev(
+            run,
+            now,
+            "decision_requested",
+            None,
+            format!("pedido {}: {text}", d.id),
+        )
+    })?;
+    out.changed += 1;
+    out.decisions += 1;
+    Ok(())
+}
+
+/// Pede ao ambiente da execução a branch de integração do épico (#341):
+/// `epic_run.prepare` a publica no `origin` (a do clone sobe; sem nenhuma,
+/// nasce da base) e a registra no work item do épico. O hub grava a mesma no
+/// espelho para seguir no mesmo ciclo. `None` = ainda sem `wip` (ambiente
+/// fora do ar ou desatualizado, ou a preparação falhou, com o evento).
+async fn prepare_wip(
+    hub: &SharedHub,
+    port: &dyn EnvPort,
+    ctx: &RunCtx,
+    protocol: Option<(u32, u32)>,
+    now: i64,
+    out: &mut TickResult,
+) -> Result<Option<String>, String> {
+    let run = &ctx.run;
+    if !port.online(&run.env_id) {
+        return Ok(None);
+    }
+    let refused = |message: String, out: &mut TickResult| -> Result<(), String> {
+        if record(
+            &hub.lock(),
+            EpicRunEvent {
+                reason: Some("sem_wip".into()),
+                ..ev(run, now, "refused", None, message)
+            },
+        )
+        .map_err(ledger_err)?
+        {
+            out.changed += 1;
+        }
+        Ok(())
+    };
+    if !protocol.is_some_and(|p| p >= PREPARE_PROTOCOL) {
+        refused(
+            format!(
+                "o ambiente da execução é anterior ao protocolo {}.{}: atualize-o para o motor \
+                 criar a branch de integração do épico",
+                PREPARE_PROTOCOL.0, PREPARE_PROTOCOL.1
+            ),
+            out,
+        )?;
+        return Ok(None);
+    }
+    let params = json!({
+        "owner": run.owner,
+        "repo": run.repo,
+        "epic": run.epic,
+        "title": ctx.epic_title,
+    });
+    match port
+        .call(run.env_id.clone(), "epic_run.prepare", params)
+        .await
+    {
+        Ok(v) => {
+            let Some(branch) = v
+                .get("branch")
+                .and_then(Value::as_str)
+                .filter(|b| !b.is_empty())
+            else {
+                refused(
+                    "o ambiente não devolveu a branch de integração do épico".into(),
+                    out,
+                )?;
+                return Ok(None);
+            };
+            let how = match v.get("published").and_then(Value::as_str) {
+                Some("base") => format!("criada a partir da {}", ctx.project.base_branch),
+                Some("local") => "enviada do clone do ambiente".into(),
+                _ => "já estava no origin".into(),
+            };
+            let h = hub.lock();
+            let wip = h
+                .set_work_item_branch_if_missing(&run.owner, &run.repo, run.epic, branch)
+                .map_err(ledger_err)?
+                .unwrap_or_else(|| branch.to_string());
+            if record(
+                &h,
+                ev(
+                    run,
+                    now,
+                    "wip_ready",
+                    None,
+                    format!("branch de integração {wip} pronta ({how})"),
+                ),
+            )
+            .map_err(ledger_err)?
+            {
+                out.changed += 1;
+            }
+            Ok(Some(wip))
+        }
+        Err((c, _)) if transient(c) => Ok(None),
+        Err((_, m)) => {
+            refused(
+                format!("a preparação da branch de integração do épico falhou: {m}"),
+                out,
+            )?;
+            Ok(None)
+        }
+    }
+}
+
 /// Inicia (ou reinicia) a sessão de plano da execução em `planejando` ou
 /// `replanejando`.
 async fn plan_session(
@@ -1032,6 +1320,17 @@ async fn plan_session(
     out: &mut TickResult,
 ) -> Result<(), String> {
     let run = &ctx.run;
+    // Pedido `plano_falhou` pendente (#341): nenhuma sessão nova até a
+    // resposta.
+    if hub
+        .lock()
+        .epic_decisions(run.id, true)
+        .map_err(ledger_err)?
+        .iter()
+        .any(|d| d.origin == EpicDecisionOrigin::PlanoFalhou)
+    {
+        return Ok(());
+    }
     if let Some(id) = &run.plan_session {
         let info = hub.lock().epic_session_info(id).map_err(ledger_err)?;
         let alive = match &info {
@@ -1041,9 +1340,80 @@ async fn plan_session(
         if alive {
             return Ok(());
         }
+        // Interrompida (ambiente reiniciado): retoma a mesma conversa, sem
+        // contar tentativa, até o limite da hora (#341). Fora do ar, espera.
+        if info
+            .as_ref()
+            .is_some_and(|i| i.state == ct_core::SessionState::Interrupted)
+        {
+            if !port.online(&run.env_id) {
+                return Ok(());
+            }
+            let revived = hub
+                .lock()
+                .epic_run_events_tail(run.id, 200)
+                .map_err(ledger_err)?
+                .iter()
+                .filter(|e| e.kind == "plan_revived" && now - e.at < 3_600_000)
+                .count();
+            if revived < super::plan::REVIVE_MAX_PER_HOUR {
+                let params = json!({ "session_id": id, "prompt": PLAN_RESUME_PROMPT });
+                match port
+                    .call(run.env_id.clone(), "session.resume", params)
+                    .await
+                {
+                    Err((c, _)) if transient(c) => return Ok(()),
+                    Ok(v) => {
+                        if let Some(new) = v.get("id").and_then(Value::as_str) {
+                            let h = hub.lock();
+                            h.set_epic_run_plan_session(run.id, Some(new), now)
+                                .map_err(ledger_err)?;
+                            if record(
+                                &h,
+                                ev(
+                                    run,
+                                    now,
+                                    "plan_revived",
+                                    None,
+                                    format!(
+                                        "a sessão de plano foi interrompida (ambiente \
+                                         reiniciado); retomada {} de {}",
+                                        revived + 1,
+                                        super::plan::REVIVE_MAX_PER_HOUR
+                                    ),
+                                ),
+                            )
+                            .map_err(ledger_err)?
+                            {
+                                out.changed += 1;
+                            }
+                            return Ok(());
+                        }
+                    }
+                    // Sem como retomar: segue como sessão encerrada.
+                    Err(_) => {}
+                }
+            }
+        }
         let h = hub.lock();
         h.set_epic_run_plan_session(run.id, None, now)
             .map_err(ledger_err)?;
+        let attempts = plan_attempts(&h, run.id).map_err(ledger_err)?;
+        if attempts >= PLAN_MAX_ATTEMPTS {
+            ask_plan_decision(
+                &h,
+                run,
+                now,
+                format!(
+                    "A sessão de plano terminou {attempts} vez(es) seguidas sem gravar o plano. \
+                     Veja a última sessão de plano para saber o motivo e corrija-o antes de \
+                     tentar de novo; para desistir, cancele a execução."
+                ),
+                out,
+            )
+            .map_err(ledger_err)?;
+            return Ok(());
+        }
         if record(
             &h,
             ev(
@@ -1051,7 +1421,10 @@ async fn plan_session(
                 now,
                 "plan_failed",
                 None,
-                "a sessão de plano terminou sem gravar o plano: o hub inicia outra".into(),
+                format!(
+                    "a sessão de plano terminou sem gravar o plano (tentativa {attempts} de \
+                     {PLAN_MAX_ATTEMPTS}): o hub inicia outra"
+                ),
             ),
         )
         .map_err(ledger_err)?
@@ -1193,6 +1566,18 @@ async fn plan_session(
             }
         }
         Err((c, _)) if transient(c) => {}
+        // Sem token de agente, a sessão não teria como gravar o plano: o
+        // desenvolvedor decide, em vez de o hub tentar a cada ciclo (#341).
+        Err((c, m)) if c == ct_http::sync::AGENT_TOKEN_MISSING => {
+            ask_plan_decision(
+                &hub.lock(),
+                run,
+                now,
+                format!("A sessão de plano não começou: {m}"),
+                out,
+            )
+            .map_err(ledger_err)?;
+        }
         Err((_, m)) => {
             if record(
                 &hub.lock(),
@@ -1230,6 +1615,14 @@ mod tests {
         calls: Mutex<Vec<(String, Value)>>,
         /// Resposta do `worktree.remove`.
         removal: Option<Value>,
+        /// Protocolo do `env.info` (padrão: o atual).
+        protocol: Option<&'static str>,
+        /// Erro do `session.start_project`.
+        plan_error: Option<(i64, String)>,
+        /// Ambiente fora do ar (sem canal).
+        offline: std::sync::atomic::AtomicBool,
+        /// Erro do `session.resume`.
+        resume_error: Mutex<Option<(i64, String)>>,
     }
 
     impl FakePort {
@@ -1253,7 +1646,7 @@ mod tests {
 
     impl EnvPort for FakePort {
         fn online(&self, _: &str) -> bool {
-            true
+            !self.offline.load(Ordering::Relaxed)
         }
         fn call(
             &self,
@@ -1268,10 +1661,34 @@ mod tests {
                     .unwrap()
                     .push((method.to_string(), params.clone()));
             }
+            if method == "session.start_project" {
+                if let Some(e) = self.plan_error.clone() {
+                    return Box::pin(async move { Err(e) });
+                }
+            }
+            if method == "session.resume" {
+                if let Some(e) = self.resume_error.lock().unwrap().clone() {
+                    return Box::pin(async move { Err(e) });
+                }
+            }
+            let plans = self
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(m, _)| m == "session.start_project")
+                .count();
             let r = match method {
-                "env.info" => json!({ "protocol": "2.26" }),
+                "env.info" => json!({ "protocol": self.protocol.unwrap_or("2.29") }),
                 "session.start" => json!({ "id": format!("s-{n}"), "cwd": format!("/wt/{n}") }),
-                "session.start_project" => json!({ "id": "s-plano" }),
+                "session.start_project" => json!({ "id": format!("s-plano-{plans}") }),
+                "session.resume" => {
+                    let old = params["session_id"].as_str().unwrap_or_default();
+                    json!({ "id": format!("{old}-r") })
+                }
+                "epic_run.prepare" => {
+                    json!({ "branch": "wip/10-acme-10", "published": "base" })
+                }
                 "worktree.remove" => self.removal.clone().unwrap_or(json!({ "removed": true })),
                 _ => json!({}),
             };
@@ -1394,7 +1811,7 @@ mod tests {
             "{p}"
         );
         let r = hub.lock().epic_run(run.id).unwrap().unwrap();
-        assert_eq!(r.plan_session.as_deref(), Some("s-plano"));
+        assert_eq!(r.plan_session.as_deref(), Some("s-plano-1"));
         // Viva (ainda desconhecida, na folga): não inicia outra.
         tick(&hub, &port, T + 60_000).await.unwrap();
         assert_eq!(
@@ -1422,7 +1839,7 @@ mod tests {
         tick(&hub, &port, T + 120_000).await.unwrap();
         assert_eq!(
             port.call_of("session.kill").unwrap()["session_id"],
-            "s-plano"
+            "s-plano-1"
         );
         let r = hub.lock().epic_run(run.id).unwrap().unwrap();
         assert_eq!(r.plan_session, None);
@@ -1430,6 +1847,165 @@ mod tests {
             kinds(&hub.lock(), run.id),
             vec!["plan_started", "plan_session_ended"]
         );
+    }
+
+    fn starts(port: &FakePort) -> usize {
+        port.methods()
+            .iter()
+            .filter(|m| *m == "session.start_project")
+            .count()
+    }
+
+    /// #341: sem a `wip` no hub, o ambiente a prepara e o plano começa no
+    /// mesmo ciclo, com ela no prompt.
+    #[tokio::test]
+    async fn sem_wip_o_ambiente_prepara_e_o_plano_comeca() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        hub.lock()
+            .conn()
+            .execute(
+                "UPDATE work_item SET branch = NULL WHERE gh_number = 10",
+                [],
+            )
+            .unwrap();
+        let run = hub.lock().create_epic_run(&new_run(pid), T).unwrap();
+        let port = FakePort::default();
+        tick(&hub, &port, T).await.unwrap();
+        let p = port.call_of("epic_run.prepare").unwrap();
+        assert_eq!(
+            (p["epic"].as_i64(), p["title"].as_str()),
+            (Some(10), Some("ACME-10"))
+        );
+        assert_eq!(
+            hub.lock()
+                .find_work_item("acme", "acme-web", 10)
+                .unwrap()
+                .unwrap()
+                .branch
+                .as_deref(),
+            Some("wip/10-acme-10")
+        );
+        let p = port.call_of("session.start_project").unwrap();
+        assert!(
+            p["prompt"].as_str().unwrap().contains("wip/10-acme-10"),
+            "{p}"
+        );
+        assert_eq!(
+            kinds(&hub.lock(), run.id),
+            vec!["wip_ready", "plan_started"]
+        );
+        // Com a `wip` no espelho, não pede de novo.
+        tick(&hub, &port, T + 60_000).await.unwrap();
+        assert_eq!(
+            port.methods()
+                .iter()
+                .filter(|m| *m == "epic_run.prepare")
+                .count(),
+            1
+        );
+    }
+
+    /// #341: ambiente anterior ao `epic_run.prepare` = recusa com o motivo,
+    /// sem sessão.
+    #[tokio::test]
+    async fn sem_wip_e_ambiente_antigo_recusa() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        hub.lock()
+            .conn()
+            .execute(
+                "UPDATE work_item SET branch = NULL WHERE gh_number = 10",
+                [],
+            )
+            .unwrap();
+        let run = hub.lock().create_epic_run(&new_run(pid), T).unwrap();
+        let port = FakePort {
+            protocol: Some("2.28"),
+            ..Default::default()
+        };
+        tick(&hub, &port, T).await.unwrap();
+        tick(&hub, &port, T + 60_000).await.unwrap();
+        assert!(port.methods().is_empty(), "{:?}", port.methods());
+        let ev = hub.lock().epic_run_events(run.id, 0, 10).unwrap();
+        assert_eq!(ev.len(), 1, "{ev:?}");
+        assert_eq!(ev[0].reason.as_deref(), Some("sem_wip"));
+        assert!(ev[0].message.contains("2.29"), "{ev:?}");
+    }
+
+    /// #341: a sessão de plano que termina sem plano é reaberta até
+    /// `PLAN_MAX_ATTEMPTS`; depois, o pedido `plano_falhou` segura o motor
+    /// até a resposta.
+    #[tokio::test]
+    async fn plano_nao_gravado_para_no_limite_e_pede_decisao() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = hub.lock().create_epic_run(&new_run(pid), T).unwrap();
+        let port = FakePort::default();
+        // A sessão some sem plano: passada a folga, conta como encerrada.
+        let clock = std::cell::Cell::new(T);
+        let next = || {
+            clock.set(clock.get() + PLAN_START_GRACE_MS + 1);
+            clock.get()
+        };
+        tick(&hub, &port, next()).await.unwrap(); // 1ª sessão
+        tick(&hub, &port, next()).await.unwrap(); // encerrada: tentativa 1
+        tick(&hub, &port, next()).await.unwrap(); // 2ª sessão
+        assert_eq!(starts(&port), 2);
+        let r = tick(&hub, &port, next()).await.unwrap(); // encerrada: pedido
+        assert_eq!(r.decisions, 1);
+        let d = hub.lock().epic_decisions(run.id, true).unwrap();
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].origin, EpicDecisionOrigin::PlanoFalhou);
+        assert_eq!(d[0].number, None);
+        assert_eq!(d[0].options, vec!["tentar_de_novo"]);
+        // Pendente: nenhuma sessão nova, nem pedido repetido.
+        for _ in 0..3 {
+            let r = tick(&hub, &port, next()).await.unwrap();
+            assert_eq!(r.decisions, 0);
+        }
+        assert_eq!(starts(&port), 2);
+        // Tentar de novo: zera a contagem e abre outra sessão.
+        let now = clock.get();
+        {
+            let h = hub.lock();
+            let d = h
+                .answer_epic_decision(d[0].id, "tentar_de_novo", "fulano", now)
+                .unwrap();
+            crate::epic_run::rpc::apply_answer(&h, &run, &d, None, now).unwrap();
+            h.add_epic_run_event(&ev(&run, now, "decided", None, "respondido".into()))
+                .unwrap();
+        }
+        tick(&hub, &port, next()).await.unwrap();
+        assert_eq!(starts(&port), 3);
+        tick(&hub, &port, next()).await.unwrap(); // encerrada: tentativa 1 de novo
+        assert!(hub.lock().epic_decisions(run.id, true).unwrap().is_empty());
+        tick(&hub, &port, next()).await.unwrap();
+        assert_eq!(starts(&port), 4);
+    }
+
+    /// #341: o ambiente recusa a sessão de plano por falta de token de
+    /// agente = pedido na hora, sem tentar a cada ciclo.
+    #[tokio::test]
+    async fn sem_token_de_agente_pede_decisao_na_hora() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = hub.lock().create_epic_run(&new_run(pid), T).unwrap();
+        let port = FakePort {
+            plan_error: Some((
+                ct_http::sync::AGENT_TOKEN_MISSING,
+                "ambiente sem token de agente do hub".into(),
+            )),
+            ..Default::default()
+        };
+        let r = tick(&hub, &port, T).await.unwrap();
+        assert_eq!(r.decisions, 1);
+        let d = hub.lock().epic_decisions(run.id, true).unwrap();
+        assert_eq!(d[0].origin, EpicDecisionOrigin::PlanoFalhou);
+        assert!(d[0].text.contains("sem token de agente"), "{d:?}");
+        tick(&hub, &port, T + 60_000).await.unwrap();
+        tick(&hub, &port, T + 120_000).await.unwrap();
+        assert_eq!(starts(&port), 1, "{:?}", port.methods());
     }
 
     #[tokio::test]
@@ -1591,6 +2167,297 @@ mod tests {
             (EpicNodeState::Assumida, Some(T + 10))
         );
         assert!(kinds(&hub.lock(), run.id).contains(&"assumed".to_string()));
+    }
+
+    /// Sessão do espelho do hub para o nó, no estado dado.
+    fn mirror_session(h: &Hub, id: &str, state: &str) {
+        let wi = h
+            .find_work_item("acme", "acme-web", 11)
+            .unwrap()
+            .map(|w| w.id)
+            .unwrap_or_else(|| {
+                h.find_work_item("acme", "acme-web", 10)
+                    .unwrap()
+                    .unwrap()
+                    .id
+            });
+        h.conn()
+            .execute(
+                "INSERT INTO session (id, env_id, work_item_id, tool, cwd, state, started_at,
+                                      last_event_at)
+                   VALUES (?1, 'env-a', ?2, 'claude', '/wt/11', ?3, ?4, ?4)
+                 ON CONFLICT (id) DO UPDATE SET state = excluded.state",
+                rusqlite::params![id, wi, state, T],
+            )
+            .unwrap();
+    }
+
+    /// #341: o ambiente sai do ar no meio da execução e volta reiniciado (a
+    /// sessão da sub-issue `interrupted`): o motor espera sem pedir decisão,
+    /// retoma a conversa com `session.resume`, segue na sessão nova e, se a
+    /// retomada for recusada, aí pede decisão.
+    #[tokio::test]
+    async fn ambiente_fora_do_ar_e_reiniciado_retoma_a_sub_issue() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = approved(&hub.lock(), pid);
+        {
+            let h = hub.lock();
+            for to in [EpicNodeState::Pronta, EpicNodeState::EmExecucao] {
+                h.set_epic_node_state(run.id, 11, to, None, T).unwrap();
+            }
+            h.update_epic_node(
+                run.id,
+                11,
+                &EpicNodePatch {
+                    session_id: Some(Some("s-11".into())),
+                    ..Default::default()
+                },
+                T,
+            )
+            .unwrap();
+            mirror_session(&h, "s-11", "running");
+        }
+        let port = FakePort::default();
+        let node = |hub: &SharedHub| hub.lock().epic_node(run.id, 11).unwrap().unwrap();
+
+        // Fora do ar: nada vai ao ambiente, nada é pedido, nada muda.
+        port.offline.store(true, Ordering::Relaxed);
+        for i in 1..=3 {
+            let r = tick(&hub, &port, T + i * 60_000).await.unwrap();
+            assert_eq!(r.decisions, 0);
+        }
+        // O ambiente reiniciou: a sessão aparece interrompida, ainda sem canal.
+        mirror_session(&hub.lock(), "s-11", "interrupted");
+        tick(&hub, &port, T + 4 * 60_000).await.unwrap();
+        assert!(port.methods().is_empty(), "{:?}", port.methods());
+        assert!(hub.lock().epic_decisions(run.id, true).unwrap().is_empty());
+        assert_eq!(node(&hub).state, EpicNodeState::EmExecucao);
+
+        // De volta: retoma a conversa e o nó passa à sessão nova.
+        port.offline.store(false, Ordering::Relaxed);
+        let r = tick(&hub, &port, T + 5 * 60_000).await.unwrap();
+        assert_eq!(r.decisions, 0);
+        assert_eq!(
+            port.call_of("session.resume").unwrap()["session_id"],
+            "s-11"
+        );
+        let n = node(&hub);
+        assert_eq!(
+            (n.state, n.session_id.as_deref()),
+            (EpicNodeState::EmExecucao, Some("s-11-r"))
+        );
+        assert!(kinds(&hub.lock(), run.id).contains(&"revived".to_string()));
+        // A sessão nova roda: nada a fazer, nenhuma retomada a mais.
+        mirror_session(&hub.lock(), "s-11-r", "running");
+        tick(&hub, &port, T + 6 * 60_000).await.unwrap();
+        let resumes = |p: &FakePort| {
+            p.methods()
+                .iter()
+                .filter(|m| *m == "session.resume")
+                .count()
+        };
+        assert_eq!(resumes(&port), 1);
+        assert!(hub.lock().epic_decisions(run.id, true).unwrap().is_empty());
+
+        // Caiu de novo e a retomada é recusada: pedido sem_progresso.
+        mirror_session(&hub.lock(), "s-11-r", "interrupted");
+        *port.resume_error.lock().unwrap() =
+            Some((-32602, "transcript da sessão foi perdido".into()));
+        let r = tick(&hub, &port, T + 7 * 60_000).await.unwrap();
+        assert_eq!(r.decisions, 1);
+        let d = hub.lock().epic_decisions(run.id, true).unwrap();
+        assert_eq!(
+            (d[0].number, d[0].origin),
+            (Some(11), EpicDecisionOrigin::SemProgresso)
+        );
+        assert!(d[0].text.contains("transcript"), "{d:?}");
+        assert_eq!(node(&hub).state, EpicNodeState::Bloqueada);
+    }
+
+    /// #341: a sessão `running` cujo último evento é um `needs_human`
+    /// (pedido de permissão) vira pedido de decisão depois do prazo.
+    #[tokio::test]
+    async fn sessao_parada_num_pedido_de_permissao_pede_decisao() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = approved(&hub.lock(), pid);
+        {
+            let h = hub.lock();
+            for to in [EpicNodeState::Pronta, EpicNodeState::EmExecucao] {
+                h.set_epic_node_state(run.id, 11, to, None, T).unwrap();
+            }
+            h.update_epic_node(
+                run.id,
+                11,
+                &EpicNodePatch {
+                    session_id: Some(Some("s-11".into())),
+                    ..Default::default()
+                },
+                T,
+            )
+            .unwrap();
+            mirror_session(&h, "s-11", "running");
+            let wi = h
+                .find_work_item("acme", "acme-web", 10)
+                .unwrap()
+                .unwrap()
+                .id;
+            h.conn()
+                .execute_batch(&format!(
+                    "UPDATE session SET last_event_at = {t} WHERE id = 's-11';
+                     INSERT INTO event (uid, env_id, hlc, ts, project_id, work_item_id,
+                                        session_id, type, payload)
+                       VALUES ('u-nh', 'env-a', 1, {t}, {pid}, {wi}, 's-11', 'needs_human',
+                               '{{\"message\":\"Claude needs your permission\"}}');",
+                    t = T + 10
+                ))
+                .unwrap();
+        }
+        let port = FakePort::default();
+        let r = tick(&hub, &port, T + 60_000).await.unwrap();
+        assert_eq!(r.decisions, 0, "antes do prazo");
+        let r = tick(&hub, &port, T + 10 + super::plan::WAITING_HUMAN_MS)
+            .await
+            .unwrap();
+        assert_eq!(r.decisions, 1);
+        let d = hub.lock().epic_decisions(run.id, true).unwrap();
+        assert!(d[0].text.contains("needs your permission"), "{d:?}");
+        assert_eq!(
+            hub.lock().epic_node(run.id, 11).unwrap().unwrap().state,
+            EpicNodeState::Bloqueada
+        );
+    }
+
+    /// #341: a sub-issue mesclada leva junto os pedidos pendentes dela; os
+    /// das outras ficam.
+    #[tokio::test]
+    async fn merge_encerra_os_pedidos_da_sub_issue() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = approved(&hub.lock(), pid);
+        let (d11, d12) = {
+            let h = hub.lock();
+            for to in [
+                EpicNodeState::Pronta,
+                EpicNodeState::EmExecucao,
+                EpicNodeState::Bloqueada,
+                EpicNodeState::Mesclada,
+            ] {
+                h.set_epic_node_state(run.id, 11, to, None, T).unwrap();
+            }
+            let d11 = h
+                .add_epic_decision(run.id, Some(11), EpicDecisionOrigin::CiEsgotado, "ci", T)
+                .unwrap();
+            let d12 = h
+                .add_epic_decision(
+                    run.id,
+                    Some(12),
+                    EpicDecisionOrigin::IssueAlterada,
+                    "mudou",
+                    T,
+                )
+                .unwrap();
+            (d11.id, d12.id)
+        };
+        let port = FakePort::default();
+        tick(&hub, &port, T + 1).await.unwrap();
+        let h = hub.lock();
+        let d = h.epic_decision(d11).unwrap().unwrap();
+        assert_eq!(
+            (d.answer.as_deref(), d.answered_by.as_deref()),
+            (
+                Some(ct_hub_store::DECISION_RESOLVED),
+                Some(ct_hub_store::DECISION_BY_ENGINE)
+            )
+        );
+        assert_eq!(h.epic_decision(d12).unwrap().unwrap().answer, None);
+        let ev = h.epic_run_events(run.id, 0, 50).unwrap();
+        assert!(ev.iter().any(|e| e.kind == "decided"
+            && e.number == Some(11)
+            && e.message.contains("mesclada")));
+    }
+
+    /// #341: a sessão de plano interrompida (ambiente reiniciado) é retomada,
+    /// sem contar tentativa nem abrir outra sessão.
+    #[tokio::test]
+    async fn sessao_de_plano_interrompida_e_retomada() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = hub.lock().create_epic_run(&new_run(pid), T).unwrap();
+        let port = FakePort::default();
+        tick(&hub, &port, T).await.unwrap();
+        assert_eq!(starts(&port), 1);
+        mirror_session(&hub.lock(), "s-plano-1", "interrupted");
+        // Fora do ar: espera.
+        port.offline.store(true, Ordering::Relaxed);
+        tick(&hub, &port, T + 60_000).await.unwrap();
+        assert!(port.call_of("session.resume").is_none());
+        port.offline.store(false, Ordering::Relaxed);
+        tick(&hub, &port, T + 120_000).await.unwrap();
+        assert_eq!(
+            port.call_of("session.resume").unwrap()["session_id"],
+            "s-plano-1"
+        );
+        let r = hub.lock().epic_run(run.id).unwrap().unwrap();
+        assert_eq!(r.plan_session.as_deref(), Some("s-plano-1-r"));
+        assert_eq!(starts(&port), 1, "não abriu outra sessão de plano");
+        let k = kinds(&hub.lock(), run.id);
+        assert!(k.contains(&"plan_revived".to_string()), "{k:?}");
+        assert!(!k.contains(&"plan_failed".to_string()), "{k:?}");
+        // Retomada recusada: conta como sessão encerrada e abre outra.
+        mirror_session(&hub.lock(), "s-plano-1-r", "interrupted");
+        *port.resume_error.lock().unwrap() = Some((-32602, "transcript perdido".into()));
+        tick(&hub, &port, T + 180_000).await.unwrap();
+        tick(&hub, &port, T + 240_000).await.unwrap();
+        assert_eq!(starts(&port), 2);
+    }
+
+    /// #341: além de `REVIVE_MAX_PER_HOUR` retomadas na hora, a sessão que
+    /// cai de novo pede decisão (sem laço de retomadas).
+    #[tokio::test]
+    async fn retomadas_param_no_limite_da_hora() {
+        let hub = SharedHub::new(Hub::open_in_memory().unwrap());
+        let pid = setup(&hub.lock());
+        let run = approved(&hub.lock(), pid);
+        {
+            let h = hub.lock();
+            for to in [EpicNodeState::Pronta, EpicNodeState::EmExecucao] {
+                h.set_epic_node_state(run.id, 11, to, None, T).unwrap();
+            }
+            h.update_epic_node(
+                run.id,
+                11,
+                &EpicNodePatch {
+                    session_id: Some(Some("s".into())),
+                    ..Default::default()
+                },
+                T,
+            )
+            .unwrap();
+        }
+        let port = FakePort::default();
+        let mut id = "s".to_string();
+        for i in 0..super::plan::REVIVE_MAX_PER_HOUR as i64 {
+            mirror_session(&hub.lock(), &id, "interrupted");
+            tick(&hub, &port, T + (i + 1) * 60_000).await.unwrap();
+            id = format!("{id}-r");
+            assert_eq!(
+                hub.lock()
+                    .epic_node(run.id, 11)
+                    .unwrap()
+                    .unwrap()
+                    .session_id,
+                Some(id.clone())
+            );
+        }
+        mirror_session(&hub.lock(), &id, "interrupted");
+        let r = tick(&hub, &port, T + 10 * 60_000).await.unwrap();
+        assert_eq!(r.decisions, 1);
+        assert_eq!(
+            hub.lock().epic_node(run.id, 11).unwrap().unwrap().state,
+            EpicNodeState::Bloqueada
+        );
     }
 
     #[tokio::test]

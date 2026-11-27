@@ -355,6 +355,14 @@ impl Sessions {
         if let Some(parent) = worktree.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        // Sub-issue da execução de épico (#341): a `wip` do `origin` como
+        // está agora, com os bloqueantes já mesclados, mesmo num ambiente
+        // que nunca a buscou. Sem rede, segue com a que o clone tem.
+        if let StartBase::EpicRun(base) = how {
+            if let Err(e) = ct_git::integration::fetch_branch(Path::new(&project.repo_path), base) {
+                tracing::warn!("execução de épico: fetch de {base} falhou: {e}");
+            }
+        }
         ensure_worktree(&WorktreeSpec {
             repo_path: Path::new(&project.repo_path),
             branch: &branch,

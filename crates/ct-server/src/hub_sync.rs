@@ -606,9 +606,27 @@ impl HubSender {
         }
     }
 
+    /// Token de agente do ambiente; sem o arquivo, puxa a configuração, que
+    /// o pede ao hub (#341). `None` = o hub não entregou (hub fora do ar,
+    /// ambiente sem chave). Síncrono: chame fora do runtime.
+    pub fn ensure_agent_token(&self) -> Option<String> {
+        let dirs = &self.sessions.config().dirs;
+        if let Some(t) = agent_token(dirs) {
+            return Some(t);
+        }
+        let r = self.pull_config();
+        if let Some(e) = r.error {
+            tracing::warn!("hub: pull para o token de agente falhou: {e}");
+        }
+        agent_token(dirs)
+    }
+
     /// Chamada a `/agent/v1/<path>` do hub com o token de agente (lido do
-    /// arquivo a cada vez), para as ferramentas `portfolio_*` do gestor.
-    /// O agente nunca vê o token. `session` vai em `X-Ctower-Session`.
+    /// arquivo a cada vez), para as ferramentas `portfolio_*` do gestor e as
+    /// das sessões de análise e de plano. O agente nunca vê o token.
+    /// `session` vai em `X-Ctower-Session`. Sem token, ou com o token
+    /// recusado (`401`, revogado no hub), pede outro ao hub (#341) e tenta
+    /// mais uma vez.
     pub fn agent_call(
         &self,
         method: &str,
@@ -617,7 +635,43 @@ impl HubSender {
         body: Option<&Value>,
         session: &str,
     ) -> Result<Value, String> {
-        let token = agent_token(&self.sessions.config().dirs).ok_or(NO_AGENT_TOKEN)?;
+        let token = self.ensure_agent_token().ok_or(NO_AGENT_TOKEN)?;
+        match self.agent_call_with(&token, method, path, query, body, session) {
+            Err(AgentCallError::Unauthorized) => {
+                tracing::warn!("hub: token de agente recusado (401); pedindo outro ao hub");
+                self.drop_agent_token(&token);
+                let token = self.ensure_agent_token().ok_or(NO_AGENT_TOKEN)?;
+                match self.agent_call_with(&token, method, path, query, body, session) {
+                    Err(AgentCallError::Unauthorized) => Err(AGENT_TOKEN_REFUSED.into()),
+                    Err(AgentCallError::Other(e)) => Err(e),
+                    Ok(v) => Ok(v),
+                }
+            }
+            Err(AgentCallError::Other(e)) => Err(e),
+            Ok(v) => Ok(v),
+        }
+    }
+
+    /// Apaga `hub-agent.token` se ainda for `token` (outro pull pode já ter
+    /// trazido um novo).
+    fn drop_agent_token(&self, token: &str) {
+        let dirs = &self.sessions.config().dirs;
+        if agent_token(dirs).as_deref() == Some(token) {
+            if let Err(e) = std::fs::remove_file(dirs.hub_agent_token_file()) {
+                tracing::warn!("hub: token de agente recusado não removido: {e}");
+            }
+        }
+    }
+
+    fn agent_call_with(
+        &self,
+        token: &str,
+        method: &str,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        session: &str,
+    ) -> Result<Value, AgentCallError> {
         let env_id = self.sessions.ledger().env_id().to_string();
         let url = format!("{}/agent/v1/{path}", self.target.url.trim_end_matches('/'));
         let mut req = self
@@ -638,17 +692,18 @@ impl HubSender {
         match resp {
             Ok(r) => r
                 .into_json::<Value>()
-                .map_err(|e| format!("resposta inválida do hub: {e}")),
-            Err(ureq::Error::Status(401, _)) => Err(
-                "hub recusou o token de agente (401): gere outro com `cthubd agent-token` no hub \
-                 e grave com `ctower hub set-agent-token`"
-                    .into(),
-            ),
+                .map_err(|e| AgentCallError::Other(format!("resposta inválida do hub: {e}"))),
+            Err(ureq::Error::Status(401, _)) => Err(AgentCallError::Unauthorized),
             Err(ureq::Error::Status(code, r)) => {
                 let body = r.into_string().unwrap_or_default();
-                Err(format!("hub respondeu {code}: {}", body.trim()))
+                Err(AgentCallError::Other(format!(
+                    "hub respondeu {code}: {}",
+                    body.trim()
+                )))
             }
-            Err(ureq::Error::Transport(t)) => Err(format!("hub indisponível: {t}")),
+            Err(ureq::Error::Transport(t)) => {
+                Err(AgentCallError::Other(format!("hub indisponível: {t}")))
+            }
         }
     }
 
@@ -750,8 +805,19 @@ pub fn spawn_sender(sender: Arc<HubSender>) {
 /// Sem `hub_url` ou sem `hub.token`: nada a enviar nem a puxar, e o
 /// ambiente não inicia sessões (spec §7).
 /// Sem `hub-agent.token`, o gestor não inicia (spec do gestor §2.3).
-pub const NO_AGENT_TOKEN: &str = "ambiente sem token de agente do hub: gere com \"cthubd \
-agent-token <nome>\" e grave com \"ctower hub set-agent-token\"";
+pub const NO_AGENT_TOKEN: &str = "ambiente sem token de agente do hub, e o hub não entregou \
+um: confira a ligação com o hub (ctower hub sync); à mão, gere com \"cthubd agent-token <nome>\" \
+e grave com \"ctower hub set-agent-token\"";
+
+/// O hub recusou também o token que acabou de entregar.
+pub const AGENT_TOKEN_REFUSED: &str = "hub recusou o token de agente (401) mesmo depois de \
+entregar um novo: confira se o token de sync do ambiente continua valendo no hub";
+
+/// Erro de [`HubSender::agent_call_with`].
+enum AgentCallError {
+    Unauthorized,
+    Other(String),
+}
 
 /// Token de agente gravado no ambiente, lido a cada chamada (trocar o
 /// arquivo não pede restart). `None` se ausente ou vazio.

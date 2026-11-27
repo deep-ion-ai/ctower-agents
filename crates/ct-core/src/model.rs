@@ -152,6 +152,7 @@ str_enum!(EpicDecisionOrigin, "epic_decision_origin", {
     SemProgresso => "sem_progresso",
     ConflitoRebase => "conflito_rebase",
     IssueAlterada => "issue_alterada",
+    PlanoFalhou => "plano_falhou",
 });
 
 // Como o agente executa o trabalho: direto na sessão (`native`) ou delegando

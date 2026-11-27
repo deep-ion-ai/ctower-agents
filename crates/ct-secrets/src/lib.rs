@@ -27,7 +27,10 @@ mod store;
 mod value;
 
 pub use age::x25519::{Identity, Recipient};
-pub use env::{decode_delivery, seal_delivery, EnvCache, EnvSecrets, Rotated, DELIVERY_FORMAT};
+pub use env::{
+    decode_delivery, open_agent_token, seal_agent_token, seal_delivery, EnvCache, EnvSecrets,
+    Rotated, DELIVERY_FORMAT,
+};
 pub use keys::{
     decrypt, encrypt, ensure_identity, identity_text, parse_identity, read_identity,
     read_recipient, write_identity,

@@ -92,6 +92,62 @@ pub fn ensure_remote_branch(repo: &Path, branch: &str, base: &str) -> Result<boo
     Ok(true)
 }
 
+/// Atualiza `refs/remotes/origin/<branch>` com a branch do `origin` (a
+/// `wip` do épico antes do worktree de uma sub-issue, #341). Branch que não
+/// existe no remoto é erro.
+pub fn fetch_branch(repo: &Path, branch: &str) -> Result<(), GitError> {
+    valid_branch(branch)?;
+    run_net(
+        repo,
+        [
+            "fetch",
+            "--quiet",
+            REMOTE,
+            &format!("+refs/heads/{branch}:refs/remotes/{REMOTE}/{branch}"),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Como [`publish_branch`] deixou a branch no remoto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Published {
+    /// Já existia no `origin`; nada mudou.
+    Existing,
+    /// Só existia no clone: a branch local subiu como está.
+    FromLocal,
+    /// Não existia: criada no `origin` a partir de `origin/<base>`.
+    FromBase,
+}
+
+/// Garante `branch` no `origin` (branch de integração do épico, #341): se
+/// ela já está lá, nada muda; se existe só no clone (uma sessão antiga do
+/// épico a criou sem push), sobe a local; senão, cria a partir de
+/// `origin/<base>`. Não mexe em árvore de trabalho nenhuma.
+pub fn publish_branch(repo: &Path, branch: &str, base: &str) -> Result<Published, GitError> {
+    valid_branch(branch)?;
+    valid_branch(base)?;
+    fetch(repo, branch, base)?;
+    if ref_exists(repo, &format!("refs/remotes/{REMOTE}/{branch}"))? {
+        return Ok(Published::Existing);
+    }
+    if ref_exists(repo, &format!("refs/heads/{branch}"))? {
+        run_net(
+            repo,
+            [
+                "push",
+                "--quiet",
+                REMOTE,
+                &format!("refs/heads/{branch}:refs/heads/{branch}"),
+            ],
+        )?;
+        fetch(repo, branch, base)?;
+        return Ok(Published::FromLocal);
+    }
+    ensure_remote_branch(repo, branch, base)?;
+    Ok(Published::FromBase)
+}
+
 /// Worktree temporário destacado, removido no `drop`.
 struct TempWorktree {
     repo: PathBuf,
@@ -344,6 +400,36 @@ mod tests {
         // A base precisa existir.
         assert!(ensure_remote_branch(&clone, "wip/outra", "inexistente").is_err());
         assert!(ensure_remote_branch(&clone, "-x", "develop").is_err());
+    }
+
+    #[test]
+    fn publica_a_branch_do_epico_sem_trocar_a_que_existe() {
+        let (_t, seed, clone) = setup();
+        // Nem no remoto nem no clone: nasce da base.
+        assert_eq!(
+            publish_branch(&clone, "wip/10-x", "develop").unwrap(),
+            Published::FromBase
+        );
+        assert_eq!(remote_sha(&seed, "wip/10-x"), remote_sha(&seed, "develop"));
+        assert_eq!(
+            publish_branch(&clone, "wip/10-x", "develop").unwrap(),
+            Published::Existing
+        );
+        // Só no clone, com um commit: sobe a local, não a base.
+        git(&clone, &["branch", "wip/20-y", "origin/develop"]);
+        git(&clone, &["checkout", "--quiet", "wip/20-y"]);
+        std::fs::write(clone.join("acme-20.txt"), "local\n").unwrap();
+        git(&clone, &["add", "acme-20.txt"]);
+        git(&clone, &["commit", "--quiet", "-m", "trabalho local"]);
+        let local = git(&clone, &["rev-parse", "wip/20-y"]).trim().to_string();
+        git(&clone, &["checkout", "--quiet", "--detach"]);
+        assert_eq!(
+            publish_branch(&clone, "wip/20-y", "develop").unwrap(),
+            Published::FromLocal
+        );
+        assert_eq!(remote_sha(&seed, "wip/20-y"), local);
+        assert!(publish_branch(&clone, "wip/30-z", "inexistente").is_err());
+        assert!(publish_branch(&clone, "-x", "develop").is_err());
     }
 
     #[test]

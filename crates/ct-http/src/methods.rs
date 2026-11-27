@@ -204,6 +204,12 @@ pub const METHODS: &[MethodSpec] = &[
         result: "WorktreeRemoval",
         scopes: UI_WEB_CHANNEL,
     },
+    MethodSpec {
+        name: "epic_run.prepare",
+        params: "{ project_id?: number | null; owner?: string | null; repo?: string | null; epic: number; title?: string | null }",
+        result: "EpicBranch",
+        scopes: UI_WEB_CHANNEL,
+    },
     MethodSpec { name: "cleanup.plan", params: "null", result: "CleanupPlan", scopes: UI },
     MethodSpec {
         name: "cleanup.run",

@@ -4,7 +4,8 @@ import type { Session, SessionState } from "../protocol/gen";
 
 /** O que o adapter usa do xterm (um fake nos testes). */
 export interface TermLike {
-  write(data: Uint8Array | string): void;
+  /** `done`: chamado depois que o xterm processou os bytes. */
+  write(data: Uint8Array | string, done?: () => void): void;
   reset(): void;
   onData(cb: (data: string) => void): { dispose(): void };
 }
@@ -76,6 +77,12 @@ export type PtyKind = "session" | "shell";
  * O PTY recebe o tamanho real antes do attach, e um snapshot com histórico
  * dispara um resize de ida e volta para o agente redesenhar a tela inteira
  * nesse tamanho (o replay é de bytes crus, gerados para outra largura).
+ *
+ * O snapshot traz as consultas que o agente fez ao terminal quando começou
+ * (atributos, cores, modo do teclado): o xterm as responde de novo ao
+ * reproduzi-las. Essas respostas não vão à sessão: são velhas, chegariam ao
+ * agente como texto digitado e, numa sub-issue da execução de épico, a
+ * marcariam como assumida (#341).
  */
 export class TerminalAdapter {
   state: TermState = { kind: "attaching" };
@@ -84,6 +91,8 @@ export class TerminalAdapter {
   private redrawTimer: ReturnType<typeof setTimeout> | null = null;
   private size: TermSize | null = null;
   private disposed = false;
+  /** Snapshots ainda sendo processados pelo xterm. */
+  private replaying = 0;
 
   constructor(
     private api: DaemonApi,
@@ -136,8 +145,15 @@ export class TerminalAdapter {
 
   chunk(c: TermChunk) {
     if (this.disposed) return;
-    if (c.snapshot) this.term.reset();
-    this.term.write(c.bytes);
+    if (c.snapshot) {
+      this.term.reset();
+      this.replaying++;
+      this.term.write(c.bytes, () => {
+        this.replaying = Math.max(0, this.replaying - 1);
+      });
+    } else {
+      this.term.write(c.bytes);
+    }
     if (this.state.kind === "attaching") this.set({ kind: "live" });
     if (c.snapshot && c.bytes.length > 0) this.redraw();
   }
@@ -158,6 +174,8 @@ export class TerminalAdapter {
 
   send(data: string) {
     if (this.state.kind === "ended" || this.disposed) return;
+    // Respostas do xterm às consultas do snapshot (veja a classe).
+    if (this.replaying > 0) return;
     this.api.input(this.env, this.session, data).catch(() => {
       // Desconectado: o status do ambiente já aparece; a tecla se perde.
     });

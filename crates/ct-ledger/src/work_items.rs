@@ -126,8 +126,9 @@ impl Ledger {
     }
 
     /// Grava a branch de um work item que ainda não tem uma (a sub-issue
-    /// cujo PR para a branch do épico apareceu no sync, #454), sem worktree.
-    pub(crate) fn set_branch_if_missing(&self, id: i64, branch: &str) -> Result<()> {
+    /// cujo PR para a branch do épico apareceu no sync, #454; a `wip` que o
+    /// motor de execução de épico publicou, #341), sem worktree.
+    pub fn set_branch_if_missing(&self, id: i64, branch: &str) -> Result<()> {
         let n = self.conn.execute(
             "UPDATE work_item SET branch = ?2 WHERE id = ?1 AND branch IS NULL",
             params![id, branch],

@@ -61,6 +61,26 @@ pub fn decode_delivery(b64: &str) -> Result<Vec<u8>> {
         .map_err(|_| SecretsError::Decrypt("entrega de secrets fora do base64".into()))
 }
 
+/// No hub: cifra o token de agente do ambiente (#341) para `to` e devolve o
+/// arquivo age em base64, pronto para o campo `agent_token` de
+/// `GET /sync/config`.
+pub fn seal_agent_token(token: &str, to: &Recipient) -> Result<String> {
+    let sealed = keys::encrypt(token.as_bytes(), std::slice::from_ref(to))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(sealed))
+}
+
+/// No ambiente: decifra o token de agente do campo `agent_token` com a
+/// identidade do ambiente.
+pub fn open_agent_token(b64: &str, identity: &Identity) -> Result<Zeroizing<String>> {
+    let sealed = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|_| SecretsError::Decrypt("token de agente fora do base64".into()))?;
+    let plain = keys::decrypt(&sealed, identity)?;
+    let text = std::str::from_utf8(&plain)
+        .map_err(|_| SecretsError::Decrypt("token de agente fora do UTF-8".into()))?;
+    Ok(Zeroizing::new(text.trim().to_string()))
+}
+
 /// Secrets e variáveis entregues ao ambiente, decifrados. O `Debug` não
 /// mostra valores.
 pub struct EnvSecrets {
@@ -462,5 +482,15 @@ mod tests {
             Err(SecretsError::UnknownFormat(2))
         ));
         assert!(!c.cache_path().exists());
+    }
+
+    #[test]
+    fn token_de_agente_so_abre_com_a_chave_do_ambiente() {
+        let id = Identity::generate();
+        let b64 = seal_agent_token("cta_abc", &id.to_public()).unwrap();
+        assert!(!b64.contains("cta_abc"));
+        assert_eq!(open_agent_token(&b64, &id).unwrap().as_str(), "cta_abc");
+        assert!(open_agent_token(&b64, &Identity::generate()).is_err());
+        assert!(open_agent_token("@@@", &id).is_err());
     }
 }

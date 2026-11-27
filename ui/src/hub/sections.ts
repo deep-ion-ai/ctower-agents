@@ -114,7 +114,8 @@ export type HubScreen = Extract<Screen, { name: "hub" }>;
  * `id` da aba da seção. A Visão geral é a aba da própria tela (`hub`): a
  * barra de atividades e `go({ name: "hub" })` caem nela.
  */
-export const hubTabId = (s: HubSection): string => (s === "overview" ? "hub" : `hub:${s}`);
+export const hubTabId = (s: HubSection, run?: number): string =>
+  s === "overview" ? "hub" : s === "epic-runs" && run !== undefined ? `hub:epic-runs:${run}` : `hub:${s}`;
 
 /**
  * Aba da seção, para `useNav().openTab` (ex.: link "Hub › Secrets" das
@@ -127,9 +128,17 @@ export const hubTabId = (s: HubSection): string => (s === "overview" ? "hub" : `
 export function hubTab(s: HubSection, extra: Omit<HubScreen, "name" | "section"> = {}): OpenTab {
   if (s === "projects") return { screen: projectsPlace(extra) };
   return {
-    id: hubTabId(s),
+    id: hubTabId(s, extra.run),
     screen: s === "overview" ? { name: "hub", ...extra } : { name: "hub", section: s, ...extra },
   };
+}
+
+/**
+ * Aba de uma execução de épico (#341): uma por execução, com o número do
+ * épico no título, para acompanhar várias lado a lado.
+ */
+export function epicRunTab(run: { id: number; epic: number }): OpenTab {
+  return { ...hubTab("epic-runs", { run: run.id }), title: `Épico #${run.epic}` };
 }
 
 /** Título da aba: "Hub · Propostas do gestor". */

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Entrada dos containers de teste (#176). Uso: ct-test-entrypoint hub|env|<comando>
 #
-# hub: grava o config do cthubd na primeira subida, gera os tokens do ambiente
-#      de teste em /link (volume só do teste) e sobe o cthubd.
-# env: espera os tokens do hub, liga o ctowerd a http://hub:7879 na primeira
-#      subida e sobe o ctowerd.
+# hub: grava o config do cthubd na primeira subida, gera o token de sync do
+#      ambiente de teste em /link (volume só do teste) e sobe o cthubd.
+# env: espera o token do hub, liga o ctowerd a http://hub:7879 na primeira
+#      subida e sobe o ctowerd. O token de agente o hub entrega sozinho no
+#      primeiro pull (#341). Com GH_TOKEN, o git usa o gh como credencial.
 # Os dois escutam em 0.0.0.0 dentro do container; o compose.yml publica as
 # portas só em 127.0.0.1 do host.
 #
@@ -52,18 +53,6 @@ EOF
       log "o hub já tem o ambiente \"$ENV_NAME\"; para ligar de novo, apague os volumes (docker compose down -v)"
     fi
   fi
-  if [[ ! -s $LINK/agent.token ]]; then
-    local tmp
-    tmp="$(mktemp "$LINK/.agent.token.XXXXXX")"
-    if cthubd agent-token "$ENV_NAME" > "$tmp"; then
-      mv "$tmp" "$LINK/agent.token"
-      log "token de agente do ambiente \"$ENV_NAME\" gerado"
-    else
-      rm -f "$tmp"
-      log "aviso: não gerei o token de agente"
-    fi
-  fi
-
   exec cthubd
 }
 
@@ -81,9 +70,11 @@ env() {
     ctower hub set-token < "$LINK/env.token" > /dev/null
     log "token de sync gravado em $ENV_CONF/hub.token"
   fi
-  if [[ ! -s $ENV_CONF/hub-agent.token && -s $LINK/agent.token ]]; then
-    ctower hub set-agent-token < "$LINK/agent.token" > /dev/null
-    log "token de agente gravado em $ENV_CONF/hub-agent.token"
+  # O push que o daemon faz fora das sessões (a wip do épico, a branch do
+  # modo autônomo) usa a credencial do git do ambiente.
+  if [[ -n ${GH_TOKEN:-} ]] && ! git config --global --get-all credential.https://github.com.helper > /dev/null; then
+    gh auth setup-git
+    log "git usa o gh (GH_TOKEN) como credencial do GitHub"
   fi
   if [[ ! -f $ENV_CONF/config.toml ]]; then
     cat > "$ENV_CONF/config.toml" <<EOF

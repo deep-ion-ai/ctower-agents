@@ -37,7 +37,8 @@ enum Cmd {
     /// Gera (ou troca) o token de agente de um ambiente e o imprime: só lê
     /// /agent/v1 e registra propostas. O anterior deixa de valer na hora.
     AgentToken { name: String },
-    /// Revoga só o token de agente de um ambiente; o sync continua.
+    /// Revoga só o token de agente de um ambiente; o sync continua, e o
+    /// ambiente recebe outro no próximo pedido (#341).
     RevokeAgentToken { name: String },
     /// Sessões web da PWA (cookie `ct_web`).
     Web {

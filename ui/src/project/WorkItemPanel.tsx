@@ -35,7 +35,7 @@ import { versionNewer } from "../util/version";
 import { AgentRules } from "../hub/AgentRules";
 import { IssueBodyModal } from "./IssueBodyModal";
 import { RunEpicDialog } from "./RunEpicDialog";
-import { hubTab } from "../hub/sections";
+import { epicRunTab } from "../hub/sections";
 import { EPIC_RUN_PROTOCOL, isActive as epicRunActive } from "../hub/epicRun";
 import type { EpicRun } from "../protocol/hub-gen";
 import { STATUS } from "./status";
@@ -644,7 +644,7 @@ export function WorkItemPanel({
                   : "Plano por agente e motor no hub: uma sessão por sub-issue, com o modelo de cada uma"
               }
               onClick={() =>
-                epicRun ? nav.openTab(hubTab("epic-runs", { run: epicRun.id })) : setRunDialog(true)
+                epicRun ? nav.openTab(epicRunTab(epicRun)) : setRunDialog(true)
               }
             >
               {epicRun ? "Ver execução do épico" : "Executar épico"}
@@ -956,7 +956,7 @@ export function WorkItemPanel({
           onStarted={(r) => {
             setRunDialog(false);
             setEpicRun(r);
-            nav.openTab(hubTab("epic-runs", { run: r.id }));
+            nav.openTab(epicRunTab(r));
           }}
         />
       )}

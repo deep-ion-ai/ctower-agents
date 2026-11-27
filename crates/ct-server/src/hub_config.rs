@@ -32,7 +32,10 @@
 
 use crate::checkout::{ensure_checkout, expand_home};
 use crate::hub_sync::{status_error, HubSender, MAX_BACKOFF};
-use ct_http::sync::{ConfigProject, ConfigReply, ConfigResponse, ENV_ID_HEADER, ENV_PUBKEY_HEADER};
+use ct_http::sync::{
+    ConfigProject, ConfigReply, ConfigResponse, AGENT_TOKEN_REQUEST_HEADER, ENV_ID_HEADER,
+    ENV_PUBKEY_HEADER,
+};
 use ct_ledger::{Ledger, LocationState};
 use ct_sessions::GithubSync;
 use serde::{Deserialize, Serialize};
@@ -416,6 +419,11 @@ impl HubSender {
             .set(ct_http::sync::VERSION_HEADER, &local.version);
         if let Some(k) = &pubkey {
             req = req.set(ENV_PUBKEY_HEADER, k);
+            // Sem token de agente, o hub manda um, cifrado para a chave
+            // (#341).
+            if crate::hub_sync::agent_token(&self.sessions.config().dirs).is_none() {
+                req = req.set(AGENT_TOKEN_REQUEST_HEADER, "1");
+            }
         }
         let reply: ConfigReply = match req.call() {
             Ok(r) => r
@@ -456,6 +464,14 @@ impl HubSender {
             }
             None => None,
         };
+        if let Some(b64) = &reply.agent_token {
+            // Falha aqui não derruba o pull: sem o arquivo, o próximo pede
+            // de novo. Os erros nunca citam o token.
+            match self.store_agent_token(b64) {
+                Ok(()) => tracing::info!("hub: token de agente recebido"),
+                Err(e) => tracing::warn!("hub: token de agente não gravado: {e}"),
+            }
+        }
         let cfg = reply.config;
         let overrides = apply_connections(
             &cfg,
@@ -505,6 +521,19 @@ impl HubSender {
             );
         }
         Ok(Some((cfg, applied, secrets)))
+    }
+
+    /// Decifra o token de agente entregue pelo hub (#341) e o grava em
+    /// `hub-agent.token` (0600).
+    fn store_agent_token(&self, b64: &str) -> Result<(), String> {
+        let key = self.env_cache.ensure_key().map_err(|e| e.to_string())?;
+        let token = ct_secrets::open_agent_token(b64, &key).map_err(|e| e.to_string())?;
+        if token.is_empty() || token.chars().any(char::is_whitespace) {
+            return Err("formato inesperado".into());
+        }
+        let path = self.sessions.config().dirs.hub_agent_token_file();
+        ct_core::files::write_private_atomic(&path, format!("{}\n", token.as_str()).as_bytes())
+            .map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Puxa de `GET /sync/done` os work items `concluido` no hub e troca o

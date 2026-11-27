@@ -136,6 +136,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.epic_run.resume",
     "hub.epic_run.cancel",
     "hub.epic_run.set_parallel",
+    "hub.epic_run.set_code_review",
     "hub.epic_run.decide",
     "hub.epic_run.set_node",
     "hub.epic_run.handback",
@@ -210,6 +211,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.epic_run.resume",
     "hub.epic_run.cancel",
     "hub.epic_run.set_parallel",
+    "hub.epic_run.set_code_review",
     "hub.epic_run.decide",
     "hub.epic_run.set_node",
     "hub.epic_run.handback",
@@ -284,7 +286,7 @@ export interface HubMethods {
   "hub.autopilot.wip": { params: { owner?: string | null; repo?: string | null } | null; result: AutonomyWip[] };
   "hub.autopilot.deps.set": { params: { owner: string; repo: string; action: string; [key: string]: unknown }; result: { dependencies: DependencyEdge[] } };
   "hub.autopilot.set": { params: { [key: string]: unknown }; result: unknown };
-  "hub.epic_run.list": { params: { owner?: string | null; repo?: string | null; epic?: number | null } | null; result: EpicRun[] };
+  "hub.epic_run.list": { params: { owner?: string | null; repo?: string | null; epic?: number | null; ended_since?: number | null } | null; result: EpicRun[] };
   "hub.epic_run.status": { params: { run_id: number }; result: EpicRunView };
   "hub.epic_run.events": { params: { run_id: number; after?: number | null; limit?: number | null }; result: EpicRunEvent[] };
   "hub.epic_run.start": { params: { owner: string; repo: string; epic: number; env_id: string; max_parallel?: number | null; plan_model?: string | null; plan_effort?: string | null }; result: EpicRun };
@@ -295,6 +297,7 @@ export interface HubMethods {
   "hub.epic_run.resume": { params: { run_id: number }; result: EpicRun };
   "hub.epic_run.cancel": { params: { run_id: number }; result: EpicRun };
   "hub.epic_run.set_parallel": { params: { run_id: number; max_parallel: number }; result: EpicRun };
+  "hub.epic_run.set_code_review": { params: { run_id: number; code_review: boolean }; result: EpicRun };
   "hub.epic_run.decide": { params: { decision_id: number; answer: string; blocker?: number | null }; result: EpicDecision };
   "hub.epic_run.set_node": { params: { run_id: number; number: number; model?: string | null; effort?: string | null }; result: EpicPlan };
   "hub.epic_run.handback": { params: { run_id: number; number: number }; result: EpicNode };
