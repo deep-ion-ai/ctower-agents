@@ -7,6 +7,7 @@
 pub mod download;
 pub mod launch;
 pub mod runner;
+pub mod service;
 
 /// Erro do atualizador (mensagem pronta para o usuário).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,16 @@ pub struct Source {
 }
 
 impl Source {
+    /// De onde vêm as atualizações do ambiente (`update_repo`, `update_ref`,
+    /// `<data>/update`), sem espaços nas pontas do repositório e do ref.
+    pub fn new(repo: &str, git_ref: &str, dir: PathBuf) -> Self {
+        Source {
+            repo: repo.trim().to_string(),
+            git_ref: git_ref.trim().to_string(),
+            dir,
+        }
+    }
+
     /// Clone dedicado (nunca o de desenvolvimento do usuário).
     pub fn src(&self) -> PathBuf {
         self.dir.join("src")

@@ -1,33 +1,12 @@
-//! Atualização do ctowerd/ctower por build local (issue #90). O núcleo
-//! (verificação, estado, atualizador) fica no crate `ct-update`, comum com o
-//! `cthubd update`; aqui ficam o `Source` do ambiente e o disparo do
-//! `ctower update --run` numa unidade transitória do systemd.
+//! Serviço do ctowerd no updater do ambiente (issue #90): o gerenciador do
+//! serviço (systemd ou launchd) e o disparo do `ctower update --run` numa
+//! unidade transitória do systemd. O núcleo (verificação, estado e
+//! atualizador) fica no resto do crate, comum com o `cthubd update`. O
+//! `ct-server` e o `ctower` chamam daqui diretamente (#242).
 
-use crate::config::DaemonConfig;
-use crate::{Dirs, Result, SessionsError};
+use crate::Result;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-pub use ct_update::{
-    git, log_file, read_state, resolve_bin, run, running, state_file, tail, workspace_version,
-    write_state, Available, Build, Phase, Relation, Source, UpdateState,
-};
-
-impl From<ct_update::Error> for SessionsError {
-    fn from(e: ct_update::Error) -> Self {
-        SessionsError::Invalid(e.0)
-    }
-}
-
-/// De onde vêm as atualizações do ambiente (`update_repo`, `update_ref`,
-/// `<data>/update`).
-pub fn source(cfg: &DaemonConfig, dirs: &Dirs) -> Source {
-    Source {
-        repo: cfg.update_repo.trim().to_string(),
-        git_ref: cfg.update_ref.trim().to_string(),
-        dir: dirs.update_dir(),
-    }
-}
 
 /// Unidade transitória do systemd onde o atualizador roda.
 pub const UNIT: &str = "ctower-update";
@@ -151,7 +130,7 @@ fn unit_program(unit: &str) -> Option<&str> {
 /// (`ct_update::launch`): no systemd, na unidade transitória [`UNIT`]; no
 /// launchd, num processo com sessão nova.
 pub fn spawn_runner(systemd_run: &str, ctower: &Path, rollback: bool) -> Result<()> {
-    use ct_update::launch::{spawn, Launch};
+    use crate::launch::{spawn, Launch};
     let args: &[&str] = if rollback {
         &["update", "--run", "--rollback"]
     } else {
@@ -167,7 +146,7 @@ pub fn spawn_runner(systemd_run: &str, ctower: &Path, rollback: bool) -> Result<
             pass_env: PASS_ENV,
         }
     };
-    Ok(spawn(how, ctower, args)?)
+    spawn(how, ctower, args)
 }
 
 /// `systemd-run` (ou `CTOWER_SYSTEMD_RUN`, nos testes).

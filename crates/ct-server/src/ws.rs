@@ -1731,7 +1731,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn verificacao_de_atualizacao() {
-        use ct_sessions::update::{git, run, Build, Source};
+        use ct_update::{git, run, Build, Source};
         let mut srv = Srv::new(FakeClaude::exit(0));
         let url = spawn_server(&srv).await;
         let mut ui = Ui::new(&url).await;
@@ -1835,7 +1835,7 @@ mod tests {
                 t = tmp.display()
             ),
         );
-        let source = ct_sessions::update::Source {
+        let source = ct_update::Source {
             repo: "/nao-usado".into(),
             git_ref: "main".into(),
             dir: dir.clone(),
@@ -1843,7 +1843,7 @@ mod tests {
         srv.state.updates = Some(Arc::new(
             crate::update::Updates::new(
                 source,
-                ct_sessions::update::Build::current(),
+                ct_update::Build::current(),
                 srv.state.events.clone(),
             )
             .with_ctower(ctower)
@@ -1902,12 +1902,12 @@ mod tests {
 
         let dir = srv.env.tmp.path().join("upd");
         let updates = Arc::new(crate::update::Updates::new(
-            ct_sessions::update::Source {
+            ct_update::Source {
                 repo: "/nao-usado".into(),
                 git_ref: "main".into(),
                 dir,
             },
-            ct_sessions::update::Build::current(),
+            ct_update::Build::current(),
             srv.state.events.clone(),
         ));
         let path = srv.env.tmp.path().join("config.toml");
