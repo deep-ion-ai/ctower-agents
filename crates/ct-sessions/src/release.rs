@@ -9,8 +9,9 @@
 //! [`Sessions::release_event`] grava o desfecho de cada etapa no ledger. As
 //! duas só respondem à sessão de release.
 
-use crate::launch::{LaunchMode, LaunchSpec, PtySize};
+use crate::launch::{LaunchSpec, PtySize};
 use crate::{AgentOptions, Result, Sessions, SessionsError};
+use ct_agent::Conversation;
 use ct_core::release::{ReleaseConfig, RELEASE_WORK_ITEM};
 use ct_core::{ForgeKind, SessionState, TrackerKind, WorkItemKind};
 use ct_ledger::{NewEvent, Project, Session, WorkItem};
@@ -131,7 +132,7 @@ impl Sessions {
             &wi,
             LaunchSpec {
                 cwd: &project.repo_path,
-                mode: LaunchMode::New(&tool_session_id),
+                mode: Conversation::New(&tool_session_id),
                 prompt,
                 size: size.unwrap_or(PtySize::DEFAULT),
                 agent,
