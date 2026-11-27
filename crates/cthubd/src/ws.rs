@@ -638,6 +638,28 @@ fn plan_accounts(st: &HubState, web: bool) -> RpcResult {
     }))
 }
 
+/// `hub.control_room.projects` (#354): PRs/MRs abertos e execuções de épico
+/// ativas de todos os projetos, do `hub.db`. O hub marca se o ambiente de
+/// cada execução está com o canal aberto; na web, os textos livres (motivo
+/// da pausa, texto do pedido, mensagem do motor) saem com a máscara de
+/// secrets do log.
+fn control_room(st: &HubState, web: bool) -> RpcResult {
+    let mut v = st
+        .hub
+        .lock()
+        .control_room_projects(ct_core::now_ms())
+        .map_err(|e| (-32000, e.to_string()))?;
+    for p in &mut v.projects {
+        for r in &mut p.epic_runs {
+            r.mark_env(st.channels.is_online(&r.env_id));
+            if web {
+                r.map_text(|t| ct_http::logs::mask(t).into_owned());
+            }
+        }
+    }
+    Ok(json!(v))
+}
+
 /// Resposta de `hub.web.sessions.revoke`.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -816,6 +838,12 @@ async fn call(st: &HubState, method: &str, p: Value, web_session: Option<&str>) 
         "hub.logs.tail" => ct_http::logs::rpc_tail(ct_http::logs::global(), &p).await,
         "hub.workitem.body" => workitem_body(st, p).await,
         "hub.release.status" => crate::release::status(st, p).await,
+        "hub.control_room.projects" => {
+            let (st, web) = (st.clone(), web_session.is_some());
+            tokio::task::spawn_blocking(move || control_room(&st, web))
+                .await
+                .map_err(|e| (-32603, e.to_string()))?
+        }
         "hub.tracker.add_issue" => tracker_add_issue(st, p).await,
         m if m.starts_with("hub.update.") => update_call(st, method, &p).await,
         "hub.projects.add" | "hub.projects.update" => {
@@ -2252,6 +2280,9 @@ mod export {
         ct_hub_store::EpicDecision::export_all_to(&dir).unwrap();
         ct_hub_store::EpicRunEvent::export_all_to(&dir).unwrap();
         crate::epic_run::rpc::EpicRunView::export_all_to(&dir).unwrap();
+        // Sala de controle (#354).
+        ct_hub_store::ControlRoomProjects::export_all_to(&dir).unwrap();
+        crate::ControlRoomChanged::export_all_to(&dir).unwrap();
         ct_core::plan::budget::BudgetDecision::export_all_to(&dir).unwrap();
         HubStatus::export_all_to(&dir).unwrap();
         BackupConfigView::export_all_to(&dir).unwrap();
@@ -2559,6 +2590,132 @@ pub(crate) mod tests {
         // Dentro do registro, o despacho segue: o projeto de teste existe.
         let r = call(&st, "hub.projects.list", json!({}), None).await;
         assert!(r.is_ok());
+    }
+
+    /// #354: `hub.control_room.projects` traz as execuções ativas de todos os
+    /// projetos, marca o ambiente sem canal e, na web, mascara os textos
+    /// livres; a mudança de uma execução avisa a Sala de controle.
+    #[tokio::test]
+    async fn sala_de_controle_por_projeto() {
+        let st = HubState::new(
+            SharedHub::new(Hub::open_in_memory().unwrap()),
+            "ui",
+            "hub",
+            "hub-id",
+        );
+        let (paused, running) = {
+            let h = st.hub.lock();
+            let mut runs = vec![];
+            for repo in ["acme-web", "acme-api"] {
+                let pid = h
+                    .add_project(&ct_hub_store::NewHubProject {
+                        owner: "acme".into(),
+                        repo: repo.into(),
+                        name: repo.into(),
+                        base_branch: "develop".into(),
+                        protected_branches: vec![],
+                    })
+                    .unwrap()
+                    .project
+                    .id;
+                runs.push(
+                    h.create_epic_run(
+                        &ct_hub_store::NewEpicRun {
+                            project_id: pid,
+                            epic: 10,
+                            env_id: "env-a".into(),
+                            started_by: "fulano".into(),
+                            max_parallel: None,
+                            plan_model: None,
+                            plan_effort: None,
+                        },
+                        1,
+                    )
+                    .unwrap(),
+                );
+            }
+            (runs[0].id, runs[1].id)
+        };
+        {
+            let h = st.hub.lock();
+            h.save_epic_plan_draft(
+                paused,
+                &ct_hub_store::EpicPlanDraft {
+                    nodes: vec![ct_hub_store::EpicPlanNodeInput {
+                        number: 11,
+                        model: Some("sonnet".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                2,
+            )
+            .unwrap();
+            h.approve_epic_plan(
+                paused,
+                &ct_hub_store::EpicApproval {
+                    version: 1,
+                    approved_by: "fulano".into(),
+                    max_parallel: 2,
+                    code_review: false,
+                    fingerprints: Default::default(),
+                },
+                3,
+            )
+            .unwrap();
+            h.set_epic_run_status(
+                paused,
+                ct_core::EpicRunStatus::Pausado,
+                Some("pausa: token=abc123"),
+                None,
+                4,
+            )
+            .unwrap();
+        }
+        let runs = |v: &Value| -> Vec<Value> {
+            v["projects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|p| p["epic_runs"].as_array().unwrap().clone())
+                .collect()
+        };
+        let ui = call(&st, "hub.control_room.projects", Value::Null, None)
+            .await
+            .unwrap();
+        let r = runs(&ui);
+        assert_eq!(r.len(), 2, "{ui}");
+        let by_id = |id: i64| r.iter().find(|x| x["run_id"] == id).unwrap().clone();
+        // Sem canal do ambiente: a planejando espera o ambiente; a pausada
+        // fica com o motivo da pausa.
+        assert_eq!(by_id(running)["env_online"], false);
+        assert_eq!(by_id(running)["stop"]["kind"], "ambiente_fora");
+        assert_eq!(by_id(paused)["stop"]["kind"], "pausado");
+        assert_eq!(by_id(paused)["stop"]["reason"], "pausa: token=abc123");
+        assert_eq!(
+            (
+                by_id(paused)["done"].clone(),
+                by_id(paused)["total"].clone()
+            ),
+            (json!(0), json!(1))
+        );
+        // Na web, com a máscara.
+        let web = call(&st, "hub.control_room.projects", Value::Null, Some("web-1"))
+            .await
+            .unwrap();
+        let w = runs(&web);
+        let p = w.iter().find(|x| x["run_id"] == paused).unwrap();
+        assert_eq!(p["stop"]["reason"], "pausa: token=***");
+        assert!(!web.to_string().contains("abc123"));
+
+        let mut rx = st.events.subscribe();
+        st.epic_runs_changed();
+        let events: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(events.iter().any(|e| e["event"] == "hub.epic_run.changed"));
+        assert!(events
+            .iter()
+            .any(|e| e["event"] == crate::CONTROL_ROOM_PUSH && e["data"]["project_id"].is_null()));
+        assert!(crate::web::web_allowed("hub.control_room.projects"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

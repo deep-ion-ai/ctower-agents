@@ -382,6 +382,15 @@ pub const METHODS: &[MethodSpec] = &[
         result: "TrackerIssueAdded",
         scopes: UI_WEB,
     },
+    // Sala de controle (#354): PRs/MRs abertos com os checks e execuções de
+    // épico ativas de todos os projetos, do espelho; relida no push
+    // `hub.control_room.changed`.
+    MethodSpec {
+        name: "hub.control_room.projects",
+        params: "null",
+        result: "ControlRoomProjects",
+        scopes: UI_WEB,
+    },
     MethodSpec {
         name: "hub.release.status",
         params: "{ owner: string; repo: string }",

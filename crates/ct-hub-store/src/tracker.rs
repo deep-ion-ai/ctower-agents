@@ -692,6 +692,7 @@ mod tests {
         // De quem não é o ambiente de sync: ack, nada aplicado.
         let r = hub.ingest("b", "b", &lote).unwrap();
         assert_eq!((r.applied, r.mirror_rejected), (0, 3));
+        assert_eq!(r.pr_mirrors, 0);
         assert_eq!(r.mirror_rejected_projects, vec!["grupo/projeto/app"]);
         assert_eq!(r.last_seq, 3);
         assert!(hub.list_issues(p.id).unwrap().is_empty());
@@ -701,6 +702,15 @@ mod tests {
         // Do ambiente de sync: issue, MR (com o work item) e o estado.
         let r = hub.ingest("a", "a", &lote).unwrap();
         assert_eq!((r.applied, r.mirror_rejected), (3, 0));
+        // O MR aplicado avisa a Sala de controle (#354), que o mostra pela
+        // chave do Jira, sem checks no espelho.
+        assert_eq!(r.pr_mirrors, 1);
+        let cr = hub.control_room_projects(1).unwrap();
+        let cp = &cr.projects[0];
+        assert_eq!(cp.forge, ct_core::ForgeKind::Gitlab);
+        assert_eq!(cp.prs[0].number, 77);
+        assert_eq!(cp.prs[0].title.as_deref(), Some("Issue 5450"));
+        assert_eq!(cp.prs[0].checks.state, crate::ControlRoomChecksState::None);
         let i = hub.get_issue(p.id, 5450).unwrap().unwrap();
         assert_eq!(
             (i.title.as_str(), i.parent_number),
