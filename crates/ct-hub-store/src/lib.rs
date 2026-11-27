@@ -30,6 +30,7 @@ mod autopilot_deps;
 mod autopilot_run;
 mod config;
 mod connection;
+mod control_room;
 mod digest;
 mod env_keys;
 mod epic_run;
@@ -79,6 +80,11 @@ pub use config::{
     DeleteImpact, HubProjectPatch, NewHubProject, ProjectAdded, ProjectProvider, QuarantineGroup,
 };
 pub use connection::{ConnectionPatch, ConnectionTest, NewConnection};
+pub use control_room::{
+    ControlRoomChecks, ControlRoomChecksState, ControlRoomEpicNode, ControlRoomEpicRun,
+    ControlRoomPr, ControlRoomProject, ControlRoomProjects, ControlRoomStop, ControlRoomStopKind,
+    EPIC_FAILURE_EVENTS,
+};
 pub use digest::{
     digest_push_body, AutonomyWip, DigestIssue, DigestProject, DigestUsage, MorningDigest,
 };
@@ -1216,6 +1222,9 @@ pub struct IngestResult {
     pub mirror_rejected_projects: Vec<String>,
     /// Propostas de regras do agente recebidas (pendentes): a UI relê.
     pub rules_proposals: usize,
+    /// Linhas `pr_mirror` aplicadas (MRs de projeto Jira): a Sala de
+    /// controle relê (#354).
+    pub pr_mirrors: usize,
 }
 
 /// Situação de um projeto no hub para a ingestão.
@@ -1627,6 +1636,9 @@ impl Hub {
                         out.applied += 1;
                         if matches!(e.change, SyncChange::RulesProposal(_)) {
                             out.rules_proposals += 1;
+                        }
+                        if matches!(e.change, SyncChange::PrMirror(_)) {
+                            out.pr_mirrors += 1;
                         }
                     } else {
                         out.mirror_rejected += 1;

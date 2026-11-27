@@ -266,7 +266,13 @@ impl HubGithub {
         }
         let result = match fetched {
             Ok(snap) => {
+                // PRs abertos e checks antes e depois: mudou, a Sala de
+                // controle relê (#354).
+                let before = h.control_room_pr_stamp(project_id)?;
                 let applied = h.apply_github(&snap, &self.hub_id)?;
+                if h.control_room_pr_stamp(project_id)? != before {
+                    let _ = self.events.send(crate::control_room_push(Some(project_id)));
+                }
                 for g in &applied.removed {
                     tracing::warn!("github: projeto {project_id}: {g}, removida do espelho");
                 }
@@ -576,9 +582,20 @@ mod tests {
         let w = h.find_work_item(o, r, 5).unwrap().unwrap();
         assert_eq!(w.status, WorkItemStatus::EmRevisao);
         assert_eq!(h.prs_for_work_item(w.id).unwrap()[0].number, 40);
+        let pid = h.find_project(o, r).unwrap().unwrap().id;
+        drop(h);
+        // PR novo no espelho: a Sala de controle relê (#354), antes do status.
+        let ev = rx.try_recv().unwrap();
+        assert_eq!(ev["event"], crate::CONTROL_ROOM_PUSH);
+        assert_eq!(ev["data"]["project_id"], pid);
         let ev = rx.try_recv().unwrap();
         assert_eq!(ev["event"], "hub_sync_status");
         assert_eq!(ev["data"]["ok"], true);
+        // Rodada sem mudança nos PRs abertos: só o status.
+        assert!(sync.sync_all().unwrap()[0].ok);
+        let ev = rx.try_recv().unwrap();
+        assert_eq!(ev["event"], "hub_sync_status");
+        assert!(rx.try_recv().is_err());
     }
 
     /// #355: o sync do hub guarda a última release e os PRs mesclados na base

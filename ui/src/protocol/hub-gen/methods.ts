@@ -9,6 +9,7 @@ import type { AutopilotStatus } from "./AutopilotStatus";
 import type { BackupConfigView } from "./BackupConfigView";
 import type { BudgetDecision } from "./BudgetDecision";
 import type { BudgetPolicy } from "./BudgetPolicy";
+import type { ControlRoomProjects } from "./ControlRoomProjects";
 import type { DeleteImpact } from "./DeleteImpact";
 import type { DependencyEdge } from "./DependencyEdge";
 import type { EpicDecision } from "./EpicDecision";
@@ -158,6 +159,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.secrets.delete",
     "hub.secrets.rotate_pending_dismiss",
     "hub.tracker.add_issue",
+    "hub.control_room.projects",
     "hub.release.status",
   ],
   web: [
@@ -219,6 +221,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.epic_run.set_node",
     "hub.epic_run.handback",
     "hub.tracker.add_issue",
+    "hub.control_room.projects",
     "hub.release.status",
   ],
 } as const;
@@ -321,6 +324,7 @@ export interface HubMethods {
   "hub.secrets.delete": { params: { scope: "global" | { project: string }; name: string }; result: SecretChanged | {} };
   "hub.secrets.rotate_pending_dismiss": { params: null; result: {} };
   "hub.tracker.add_issue": { params: { owner: string; repo: string; key: string | number }; result: TrackerIssueAdded };
+  "hub.control_room.projects": { params: null; result: ControlRoomProjects };
   "hub.release.status": { params: { owner: string; repo: string }; result: HubReleaseStatus };
 }
 
