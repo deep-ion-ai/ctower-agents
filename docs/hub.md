@@ -706,6 +706,20 @@ Se o agente imprimir um secret (`env`, `echo $API_TOKEN`), o valor acabaria no s
 - **Cache novo com a sessão no ar** (#165): quando um pull regrava o cache, o `ctowerd` soma ao conjunto de cada sessão viva os secrets atuais do projeto dela, **mantendo os anteriores** (a saída antiga ainda pode trazer o valor velho). Vale para a saída do PTY dali em diante (a cauda pendente do filtro continua valendo) e para o backup do transcript. O scrollback já emitido não é reescrito.
 - **Resume:** a sessão retomada recebe os valores atuais do cache e mascara esses. Um valor injetado antes e trocado no hub depois não é mais mascarado.
 
+##### O que a máscara não protege (#335)
+
+A máscara age só na saída que o Control Tower mostra e grava. O agente roda antes dela, então um valor impresso na sessão (o token de uma conexão ou um secret do hub):
+
+- **chega aberto ao contexto do modelo.** Não há como protegê-lo: a saída da ferramenta entra no contexto antes de qualquer filtro do Control Tower, e os hooks do Claude Code não reescrevem a saída de `Bash`;
+- **fica aberto no arquivo de sessão do próprio Claude Code** (`~/.claude/projects/.../*.jsonl`, na máquina do ambiente). O Control Tower não altera esse arquivo: reescrevê-lo com a sessão no ar, ou depois dela, arrisca a retomada e disputa o arquivo com o Claude. Só a cópia em `transcripts/` é mascarada.
+
+Recomendações:
+
+- use credenciais de **escopo mínimo** (token fine-grained, só os repositórios e permissões necessários) e, quando possível, de curta duração;
+- se uma credencial foi impressa numa sessão, trate-a como exposta e **troque-a** no hub (a nova vale nas sessões seguintes);
+- proteja o diretório `~/.claude` do ambiente como protegeria qualquer segredo local (permissões do usuário, disco cifrado, sem backup para fora da máquina);
+- peça ao agente que não imprima variáveis de credencial (`env`, `printenv`, `echo $TOKEN`): a máscara é uma rede de segurança, não uma garantia.
+
 ### Secrets e variáveis pela UI do hub
 
 Os secrets e as variáveis são cadastrados pelo `/ws` do hub (token de UI do hub, #165). A UI só escreve secrets: nenhuma resposta nem erro carrega o valor de um, e editar é digitar um valor novo.
