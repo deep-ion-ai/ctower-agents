@@ -4,7 +4,7 @@
 
 use crate::autopilot::runner::{EnvPort, HubPort};
 use crate::HubState;
-use ct_core::{EpicNodeState, EpicRunStatus};
+use ct_core::{EpicNodeState, EpicRunStatus, PrState};
 use ct_http::rpc::{i64_param, invalid, str_param, RpcResult};
 use ct_hub_store::{
     EpicApproval, EpicDecision, EpicNode, EpicNodePatch, EpicPlan, EpicRun, EpicRunEvent, Hub,
@@ -33,6 +33,10 @@ pub struct EpicRunView {
     pub titles: BTreeMap<i64, String>,
     /// Último ciclo do motor (ms).
     pub last_tick_at: Option<i64>,
+    /// O PR do épico (`wip` → base), do espelho: o aberto ou, sem ele, o
+    /// mais recente (#341). `None` = ainda não aberto.
+    #[serde(default)]
+    pub epic_pr: Option<ct_ledger::PrRow>,
 }
 
 fn ledger(e: LedgerError) -> (i64, String) {
@@ -76,7 +80,8 @@ pub fn view(h: &Hub, run: EpicRun, last_tick_at: Option<i64>) -> ct_ledger::Resu
         (Some(v), Some(p)) if p.version != v => h.epic_plan(run.id, v)?,
         _ => None,
     };
-    let titles = match h.find_project(&run.owner, &run.repo)? {
+    let project = h.find_project(&run.owner, &run.repo)?;
+    let titles = match &project {
         Some(p) => h
             .list_issues(p.id)?
             .into_iter()
@@ -84,6 +89,21 @@ pub fn view(h: &Hub, run: EpicRun, last_tick_at: Option<i64>) -> ct_ledger::Resu
             .map(|i| (i.gh_number, i.title))
             .collect(),
         None => BTreeMap::new(),
+    };
+    let epic_pr = match (&project, h.find_work_item(&run.owner, &run.repo, run.epic)?) {
+        (Some(p), Some(w)) => match w.branch.as_deref() {
+            Some(wip) => {
+                let mut prs: Vec<_> = h
+                    .prs_for_work_item(w.id)?
+                    .into_iter()
+                    .filter(|pr| pr.head == wip && pr.base == p.base_branch)
+                    .collect();
+                prs.sort_by_key(|pr| (pr.state == PrState::Open, pr.number));
+                prs.pop()
+            }
+            None => None,
+        },
+        _ => None,
     };
     Ok(EpicRunView {
         nodes: h.epic_nodes(run.id)?,
@@ -93,6 +113,7 @@ pub fn view(h: &Hub, run: EpicRun, last_tick_at: Option<i64>) -> ct_ledger::Resu
         approved,
         titles,
         last_tick_at,
+        epic_pr,
         run,
     })
 }
@@ -163,7 +184,12 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                             let epic = i64_param(&p, "epic")?;
                             h.epic_runs(pid, epic).map_err(ledger)?
                         }
-                        _ => h.active_epic_runs().map_err(ledger)?,
+                        // Com `ended_since` (ms), também as encerradas desde
+                        // então: o histórico do índice (#341).
+                        _ => match p.get("ended_since").and_then(Value::as_i64) {
+                            Some(since) => h.epic_runs_with_history(since).map_err(ledger)?,
+                            None => h.active_epic_runs().map_err(ledger)?,
+                        },
                     };
                     Ok((json!(runs), false))
                 }
@@ -214,17 +240,8 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                             project.item_ref(epic)
                         )));
                     }
-                    if h.find_work_item(owner, repo, epic)
-                        .map_err(ledger)?
-                        .and_then(|w| w.branch)
-                        .is_none()
-                    {
-                        return Err(invalid(format!(
-                            "{} ainda não tem branch de integração: inicie uma sessão do épico \
-                         uma vez para criar a wip",
-                            project.item_ref(epic)
-                        )));
-                    }
+                    // Sem a `wip`, o motor pede ao ambiente que a crie
+                    // antes da sessão de plano (#341).
                     let run = h
                         .create_epic_run(
                             &NewEpicRun {
@@ -385,6 +402,29 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     event(&h, &run, "parallel_set", None, format!("paralelismo: {n}"));
                     Ok((json!(run), true))
                 }
+                "hub.epic_run.set_code_review" => {
+                    let run = run_of(&h, &p)?;
+                    let on = p
+                        .get("code_review")
+                        .and_then(Value::as_bool)
+                        .ok_or_else(|| {
+                            invalid("parâmetro obrigatório: code_review (true ou false)")
+                        })?;
+                    let run = h
+                        .set_epic_run_code_review(run.id, on, now)
+                        .map_err(ledger)?;
+                    event(
+                        &h,
+                        &run,
+                        "code_review_set",
+                        None,
+                        format!(
+                            "/code-review na integração: {}",
+                            if on { "ligado" } else { "desligado" }
+                        ),
+                    );
+                    Ok((json!(run), true))
+                }
                 "hub.epic_run.set_node" => {
                     let run = run_of(&h, &p)?;
                     let n = i64_param(&p, "number")?;
@@ -401,6 +441,11 @@ pub(crate) async fn call(st: &HubState, method: &str, p: Value, web: bool) -> Rp
                     let run = run_of(&h, &p)?;
                     let n = i64_param(&p, "number")?;
                     let node = h.restore_epic_node(run.id, n, now).map_err(ledger)?;
+                    // O pedido de merge sai de novo (#341): o anterior pode ter
+                    // caído num diálogo que o desenvolvedor acabou de fechar.
+                    if let Some(w) = h.find_work_item(&run.owner, &run.repo, n).map_err(ledger)? {
+                        h.forget_close_merge(w.id).map_err(ledger)?;
+                    }
                     event(
                         &h,
                         &run,
@@ -945,19 +990,123 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+        // Com `ended_since`, a cancelada aparece no histórico (#341).
+        let hist = rpc(&st, "hub.epic_run.list", json!({ "ended_since": 0 }))
+            .await
+            .unwrap();
+        assert_eq!(hist.as_array().unwrap().len(), 1, "{hist}");
+        assert_eq!(hist[0]["status"], "cancelado");
+        let futuro = rpc(&st, "hub.epic_run.list", json!({ "ended_since": i64::MAX }))
+            .await
+            .unwrap();
+        assert!(futuro.as_array().unwrap().is_empty());
     }
 
+    /// #341: o `/code-review` da integração liga e desliga depois da
+    /// aprovação, até a sessão de integração começar.
     #[tokio::test]
-    async fn sem_wip_nao_dispara() {
-        let st = state(false);
-        let e = rpc(
+    async fn code_review_muda_ate_a_integracao_comecar() {
+        let st = state(true);
+        let run = rpc(
             &st,
             "hub.epic_run.start",
             json!({ "owner": "acme", "repo": "acme-web", "epic": 10, "env_id": "env-a" }),
         )
         .await
+        .unwrap();
+        let id = run["id"].as_i64().unwrap();
+        assert_eq!(run["code_review"], false);
+        let r = rpc(
+            &st,
+            "hub.epic_run.set_code_review",
+            json!({ "run_id": id, "code_review": true }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r["code_review"], true);
+        let ev = st.hub.lock().epic_run_events(id, 0, 50).unwrap();
+        assert!(ev
+            .iter()
+            .any(|e| e.kind == "code_review_set" && e.message.contains("ligado")));
+        // Sem o valor: recusa.
+        assert!(
+            rpc(&st, "hub.epic_run.set_code_review", json!({ "run_id": id }))
+                .await
+                .is_err()
+        );
+        // Com a integração já começada: recusa, com o motivo.
+        st.hub
+            .lock()
+            .conn()
+            .execute(
+                "UPDATE epic_run SET integration_session = 's-int' WHERE id = ?1",
+                [id],
+            )
+            .unwrap();
+        let e = rpc(
+            &st,
+            "hub.epic_run.set_code_review",
+            json!({ "run_id": id, "code_review": false }),
+        )
+        .await
         .unwrap_err();
-        assert!(e.1.contains("branch de integração"), "{e:?}");
+        assert!(e.1.contains("integração já começou"), "{e:?}");
+    }
+
+    /// #341: a visão traz o PR do épico (`wip` → base), o aberto antes do
+    /// fechado.
+    #[tokio::test]
+    async fn visao_traz_o_pr_do_epico() {
+        let st = state(true);
+        let run = rpc(
+            &st,
+            "hub.epic_run.start",
+            json!({ "owner": "acme", "repo": "acme-web", "epic": 10, "env_id": "env-a" }),
+        )
+        .await
+        .unwrap();
+        let id = run["id"].as_i64().unwrap();
+        let v = rpc(&st, "hub.epic_run.status", json!({ "run_id": id }))
+            .await
+            .unwrap();
+        assert!(v["epic_pr"].is_null(), "{v}");
+        {
+            let h = st.hub.lock();
+            let pid = h.find_project("acme", "acme-web").unwrap().unwrap().id;
+            let wi = h
+                .find_work_item("acme", "acme-web", 10)
+                .unwrap()
+                .unwrap()
+                .id;
+            h.conn()
+                .execute_batch(&format!(
+                    "INSERT INTO pr_cache (project_id, number, work_item_id, head, base, state, url,
+                                           updated_at, synced_at)
+                     VALUES ({pid}, 90, {wi}, 'wip/10-x', 'develop', 'closed', 'u90', 1, 1),
+                            ({pid}, 91, {wi}, 'wip/10-x', 'develop', 'open', 'u91', 2, 2),
+                            ({pid}, 92, {wi}, 'feat/10-y', 'develop', 'open', 'u92', 3, 3);"
+                ))
+                .unwrap();
+        }
+        let v = rpc(&st, "hub.epic_run.status", json!({ "run_id": id }))
+            .await
+            .unwrap();
+        assert_eq!(v["epic_pr"]["number"], 91, "{v}");
+        assert_eq!(v["epic_pr"]["url"], "u91");
+    }
+
+    /// #341: o épico sem `wip` dispara; o motor a cria antes do plano.
+    #[tokio::test]
+    async fn sem_wip_dispara() {
+        let st = state(false);
+        let run = rpc(
+            &st,
+            "hub.epic_run.start",
+            json!({ "owner": "acme", "repo": "acme-web", "epic": 10, "env_id": "env-a" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(run["status"], "planejando");
     }
 
     #[tokio::test]
@@ -1038,6 +1187,30 @@ mod tests {
             st.hub.lock().epic_node(id, 11).unwrap().unwrap().state,
             EpicNodeState::Assumida
         );
+        // Pedido de merge já enviado (#341): a devolução o esquece, para o
+        // motor pedir de novo; as tentativas ficam.
+        let wi = {
+            let h = st.hub.lock();
+            h.set_work_item_branch_if_missing("acme", "acme-web", 11, "feat/11-x")
+                .unwrap();
+            let wi = h
+                .find_work_item("acme", "acme-web", 11)
+                .unwrap()
+                .unwrap()
+                .id;
+            h.save_autopilot_close(
+                &ct_hub_store::CloseState {
+                    work_item_id: wi,
+                    attempts: 2,
+                    merge_head: Some("abc".into()),
+                    last_sent_at: Some(5),
+                    ..Default::default()
+                },
+                5,
+            )
+            .unwrap();
+            wi
+        };
         let n = rpc(
             &st,
             "hub.epic_run.handback",
@@ -1046,6 +1219,15 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(n["state"], "em_execucao");
+        let c = st
+            .hub
+            .lock()
+            .autopilot_close_states()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.work_item_id == wi)
+            .unwrap();
+        assert_eq!((c.merge_head, c.attempts), (None, 2));
         // Replanejar leva a execução a replanejando.
         let d = st
             .hub

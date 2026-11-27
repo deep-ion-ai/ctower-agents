@@ -1,5 +1,5 @@
 import type { EpicNode, EpicPlan } from "../protocol/hub-gen";
-import { areaOverlaps, closesLines, overlapPairs, overlaps, runTone, waves } from "./epicRun";
+import { areaOverlaps, closesLines, overlapPairs, overlaps, readyWait, runTone, waves } from "./epicRun";
 
 function plan(nodes: [number, string[]][], edges: [number, number][]): EpicPlan {
   return {
@@ -99,4 +99,25 @@ test("Closes de cada sub-issue mesclada e do épico; tons", () => {
   expect(runTone("aguardando_aprovacao")).toBe("attention");
   expect(runTone("aguardando_merge")).toBe("attention");
   expect(runTone("executando")).toBe("running");
+});
+
+test("pronta que espera: áreas em comum com uma viva, ou o paralelismo cheio", () => {
+  const p = plan(
+    [
+      [1, ["crates/app/src/a.rs", "docs/roteiro.md"]],
+      [2, ["docs/roteiro.md"]],
+      [3, ["ui/src/"]],
+    ],
+    [],
+  );
+  const n = (number: number, state: EpicNode["state"]) => ({ number, state }) as EpicNode;
+  expect(readyWait(p, [n(1, "em_pr"), n(2, "pronta"), n(3, "pronta")], 2, 2)).toBe("aguarda #1 (áreas em comum)");
+  expect(readyWait(p, [n(1, "em_pr"), n(2, "pronta"), n(3, "pronta")], 3, 2)).toBeNull();
+  expect(readyWait(p, [n(1, "em_pr"), n(2, "pronta"), n(3, "pronta")], 3, 1)).toBe("aguarda vaga no paralelismo");
+  // A bloqueada com PR (CI esgotado) segura; sem sessão nem PR, não.
+  const bloqueada = (pr: number | null) => ({ number: 1, state: "bloqueada", session_id: null, pr }) as EpicNode;
+  expect(readyWait(p, [bloqueada(10), n(2, "pronta")], 2, 2)).toBe("aguarda #1 (áreas em comum)");
+  expect(readyWait(p, [bloqueada(null), n(2, "pronta")], 2, 2)).toBeNull();
+  // A mesclada não segura ninguém.
+  expect(readyWait(p, [n(1, "mesclada"), n(2, "pronta")], 2, 2)).toBeNull();
 });

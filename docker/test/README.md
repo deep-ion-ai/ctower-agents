@@ -3,7 +3,7 @@
 Um par hub (`cthubd`) e ambiente (`ctowerd`) isolado, compilado do checkout atual, para testar uma branch de ponta a ponta sem tocar no hub e no ambiente de uso diário (#176).
 
 - Cada serviço tem seu próprio volume de HOME: config, `hub.db`, ledger, worktrees e o login do Claude Code e do `gh` ficam ali. Nada do HOME do host é montado.
-- Na primeira subida, o hub gera o token de sync e o token de agente do ambiente, e o ambiente se liga a ele (`hub_url = "http://hub:7879"`), como o `provision.sh --hub --env` faz numa máquina só.
+- Na primeira subida, o hub gera o token de sync do ambiente, e o ambiente se liga a ele (`hub_url = "http://hub:7879"`), como o `provision.sh --hub --env` faz numa máquina só. O token de agente o hub entrega sozinho no primeiro pull da configuração (#341).
 - Os dois sobem com `test_mode = true`: a UI pinta a barra do topo de roxo e mostra o selo **Ambiente de teste**, e o título da janela ganha `[TESTE]`.
 - As portas ficam só em `127.0.0.1` do host e são diferentes das padrão, para conviver com os daemons de verdade.
 
@@ -66,6 +66,8 @@ O hub também precisa de um token do GitHub para validar o repositório ao cadas
 ```sh
 CT_TEST_GH_TOKEN="$(gh auth token)" docker compose -f docker/test/compose.yml up -d
 ```
+
+Com o `GH_TOKEN` na subida, o ambiente configura o `gh` como credencial do git (`gh auth setup-git`), uma vez. Sem isso, o push que o daemon faz fora das sessões, como a criação da `wip` do épico pelo motor da execução de épico, falha com `could not read Username for 'https://github.com'`.
 
 **Use um repositório só de teste**, de preferência com um token restrito a ele. O sync, os PRs e a limpeza de branches falam com o GitHub de verdade: as travas do Control Tower bloqueiam o merge, mas criar PR, fechar issue e apagar branch remota acontecem de fato.
 

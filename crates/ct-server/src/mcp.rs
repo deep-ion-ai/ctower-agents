@@ -1471,8 +1471,35 @@ mod tests {
                 .all(|p| p.gh_owner != "_ctower"));
         }
 
-        // Sem o arquivo do token de agente: erro claro.
-        std::fs::remove_file(srv.env.cfg.dirs.hub_agent_token_file()).unwrap();
+        // Sem o arquivo do token de agente: o pull pede um ao hub, que o
+        // entrega cifrado (#341), e a chamada segue.
+        let file = srv.env.cfg.dirs.hub_agent_token_file();
+        std::fs::remove_file(&file).unwrap();
+        let r = call(&srv, &g.id, "portfolio_overview", json!({})).await;
+        assert_eq!(r["isError"], false, "{r}");
+        let entregue = std::fs::read_to_string(&file).unwrap();
+        assert!(entregue.trim().starts_with("cta_") && entregue.trim() != agent);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // Revogado no hub: o 401 leva a outro token, e a chamada segue.
+        assert!(hub.lock().revoke_agent_token("teste").unwrap());
+        let r = call(&srv, &g.id, "portfolio_overview", json!({})).await;
+        assert_eq!(r["isError"], false, "{r}");
+        let outro = std::fs::read_to_string(&file).unwrap();
+        assert!(outro.trim().starts_with("cta_") && outro != entregue);
+        // Sem ligação com o hub que entregue: erro claro, com o caminho à mão.
+        std::fs::remove_file(&file).unwrap();
+        srv.state.hub_sender = Some(Arc::new(HubSender::new(
+            srv.env.sessions.clone(),
+            HubTarget {
+                url: "http://127.0.0.1:9".into(),
+                token: "x".into(),
+            },
+            Duration::from_secs(1),
+        )));
         let r = call(&srv, &g.id, "portfolio_overview", json!({})).await;
         assert!(r["content"][0]["text"]
             .as_str()

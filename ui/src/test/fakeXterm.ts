@@ -34,8 +34,9 @@ export function mountTerminal(_el: HTMLElement, opts: MountOptions): MountedTerm
   terms.push(t);
   return {
     term: {
-      write: (d) => {
+      write: (d, done) => {
         t.screen += typeof d === "string" ? d : new TextDecoder().decode(d);
+        done?.();
       },
       reset: () => {
         t.screen = "";

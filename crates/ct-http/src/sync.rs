@@ -17,6 +17,11 @@ pub const ENV_ID_HEADER: &str = "x-ctower-env-id";
 /// token e cifra a entrega de secrets para ela. Sem o cabeçalho (ambiente
 /// antigo), o hub não entrega secrets.
 pub const ENV_PUBKEY_HEADER: &str = "x-ctower-env-pubkey";
+/// Pedido do token de agente no `GET /sync/config` (#341): o ambiente sem
+/// `hub-agent.token` manda `1`, e o hub responde com um token novo em
+/// [`ConfigReply::agent_token`], cifrado para a chave de
+/// [`ENV_PUBKEY_HEADER`].
+pub const AGENT_TOKEN_REQUEST_HEADER: &str = "x-ctower-agent-token-request";
 
 /// Versão do contrato de sync (`protocol`): sobe quando o que o hub e o
 /// ambiente trocam em `/sync/channel`, `/sync/push` e `/sync/config` muda.
@@ -128,6 +133,13 @@ pub struct ConfigReply {
     /// ambiente mantém o cache que tem.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<String>,
+    /// Token de agente novo do ambiente (#341), arquivo age em base64
+    /// (`ct_secrets::seal_agent_token`) cifrado só para a chave do
+    /// ambiente. Só vem quando o ambiente pediu
+    /// ([`AGENT_TOKEN_REQUEST_HEADER`]) e mandou a chave pública; o anterior
+    /// deixa de valer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
 }
 
 /// Tamanho máximo de um lote em `POST /sync/push`.
@@ -227,6 +239,11 @@ pub const APPROVAL_REQUIRED: i64 = -32052;
 /// `session.start_release` recusado pelo ambiente (#204): já há uma sessão
 /// de release viva no projeto.
 pub const RELEASE_BUSY: i64 = -32053;
+
+/// `session.start_project` com `epic_plan` recusado pelo ambiente (#341):
+/// ele não tem token de agente do hub e não conseguiu recebê-lo, e a sessão
+/// de plano não teria como gravar o plano.
+pub const AGENT_TOKEN_MISSING: i64 = -32054;
 
 /// O canal aceita `method`?
 pub fn channel_method_allowed(method: &str) -> bool {

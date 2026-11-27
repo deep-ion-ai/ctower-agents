@@ -697,6 +697,7 @@ impl Hub {
                 "sem_progresso" => "sem progresso",
                 "conflito_rebase" => "conflito de rebase",
                 "issue_alterada" => "sub-issue alterada",
+                "plano_falhou" => "plano não gravado",
                 o => o,
             };
             let item = number.map(|n| format!(" (#{n})")).unwrap_or_default();

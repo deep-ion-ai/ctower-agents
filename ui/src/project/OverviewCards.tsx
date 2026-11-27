@@ -24,6 +24,7 @@ import { changeLabel, changeRef, forgeLabel } from "../util/item";
 import type { Clone } from "./clones";
 import { entryName, markPr, markReviewed, openPr, projectEntries, useReviewEntries, type ReviewEntry } from "../review/entries";
 import { noteReviewed, reviewKey, useReviews, wasReviewed } from "../review/ui-store";
+import { ExternalLink } from "../shell/ExternalLink";
 
 /**
  * Saúde do projeto: os sinais de aviso e críticos do hub com este
@@ -240,9 +241,9 @@ export function ProjectAutonomyCard({
           )}
           {wip.pr_url && (
             <span className="hub-card-sub">
-              <a href={wip.pr_url} target="_blank" rel="noreferrer">
+              <ExternalLink href={wip.pr_url}>
                 PR {wip.branch} → {wip.base}
-              </a>{" "}
+              </ExternalLink>{" "}
               <span className="muted">({ciText(wip.ci)})</span>
             </span>
           )}

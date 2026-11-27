@@ -241,6 +241,7 @@ impl Sessions {
             }
             None => new,
         };
+        self.carry_session_marks(&old, &new)?;
         self.ledger().archive_session(&old.id, Some(&new.id))?;
         // A nova sessão tem o próprio conjunto (valores atuais do cache).
         self.forget_mask(&old.id);
@@ -249,6 +250,38 @@ impl Sessions {
             json!({ "old_session_id": old.id, "new_session_id": new.id }),
         );
         Ok(new)
+    }
+
+    /// As marcas presas ao id da sessão (a sessão de plano do épico, #299, e
+    /// a de análise do piloto, #215) passam à sessão retomada: sem elas, a
+    /// retomada perderia `epic_set_plan` ou `autopilot_set_dependencies`
+    /// (#341).
+    fn carry_session_marks(&self, old: &Session, new: &Session) -> Result<()> {
+        let l = self.ledger();
+        let project_id = l.get_work_item(old.work_item_id)?.project_id;
+        for kind in [
+            crate::epic_plan::EPIC_PLAN,
+            crate::autonomy::AUTOPILOT_ANALYSIS,
+        ] {
+            let marks = l.list_events_of_kind(old.work_item_id, kind)?;
+            let Some(mark) = marks
+                .iter()
+                .rev()
+                .find(|e| e.session_id.as_deref() == Some(old.id.as_str()))
+            else {
+                continue;
+            };
+            let mut payload = mark.payload.clone();
+            payload["session_id"] = json!(new.id);
+            l.append_event(NewEvent {
+                project_id,
+                work_item_id: Some(new.work_item_id),
+                session_id: Some(&new.id),
+                kind,
+                payload,
+            })?;
+        }
+        Ok(())
     }
 
     /// Descarta uma sessão `interrupted`/`exited` da recuperação.
@@ -427,6 +460,51 @@ mod tests {
         drop(l);
         env.sessions.kill(&new.id).unwrap();
         env.sessions.kill(&old.id).ok();
+    }
+
+    /// #341: a sessão de plano do épico retomada continua sendo a sessão de
+    /// plano (vê `epic_set_plan`); a sessão comum continua comum.
+    #[test]
+    fn retomar_a_sessao_de_plano_mantem_a_marca() {
+        let env = TestEnv::new(FakeClaude::sleep(30));
+        let plano = env
+            .sessions
+            .start_epic_plan(
+                env.project_id,
+                10,
+                "planeje",
+                None,
+                &AgentOptions::default(),
+            )
+            .unwrap();
+        env.wait_fake_output(&plano.id);
+        let t = env.tmp.path().join("plano.jsonl");
+        std::fs::write(&t, "conversa\n").unwrap();
+        env.sessions
+            .ledger()
+            .set_session_tool_info(
+                &plano.id,
+                plano.tool_session_id.as_deref().unwrap(),
+                &t.to_string_lossy(),
+            )
+            .unwrap();
+        env.sessions.backup_session(&plano.id).unwrap();
+        env.sessions
+            .ledger()
+            .transition_session(&plano.id, SessionState::Interrupted, None)
+            .unwrap();
+        let new = env.sessions.resume(&plano.id, None, false).unwrap();
+        assert_ne!(new.id, plano.id);
+        assert_eq!(env.sessions.epic_plan_of(&new).unwrap(), Some(10));
+
+        let t2 = env.tmp.path().join("t.jsonl");
+        std::fs::write(&t2, "conversa\n").unwrap();
+        let comum = interrupted(&env, Some(&t2));
+        let nova = env.sessions.resume(&comum.id, None, false).unwrap();
+        assert_eq!(env.sessions.epic_plan_of(&nova).unwrap(), None);
+        for id in [&new.id, &nova.id] {
+            env.sessions.kill(id).ok();
+        }
     }
 
     /// O resume lê o cache na hora (#166): o secret gravado depois da

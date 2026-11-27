@@ -85,8 +85,8 @@ pub use env_keys::{EnvAssignmentRev, EnvPubkey, EnvSecretsInput};
 pub use epic_run::{
     EpicApproval, EpicDecision, EpicNode, EpicNodePatch, EpicPlan, EpicPlanDraft, EpicPlanEdge,
     EpicPlanNode, EpicPlanNodeInput, EpicPlanSessionInput, EpicPlanSessionNode, EpicProposal,
-    EpicRun, EpicRunEvent, EpicSessionInfo, NewEpicRun, EPIC_PLAN_MAX_NODES,
-    EPIC_PLAN_MAX_PROPOSALS,
+    EpicRun, EpicRunEvent, EpicSessionInfo, NewEpicRun, DECISION_BY_ENGINE, DECISION_RESOLVED,
+    EPIC_PLAN_MAX_NODES, EPIC_PLAN_MAX_PROPOSALS,
 };
 pub use health::{
     HealthCounts, HealthFilter, HealthKind, HealthSignal, HealthThresholds, HubHealth, Severity,
@@ -1061,6 +1061,18 @@ ALTER TABLE epic_run ADD COLUMN plan_effort TEXT;
     // épico que valida a `wip` e abre o PR para a base.
     r#"
 ALTER TABLE epic_run ADD COLUMN integration_session TEXT;
+"#,
+    // 49: pedidos de decisão que ficaram pendentes em execuções já
+    // concluídas ou canceladas, antes de o encerramento fechá-los (#341):
+    // fecham com o status da execução, pelo motor.
+    r#"
+UPDATE epic_decision
+   SET answer = (SELECT r.status FROM epic_run r WHERE r.id = epic_decision.run_id),
+       answered_at = (SELECT coalesce(r.ended_at, r.updated_at) FROM epic_run r
+                       WHERE r.id = epic_decision.run_id),
+       answered_by = 'motor'
+ WHERE answer IS NULL
+   AND run_id IN (SELECT id FROM epic_run WHERE status IN ('concluido', 'cancelado'));
 "#,
 ];
 
@@ -2171,10 +2183,21 @@ impl Hub {
 
     /// Work items com branch e não concluídos (os PRs a observar).
     pub fn github_work_items(&self, project_id: i64) -> Result<Vec<HubWorkItem>> {
+        // O concluído com PR ainda aberto no espelho continua: a issue fechou
+        // (o `Closes` do merge) antes de o PR ser relido, e sem isso o PR
+        // ficaria aberto para sempre (o do épico prende a execução, #341).
+        let open: std::collections::HashSet<i64> = self
+            .open_prs(project_id)?
+            .into_iter()
+            .map(|p| p.work_item_id)
+            .collect();
         Ok(self
             .list_work_items(project_id)?
             .into_iter()
-            .filter(|w| w.branch.is_some() && w.status != WorkItemStatus::Concluido)
+            .filter(|w| {
+                w.branch.is_some()
+                    && (w.status != WorkItemStatus::Concluido || open.contains(&w.id))
+            })
             .collect())
     }
 
@@ -2916,6 +2939,28 @@ impl Hub {
                 row_to_project,
             )
             .optional()?)
+    }
+
+    /// Grava no espelho a branch de um work item que ainda não tem uma (a
+    /// `wip` do épico que o ambiente acabou de publicar, #341), sem esperar
+    /// o sync do ambiente, que traz a mesma. Devolve a branch em vigor.
+    pub fn set_work_item_branch_if_missing(
+        &self,
+        owner: &str,
+        repo: &str,
+        gh_number: i64,
+        branch: &str,
+    ) -> Result<Option<String>> {
+        let id = self.ensure_work_item(owner, repo, gh_number)?;
+        self.conn.execute(
+            "UPDATE work_item SET branch = ?2 WHERE id = ?1 AND branch IS NULL",
+            params![id, branch],
+        )?;
+        Ok(self
+            .conn
+            .query_row("SELECT branch FROM work_item WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })?)
     }
 
     pub fn find_work_item(
@@ -4671,6 +4716,40 @@ mod tests {
         );
     }
 
+    /// #341: o work item concluído (a issue fechou pelo `Closes` do merge)
+    /// com o PR ainda aberto no espelho continua no sync, para o PR ser
+    /// relido; sem PR aberto, sai.
+    #[test]
+    fn concluido_com_pr_aberto_no_espelho_segue_no_sync() {
+        let hub = hub_com("deep-ion-ai", "demo");
+        let a = ledger("/a");
+        for n in [7, 9] {
+            let w = a.ensure_work_item(1, n, WorkItemKind::Issue).unwrap();
+            a.set_work_item_branch(w.id, &format!("feat/{n}"), "/a/wt")
+                .unwrap();
+        }
+        push(&hub, &a, "a");
+        let p = hub.find_project("deep-ion-ai", "demo").unwrap().unwrap();
+        let id = |n| {
+            hub.find_work_item("deep-ion-ai", "demo", n)
+                .unwrap()
+                .unwrap()
+                .id
+        };
+        let (w7, w9) = (id(7), id(9));
+        hub.conn
+            .execute_batch(&format!(
+                "UPDATE work_item SET status = 'concluido' WHERE id IN ({w7}, {w9});
+                 INSERT INTO pr_cache (project_id, number, work_item_id, head, base, state, url,
+                                       updated_at, synced_at)
+                 VALUES ({pid}, 70, {w7}, 'feat/7', 'develop', 'open', 'u', 1, 1);",
+                pid = p.id
+            ))
+            .unwrap();
+        let ws = hub.github_work_items(p.id).unwrap();
+        assert_eq!(ws.iter().map(|w| w.gh_number).collect::<Vec<_>>(), vec![7]);
+    }
+
     #[test]
     fn hub_sincroniza_projeto_sem_clone_e_deduplica_com_o_ambiente() {
         use crate::{GithubSnapshot, PrRow};
@@ -5502,7 +5581,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, HUB_MIGRATIONS.len() as i64);
-        assert_eq!(v, 48);
+        assert_eq!(v, 49);
         let k = hub.env_pubkey("env-nb").unwrap().unwrap();
         assert_eq!(k.pubkey, "age1chave");
         assert_eq!(k.delivered.as_deref(), Some("age1chave"));

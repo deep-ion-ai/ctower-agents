@@ -384,11 +384,12 @@ function HubSection({ env }: { env: EnvView }) {
           <h3 id={`env-hub-cli-${env.id}`}>{linked === false ? "Ligar ao hub" : "Tokens (pela CLI)"}</h3>
         </div>
         <p className="muted">
-          Ligar o ambiente ao hub e dar o token do gestor é pela CLI. Na máquina do hub,{" "}
+          Ligar o ambiente ao hub é pela CLI. Na máquina do hub,{" "}
           <span className="mono">cthubd add-env {info?.env_name ?? "<nome>"}</span> gera o token de sync; no ambiente,{" "}
           <span className="mono">ctower hub set-token</span> o grava (lido do stdin; ex.:{" "}
           <span className="mono">cthubd add-env {info?.env_name ?? "<nome>"} | ctower hub set-token</span>) e o{" "}
-          <span className="mono">hub_url</span> vai no config.toml. Para o gestor,{" "}
+          <span className="mono">hub_url</span> vai no config.toml. O token de agente (gestor, plano de épico) o hub
+          entrega sozinho no envio da configuração; à mão,{" "}
           <span className="mono">cthubd agent-token {info?.env_name ?? "<nome>"}</span> e{" "}
           <span className="mono">ctower hub set-agent-token</span>.
         </p>

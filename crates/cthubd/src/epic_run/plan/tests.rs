@@ -119,6 +119,7 @@ fn snap(status: EpicRunStatus, plan: Vec<EpicPlanNode>, edges: Vec<EpicPlanEdge>
         idle_timeout_min: 30,
         handback_at: BTreeMap::new(),
         integration: IntegrationSnap::default(),
+        revivals: BTreeMap::new(),
     }
 }
 
@@ -139,6 +140,8 @@ fn with_session(s: &mut Snapshot, n: i64, state: EpicNodeState, sess: SessionSta
             state: sess,
             idle_since: (sess == SessionState::Idle).then_some(T - 60_000),
             human_input_at: None,
+            waiting: None,
+            running_at: None,
         },
     );
 }
@@ -497,6 +500,155 @@ fn sessao_sumida_pede_decisao_depois_da_folga() {
     assert_eq!(asks(&decide(&s)).len(), 1);
     s.pending
         .insert((Some(11), EpicDecisionOrigin::SemProgresso));
+    assert!(asks(&decide(&s)).is_empty());
+}
+
+/// #341: sessão interrompida (ambiente reiniciado) é retomada sem pedir
+/// decisão, até o limite da hora; com o ambiente fora do ar, espera.
+#[test]
+fn sessao_interrompida_retoma_ate_o_limite() {
+    let revives = |o: &Outcome| -> Vec<(i64, String)> {
+        o.actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Revive {
+                    number, session_id, ..
+                } => Some((*number, session_id.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut s = snap(EpicRunStatus::Executando, vec![pnode(11, &[])], vec![]);
+    with_session(&mut s, 11, EpicNodeState::EmPr, SessionState::Interrupted);
+    let o = decide(&s);
+    assert_eq!(revives(&o), vec![(11, "s-11".to_string())]);
+    assert!(asks(&o).is_empty());
+    // Ambiente fora do ar: nem retoma nem pede.
+    s.env_online = false;
+    let o = decide(&s);
+    assert!(revives(&o).is_empty() && asks(&o).is_empty(), "{o:?}");
+    // No limite da hora: pede decisão, como a sessão encerrada.
+    s.env_online = true;
+    s.revivals.insert(11, REVIVE_MAX_PER_HOUR);
+    let o = decide(&s);
+    assert!(revives(&o).is_empty());
+    assert_eq!(
+        asks(&o),
+        vec![(Some(11), EpicDecisionOrigin::SemProgresso, true)]
+    );
+    // Encerrada (não interrompida) continua pedindo decisão.
+    let mut s = snap(EpicRunStatus::Executando, vec![pnode(11, &[])], vec![]);
+    with_session(&mut s, 11, EpicNodeState::EmExecucao, SessionState::Exited);
+    assert!(revives(&decide(&s)).is_empty());
+}
+
+/// #341: a bloqueada (CI esgotado) com sessão e PR ainda ocupa as áreas e
+/// a vaga; sem sessão nem PR, não.
+#[test]
+fn bloqueada_com_sessao_ocupa_areas_e_vaga() {
+    let mut s = snap(
+        EpicRunStatus::Executando,
+        vec![
+            pnode(11, &["docs/roteiro.md"]),
+            pnode(12, &["docs/roteiro.md"]),
+        ],
+        vec![],
+    );
+    with_session(&mut s, 11, EpicNodeState::Bloqueada, SessionState::Idle);
+    set(&mut s, 11, |x| x.pr = Some(111));
+    set(&mut s, 12, |x| x.state = EpicNodeState::Pronta);
+    s.pending.insert((Some(11), EpicDecisionOrigin::CiEsgotado));
+    assert!(
+        starts(&decide(&s)).is_empty(),
+        "áreas em comum com a bloqueada"
+    );
+    // Sem sobreposição, mas com o paralelismo em 1: a vaga é dela.
+    s.plan.as_mut().unwrap().nodes[1].areas = vec!["ui/".into()];
+    s.run.max_parallel = 1;
+    assert!(starts(&decide(&s)).is_empty(), "a bloqueada ocupa a vaga");
+    // Bloqueada sem sessão nem PR (esperando um bloqueante): libera.
+    s.run.max_parallel = 2;
+    s.plan.as_mut().unwrap().nodes[1].areas = vec!["docs/roteiro.md".into()];
+    set(&mut s, 11, |x| {
+        x.session_id = None;
+        x.pr = None;
+    });
+    assert_eq!(starts(&decide(&s)), vec![12]);
+}
+
+/// #341: a sessão rodando parada num pedido ao humano (permissão) vira
+/// pedido de decisão depois do prazo; respondida pelo teclado, não.
+#[test]
+fn sessao_esperando_o_humano_pede_decisao() {
+    let mut s = snap(EpicRunStatus::Executando, vec![pnode(11, &[])], vec![]);
+    with_session(&mut s, 11, EpicNodeState::EmExecucao, SessionState::Running);
+    let waiting = |at: i64| Some((at, "Claude needs your permission".to_string()));
+    s.sessions.get_mut("s-11").unwrap().waiting = waiting(T - 60_000);
+    assert!(asks(&decide(&s)).is_empty(), "antes do prazo");
+    s.sessions.get_mut("s-11").unwrap().waiting = waiting(T - WAITING_HUMAN_MS);
+    let o = decide(&s);
+    assert_eq!(
+        asks(&o),
+        vec![(Some(11), EpicDecisionOrigin::SemProgresso, true)]
+    );
+    let text = o
+        .actions
+        .iter()
+        .find_map(|a| match a {
+            Action::Ask { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(text.contains("needs your permission"), "{text}");
+    // Já pedido: não repete.
+    s.pending
+        .insert((Some(11), EpicDecisionOrigin::SemProgresso));
+    assert!(asks(&decide(&s)).is_empty());
+    s.pending.clear();
+    // Alguém respondeu no terminal depois do pedido: não pede.
+    s.sessions.get_mut("s-11").unwrap().human_input_at = Some(T - 1_000);
+    s.handback_at.insert(11, T);
+    assert!(asks(&decide(&s)).is_empty());
+}
+
+/// #341: o pedido do motor que não chegou ao agente (a sessão seguiu
+/// ociosa desde o envio) vira pedido de decisão depois do prazo.
+#[test]
+fn pedido_do_motor_nao_recebido_pede_decisao() {
+    let mut s = snap(EpicRunStatus::Executando, vec![pnode(11, &[])], vec![]);
+    with_session(&mut s, 11, EpicNodeState::EmPr, SessionState::Idle);
+    let sent = T - WAITING_HUMAN_MS;
+    open_pr(
+        &mut s,
+        11,
+        "abc",
+        "success",
+        CloseState {
+            merge_head: Some("abc".into()),
+            last_sent_at: Some(sent),
+            ..Default::default()
+        },
+    );
+    // Trabalhou antes do envio, não depois: pede.
+    s.sessions.get_mut("s-11").unwrap().running_at = Some(sent - 60_000);
+    let o = decide(&s);
+    assert_eq!(
+        asks(&o),
+        vec![(Some(11), EpicDecisionOrigin::SemProgresso, true)]
+    );
+    // Pegou o texto (passou a running depois do envio): não pede.
+    s.sessions.get_mut("s-11").unwrap().running_at = Some(sent + 1_000);
+    assert!(asks(&decide(&s)).is_empty());
+    // Ainda dentro do prazo: não pede.
+    s.sessions.get_mut("s-11").unwrap().running_at = None;
+    s.items
+        .get_mut(&11)
+        .unwrap()
+        .open
+        .as_mut()
+        .unwrap()
+        .state
+        .last_sent_at = Some(T - 60_000);
     assert!(asks(&decide(&s)).is_empty());
 }
 
@@ -860,6 +1012,8 @@ fn integ_session(s: &mut Snapshot, state: SessionState, idle_min: i64) {
         state,
         idle_since: (state == SessionState::Idle).then_some(T - idle_min * 60_000),
         human_input_at: None,
+        waiting: None,
+        running_at: None,
     });
 }
 

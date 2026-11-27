@@ -9,11 +9,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EpicDecision, EpicNode, EpicPlan, EpicRun, EpicRunView } from "../protocol/hub-gen";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
+import { changeUrl } from "../util/item";
+import { epicRunTab } from "./sections";
+import { useEpicRuns, type EpicRunItem } from "./useEpicRuns";
 import { ago } from "../util/time";
 import { CLAUDE_EFFORTS, CLAUDE_MODELS } from "../settings/session-options";
 import { errText } from "./calls";
 import {
   EPIC_RUN_PROTOCOL,
+  envStatusOf,
   NODE_STATE_TEXT,
   OPTION_TEXT,
   ORIGIN_TEXT,
@@ -22,16 +26,20 @@ import {
   blockersOf,
   clock,
   closesLines,
+  projectNameOf,
   isActive,
   isIntegrating,
   mergedCount,
   nodeTone,
+  occupies,
   overlapPairs,
   overlaps,
+  readyWait,
   runTone,
   waves,
 } from "./epicRun";
 import "./epic-run.css";
+import { ExternalLink } from "../shell/ExternalLink";
 
 /** Paralelismo digitado: 1 a 8; vazio ou inválido = `fallback`. */
 export const parallelOf = (text: string, fallback: number) => {
@@ -41,10 +49,121 @@ export const parallelOf = (text: string, fallback: number) => {
 
 type Act = (method: string, params: object, ok?: string) => Promise<boolean>;
 
+const NO_CONNECTION = "O ambiente desta execução não está nas conexões deste app.";
+
+/** O que "Devolver ao motor" faz (a sub-issue assumida, #301). */
+const HANDBACK_HINT =
+  "Você terminou de intervir: o motor volta a conduzir esta sub-issue. Ele confere o PR e o CI, manda as " +
+  "correções e o pedido de merge na wip e volta a contar a falta de progresso. A sessão continua a mesma.";
+
+/** A conexão deste app com o ambiente da execução (o `env_id` do hub). */
+function useRunConnection(run: EpicRun): string | null {
+  return useTower().hub.envByDaemon[run.env_id] ?? null;
+}
+
+/**
+ * Hub › Execução de épicos. Com `initialRun`, a aba daquela execução (uma por
+ * execução, #341); sem, o índice das execuções ativas, que abre a aba de
+ * cada uma.
+ */
 export function EpicRuns({ now, initialRun }: { now: number; initialRun?: number }) {
+  if (initialRun === undefined) return <EpicRunIndex now={now} />;
+  return <EpicRunTab now={now} run={initialRun} />;
+}
+
+/** Índice: as execuções em andamento e o histórico dos últimos 7 dias. */
+function EpicRunIndex({ now }: { now: number }) {
+  const { runs, error } = useEpicRuns({ history: true });
+  const active = (runs ?? []).filter((i) => isActive(i.run.status));
+  const ended = (runs ?? []).filter((i) => !isActive(i.run.status));
+  return (
+    <section aria-labelledby="hub-epic-runs" className="panel settings-section epic-runs">
+      <div className="hub-page-head">
+        <h2 id="hub-epic-runs">Execução de épicos</h2>
+        <p className="muted small">Cada execução abre na própria aba. Para começar outra, abra um épico e use Executar épico.</p>
+      </div>
+      {error && (
+        <p role="alert" className="start-error">
+          {error.includes("método desconhecido")
+            ? `Este hub não executa épicos (anterior ao protocolo ${EPIC_RUN_PROTOCOL}): atualize o hub.`
+            : error}
+        </p>
+      )}
+      {runs === null && !error && <p className="muted">Lendo as execuções…</p>}
+      {runs !== null && (
+        <>
+          <h3 className="er-index-head">
+            Em andamento <span className="muted">{active.length}</span>
+          </h3>
+          {active.length === 0 ? (
+            <p className="muted small">Nenhuma execução em andamento.</p>
+          ) : (
+            <ul className="er-index" aria-label="Execuções ativas">
+              {active.map((i) => (
+                <IndexRow key={i.run.id} item={i} now={now} />
+              ))}
+            </ul>
+          )}
+          <h3 className="er-index-head">
+            Histórico <span className="muted">· últimos 7 dias</span>
+          </h3>
+          {ended.length === 0 ? (
+            <p className="muted small">Nenhuma execução concluída ou cancelada nos últimos 7 dias.</p>
+          ) : (
+            <ul className="er-index" aria-label="Histórico de execuções">
+              {ended.map((i) => (
+                <IndexRow key={i.run.id} item={i} now={now} />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Uma execução no índice: a linha inteira abre a aba dela. */
+function IndexRow({ item, now }: { item: EpicRunItem; now: number }) {
+  const nav = useNav();
+  const { hub } = useTower();
+  const { run: r, title, pending, merged, total } = item;
+  const project = projectNameOf(hub.projects, r);
+  const tone = pending > 0 ? "attention" : runTone(r.status);
+  const when =
+    r.ended_at != null
+      ? `${r.status === "cancelado" ? "cancelada" : "concluída"} ${ago(r.ended_at, now)}`
+      : `iniciada ${ago(r.created_at, now)}`;
+  return (
+    <li>
+      <button type="button" className="er-index-row" onClick={() => nav.openTab(epicRunTab(r))}>
+        <span className="er-index-dot" data-tone={tone} aria-hidden="true" />
+        <span className="er-index-main">
+          <span className="er-index-title">
+            <span className="mono muted">#{r.epic}</span> {title ?? `${r.owner}/${r.repo}`}
+          </span>
+          <span className="small muted">
+            <span className="er-index-project">{project}</span>
+            {project !== `${r.owner}/${r.repo}` && ` · ${r.owner}/${r.repo}`}
+            {total > 0 && ` · ${merged} de ${total} mescladas`} · {when}
+          </span>
+        </span>
+        <span className="er-index-badges">
+          {pending > 0 && (
+            <span className="badge" data-tone="attention">
+              {pending === 1 ? "1 decisão pendente" : `${pending} decisões pendentes`}
+            </span>
+          )}
+          <span className="badge" data-tone={runTone(r.status)}>
+            {RUN_STATUS_TEXT[r.status]}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function EpicRunTab({ now, run }: { now: number; run: number }) {
   const { api, hub } = useTower();
-  const [runs, setRuns] = useState<EpicRun[] | null>(null);
-  const [selected, setSelected] = useState<number | null>(initialRun ?? null);
   const [view, setView] = useState<EpicRunView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -52,16 +171,8 @@ export function EpicRuns({ now, initialRun }: { now: number; initialRun?: number
 
   const load = useCallback(async () => {
     try {
-      const list = await api.hubCall<EpicRun[]>("hub.epic_run.list");
-      setRuns(list);
+      setView(await api.hubCall<EpicRunView>("hub.epic_run.status", { run_id: run }));
       setError(null);
-      const id = selected ?? list[0]?.id ?? null;
-      if (id !== null) {
-        setSelected(id);
-        setView(await api.hubCall<EpicRunView>("hub.epic_run.status", { run_id: id }));
-      } else {
-        setView(null);
-      }
     } catch (e) {
       const t = errText(e);
       setError(
@@ -70,7 +181,7 @@ export function EpicRuns({ now, initialRun }: { now: number; initialRun?: number
           : t,
       );
     }
-  }, [api, selected]);
+  }, [api, run]);
 
   useEffect(() => {
     if (!hub.connected) return;
@@ -97,10 +208,7 @@ export function EpicRuns({ now, initialRun }: { now: number; initialRun?: number
   };
 
   return (
-    <section aria-labelledby="hub-epic-runs" className="panel settings-section epic-runs">
-      <div className="hub-page-head">
-        <h2 id="hub-epic-runs">Execução de épicos</h2>
-      </div>
+    <section aria-label="Execução de épicos" className="panel settings-section epic-runs">
       {error && (
         <p role="alert" className="start-error">
           {error}
@@ -111,26 +219,7 @@ export function EpicRuns({ now, initialRun }: { now: number; initialRun?: number
           {msg}
         </p>
       )}
-      {runs === null && !error && <p className="muted">Lendo as execuções…</p>}
-      {runs !== null && runs.length === 0 && (
-        <p className="muted">
-          Nenhuma execução ativa. Para começar, abra um épico e use <span className="strong">Executar épico</span>.
-        </p>
-      )}
-      {runs !== null && runs.length > 1 && (
-        <ul className="hub-card-list" aria-label="Execuções ativas">
-          {runs.map((r) => (
-            <li key={r.id} aria-current={r.id === selected ? "true" : undefined}>
-              <button type="button" className="linklike" onClick={() => setSelected(r.id)}>
-                <span className="mono">
-                  {r.owner}/{r.repo}#{r.epic}
-                </span>{" "}
-                · {RUN_STATUS_TEXT[r.status]}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {!view && !error && <p className="muted">Lendo a execução…</p>}
       {view && <RunDetail view={view} now={now} act={act} busy={busy} />}
     </section>
   );
@@ -139,48 +228,77 @@ export function EpicRuns({ now, initialRun }: { now: number; initialRun?: number
 function RunHead({ view, children }: { view: EpicRunView; children?: React.ReactNode }) {
   const { run } = view;
   const [done, total] = mergedCount(view.nodes);
+  const { hub } = useTower();
+  const env = envStatusOf(
+    hub.envs.find((e) => e.env_id === run.env_id),
+    run.env_id,
+  );
+  const now = Date.now();
   return (
-    <div className="er-head">
-      <div className="er-title">
-        <div className="er-chips">
-          <span className="er-chip" data-kind="epic">
-            ÉPICO #{run.epic}
-          </span>
-          <span className="badge" data-tone={runTone(run.status)} aria-label="Estado da execução">
-            {RUN_STATUS_TEXT[run.status]}
-            {view.plan && run.status === "executando" && ` · plano v${run.plan_version ?? view.plan.version}`}
-          </span>
-        </div>
-        <h3>{view.titles[run.epic] ?? `${run.owner}/${run.repo}#${run.epic}`}</h3>
-        <div className="muted small er-meta">
-          <span>
-            {run.owner}/{run.repo}
-          </span>
-          <span>Ambiente: {run.env_id}</span>
-          {total > 0 && (
-            <span>
-              {done} de {total} mescladas
+    <>
+      <div className="er-head">
+        <div className="er-title">
+          <div className="er-chips">
+            <span className="er-chip" data-kind="epic">
+              ÉPICO #{run.epic}
             </span>
-          )}
+            <span className="badge" data-tone={runTone(run.status)} aria-label="Estado da execução">
+              {RUN_STATUS_TEXT[run.status]}
+              {view.plan && run.status === "executando" && ` · plano v${run.plan_version ?? view.plan.version}`}
+            </span>
+          </div>
+          <h3>{view.titles[run.epic] ?? `${run.owner}/${run.repo}#${run.epic}`}</h3>
+          <div className="muted small er-meta">
+            <span>
+              <span className="strong">{projectNameOf(hub.projects, run)}</span> · {run.owner}/{run.repo}
+            </span>
+            <span title={run.env_id}>
+              Ambiente: <span className="strong">{env.name}</span>{" "}
+              <span className="badge" data-tone={env.tone} aria-label="Estado do ambiente">
+                {env.text}
+                {env.since !== null && ` · último contato ${ago(env.since, now)}`}
+              </span>
+            </span>
+            {total > 0 && (
+              <span>
+                {done} de {total} mescladas
+              </span>
+            )}
+          </div>
         </div>
+        <div className="actions">{children}</div>
       </div>
-      <div className="actions">{children}</div>
-    </div>
+      {env.known && !env.online && isActive(run.status) && (
+        <p className="banner" aria-label="Ambiente fora do ar">
+          O ambiente {env.name} está fora do ar. O motor não inicia nem retoma sessões até o canal reabrir; quando
+          ele voltar, as sessões interrompidas são retomadas sozinhas.
+        </p>
+      )}
+    </>
   );
 }
 
 function RunDetail({ view, now, act, busy }: { view: EpicRunView; now: number; act: Act; busy: boolean }) {
   const { run } = view;
   if (run.status === "planejando" || (run.status === "aguardando_aprovacao" && !view.plan)) {
+    const pending = view.decisions.filter((d) => d.answer === null);
+    const stalled = pending.some((d) => d.origin === "plano_falhou");
     return (
       <div className="er">
         <RunHead view={view}>
           <CancelButton run={run} act={act} busy={busy} />
         </RunHead>
         <p role="status">
-          Sessão de plano {run.plan_session ? "em andamento" : "iniciando"} (
-          {agentText(run.plan_model ?? "opus", run.plan_effort ?? "high")}): ela grava o plano e encerra.
+          {stalled ? (
+            <>A sessão de plano não gravou o plano: nenhuma sessão nova começa até você decidir.</>
+          ) : (
+            <>
+              Sessão de plano {run.plan_session ? "em andamento" : "iniciando"} (
+              {agentText(run.plan_model ?? "opus", run.plan_effort ?? "high")}): ela grava o plano e encerra.
+            </>
+          )}
         </p>
+        <Decisions run={run} pending={pending} act={act} busy={busy} />
         <Events view={view} />
       </div>
     );
@@ -192,21 +310,40 @@ function RunDetail({ view, now, act, busy }: { view: EpicRunView; now: number; a
   return <Execution view={view} now={now} act={act} busy={busy} />;
 }
 
+/**
+ * Cancelar com confirmação na própria tela: o `window.confirm` não abre na
+ * janela do app desktop e responde "não" sozinho (#341).
+ */
 function CancelButton({ run, act, busy }: { run: EpicRun; act: Act; busy: boolean }) {
+  const [asking, setAsking] = useState(false);
   if (!isActive(run.status)) return null;
+  if (!asking) {
+    return (
+      <button type="button" className="btn btn-danger" disabled={busy} onClick={() => setAsking(true)}>
+        Cancelar
+      </button>
+    );
+  }
   return (
-    <button
-      type="button"
-      className="btn btn-danger"
-      disabled={busy}
-      onClick={() => {
-        if (window.confirm("Cancelar a execução? O motor para de dirigir as sessões; nada é desfeito.")) {
-          void act("hub.epic_run.cancel", { run_id: run.id }, "Execução cancelada.");
-        }
-      }}
-    >
-      Cancelar
-    </button>
+    <div role="group" aria-label="Confirmar o cancelamento da execução" className="confirm-box">
+      <p className="small">Cancelar a execução? O motor para de dirigir as sessões; nada é desfeito.</p>
+      <div className="form-actions">
+        <button type="button" className="btn" onClick={() => setAsking(false)}>
+          Voltar
+        </button>
+        <button
+          type="button"
+          className="btn btn-danger"
+          disabled={busy}
+          onClick={() => {
+            setAsking(false);
+            void act("hub.epic_run.cancel", { run_id: run.id }, "Execução cancelada.");
+          }}
+        >
+          Cancelar a execução
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -438,9 +575,27 @@ function nodeLine(n: EpicNode, now: number): string {
   }
 }
 
+/** A linha de estado do card, com o "PR #n" como link para o PR. */
+function NodeLine({ n, now, href }: { n: EpicNode; now: number; href: string | null }) {
+  const line = nodeLine(n, now);
+  const tag = n.pr ? `PR #${n.pr}` : null;
+  const at = tag && href ? line.indexOf(tag) : -1;
+  if (!tag || !href || at < 0) return <>{line}</>;
+  return (
+    <>
+      {line.slice(0, at)}
+      <ExternalLink href={href}>{tag}</ExternalLink>
+      {line.slice(at + tag.length)}
+    </>
+  );
+}
+
 function Execution({ view, now, act, busy }: { view: EpicRunView; now: number; act: Act; busy: boolean }) {
   const nav = useNav();
   const { run } = view;
+  const { hub } = useTower();
+  const project = hub.projects.find((p) => p.project.gh_owner === run.owner && p.project.gh_repo === run.repo)
+    ?.project ?? { gh_owner: run.owner, gh_repo: run.repo };
   const plan = view.approved ?? view.plan;
   const [parallel, setParallel] = useState(String(run.max_parallel));
   useEffect(() => setParallel(String(run.max_parallel)), [run.max_parallel]);
@@ -449,7 +604,8 @@ function Execution({ view, now, act, busy }: { view: EpicRunView; now: number; a
   const planNode = new Map((plan?.nodes ?? []).map((n) => [n.number, n]));
   const blockers = plan ? blockersOf(plan) : new Map<number, number[]>();
   const pending = view.decisions.filter((d) => d.answer === null);
-  const openSession = (s: string) => nav.openTerminal({ env: run.env_id, session: s });
+  const conn = useRunConnection(run);
+  const openSession = (s: string) => conn && nav.openTerminal({ env: conn, session: s });
   return (
     <div className="er">
       <RunHead view={view}>
@@ -546,16 +702,20 @@ function Execution({ view, now, act, busy }: { view: EpicRunView; now: number; a
                   if (!n) return null;
                   const pn = planNode.get(num);
                   const deps = blockers.get(num) ?? [];
+                  const wait = n.state === "pronta" && plan ? readyWait(plan, view.nodes, num, run.max_parallel) : null;
                   return (
                     <article key={num} className="er-card" data-tone={nodeTone(n.state)} aria-label={`#${num}`}>
                       <div className="er-card-title">
                         <span className="mono muted">#{num}</span> {view.titles[num] ?? ""}
                       </div>
-                      <div className="small er-state">{nodeLine(n, now)}</div>
+                      <div className="small er-state">
+                        <NodeLine n={n} now={now} href={n.pr ? changeUrl(project, n.pr) : null} />
+                      </div>
                       <div className="small muted">
                         {agentText(pn?.model, pn?.effort)}
                         {n.state === "mesclada" && !n.worktree && !n.reason && " · worktree removido"}
                         {n.state === "pendente" && deps.length > 0 && ` · aguarda ${deps.map((d) => `#${d}`).join(", ")}`}
+                        {wait && ` · ${wait}`}
                       </div>
                       {n.reason && <div className="small muted">{n.reason}</div>}
                       {n.state === "assumida" && (
@@ -563,7 +723,13 @@ function Execution({ view, now, act, busy }: { view: EpicRunView; now: number; a
                       )}
                       <div className="er-card-actions">
                         {n.session_id && n.state !== "mesclada" && (
-                          <button type="button" className="linklike" onClick={() => openSession(n.session_id!)}>
+                          <button
+                            type="button"
+                            className="linklike"
+                            disabled={!conn}
+                            title={conn ? undefined : NO_CONNECTION}
+                            onClick={() => openSession(n.session_id!)}
+                          >
                             Abrir sessão
                           </button>
                         )}
@@ -572,6 +738,7 @@ function Execution({ view, now, act, busy }: { view: EpicRunView; now: number; a
                             type="button"
                             className="btn btn-sm"
                             disabled={busy}
+                            title={HANDBACK_HINT}
                             onClick={() =>
                               void act("hub.epic_run.handback", { run_id: run.id, number: num }, `#${num} devolvida ao motor.`)
                             }
@@ -595,11 +762,30 @@ function Execution({ view, now, act, busy }: { view: EpicRunView; now: number; a
             <dl className="er-facts">
               <dt>Sessões vivas</dt>
               <dd>
-                {view.nodes.filter((n) => ["em_execucao", "em_pr", "assumida", "estacionada"].includes(n.state)).length} de{" "}
+                {view.nodes.filter(occupies).length} de{" "}
                 {run.max_parallel}
               </dd>
               <dt>Code-review na integração</dt>
-              <dd>{run.code_review ? "sim" : "não"}</dd>
+              <dd className="er-inline">
+                {run.code_review ? "sim" : "não"}
+                {!run.integration_session && isActive(run.status) && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={busy}
+                    title="A sessão de integração roda o /code-review sobre o conjunto da wip antes de abrir o PR do épico. Dá para mudar até ela começar."
+                    onClick={() =>
+                      void act(
+                        "hub.epic_run.set_code_review",
+                        { run_id: run.id, code_review: !run.code_review },
+                        run.code_review ? "/code-review desligado na integração." : "/code-review ligado na integração.",
+                      )
+                    }
+                  >
+                    {run.code_review ? "Desligar" : "Ligar"}
+                  </button>
+                )}
+              </dd>
             </dl>
           </section>
         </aside>
@@ -685,22 +871,47 @@ function Events({ view }: { view: EpicRunView }) {
 
 // --- Integração -----------------------------------------------------------
 
+/** O que é a sessão de integração (#302), no botão que a abre. */
+const INTEGRATION_HINT =
+  "Abre o terminal da sessão do épico que o motor iniciou depois de todas as sub-issues mescladas: ela " +
+  "valida a wip (build e testes), roda o /code-review se o plano pediu e abre o PR do épico para a base. " +
+  "Use para acompanhar ou intervir; o motor continua acompanhando o CI e as reviews do PR, mas o merge é seu.";
+
+const PR_STATE_TEXT: Record<"open" | "merged" | "closed", string> = {
+  open: "aberto",
+  merged: "mesclado",
+  closed: "fechado sem merge",
+};
+
 function Integration({ view, act, busy }: { view: EpicRunView; act: Act; busy: boolean }) {
   const nav = useNav();
   const { run } = view;
+  const conn = useRunConnection(run);
   const plan = view.approved ?? view.plan;
   const waiting = run.status === "aguardando_merge";
   const done = run.status === "concluido";
   const planNode = new Map((plan?.nodes ?? []).map((n) => [n.number, n]));
   const prOpen = waiting || done;
+  const { hub } = useTower();
+  const project = hub.projects.find((p) => p.project.gh_owner === run.owner && p.project.gh_repo === run.repo)
+    ?.project ?? { gh_owner: run.owner, gh_repo: run.repo };
+  const epicPr = view.epic_pr ?? null;
+  const epicPrUrl = epicPr ? epicPr.url || changeUrl(project, epicPr.number) : null;
   return (
     <div className="er">
       <RunHead view={view}>
+        {epicPr && epicPrUrl && (
+          <ExternalLink className="btn" href={epicPrUrl}>
+            Abrir PR #{epicPr.number}
+          </ExternalLink>
+        )}
         {run.integration_session && (
           <button
             type="button"
             className="btn"
-            onClick={() => nav.openTerminal({ env: run.env_id, session: run.integration_session! })}
+            disabled={!conn}
+            title={conn ? INTEGRATION_HINT : NO_CONNECTION}
+            onClick={() => conn && nav.openTerminal({ env: conn, session: run.integration_session! })}
           >
             Abrir sessão de integração
           </button>
@@ -723,7 +934,16 @@ function Integration({ view, act, busy }: { view: EpicRunView; act: Act; busy: b
           <section className="er-box" aria-label="PR do épico">
             <h4>PR do épico</h4>
             <p className="small muted">
-              {prOpen ? "Aberto." : "Ainda não aberto."} O corpo fecha cada sub-issue e o épico no merge:
+              {epicPr && epicPrUrl ? (
+                <>
+                  <ExternalLink href={epicPrUrl}>PR #{epicPr.number}</ExternalLink> {PR_STATE_TEXT[epicPr.state]}.
+                </>
+              ) : prOpen ? (
+                "Aberto."
+              ) : (
+                "Ainda não aberto."
+              )}{" "}
+              O corpo fecha cada sub-issue e o épico no merge:
             </p>
             <pre className="er-pre">{closesLines(run, view.nodes).join("\n")}</pre>
             {waiting && (
@@ -742,6 +962,11 @@ function Integration({ view, act, busy }: { view: EpicRunView; act: Act; busy: b
                     <span className="mono muted">#{n.number}</span> {view.titles[n.number] ?? ""}
                   </span>
                   <span className="small muted">
+                    {n.pr && (
+                      <>
+                        <ExternalLink href={changeUrl(project, n.pr)}>PR #{n.pr}</ExternalLink> ·{" "}
+                      </>
+                    )}
                     {agentText(planNode.get(n.number)?.model, planNode.get(n.number)?.effort)}
                   </span>
                 </li>

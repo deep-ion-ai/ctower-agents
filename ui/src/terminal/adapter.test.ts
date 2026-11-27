@@ -7,8 +7,18 @@ class FakeTerm implements TermLike {
   screen = "";
   resets = 0;
   private cb: ((d: string) => void) | null = null;
-  write(d: Uint8Array | string) {
-    this.screen += typeof d === "string" ? d : new TextDecoder().decode(d);
+  /** Respostas que o "xterm" dá ao ler uma consulta (`ESC[c`), como o de verdade. */
+  replies = true;
+  pending: (() => void)[] = [];
+  write(d: Uint8Array | string, done?: () => void) {
+    const text = typeof d === "string" ? d : new TextDecoder().decode(d);
+    this.screen += text;
+    if (this.replies && text.includes("\x1b[c")) this.cb?.("\x1b[?1;2c");
+    if (done) this.pending.push(done);
+  }
+  /** O xterm termina de processar o que foi escrito. */
+  flush() {
+    for (const f of this.pending.splice(0)) f();
   }
   reset() {
     this.screen = "";
@@ -51,6 +61,19 @@ test("re-attach após reconexão não duplica a saída", async () => {
   api.output(S, "um\r\ndois\r\n", true);
   api.output(S, "tres\r\n");
   expect(term.screen).toBe("um\r\ndois\r\ntres\r\n");
+});
+
+test("respostas do xterm às consultas do snapshot não vão à sessão (#341)", async () => {
+  const { api, term } = await setup();
+  // O snapshot traz a consulta que o agente fez quando começou.
+  api.output(S, "\x1b[cprompt> ", true);
+  term.type("x"); // ainda processando o snapshot: descartado
+  term.flush();
+  expect(api.inputs).toEqual([]);
+  // Depois do replay, a tecla e até a resposta a uma consulta nova passam.
+  term.type("y");
+  api.output(S, "\x1b[c");
+  expect(api.inputs.map((i) => i.data)).toEqual(["y", "\x1b[?1;2c"]);
 });
 
 test("entrada vai para a sessão certa", async () => {

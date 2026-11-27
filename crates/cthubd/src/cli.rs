@@ -952,9 +952,19 @@ pub async fn serve(dirs: Dirs) -> Result<(), Box<dyn std::error::Error>> {
         .with_secrets(Arc::clone(&secrets)),
     );
     if cfg.gh_sync_interval_secs > 0 {
+        // PR aberto ou mesclado no espelho: o motor da execução de épico
+        // olha no mesmo instante, sem esperar o próprio ciclo (#341).
+        let epic_runs = Arc::clone(&state.epic_runs);
         github::spawn_periodic(
             Arc::clone(&gh),
             Duration::from_secs(cfg.gh_sync_interval_secs),
+            move |r| {
+                if r.iter()
+                    .any(|p| p.ok && (p.prs > 0 || p.status_changes > 0))
+                {
+                    epic_runs.kick();
+                }
+            },
         );
     } else {
         tracing::info!("sync periódico com o GitHub desligado (gh_sync_interval_secs = 0)");

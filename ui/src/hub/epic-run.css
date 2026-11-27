@@ -378,3 +378,81 @@
     width: 100%;
   }
 }
+
+/* Índice de execuções (#341): em andamento e histórico, uma linha por execução. */
+.er-index-head {
+  margin: 18px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.er-index {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.er-index-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.er-index-row:hover,
+.er-index-row:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.er-index-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.er-index-dot[data-tone="running"] {
+  background: var(--running);
+}
+.er-index-dot[data-tone="attention"] {
+  background: var(--attention);
+}
+.er-index-dot[data-tone="done"] {
+  background: var(--done);
+}
+.er-index-dot[data-tone="error"] {
+  background: var(--error);
+}
+.er-index-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.er-index-project {
+  color: var(--text);
+  font-weight: 600;
+}
+.er-index-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.er-index-badges {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}

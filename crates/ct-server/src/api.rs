@@ -144,6 +144,7 @@ mod export {
         crate::cleanup::CleanupStatus::export_all_to(&dir).unwrap();
         ct_sessions::cleanup::CleanupRun::export_all_to(&dir).unwrap();
         ct_sessions::epic_run::WorktreeRemoval::export_all_to(&dir).unwrap();
+        ct_sessions::epic_run::EpicBranch::export_all_to(&dir).unwrap();
         // Os tipos do /ws do hub ficam em ui/src/protocol/hub-gen (cthubd).
         Dashboard::export_all_to(&dir).unwrap();
         Review::export_all_to(&dir).unwrap();
