@@ -162,6 +162,11 @@ pub(crate) async fn push(State(st): State<HubState>, headers: HeaderMap, body: B
                 // Proposta de regras nova (#357): a UI relê as pendentes.
                 st.rules_changed();
             }
+            if r.pr_mirrors > 0 {
+                // MR novo ou mudado de projeto Jira (#354): a Sala de
+                // controle relê.
+                st.control_room_changed(None);
+            }
             axum::Json(PushResponse {
                 last_seq: r.last_seq,
             })

@@ -13,6 +13,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
+use ct_cleanup::EpicWorktree;
 use ct_core::{DecisionOrigin, SessionMode, WorkItemKind, CLAUDE_EFFORTS, CLAUDE_MODELS};
 use ct_http::rpc::{i64_param, invalid, str_param, RpcResult};
 use ct_ledger::{Decision, Ledger, Project};
@@ -25,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 pub const CHANNEL_OUTPUT: u8 = 0;
 pub const CHANNEL_INPUT: u8 = 1;
@@ -309,7 +311,7 @@ async fn project_param(sessions: &Sessions, linked: bool, p: &Value) -> Result<i
     let found = blocking(sessions, {
         let wanted = wanted.clone();
         move |s| {
-            Ok(s.ledger()
+            Ok(s.ledger_read()
                 .list_projects()?
                 .into_iter()
                 .find(|x| match (&wanted, by_id) {
@@ -338,7 +340,10 @@ impl Conn {
     async fn handle_text(&mut self, text: &str) -> Value {
         match ct_http::rpc::parse(text) {
             Ok(req) => {
-                let r = self.call(&req.method, &req.params).await;
+                let r = self
+                    .call(&req.method, &req.params)
+                    .instrument(req.span())
+                    .await;
                 ct_http::rpc::reply(req.id, r)
             }
             Err(reply) => reply,
@@ -378,7 +383,7 @@ impl Conn {
                         // demorar a responder.
                         let docs = ct_sessions::docs::status(s.config().docs_root.as_deref());
                         let sync = sender.as_ref().map(|h| h.status());
-                        let l = s.ledger();
+                        let l = s.ledger_read();
                         let mut config = crate::hub_config::status(
                             sender.as_deref(),
                             &l,
@@ -423,7 +428,8 @@ impl Conn {
                 };
                 let rollback = method == "env.rollback";
                 let force = p.get("force").and_then(Value::as_bool).unwrap_or(false);
-                let live = blocking(&sessions, |s| Ok(s.ledger().live_sessions()?.len())).await?;
+                let live =
+                    blocking(&sessions, |s| Ok(s.ledger_read().live_sessions()?.len())).await?;
                 if live > 0 && !force {
                     return Err((
                         crate::update::LIVE_SESSIONS,
@@ -474,7 +480,7 @@ impl Conn {
                         .unwrap_or("")
                         .to_string();
                     let known = blocking(&sessions, |s| {
-                        let (conns, names) = s.ledger().hub_connections()?;
+                        let (conns, names) = s.ledger_read().hub_connections()?;
                         let mut known = names;
                         known.extend(conns.into_iter().map(|c| c.name));
                         Ok(known)
@@ -487,7 +493,7 @@ impl Conn {
                             .await
                             .map_err(|e| (-32603, e.to_string()))??;
                     blocking(&sessions, move |s| {
-                        for w in s.ledger().connection_warnings(&overrides)? {
+                        for w in s.ledger_read().connection_warnings(&overrides)? {
                             tracing::warn!("conexões: {w}");
                         }
                         s.invalidate_connection(&name)?;
@@ -498,7 +504,7 @@ impl Conn {
                 let linked = self.linked();
                 let rows = blocking(&sessions, move |s| {
                     let (_, overrides) = s.config().credentials.connections();
-                    let l = s.ledger();
+                    let l = s.ledger_read();
                     let (conns, names) = l.hub_connections()?;
                     let projects = assigned_projects(&l, linked)?;
                     Ok(crate::env_config::connection_rows(
@@ -520,7 +526,7 @@ impl Conn {
                 let linked = self.linked();
                 let v = blocking(&sessions, move |s| {
                     let ps = {
-                        let l = s.ledger();
+                        let l = s.ledger_read();
                         if unassigned {
                             l.list_unassigned_projects()?
                         } else {
@@ -663,7 +669,7 @@ impl Conn {
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
                 // Título, labels e tipo ausentes vêm do espelho do GitHub.
                 let cached = blocking(&sessions, move |s| {
-                    Ok(s.ledger().get_issue(project_id, gh_number)?)
+                    Ok(s.ledger_read().get_issue(project_id, gh_number)?)
                 })
                 .await?;
                 // Fora do espelho do Jira (#143): lê a issue direto no Jira,
@@ -931,7 +937,7 @@ impl Conn {
                     return Err(invalid("body vazio"));
                 }
                 let project = blocking(&sessions, move |s| {
-                    Ok(s.ledger().get_project(project_id)?)
+                    Ok(s.ledger_read().get_project(project_id)?)
                 })
                 .await?;
                 tokio::task::spawn_blocking(move || {
@@ -949,7 +955,7 @@ impl Conn {
             }
             "tree.get" => {
                 let id = i64_param(p, "project_id")?;
-                let v = blocking(&sessions, move |s| Ok(s.ledger().project_tree(id)?)).await?;
+                let v = blocking(&sessions, move |s| Ok(s.ledger_read().project_tree(id)?)).await?;
                 Ok(json!(v))
             }
             // "Abrir pasta de docs" (#444): cria o que faltar e devolve o
@@ -1033,7 +1039,7 @@ impl Conn {
                         .min(EVENTS_MAX as u64) as u32,
                 };
                 let v = blocking(&sessions, move |s| {
-                    let l = s.ledger();
+                    let l = s.ledger_read();
                     // Item inexistente é erro, não lista vazia.
                     l.get_work_item(id)?;
                     Ok(l.list_events_before(id, before, limit)?)
@@ -1111,7 +1117,7 @@ impl Conn {
                 // `work_item_concluded`: a aba não oferece a Recuperação de
                 // sessão cuja issue já concluiu (#297).
                 let v = blocking(&sessions, move |s| {
-                    let l = s.ledger();
+                    let l = s.ledger_read();
                     let sess = l.get_session(&id)?;
                     let concluded = ct_sessions::work_item_concluded(&l, sess.work_item_id)?;
                     Ok(json!({ "session": sess, "work_item_concluded": concluded }))
@@ -1222,7 +1228,7 @@ impl Conn {
                 let project_id = project_param(&sessions, self.linked(), p).await?;
                 let n = i64_param(p, "gh_number")?;
                 let id = blocking(&sessions, move |s| {
-                    Ok(s.ledger().find_work_item(project_id, n)?)
+                    Ok(s.ledger_read().find_work_item(project_id, n)?)
                 })
                 .await?
                 .ok_or_else(|| invalid(format!("work item #{n} não está neste ambiente")))?
@@ -1345,7 +1351,7 @@ fn note_human_input(sessions: &Sessions, id: &str, data: &[u8]) {
 }
 
 fn dashboard(s: &Sessions, linked: bool) -> Result<Value, SessionsError> {
-    let l = s.ledger();
+    let l = s.ledger_read();
     let mut projects = Vec::new();
     for project in assigned_projects(&l, linked)? {
         let issues: HashMap<i64, ct_ledger::IssueRow> = l
@@ -1402,7 +1408,7 @@ fn pending_review(l: &Ledger, work_item_id: i64) -> Result<Vec<Decision>, Sessio
 }
 
 fn review_get(s: &Sessions, work_item_id: i64) -> Result<Value, SessionsError> {
-    let l = s.ledger();
+    let l = s.ledger_read();
     Ok(json!(Review {
         work_item: l.get_work_item(work_item_id)?,
         prs: l.prs_for_work_item(work_item_id)?,
@@ -1731,7 +1737,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn verificacao_de_atualizacao() {
-        use ct_sessions::update::{git, run, Build, Source};
+        use ct_update::{git, run, Build, Source};
         let mut srv = Srv::new(FakeClaude::exit(0));
         let url = spawn_server(&srv).await;
         let mut ui = Ui::new(&url).await;
@@ -1835,7 +1841,7 @@ mod tests {
                 t = tmp.display()
             ),
         );
-        let source = ct_sessions::update::Source {
+        let source = ct_update::Source {
             repo: "/nao-usado".into(),
             git_ref: "main".into(),
             dir: dir.clone(),
@@ -1843,7 +1849,7 @@ mod tests {
         srv.state.updates = Some(Arc::new(
             crate::update::Updates::new(
                 source,
-                ct_sessions::update::Build::current(),
+                ct_update::Build::current(),
                 srv.state.events.clone(),
             )
             .with_ctower(ctower)
@@ -1902,12 +1908,12 @@ mod tests {
 
         let dir = srv.env.tmp.path().join("upd");
         let updates = Arc::new(crate::update::Updates::new(
-            ct_sessions::update::Source {
+            ct_update::Source {
                 repo: "/nao-usado".into(),
                 git_ref: "main".into(),
                 dir,
             },
-            ct_sessions::update::Build::current(),
+            ct_update::Build::current(),
             srv.state.events.clone(),
         ));
         let path = srv.env.tmp.path().join("config.toml");
@@ -2969,9 +2975,9 @@ mod tests {
             api_issue("PROJ-1", "Épico", "new"),
             api_issue("PROJ-2", "Tarefa", "done"),
         ]);
-        srv.state.tracker = Some(Arc::new(ct_sessions::JiraGitlabSync::new(
-            srv.env.sessions.clone(),
-            ct_sessions::TrackerSyncConfig::new(fake.bin().to_str().unwrap()),
+        srv.state.tracker = Some(Arc::new(ct_sync::JiraGitlabSync::new(
+            srv.env.sessions.sync_handle(),
+            ct_sync::TrackerSyncConfig::new(fake.bin().to_str().unwrap()),
         )));
         let url = spawn_server(&srv).await;
         let mut ui = Ui::new(&url).await;

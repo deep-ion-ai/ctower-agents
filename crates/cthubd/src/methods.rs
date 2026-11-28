@@ -53,6 +53,8 @@ pub const METHODS: &[MethodSpec] = &[
         scopes: UI,
     },
     MethodSpec { name: "hub.projects.impact", params: "{ owner: string; repo: string }", result: "DeleteImpact", scopes: UI },
+    // Última release e entregas na base sem release, por projeto (#355).
+    MethodSpec { name: "hub.projects.release", params: "null", result: "ProjectRelease[]", scopes: UI_WEB },
     MethodSpec { name: "hub.tree.get", params: "{ owner: string; repo: string }", result: "HubTree", scopes: UI_WEB },
     MethodSpec { name: "hub.dashboard.get", params: "null", result: "HubDashboard", scopes: UI_WEB },
     MethodSpec { name: "hub.envs.list", params: "null", result: "HubEnv[]", scopes: UI_WEB },
@@ -378,6 +380,15 @@ pub const METHODS: &[MethodSpec] = &[
         name: "hub.tracker.add_issue",
         params: "{ owner: string; repo: string; key: string | number }",
         result: "TrackerIssueAdded",
+        scopes: UI_WEB,
+    },
+    // Sala de controle (#354): PRs/MRs abertos com os checks e execuções de
+    // épico ativas de todos os projetos, do espelho; relida no push
+    // `hub.control_room.changed`.
+    MethodSpec {
+        name: "hub.control_room.projects",
+        params: "null",
+        result: "ControlRoomProjects",
         scopes: UI_WEB,
     },
     MethodSpec {

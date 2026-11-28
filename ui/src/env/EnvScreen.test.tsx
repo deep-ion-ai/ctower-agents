@@ -23,6 +23,7 @@ import {
 } from "../test/fixtures";
 import { webApi } from "../test/web";
 import { envAt } from "./sections";
+import { openHealth } from "../test/control-room";
 
 const NOW = Date.now();
 
@@ -77,7 +78,7 @@ const findBody = (name: string) => screen.findByRole("group", { name });
 
 test("Sala de controle: a linha do ambiente abre o detalhe; o envio ao hub segue na linha", async () => {
   const { user } = setup();
-  const side = screen.getByRole("complementary", { name: "Ambientes e projetos" });
+  const side = await openHealth();
   // "Enviar ao hub" (#21) fica fora do botão da linha.
   expect(await within(side).findByRole("button", { name: "Enviar ao hub o estado de wsl" })).toBeInTheDocument();
   await user.click(await within(side).findByRole("button", { name: /^wsl conectado/ }));

@@ -128,7 +128,7 @@ impl Sessions {
         Ok(ok)
     }
 
-    pub(crate) fn backup_failed(&self, s: &Session, e: &SessionsError) -> Result<()> {
+    pub fn backup_failed(&self, s: &Session, e: &SessionsError) -> Result<()> {
         let l = self.ledger();
         let wi = l.get_work_item(s.work_item_id)?;
         l.append_event(NewEvent {

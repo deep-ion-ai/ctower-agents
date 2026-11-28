@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DaemonApi } from "../api/daemon";
-import type { Peek, Session, WorkItemStatus } from "../protocol/gen";
+import type { Peek, Project, Session, WorkItemStatus } from "../protocol/gen";
 import { agentLabel } from "../settings/session-options";
 import { useNav } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -77,17 +77,23 @@ const FILTER_TITLE: Record<TileFilter, string> = {
   running: "Rodando",
 };
 
+/** Escolhe os projetos de um ambiente a mostrar. */
+export type ProjectMatch = (env: string, project: Project) => boolean;
+
 export function TileGrid({
   now,
   filter = "all",
   group = false,
   density = "auto",
+  only,
 }: {
   now: number;
   filter?: TileFilter;
   /** Agrupa os tiles por projeto (subtítulo por grupo). */
   group?: boolean;
   density?: Density;
+  /** Só as sessões dos projetos que passam no filtro (tela do projeto); o gestor e as sem projeto saem. */
+  only?: ProjectMatch;
 }) {
   const { envs, dashboards, api, web } = useTower();
   // Com mais de um ambiente, cada tile diz onde a sessão roda.
@@ -101,6 +107,7 @@ export function TileGrid({
         ...lookup(dashboards[e.id], s),
       })),
     )
+    .filter(({ env, project }) => !only || (project !== undefined && only(env, project)))
     .filter(({ wi }) => {
       const waiting = wi?.status === "aguardando_voce";
       return filter === "all" || (filter === "attention" ? waiting : !waiting);
@@ -167,7 +174,9 @@ export function TileGrid({
             ? "Nenhuma sessão esperando você."
             : web
               ? "Nenhuma sessão rodando."
-              : "Nenhuma sessão rodando. Inicie uma pela tela Projeto."}
+              : only
+                ? "Nenhuma sessão rodando neste projeto."
+                : "Nenhuma sessão rodando. Inicie uma pela tela Projeto."}
         </p>
       ) : group ? (
         [...groups.entries()]

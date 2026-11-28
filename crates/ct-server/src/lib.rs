@@ -1,7 +1,7 @@
 //! Servidor HTTP do daemon (spec §8, §9, §11): `/hooks`, `/hooks/permission` e `/mcp` com o token
 //! de hook, `/ws`, `/hub/sync`, `/cleanup/plan`, `/cleanup/run` e
-//! `/secrets/rotate-env-key` com o token de UI, `/session/secret` com o
-//! token da sessão (#165),
+//! `/secrets/rotate-env-key` com o token de UI, `/session/secret` (#165) e
+//! `/session/git-credential` (#334) com o token da sessão,
 //! `/healthz` sem autenticação. Com hub ligado, o daemon também mantém o
 //! canal reverso com ele (`hub_channel`, `/sync/channel`). O hub é outro
 //! binário (`cthubd`); a base HTTP/WS comum aos dois fica em `ct-http`.
@@ -27,7 +27,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use ct_sessions::{GithubSync, JiraGitlabSync, Notifier, Sessions};
+use ct_sessions::{Notifier, Sessions};
+use ct_sync::{GithubSync, JiraGitlabSync};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -173,6 +174,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/session/secret", post(env_secrets::session_secret_http))
         .route(
+            "/session/git-credential",
+            post(env_secrets::session_git_credential_http),
+        )
+        .route(
             "/session/release/context",
             post(env_secrets::release_context_http),
         )
@@ -193,6 +198,24 @@ async fn healthz() -> impl IntoResponse {
 }
 
 /// Resumo para `ctower status`/`ctower restart` (token de UI).
+/// Contadores mínimos do `/status` (#243): sessões vivas, tamanho e idade
+/// do outbox e a idade do último envio confirmado ao hub (`null` = nunca,
+/// ou ambiente sem hub).
+fn status_counters(
+    live: usize,
+    outbox: &ct_ledger::OutboxStats,
+    last_sync_ok_at: Option<i64>,
+    now: i64,
+) -> Value {
+    json!({
+        "live_sessions": live,
+        "outbox_pending": outbox.pending,
+        "outbox_oldest_age_ms": outbox.oldest_created_at.map(|t| (now - t).max(0)),
+        "last_sync_ok_at": last_sync_ok_at,
+        "last_sync_age_ms": last_sync_ok_at.map(|t| (now - t).max(0)),
+    })
+}
+
 async fn status(
     axum::extract::State(st): axum::extract::State<AppState>,
     headers: HeaderMap,
@@ -201,14 +224,17 @@ async fn status(
         return unauthorized();
     }
     let sessions = st.sessions.clone();
+    let last_sync_ok_at = st.hub_sender.as_ref().and_then(|h| h.last_ok_at());
     let r = tokio::task::spawn_blocking(move || {
         let l = sessions.ledger();
         let live = l.live_sessions()?;
         let interrupted = ct_sessions::recoverable_sessions(&l)?.len();
+        let outbox = l.outbox_stats().map_err(ct_sessions::SessionsError::from)?;
         Ok::<_, ct_sessions::SessionsError>(json!({
             "version": env!("CARGO_PKG_VERSION"),
-            "live_sessions": live,
             "interrupted": interrupted,
+            "counters": status_counters(live.len(), &outbox, last_sync_ok_at, ct_core::now_ms()),
+            "live_sessions": live,
         }))
     })
     .await;
@@ -364,7 +390,10 @@ pub(crate) mod test_util {
                 ),
                 json!([]),
             );
-            srv.state.github = Some(Arc::new(GithubSync::new(srv.env.sessions.clone(), client)));
+            srv.state.github = Some(Arc::new(GithubSync::new(
+                srv.env.sessions.sync_handle(),
+                client,
+            )));
             (srv, gh)
         }
 
@@ -421,7 +450,29 @@ mod tests {
         let v: Value =
             serde_json::from_slice(&r.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(v["live_sessions"][0]["id"], s.id.as_str());
+        // Contadores mínimos (#243): sem hub, o último envio é `null`.
+        assert_eq!(v["counters"]["live_sessions"], 1);
+        assert!(v["counters"]["outbox_pending"].is_i64());
+        assert!(v["counters"]["last_sync_age_ms"].is_null());
         srv.env.sessions.kill(&s.id).unwrap();
+    }
+
+    #[test]
+    fn contadores_do_status_calculam_as_idades() {
+        let outbox = ct_ledger::OutboxStats {
+            pending: 4,
+            oldest_created_at: Some(9_000),
+        };
+        let c = status_counters(2, &outbox, Some(9_500), 10_000);
+        assert_eq!(c["live_sessions"], 2);
+        assert_eq!(c["outbox_pending"], 4);
+        assert_eq!(c["outbox_oldest_age_ms"], 1_000);
+        assert_eq!(c["last_sync_ok_at"], 9_500);
+        assert_eq!(c["last_sync_age_ms"], 500);
+        let vazio = ct_ledger::OutboxStats::default();
+        let c = status_counters(0, &vazio, None, 10_000);
+        assert!(c["outbox_oldest_age_ms"].is_null() && c["last_sync_age_ms"].is_null());
+        assert_eq!(c["outbox_pending"], 0);
     }
 
     #[tokio::test]

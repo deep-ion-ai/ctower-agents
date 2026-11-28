@@ -117,7 +117,7 @@ pub enum SecretGetError {
 /// Valores mascarados de uma sessão: na saída do PTY e no backup do
 /// transcript (que também cobre a forma escapada em JSON).
 #[derive(Clone, Default)]
-pub(crate) struct SessionMask {
+pub struct SessionMask {
     pub pty: MaskSet,
     pub transcript: MaskSet,
 }
@@ -201,8 +201,7 @@ pub(crate) fn new_session_token() -> std::io::Result<String> {
 impl Sessions {
     /// Chave e cache de secrets deste ambiente.
     pub fn env_cache(&self) -> EnvCache {
-        let dirs = &self.config().dirs;
-        EnvCache::new(dirs.env_key_file(), dirs.secrets_cache_file())
+        self.connections().env_cache()
     }
 
     /// Idade (ms) da configuração do hub no ambiente: desde a última
@@ -274,7 +273,7 @@ impl Sessions {
     /// Vale para qualquer fonte (comando, secret ou arquivo, #274): o cache
     /// guarda o token com a fonte que o resolveu, a mesma que o sync usa
     /// ([`Sessions::sources`]), de todos os tipos que o projeto usa.
-    pub(crate) fn connection_mask(&self, project: &Project) -> SessionMask {
+    pub fn connection_mask(&self, project: &Project) -> SessionMask {
         let resolver = self.credentials();
         let mut found: Vec<std::sync::Arc<Secret>> = Vec::new();
         for (kind, s) in self.sources(project) {
@@ -287,19 +286,9 @@ impl Sessions {
         SessionMask::new(&pairs)
     }
 
-    /// Busca de secret do resolvedor para as conexões do projeto (fonte
-    /// `Secret`, #274): o valor atual no cache de secrets do ambiente, pelas
-    /// regras do spawn e do `ctower secret get` ([`cached_secret`]).
-    pub(crate) fn secret_lookup<'a>(
-        &'a self,
-        project: &'a Project,
-    ) -> impl Fn(&str) -> Option<String> + 'a {
-        move |name| cached_secret(&self.env_cache(), project, name)
-    }
-
     /// Guarda (só em memória) o mascaramento de uma sessão.
     pub(crate) fn set_mask(&self, session_id: &str, mask: SessionMask) {
-        let mut masks = self.inner.masks.lock().unwrap();
+        let mut masks = self.inner.masks.lock();
         if mask.pty.is_empty() {
             masks.remove(session_id);
         } else {
@@ -312,7 +301,6 @@ impl Sessions {
         self.inner
             .session_tokens
             .lock()
-            .unwrap()
             .insert(token.to_string(), session_id.to_string());
     }
 
@@ -321,7 +309,6 @@ impl Sessions {
         self.inner
             .session_tokens
             .lock()
-            .unwrap()
             .retain(|_, s| s != session_id);
     }
 
@@ -331,7 +318,7 @@ impl Sessions {
         if token.is_empty() {
             return None;
         }
-        let tokens = self.inner.session_tokens.lock().unwrap();
+        let tokens = self.inner.session_tokens.lock();
         tokens
             .iter()
             .find(|(t, _)| same_bytes(t.as_bytes(), token.as_bytes()))
@@ -397,12 +384,63 @@ impl Sessions {
         // soma a entrega nova antes de trocar o cache ([`Sessions::premask`]),
         // mas não alcança a sessão que ainda está subindo (fora das vivas).
         if entry.kind == Kind::Secret {
-            let pty = self.inner.live.lock().unwrap().get(&session_id).cloned();
+            let pty = self.inner.live.lock().get(&session_id).cloned();
             let mask = SessionMask::new(&[(name, entry.value.expose())]);
             self.add_mask(&session_id, pty.as_ref(), &mask);
         }
         tracing::info!("secrets: {name} lido pela sessão {session_id}");
         Ok(entry.value.expose().to_string())
+    }
+
+    /// Credencial do git para o `fetch` e o `push` da sessão dona de `token`
+    /// (#334): o token da conexão do GitLab do projeto, pelo mesmo resolvedor
+    /// do clone ([`Sessions::connection_token`]), e só quando `protocol` é
+    /// `https` e `host` (com a porta, como o git manda) é o da URL de clone do
+    /// projeto. Outro host, SSH ou projeto sem GitLab: `Ok(None)`, para o git
+    /// seguir com os outros helpers. Sem token resolvido: `Unavailable`. O
+    /// valor entra no mascaramento da sessão antes de sair.
+    pub fn session_git_credential(
+        &self,
+        token: &str,
+        protocol: &str,
+        host: &str,
+    ) -> Result<Option<(String, String)>, SecretGetError> {
+        let session_id = self
+            .session_of_token(token)
+            .ok_or(SecretGetError::Unauthorized)?;
+        let project = {
+            let l = self.ledger();
+            l.get_session(&session_id)
+                .and_then(|s| l.get_work_item(s.work_item_id))
+                .and_then(|wi| l.get_project(wi.project_id))
+        }
+        .map_err(|e| SecretGetError::Unavailable(e.to_string()))?;
+        let Some(clone_url) = project.forge.gitlab().map(|g| g.clone_url.as_str()) else {
+            return Ok(None);
+        };
+        let host = host.trim();
+        let same_host = ct_git::https_host(clone_url)
+            .is_some_and(|h| !host.is_empty() && h.eq_ignore_ascii_case(host));
+        if !protocol.trim().eq_ignore_ascii_case("https") || !same_host {
+            return Ok(None);
+        }
+        let value = self
+            .connection_token(&project, ct_core::provider::ProviderKind::Gitlab)
+            .map_err(SecretGetError::Unavailable)?;
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            return Err(SecretGetError::Unavailable(
+                "a credencial da conexão do GitLab veio vazia".into(),
+            ));
+        }
+        let pty = self.inner.live.lock().get(&session_id).cloned();
+        self.add_mask(
+            &session_id,
+            pty.as_ref(),
+            &SessionMask::new(&[("CONEXAO_TOKEN", &value)]),
+        );
+        tracing::info!("git: credencial da conexão do GitLab lida pela sessão {session_id}");
+        Ok(Some((ct_git::TOKEN_USER.to_string(), value)))
     }
 
     /// O cache mudou (pull com entrega nova) ou o sync resolveu o token de
@@ -445,7 +483,6 @@ impl Sessions {
         self.inner
             .live
             .lock()
-            .unwrap()
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
@@ -477,7 +514,7 @@ impl Sessions {
     /// PTY dela, se houver. O PTY recebe o conjunto com o lock dos conjuntos
     /// preso: duas somas ao mesmo tempo nunca deixam no PTY o conjunto menor.
     fn add_mask(&self, session_id: &str, pty: Option<&ct_pty::PtySession>, extra: &SessionMask) {
-        let mut masks = self.inner.masks.lock().unwrap();
+        let mut masks = self.inner.masks.lock();
         let merged = masks
             .get(session_id)
             .cloned()
@@ -495,7 +532,7 @@ impl Sessions {
     /// guardado, que pode ter crescido depois do spawn (#320: um `ctower
     /// secret get` antes de a sessão estar entre as vivas).
     pub(crate) fn sync_pty_mask(&self, session_id: &str, pty: &ct_pty::PtySession) {
-        let masks = self.inner.masks.lock().unwrap();
+        let masks = self.inner.masks.lock();
         if let Some(m) = masks.get(session_id) {
             pty.set_mask(m.pty.clone());
         }
@@ -503,7 +540,7 @@ impl Sessions {
 
     /// Esquece o mascaramento de uma sessão (retomada ou arquivada).
     pub(crate) fn forget_mask(&self, session_id: &str) {
-        self.inner.masks.lock().unwrap().remove(session_id);
+        self.inner.masks.lock().remove(session_id);
     }
 
     /// Mascaramento do backup do transcript da sessão: o guardado no spawn
@@ -511,7 +548,7 @@ impl Sessions {
     /// projeto da sessão. Cache de secrets ausente ou ilegível: só os tokens
     /// das conexões em cache (não há outros valores conhecidos a esconder).
     pub(crate) fn transcript_mask(&self, s: &Session) -> MaskSet {
-        if let Some(m) = self.inner.masks.lock().unwrap().get(&s.id) {
+        if let Some(m) = self.inner.masks.lock().get(&s.id) {
             return m.transcript.clone();
         }
         let project = {
@@ -615,7 +652,7 @@ pub(crate) fn scope_of(project: &Project) -> Option<String> {
 /// globais), como no spawn e no `ctower secret get`. Nome reservado, cache
 /// ausente ou ilegível: `None` (o resolvedor diz que o secret não existe no
 /// ambiente; o cache ilegível já avisa no log).
-pub(crate) fn cached_secret(cache: &EnvCache, project: &Project, name: &str) -> Option<String> {
+pub fn cached_secret(cache: &EnvCache, project: &Project, name: &str) -> Option<String> {
     if is_reserved_name(name) {
         return None;
     }
@@ -1042,6 +1079,102 @@ mod tests {
         );
     }
 
+    /// #334: o `fetch` e o `push` da sessão recebem o token da conexão do
+    /// GitLab só para o host (e a porta) da URL de clone, por HTTPS; outro
+    /// host, SSH e token de sessão desconhecido não levam nada. O valor sai
+    /// mascarado na sessão.
+    #[test]
+    fn credencial_do_git_vale_so_para_o_host_do_clone() {
+        let env = TestEnv::new(FakeClaude::script(
+            "while read l; do echo \"saida=$l\"; done",
+        ));
+        let marca = env.tmp.path().join("marca-credencial");
+        let gitlab = cmd_com_marca(&marca, "tok-acme-gitlab-654321");
+        assign_jira_gitlab(&env, "true", &gitlab);
+        let s = env.sessions.start(env.request(35, "Git")).unwrap();
+        let token = token_of(&env, &s.id);
+        let cred =
+            |proto: &str, host: &str| env.sessions.session_git_credential(&token, proto, host);
+
+        let ok = cred("https", "gitlab.example.com").unwrap();
+        assert_eq!(
+            ok,
+            Some(("oauth2".to_string(), "tok-acme-gitlab-654321".to_string()))
+        );
+        // Host em outra caixa é o mesmo host.
+        assert!(cred("https", "GitLab.Example.com").unwrap().is_some());
+        // Outro host, outra porta, HTTP e SSH: o git segue sem a nossa credencial.
+        assert_eq!(cred("https", "outro.example.com").unwrap(), None);
+        assert_eq!(cred("https", "gitlab.example.com:8443").unwrap(), None);
+        assert_eq!(cred("http", "gitlab.example.com").unwrap(), None);
+        assert_eq!(cred("ssh", "gitlab.example.com").unwrap(), None);
+        assert_eq!(cred("https", "").unwrap(), None);
+        // A segunda leitura veio do cache do resolvedor.
+        assert_eq!(std::fs::read_to_string(&marca).unwrap().lines().count(), 1);
+        assert!(matches!(
+            env.sessions.session_git_credential(
+                "token-desconhecido",
+                "https",
+                "gitlab.example.com"
+            ),
+            Err(SecretGetError::Unauthorized)
+        ));
+
+        // O token sai mascarado na sessão.
+        let pty = env.sessions.pty(&s.id).unwrap();
+        pty.write(b"tok-acme-gitlab-654321\n").unwrap();
+        let saida = wait_output(&env, &s.id, "saida=***CONEXAO_TOKEN***");
+        assert!(!saida.contains("tok-acme-gitlab"), "{saida}");
+        env.sessions.kill(&s.id).unwrap();
+    }
+
+    /// #334: projeto no GitHub, ou GitLab por SSH, não recebe credencial do
+    /// GitLab; credencial que falha vira indisponível, sem o valor.
+    #[test]
+    fn credencial_do_git_sem_gitlab_https_ou_com_falha() {
+        let env = TestEnv::new(FakeClaude::script("sleep 30"));
+        let s = env.sessions.start(env.request(35, "GitHub")).unwrap();
+        let token = token_of(&env, &s.id);
+        assert_eq!(
+            env.sessions
+                .session_git_credential(&token, "https", "github.com")
+                .unwrap(),
+            None
+        );
+        env.sessions.kill(&s.id).unwrap();
+
+        let env = TestEnv::new(FakeClaude::script("sleep 30"));
+        assign_jira_gitlab(&env, "true", "exit 1");
+        let s = env.sessions.start(env.request(35, "Falha")).unwrap();
+        let token = token_of(&env, &s.id);
+        let e = env
+            .sessions
+            .session_git_credential(&token, "https", "gitlab.example.com")
+            .unwrap_err();
+        assert!(matches!(e, SecretGetError::Unavailable(_)), "{e}");
+        env.sessions.kill(&s.id).unwrap();
+
+        // SSH: a URL de clone não é HTTPS, não há host para atender.
+        let env = TestEnv::new(FakeClaude::script("sleep 30"));
+        assign_jira_gitlab(&env, "true", "printf 'tok-ssh-123456'");
+        env.assign_config(1, |p| {
+            p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                connection: Some(8),
+                path: "acme/acme-web".into(),
+                clone_url: "git@gitlab.example.com:acme/acme-web.git".into(),
+            });
+        });
+        let s = env.sessions.start(env.request(35, "Ssh")).unwrap();
+        let token = token_of(&env, &s.id);
+        assert_eq!(
+            env.sessions
+                .session_git_credential(&token, "https", "gitlab.example.com")
+                .unwrap(),
+            None
+        );
+        env.sessions.kill(&s.id).unwrap();
+    }
+
     /// Token que o sync já resolveu sai mascarado no PTY e no transcript da
     /// sessão aberta depois (#266), sem rodar o comando de novo.
     #[test]
@@ -1084,10 +1217,10 @@ mod tests {
         assign_jira_gitlab(&env, jira, "");
         let s = env.sessions.start(env.request(35, "Máscara")).unwrap();
         env.wait_fake_output(&s.id);
-        assert!(!env.sessions.inner.masks.lock().unwrap().contains_key(&s.id));
+        assert!(!env.sessions.inner.masks.lock().contains_key(&s.id));
         sync_resolve(&env, &crate::resolver::jira_key(env.project_id), jira);
         let deadline = Instant::now() + T;
-        while !env.sessions.inner.masks.lock().unwrap().contains_key(&s.id) {
+        while !env.sessions.inner.masks.lock().contains_key(&s.id) {
             assert!(Instant::now() < deadline, "máscara não atualizada");
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -1151,11 +1284,11 @@ mod tests {
         )]);
         let s = env.sessions.start(env.request(35, "Máscara")).unwrap();
         env.wait_fake_output(&s.id);
-        assert!(!env.sessions.inner.masks.lock().unwrap().contains_key(&s.id));
+        assert!(!env.sessions.inner.masks.lock().contains_key(&s.id));
 
         // O que o sync faz: a fonte efetiva e a busca no cache de secrets.
         let p = env.sessions.ledger().get_project(env.project_id).unwrap();
-        let lookup = env.sessions.secret_lookup(&p);
+        let lookup = env.sessions.connections().secret_lookup(&p);
         for (key, what, source) in [
             (
                 crate::resolver::jira_key(p.id),
@@ -1187,7 +1320,6 @@ mod tests {
                 .inner
                 .masks
                 .lock()
-                .unwrap()
                 .get(&s.id)
                 .map(|m| m.pty.apply(b"tok-acme-arquivo-424242"));
             if n.as_deref() == Some(b"***CONEXAO_TOKEN***".as_slice()) {

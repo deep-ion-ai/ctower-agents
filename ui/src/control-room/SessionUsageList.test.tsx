@@ -74,8 +74,7 @@ function setup() {
 
 async function openView() {
   const user = userEvent.setup();
-  const lateral = await screen.findByRole("complementary", { name: "Ambientes e projetos" });
-  await user.click(within(lateral).getByRole("button", { name: "Uso por sessão" }));
+  await user.click(await screen.findByRole("button", { name: "Uso por sessão" }));
   return user;
 }
 

@@ -1,9 +1,9 @@
 //! `ctower update` (issue #90): atualização do ctowerd/ctower por build local.
 
 use ct_sessions::config::DaemonConfig;
-use ct_sessions::update::{log_file, Build, Phase, Relation, UpdateState};
 use ct_sessions::Dirs;
 use ct_update::runner::{short, Action, Runner, Target};
+use ct_update::{log_file, Build, Phase, Relation, UpdateState};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -37,7 +37,7 @@ pub fn check() -> i32 {
         let dirs = Dirs::from_env().map_err(|e| e.to_string())?;
         let cfg = DaemonConfig::load(&dirs).map_err(|e| e.to_string())?;
         let inst = installed(cfg.port);
-        let source = ct_sessions::update::source(&cfg, &dirs);
+        let source = ct_update::Source::new(&cfg.update_repo, &cfg.update_ref, dirs.update_dir());
         let a = source
             .check(&inst, ct_core::now_ms())
             .map_err(|e| e.to_string())?;
@@ -130,7 +130,7 @@ fn verify_timeout() -> Duration {
 fn runner(kind: &str) -> Result<Runner, String> {
     let dirs = Dirs::from_env().map_err(|e| e.to_string())?;
     let cfg = DaemonConfig::load(&dirs).map_err(|e| e.to_string())?;
-    let source = ct_sessions::update::source(&cfg, &dirs);
+    let source = ct_update::Source::new(&cfg.update_repo, &cfg.update_ref, dirs.update_dir());
     let port = cfg.port;
     let target = Target {
         service: "ctowerd".into(),
@@ -141,7 +141,7 @@ fn runner(kind: &str) -> Result<Runner, String> {
         release_prefix: Some("ctower-env".into()),
         verify_timeout: verify_timeout(),
         ctl: Box::new(|a| {
-            ct_sessions::update::Manager::from_env().command(match a {
+            ct_update::service::Manager::from_env().command(match a {
                 Action::Restart => "restart",
                 Action::Stop => "stop",
                 Action::Start => "start",
@@ -216,7 +216,7 @@ pub fn update(force: bool, rollback: bool) -> i32 {
         }
     };
     let t0 = ct_core::now_ms();
-    if let Some(s) = ct_sessions::update::running(&dir, t0) {
+    if let Some(s) = ct_update::running(&dir, t0) {
         eprintln!("Uma atualização já está em andamento ({}).", label(s.phase));
         return 1;
     }
@@ -227,14 +227,14 @@ pub fn update(force: bool, rollback: bool) -> i32 {
             return 1;
         }
     };
-    let run = ct_sessions::update::systemd_run_bin();
-    if let Err(e) = ct_sessions::update::spawn_runner(&run, &me, rollback) {
+    let run = ct_update::service::systemd_run_bin();
+    if let Err(e) = ct_update::service::spawn_runner(&run, &me, rollback) {
         eprintln!("não foi possível iniciar o {what}: {e}");
         return 1;
     }
     println!(
         "{what} iniciado na unidade {} (log: {})",
-        ct_sessions::update::UNIT,
+        ct_update::service::UNIT,
         log_file(&dir).display()
     );
     follow(&dir, t0)
@@ -245,17 +245,17 @@ fn follow(dir: &Path, t0: i64) -> i32 {
     let started = Instant::now();
     let mut last: Option<Phase> = None;
     loop {
-        let st = ct_sessions::update::read_state(dir).filter(|s| s.started_at >= t0);
+        let st = ct_update::read_state(dir).filter(|s| s.started_at >= t0);
         match st {
             None if started.elapsed() > START_TIMEOUT => {
                 eprintln!(
                     "O atualizador não começou. Veja {}.",
-                    if ct_sessions::update::Manager::from_env()
-                        == ct_sessions::update::Manager::Launchd
+                    if ct_update::service::Manager::from_env()
+                        == ct_update::service::Manager::Launchd
                     {
                         format!("{}", log_file(dir).display())
                     } else {
-                        format!("`journalctl --user -u {}`", ct_sessions::update::UNIT)
+                        format!("`journalctl --user -u {}`", ct_update::service::UNIT)
                     }
                 );
                 return 1;

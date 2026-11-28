@@ -40,6 +40,7 @@ pub const WEB_PUSHES: &[&str] = &[
     "env.push",
     "hub.update.status",
     "hub.autopilot.changed",
+    crate::CONTROL_ROOM_PUSH,
 ];
 
 /// Erro de método fora da lista do `/web/ws`.
@@ -901,6 +902,7 @@ mod tests {
             &json!({ "event": "env.online", "data": { "env_id": "e", "online": true } })
         ));
         assert!(web_push(&json!({ "event": "env.push", "data": {} })));
+        assert!(web_push(&crate::control_room_push(Some(1))));
         assert!(!web_push(&json!({ "event": "outro", "data": {} })));
         assert!(!web_push(&json!({})));
     }

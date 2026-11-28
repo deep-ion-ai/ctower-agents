@@ -7,6 +7,7 @@ import { terms } from "../test/fakeXterm";
 import { dashboard, MIN, session, sync, workItem } from "../test/fixtures";
 import { groupSessions } from "./SessionTree";
 import { closeCheck, resetShellStore, shellEndText } from "./shells";
+import { showSessions } from "../test/control-room";
 
 // Shell livre no worktree (#423). O xterm é o fake de ../test/fakeXterm.
 
@@ -36,6 +37,7 @@ async function openSession(api = new FakeDaemonApi(), shells: Shell[] = []) {
   terms.length = 0;
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /ui: terminal embutido/ }));
   await waitFor(() => expect(api.attached.has(S.id)).toBe(true));
   return { api, user };
@@ -152,6 +154,7 @@ test("sessão do projeto (#0): \"Shell · sessão do projeto\" e o aviso do clon
     .on("shell.open", { ...SH, work_item_id: 0, cwd: "/home/user/ctower-agents" });
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /sessão do projeto/i }));
   await user.click(await screen.findByRole("button", { name: "Abrir shell no worktree" }));
   const barra = await screen.findByRole("region", { name: "Shell" });

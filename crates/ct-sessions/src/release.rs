@@ -113,7 +113,7 @@ impl Sessions {
             )));
         }
         // Conferência e criação juntas: dois cliques não abrem duas sessões.
-        let _guard = self.inner.release_start.lock().unwrap();
+        let _guard = self.inner.release_start.lock();
         if let Some(s) = self.live_release_session(project_id)? {
             return Err(SessionsError::ReleaseBusy(format!(
                 "já há uma sessão de release viva no projeto ({})",

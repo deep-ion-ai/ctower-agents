@@ -33,6 +33,30 @@ pub struct Request {
     pub params: Value,
 }
 
+impl Request {
+    /// Span `rpc{method, req_id, session}` do despacho (#243): tudo o que o
+    /// método loga leva a requisição junto. `req_id` é o `id` do frame
+    /// (número ou texto) e `session` o `session_id` dos parâmetros, quando
+    /// há, para achar também por aqui o que se passou com uma sessão.
+    pub fn span(&self) -> tracing::Span {
+        let req_id = match &self.id {
+            Value::Null => String::new(),
+            Value::String(s) => s.clone(),
+            v => v.to_string(),
+        };
+        let span = tracing::info_span!(
+            "rpc",
+            method = %self.method,
+            req_id = %req_id,
+            session = tracing::field::Empty
+        );
+        if let Some(s) = self.params.get("session_id").and_then(Value::as_str) {
+            span.record("session", s);
+        }
+        span
+    }
+}
+
 /// Decodifica o frame; JSON inválido já vira a resposta de erro.
 pub fn parse(text: &str) -> Result<Request, Value> {
     let Ok(req) = serde_json::from_str::<Value>(text) else {
@@ -108,5 +132,40 @@ mod tests {
         assert_eq!(v["error"]["code"], -32602);
         assert!(str_param(&json!({}), "owner").is_err());
         assert_eq!(i64_param(&json!({ "n": 2 }), "n").unwrap(), 2);
+    }
+
+    #[test]
+    fn span_do_despacho() {
+        let mut out = Vec::new();
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        struct W(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for W {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let w = buf.clone();
+        let sub = tracing_subscriber::fmt()
+            .with_writer(move || W(w.clone()))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(sub, || {
+            let r =
+                parse(r#"{"id":3,"method":"session.get","params":{"session_id":"s-1"}}"#).unwrap();
+            r.span().in_scope(|| tracing::info!("x"));
+            let r = parse(r#"{"id":"abc","method":"hub.info"}"#).unwrap();
+            r.span().in_scope(|| tracing::info!("y"));
+        });
+        out.extend(buf.lock().unwrap().iter());
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains(r#"rpc{method=session.get req_id=3 session="s-1"}"#),
+            "{text}"
+        );
+        assert!(text.contains("rpc{method=hub.info req_id=abc}"), "{text}");
     }
 }

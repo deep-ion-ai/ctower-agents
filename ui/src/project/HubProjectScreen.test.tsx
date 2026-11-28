@@ -12,6 +12,7 @@ import { resetProjectUi } from "./ui-store";
 import { hubItem as webItem, webApi } from "../test/web";
 import { DESKTOP_ONLY_NOTE } from "../web/mode";
 import { DEFAULT_RELEASE_CONFIG } from "../hub/release";
+import { openHealth, showSessions } from "../test/control-room";
 
 const NOW = Date.now();
 
@@ -216,7 +217,7 @@ test("hub fora: aviso de visão parcial e pendências do envio", async () => {
   const api = setup(false);
   render(<App api={api} />);
   expect(await screen.findByText(/hub indisponível: visão parcial/)).toBeInTheDocument();
-  const side = screen.getByRole("complementary", { name: "Ambientes e projetos" });
+  const side = await openHealth();
   expect(await within(side).findByText(/hub: 3 pendentes · falhou/)).toBeInTheDocument();
   expect(api.callsTo("hub.dashboard.get")).toHaveLength(0);
 });
@@ -224,14 +225,15 @@ test("hub fora: aviso de visão parcial e pendências do envio", async () => {
 test("hub no ar: sem aviso, conexão própria e projetos da visão consolidada", async () => {
   const api = setup(true);
   render(<App api={api} />);
-  const side = screen.getByRole("complementary", { name: "Ambientes e projetos" });
+  const side = await openHealth();
   expect(await within(side).findByText("conectado · configuração rev 7")).toBeInTheDocument();
   expect(within(side).getByText("mac-mini")).toBeInTheDocument();
   await waitFor(() => expect(api.callsTo("hub.dashboard.get").length).toBeGreaterThan(0));
   expect(screen.queryByText(/hub indisponível/)).not.toBeInTheDocument();
   // O hub tem conexão própria: nenhum ambiente recebe chamadas hub.*.
   expect(api.calls.filter((c) => c.method.startsWith("hub.") && c.env !== "hub")).toHaveLength(0);
-  // Tile da sessão viva diz em que ambiente roda.
+  // Tile da sessão viva diz em que ambiente roda (visão "Rodando", #357).
+  await showSessions(userEvent.setup());
   expect(await screen.findByText(/WSL · claude ·/)).toBeInTheDocument();
 });
 
@@ -1223,7 +1225,8 @@ test("faixa Precisa de você (#90): sync falhando há 3 ciclos, com o link para 
   const api = setupFailing(3, false);
   render(<App api={api} initial={{ name: "control" }} />);
   const faixa = await screen.findByRole("region", { name: /Precisa de você/ });
-  expect(faixa).toHaveTextContent("ctower-agents: sync falhando há 3 ciclos");
+  const linha = within(faixa).getByText("Sync falhando há 3 ciclos").closest("li")!;
+  expect(within(linha).getByText("ctower-agents")).toBeInTheDocument();
   expect(faixa).toHaveTextContent("GitHub: HTTP 410");
   // A rodada seguinte dá certo: o push do ambiente traz o dashboard novo e o aviso some.
   api.on("dashboard.get", (_: unknown, env: string) =>
@@ -1232,7 +1235,7 @@ test("faixa Precisa de você (#90): sync falhando há 3 ciclos, com o link para 
       : dashboard({ projects: [] }),
   );
   act(() => api.push("wsl", "sync_status", { project_id: 1, ok: true, last_ok_at: NOW, error: null }));
-  await waitFor(() => expect(screen.queryByText(/sync falhando há/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/sync falhando há/i)).toBeNull());
 });
 
 test("paleta (#90): Sincronizar este projeto na aba do projeto e Sincronizar projeto… escolhendo o projeto", async () => {

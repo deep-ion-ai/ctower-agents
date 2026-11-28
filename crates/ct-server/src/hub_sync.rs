@@ -718,6 +718,14 @@ impl HubSender {
             .is_ok()
     }
 
+    /// Último envio confirmado pelo hub, sem tocar no ledger (o `/status`).
+    pub fn last_ok_at(&self) -> Option<i64> {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_ok_at
+    }
+
     pub fn status(&self) -> HubSyncStatus {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
         {

@@ -5,7 +5,7 @@
 //! - Sessões `interrupted`/`exited` saem da Recuperação: o `run` faz um
 //!   último backup do transcript (se o original ainda existe) e as arquiva
 //!   (`archived`). As linhas ficam até a poda do #179. A Recuperação já as
-//!   esconde antes disso ([`crate::recoverable_sessions`]), porque a etapa
+//!   esconde antes disso ([`ct_sessions::recoverable_sessions`]), porque a etapa
 //!   só roda depois das idades mínimas e, sem `cleanup.auto`, à mão.
 //! - Sessão viva nunca é encerrada sem ação explícita: a etapa fica
 //!   bloqueada ("issue concluída, sessão ainda aberta") até alguém encerrá-la
@@ -38,10 +38,10 @@
 //! pega a pasta na próxima verificação: ela avalia os worktrees do work item
 //! que já não existem.
 
-use crate::cleanup::{CleanupStep, StepContext, StepKind, StepOutcome, StepPlan};
-use crate::{Result, Sessions, SessionsError};
+use crate::{CleanupStep, StepContext, StepKind, StepOutcome, StepPlan};
 use ct_core::SessionState;
 use ct_ledger::Session;
+use ct_sessions::{Result, Sessions, SessionsError};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,7 +52,7 @@ const H: i64 = 3_600_000;
 /// Espera máxima para a sessão encerrada pela etapa sair do estado vivo.
 const END_TIMEOUT: Duration = Duration::from_secs(10);
 // O agente que ignora o `SIGHUP` sai com o `SIGKILL` dentro do prazo.
-const _: () = assert!(crate::KILL_GRACE.as_secs() < END_TIMEOUT.as_secs());
+const _: () = assert!(ct_sessions::KILL_GRACE.as_secs() < END_TIMEOUT.as_secs());
 
 /// Pastas de transcript do agente de um worktree ([`agent_transcript_dirs`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -92,7 +92,7 @@ fn evaluate(sessions: &Sessions, worktree: &str, strict: bool) -> Result<AgentTr
     let Some(root) = sessions.config().agent_home.transcripts_root.clone() else {
         return Ok(out);
     };
-    let runtime = crate::agent_runtime(crate::AGENT_TOOL)?;
+    let runtime = ct_sessions::agent_runtime(ct_sessions::AGENT_TOOL)?;
     if worktree.is_empty() {
         return Ok(out);
     }
@@ -455,11 +455,11 @@ fn wait_stopped(sessions: &Sessions, ended: &[&Session]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cleanup::{Cleaner, CleanupScope, StepResult, StepState};
-    use crate::config::CleanupConfig;
-    use crate::test_support::{FakeClaude, TestEnv};
+    use crate::{Cleaner, CleanupScope, StepResult, StepState};
     use ct_core::{SessionMode, Tool, WorkItemKind, WorkItemStatus};
     use ct_ledger::NewSession;
+    use ct_sessions::config::CleanupConfig;
+    use ct_sessions::test_support::{FakeClaude, TestEnv};
 
     fn cfg() -> CleanupConfig {
         CleanupConfig {
@@ -476,11 +476,11 @@ mod tests {
             .unwrap();
     }
 
-    fn sessoes(plan: &crate::cleanup::CleanupPlan) -> &StepPlan {
+    fn sessoes(plan: &crate::CleanupPlan) -> &StepPlan {
         &plan.items[0].steps[0]
     }
 
-    fn run(c: &Cleaner, env: &TestEnv, dry: bool, now: i64) -> crate::cleanup::CleanupRun {
+    fn run(c: &Cleaner, env: &TestEnv, dry: bool, now: i64) -> crate::CleanupRun {
         c.run(&env.sessions, CleanupScope::default(), dry, now)
             .unwrap()
     }
@@ -613,8 +613,9 @@ mod tests {
             s
         };
         let (a, b) = (mk(1), mk(2));
-        let ids =
-            |v: Vec<crate::RecoveryItem>| v.into_iter().map(|i| i.session.id).collect::<Vec<_>>();
+        let ids = |v: Vec<ct_sessions::RecoveryItem>| {
+            v.into_iter().map(|i| i.session.id).collect::<Vec<_>>()
+        };
         assert_eq!(
             ids(env.sessions.recovery_list().unwrap()),
             vec![a.id.clone(), b.id.clone()]
@@ -674,7 +675,7 @@ mod tests {
         fs::create_dir_all(&worktree).unwrap();
         let wt_str = worktree.to_string_lossy().to_string();
         let root = env.cfg.agent_home.transcripts_root.clone().unwrap();
-        let dir = crate::agent_runtime(crate::AGENT_TOOL)
+        let dir = ct_sessions::agent_runtime(ct_sessions::AGENT_TOOL)
             .unwrap()
             .transcript_dirs_for(&root, &wt_str, &[])
             .remove(0);

@@ -5,6 +5,7 @@ import { FakeDaemonApi } from "../api/fake";
 import type { IssueRow, ProjectTree, TreeNode } from "../protocol/gen";
 import { dashboard, project, session, sync, workItem } from "../test/fixtures";
 import { webApi } from "../test/web";
+import { showSessions } from "../test/control-room";
 
 const NOW = Date.now();
 
@@ -83,6 +84,7 @@ async function open(user: ReturnType<typeof userEvent.setup>) {
 
 test("#297 → Enter abre o item na tela Projeto, com o detalhe aberto", async () => {
   const { user } = setup();
+  await showSessions(user);
   await screen.findByRole("button", { name: /ui: paleta de comandos/ });
   await open(user);
   await user.type(input(), "#297");
@@ -105,6 +107,7 @@ test("#297 → Enter abre o item na tela Projeto, com o detalhe aberto", async (
 
 test("Iniciar sessão: #297 abre a modal de início no item", async () => {
   const { user } = setup();
+  await showSessions(user);
   await screen.findByRole("button", { name: /ui: paleta de comandos/ });
   await open(user);
   await user.type(input(), ">iniciar 297");
@@ -200,6 +203,7 @@ test("sem hub e sem ambiente: telas e comandos continuam", async () => {
 
 test("comandos de projeto (#9): \"novo projeto\" abre o cadastro; \"configurar ctower\", a configuração", async () => {
   const { user } = setup();
+  await showSessions(user);
   await screen.findByRole("button", { name: /ui: paleta de comandos/ });
   await open(user);
   await user.type(input(), "novo projeto");
@@ -230,6 +234,7 @@ test("comandos de projeto (#9): \"novo projeto\" abre o cadastro; \"configurar c
 
 test("comandos de projeto (#17): cada aba e seção abre na aba do próprio projeto", async () => {
   const { user } = setup();
+  await showSessions(user);
   await screen.findByRole("button", { name: /ui: paleta de comandos/ });
   await open(user);
   await user.type(input(), "configurar ctower");
@@ -266,6 +271,7 @@ test("comandos de projeto (#17): cada aba e seção abre na aba do próprio proj
 test("comandos de projeto na web (#9): só os de leitura", async () => {
   const user = userEvent.setup();
   render(<App api={webApi()} />);
+  await showSessions(user);
   await screen.findByRole("button", { name: /WebDaemonApi/ });
   await open(user);
   await user.type(input(), ">projeto");

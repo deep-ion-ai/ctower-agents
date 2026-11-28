@@ -86,6 +86,7 @@ recovery_reverify_days = 90          # lembrete para verificar a chave de recupe
 dir = ""                             # vazio = ~/.local/state/ctower/logs/cthubd.jsonl (~/Library/Logs/ctower no macOS; <CTHUB_DATA_DIR>/logs se definido)
 max_file_mb = 10                     # tamanho de cada arquivo antes de rotacionar; 0 desliga o arquivo
 max_files = 5                        # arquivos guardados, contando o atual
+retention_days = 7                   # dias do log diário (cthubd.AAAA-MM-DD.log); 0 desliga; veja docs/ambiente.md, "Logs"
 
 [web]                                # UI web (PWA), #199 e #200; veja "UI web" abaixo
 enabled = false                      # `/`, `/assets/*` e `/web/*` desligados (404) por padrão
@@ -207,7 +208,7 @@ O release não tem binário de hub para macOS, então o build é local (o CI de 
 bash scripts/provision/provision.sh --hub
 ```
 
-No macOS valem `--hub` (hub) e `--env` (ambiente, `docs/ambiente-macos.md`). Para o ambiente ligar a um hub em outra máquina, veja "Ambiente com hub remoto" abaixo. O script compila o `cthubd` e instala o LaunchAgent `packaging/launchd/ai.deep-ion.cthubd.plist` em `~/Library/LaunchAgents/`, com o `@HOME@` trocado pelo seu HOME (o launchd não expande `~`). Depois carrega o agente com `launchctl bootstrap gui/$(id -u) ...`. O agente sobe no login e reinicia se o processo cair com erro. Log: `~/Library/Logs/cthubd.log`. À mão:
+No macOS valem `--hub` (hub) e `--env` (ambiente, `docs/ambiente-macos.md`). Para o ambiente ligar a um hub em outra máquina, veja "Ambiente com hub remoto" abaixo. O script compila o `cthubd` e instala o LaunchAgent `packaging/launchd/ai.deep-ion.cthubd.plist` em `~/Library/LaunchAgents/`, com o `@HOME@` trocado pelo seu HOME (o launchd não expande `~`). Depois carrega o agente com `launchctl bootstrap gui/$(id -u) ...`. O agente sobe no login e reinicia se o processo cair com erro. Log: `~/Library/Logs/ctower/cthubd.AAAA-MM-DD.log` (diário, com retenção; docs/ambiente.md, "Logs"). À mão:
 
 ```bash
 (cd ui && npm ci && npm run build:web)
@@ -525,7 +526,7 @@ O `ctowerd` lê o `docs_root` ao subir: depois de mudar, `ctower restart`. Para 
 
 - **`env.info.docs`** (`{ root, reachable, warning? }`): `reachable: true` com o `root` esperado é o critério de pronto. `reachable` exige o marcador `<docs_root>/.ct-docs-root` (decisão 106). A UI mostra o selo "docs inacessíveis" no ambiente quando vem `warning: "docs_unreachable"` (#441); pelo hub, `hub.env.call { env, method: "env.info" }` lê o de qualquer ambiente com canal.
 - **No terminal:** `ls -a <docs_root>` mostra o `.ct-docs-root` e as pastas `<owner>__<repo>` dos projetos (sem o marcador, a montagem caiu ou aponta para outra pasta); `mount | grep ctdocs` (macOS e Linux) mostra a montagem.
-- **No log do ambiente** (`journalctl --user -u ctowerd`, `~/Library/Logs/ctowerd.log`): `docs: docs_root ... inacessível (montagem caída?)` quando uma sessão subiu sem os docs.
+- **No log do ambiente** (`journalctl --user -u ctowerd`, `~/Library/Logs/ctower/ctowerd.AAAA-MM-DD.log`): `docs: docs_root ... inacessível (montagem caída?)` quando uma sessão subiu sem os docs.
 
 `reachable` diz que a pasta abre em até 2 s **e** tem o marcador `.ct-docs-root`, que só existe no `docs_dir` do hub: uma pasta de montagem vazia (montagem caída) não passa, e o ambiente não grava nada no disco local no lugar do compartilhamento. Não apague o marcador; se sumir, o `cthubd` o recria ao subir (ou rode de novo o `provision.sh --hub --docs-dir`).
 
@@ -668,7 +669,7 @@ secrets_max_age_hours = 24    # idade da configuração que dispara o aviso no s
 - **Remover:** todo projeto do cache que não veio em `projects` ganha `unassigned_at` e sai da lista. O clone, os worktrees e as sessões ficam; a limpeza é à mão. O espelho do GitHub do ambiente (`issue_cache`, `pr_cache`) só sincroniza os atribuídos.
 - **Primeiro pull:** projetos locais legados que vieram em `projects` são casados por `owner/repo` e mantêm o `id` local (o histórico continua ligado a eles). Legados que o hub não atribuiu ganham `unassigned_at` ("projeto local fora do hub"), sem nada ser apagado do disco.
 - **Hub antigo:** `404` em `/sync/config` (o `ctowerd` com `hub = true` do #64, durante a migração) não é erro: os projetos locais legados continuam valendo até o primeiro pull que responder, e `hub_config.legacy_hub` fica `true`.
-- **Concluídos do hub (#298):** o status dos work items não move o `config_rev`, então o `concluido` marcado à mão na tela Hub vem por `GET <hub_url>/sync/done` (mesmos cabeçalhos): o conjunto completo dos work items `concluido` dos projetos atribuídos. O `ctowerd` o pede em todo ciclo do pull e substitui o cache `hub_done` do `ledger.db`; `ct_sessions::cleanup::completion` o usa como sinal `work item concluído` (um PR aberto da branch ainda vence). `404` = hub antigo, ignorado.
+- **Concluídos do hub (#298):** o status dos work items não move o `config_rev`, então o `concluido` marcado à mão na tela Hub vem por `GET <hub_url>/sync/done` (mesmos cabeçalhos): o conjunto completo dos work items `concluido` dos projetos atribuídos. O `ctowerd` o pede em todo ciclo do pull e substitui o cache `hub_done` do `ledger.db`; `ct_sessions::completion::completion` o usa como sinal `work item concluído` (um PR aberto da branch ainda vence). `404` = hub antigo, ignorado.
 
 ### Secrets do ambiente
 
@@ -705,6 +706,20 @@ Se o agente imprimir um secret (`env`, `echo $API_TOKEN`), o valor acabaria no s
 - **Onde fica o conjunto:** só em memória no `ctowerd`, associado à sessão; nunca é gravado. Sai quando a sessão é retomada (a nova ganha o próprio) ou arquivada. Se um backup acontece sem ele (o daemon reiniciou), o conjunto é recalculado do cache atual pelo projeto da sessão; se o cache mudou nesse meio tempo, valem os valores atuais. Cache ausente ou ilegível: o backup sai sem mascaramento, com aviso no log.
 - **Cache novo com a sessão no ar** (#165): quando um pull regrava o cache, o `ctowerd` soma ao conjunto de cada sessão viva os secrets atuais do projeto dela, **mantendo os anteriores** (a saída antiga ainda pode trazer o valor velho). Vale para a saída do PTY dali em diante (a cauda pendente do filtro continua valendo) e para o backup do transcript. O scrollback já emitido não é reescrito.
 - **Resume:** a sessão retomada recebe os valores atuais do cache e mascara esses. Um valor injetado antes e trocado no hub depois não é mais mascarado.
+
+##### O que a máscara não protege (#335)
+
+A máscara age só na saída que o Control Tower mostra e grava. O agente roda antes dela, então um valor impresso na sessão (o token de uma conexão ou um secret do hub):
+
+- **chega aberto ao contexto do modelo.** Não há como protegê-lo: a saída da ferramenta entra no contexto antes de qualquer filtro do Control Tower, e os hooks do Claude Code não reescrevem a saída de `Bash`;
+- **fica aberto no arquivo de sessão do próprio Claude Code** (`~/.claude/projects/.../*.jsonl`, na máquina do ambiente). O Control Tower não altera esse arquivo: reescrevê-lo com a sessão no ar, ou depois dela, arrisca a retomada e disputa o arquivo com o Claude. Só a cópia em `transcripts/` é mascarada.
+
+Recomendações:
+
+- use credenciais de **escopo mínimo** (token fine-grained, só os repositórios e permissões necessários) e, quando possível, de curta duração;
+- se uma credencial foi impressa numa sessão, trate-a como exposta e **troque-a** no hub (a nova vale nas sessões seguintes);
+- proteja o diretório `~/.claude` do ambiente como protegeria qualquer segredo local (permissões do usuário, disco cifrado, sem backup para fora da máquina);
+- peça ao agente que não imprima variáveis de credencial (`env`, `printenv`, `echo $TOKEN`): a máscara é uma rede de segurança, não uma garantia.
 
 ### Secrets e variáveis pela UI do hub
 
@@ -995,6 +1010,38 @@ A execução de épico roda as sub-issues de um épico com um **plano por agente
 
   O âmbar marca só o que pede o desenvolvedor: plano aguardando aprovação, decisões pendentes e o merge do épico.
 - **Web Push:** cada pedido de decisão novo gera a notificação `epic_decision`, com o épico, a sub-issue e o motivo, nunca o texto do pedido.
+
+### Sala de controle: PRs, checks e execuções de épico por projeto (#354)
+
+`hub.control_room.projects` (hub 1.29, também na web, sem parâmetros) devolve `ControlRoomProjects { projects, now }`, um item por projeto do hub na ordem dos projetos. Tudo sai do `hub.db`, sem consulta nova ao GitHub ou ao GitLab. Cada `ControlRoomProject` traz `owner`, `repo`, `name`, `tracker`, `forge` (`github` = PRs, `gitlab` = MRs) e:
+
+- **`prs`:** os PRs/MRs abertos do espelho (`pr_cache`), do mais novo ao mais antigo. Cada um tem `number`, `url`, `head`, `base`, a issue ligada (`issue`, `issue_ref`) e `title`, que é o título da issue ligada, porque o espelho não guarda o do PR. O PR do épico (`wip → base`) entra, ligado ao épico. O PR da `wip/autonoma` não entra: ele fica no bloco do piloto (`hub.autopilot.wip`). Os checks (`checks`) vêm do espelho `pr_checks` (#129):
+  - `state`: `success`, `pending` (algum em andamento, ou nenhum check ainda), `failure` (algum falhou; vence os em andamento) ou `none` (sem leitura no espelho, como nos MRs do GitLab, cujos checks o hub não lê);
+  - `total`, `failed`, `pending` e o texto pronto (`text`, "2 checks, 1 falhou");
+  - `failed_names` (os checks que falharam), `head_sha` e `synced_at`.
+- **`epic_runs`:** as execuções de épico ativas. Concluídas e canceladas não aparecem. Cada `ControlRoomEpicRun` traz:
+  - o épico (`epic`, `epic_ref`, `title`), o `status`, o `env_id` e `env_online`, que diz se o canal do ambiente está aberto;
+  - o progresso pelo plano aprovado em vigor: `done` (sub-issues mescladas na `wip`) e `total`, ambos 0 sem plano aprovado;
+  - `current`, as sub-issues com sessão ou PR vivos, na ordem do plano, e `next`, a primeira pronta ou, sem nenhuma pronta, a primeira pendente;
+  - `pending_decisions`, os pedidos de decisão pendentes.
+- **`stop`:** o motivo de a execução estar parada, ou `null` se ela está andando. Vale só um, nesta ordem:
+  1. `pausado`, com o motivo da pausa;
+  2. `estacionado`, com o motivo e `until` (a retomada);
+  3. `aguardando_decisao`, com o texto do pedido pendente mais antigo e a sub-issue dele;
+  4. `aguardando_aprovacao`, quando o plano espera aprovação;
+  5. `falha`, quando o evento mais recente do motor é `start_failed`, `refused`, `continue_failed` ou `plan_failed`, com a mensagem;
+  6. `ambiente_fora`, quando o ambiente da execução está sem canal e o motor espera por ele.
+
+Na web, os textos livres de `stop.reason` (motivo da pausa, texto do pedido, mensagem do motor) passam pela mesma máscara de secrets do log do hub. Caminhos de worktree e ids de sessão não saem por este método.
+
+**Push:** `hub.control_room.changed` (`ControlRoomChanged { project_id }`, também na web) avisa que a tela deve reler. Ele sai em quatro casos:
+
+- quando o sync do GitHub do hub muda os PRs abertos ou os checks de um projeto (`project_id` preenchido);
+- quando o sync grava uma leitura nova da release ou das entregas de um projeto (`project_id` preenchido; em `304` não sai);
+- quando a ingestão de um ambiente aplica MRs do espelho de um projeto Jira;
+- junto de todo `hub.epic_run.changed` (`project_id: null`).
+
+**`hub.projects.release` (#355):** sem parâmetros, devolve um `ProjectRelease` por projeto: `owner`/`repo`, a última release (`release`: `tag`, `name`, `published_at`, `url`) e as entregas na base sem release (`unreleased` e `deliveries`, do merge mais recente ao mais antigo). Três flags dizem como ler o resultado: `supported` (só projeto GitHub com GitHub; `false` vira "—" na UI), `synced` (sem leitura, `release` vazio é "ainda não sei", não "sem release") e `truncated` (a leitura parou no limite de páginas, então `unreleased` é um mínimo). `synced_at` é quando a leitura gravada mudou pela última vez. O hub lê com requisições condicionais (ETag) a cada sync do GitHub, e a UI relê o método junto de `hub.control_room.changed`. Vale também na web.
 
 ### Hub fora do ar
 

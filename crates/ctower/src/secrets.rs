@@ -45,6 +45,17 @@ pub fn get(name: &str) -> i32 {
 }
 
 fn fetch(name: &str) -> Result<String, (i32, String)> {
+    session_post(
+        "/session/secret",
+        &serde_json::json!({ "name": name }),
+        GET_TIMEOUT,
+    )
+}
+
+/// `POST <CTOWER_URL><path>` com o token da sessão (`CTOWER_SESSION_TOKEN`):
+/// o corpo da resposta, ou `(código de saída, mensagem)`; 400 e 404 dão
+/// [`NOT_FOUND_EXIT`].
+fn session_post(path: &str, body: &Value, timeout: Duration) -> Result<String, (i32, String)> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
     let token = env(ct_sessions::SESSION_TOKEN_ENV).ok_or_else(|| {
         (
@@ -58,13 +69,13 @@ fn fetch(name: &str) -> Result<String, (i32, String)> {
     let url = env("CTOWER_URL").ok_or_else(|| (1, "CTOWER_URL ausente".to_string()))?;
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(2))
-        .timeout(GET_TIMEOUT)
+        .timeout(timeout)
         .build();
     let resp = agent
-        .post(&format!("{}/session/secret", url.trim_end_matches('/')))
+        .post(&format!("{}{path}", url.trim_end_matches('/')))
         .set("Authorization", &format!("Bearer {token}"))
         .set("Content-Type", "application/json")
-        .send_string(&serde_json::json!({ "name": name }).to_string());
+        .send_string(&body.to_string());
     match resp {
         Ok(r) => r.into_string().map_err(|e| (1, e.to_string())),
         Err(ureq::Error::Status(code, r)) => {
@@ -84,6 +95,57 @@ fn fetch(name: &str) -> Result<String, (i32, String)> {
             ))
         }
         Err(ureq::Error::Transport(e)) => Err((1, format!("ctowerd fora do ar: {e}"))),
+    }
+}
+
+/// Prazo de `ctower git-credential get`: o daemon pode rodar o comando de
+/// credencial da conexão (`CREDENTIAL_DEADLINE`, 10 s) antes de responder.
+const GIT_CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `ctower git-credential <get|store|erase>` (#334): o credential helper do
+/// git das sessões do GitLab. `get` lê do stdin os campos que o git manda
+/// (`protocol`, `host`, ...) e imprime `username=` e `password=` com o token
+/// da conexão do GitLab do projeto, pedido ao ctowerd com o token da sessão.
+/// Host que não é o da conexão: nada no stdout e saída `0`, para o git seguir
+/// com os outros helpers. Fora de uma sessão (variáveis ausentes), com a
+/// sessão encerrada (401) ou com o daemon fora do ar: o motivo no stderr e
+/// saída `1` (o git avisa e segue para o próximo helper). `store` e `erase` não fazem
+/// nada: a credencial é da conexão, não do git. Falha ao resolver o token:
+/// motivo no stderr (nunca o valor) e saída `1`.
+pub fn git_credential(op: &str) -> i32 {
+    if op != "get" {
+        return 0;
+    }
+    let mut input = String::new();
+    if std::io::Read::read_to_string(&mut std::io::stdin(), &mut input).is_err() {
+        return 0;
+    }
+    let field = |k: &str| {
+        input
+            .lines()
+            .find_map(|l| l.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+            .unwrap_or("")
+            .to_string()
+    };
+    let body = serde_json::json!({ "protocol": field("protocol"), "host": field("host") });
+    match session_post("/session/git-credential", &body, GIT_CREDENTIAL_TIMEOUT) {
+        Ok(out) => {
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            if stdout
+                .write_all(out.as_bytes())
+                .and_then(|()| stdout.flush())
+                .is_err()
+            {
+                return 1;
+            }
+            0
+        }
+        Err((NOT_FOUND_EXIT, _)) => 0,
+        Err((code, e)) => {
+            eprintln!("ctower git-credential: {e}");
+            code
+        }
     }
 }
 

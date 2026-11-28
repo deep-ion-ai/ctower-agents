@@ -154,6 +154,68 @@ pub(crate) async fn session_secret_http(
     (code, msg).into_response()
 }
 
+/// Corpo de `POST /session/git-credential` (os campos de `protocol` e `host`
+/// que o git manda ao credential helper).
+#[derive(Debug, Deserialize)]
+pub struct GitCredentialRequest {
+    pub protocol: String,
+    pub host: String,
+}
+
+/// `POST /session/git-credential` com `Authorization: Bearer <token da
+/// sessão>` (#334), chamado por `ctower git-credential get`. Responde `200`
+/// com `username=` e `password=` (o formato do git) quando o host é o da URL
+/// de clone do GitLab do projeto da sessão; `404` para outro host, SSH ou
+/// projeto sem GitLab (o git segue com os outros helpers); `401` token
+/// ausente ou inválido; `503` credencial da conexão indisponível, com o
+/// motivo e sem valor.
+pub(crate) async fn session_git_credential_http(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(token) = ct_http::bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "token de sessão ausente").into_response();
+    };
+    let Ok(req) = serde_json::from_slice::<GitCredentialRequest>(&body) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "corpo esperado: {\"protocol\": \"https\", \"host\": \"host\"}",
+        )
+            .into_response();
+    };
+    let sessions = st.sessions.clone();
+    let r = tokio::task::spawn_blocking(move || {
+        sessions.session_git_credential(&token, &req.protocol, &req.host)
+    })
+    .await;
+    let (code, msg) = match r {
+        Ok(Ok(Some((user, password)))) => {
+            let mut resp = format!("username={user}\npassword={password}\n").into_response();
+            resp.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            );
+            return resp;
+        }
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            "sem credencial para este host".to_string(),
+        ),
+        Ok(Err(e)) => (
+            match e {
+                SecretGetError::Unauthorized => StatusCode::UNAUTHORIZED,
+                SecretGetError::Invalid(_) => StatusCode::BAD_REQUEST,
+                SecretGetError::NotFound(_) => StatusCode::NOT_FOUND,
+                SecretGetError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            },
+            e.to_string(),
+        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    (code, msg).into_response()
+}
+
 /// Status HTTP de uma recusa das rotas da release.
 fn release_error(e: ReleaseApiError) -> Response {
     let code = match e {
@@ -648,6 +710,73 @@ mod tests {
         assert_eq!(s, StatusCode::BAD_REQUEST);
         srv.env.sessions.kill(&projeto.id).unwrap();
         srv.env.sessions.kill(&gestor.id).unwrap();
+    }
+
+    /// `POST /session/git-credential` direto no router: (status, corpo).
+    async fn git_credential(srv: &Srv, token: Option<&str>, body: &str) -> (StatusCode, String) {
+        use axum::body::Body;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let mut req = axum::http::Request::post("/session/git-credential")
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            req = req.header("authorization", format!("Bearer {t}"));
+        }
+        let resp = crate::router(srv.state.clone())
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    /// #334: a rota devolve o usuário e o token da conexão do GitLab só para
+    /// o host do clone, pelo token da sessão; o resto é 401, 400 ou 404.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rota_da_credencial_do_git_pelo_token_da_sessao() {
+        use ct_core::provider::{CredentialSource, ProviderKind};
+        let srv = Srv::new(FakeClaude::sleep(30));
+        srv.env.assign_config(1, |p| {
+            p.forge = ct_core::ForgeConfig::Gitlab(ct_core::GitlabConfig {
+                connection: Some(8),
+                path: "acme/acme-web".into(),
+                clone_url: "https://gitlab.example.com/acme/acme-web.git".into(),
+            });
+        });
+        srv.env.connect(vec![ct_sessions::test_support::connection(
+            8,
+            ProviderKind::Gitlab,
+            "gitlab.example.com",
+            CredentialSource::Command {
+                cmd: "printf 'tok-ficticio-gitlab-1'".into(),
+            },
+        )]);
+        let s = srv.env.sessions.start(srv.env.request(41, "Git")).unwrap();
+        let t = token_of(&srv, &s.id);
+        let body =
+            |host: &str| serde_json::json!({ "protocol": "https", "host": host }).to_string();
+        let (st, b) = git_credential(&srv, Some(&t), &body("gitlab.example.com")).await;
+        assert_eq!(
+            (st, b.as_str()),
+            (
+                StatusCode::OK,
+                "username=oauth2\npassword=tok-ficticio-gitlab-1\n"
+            )
+        );
+        // Outro host: 404 sem valor.
+        let (st, b) = git_credential(&srv, Some(&t), &body("outro.example.com")).await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "{b}");
+        assert!(!b.contains("tok-"), "{b}");
+        // Token ausente, de UI, de hook ou inventado: 401.
+        for t in [None, Some(UI), Some(crate::test_util::HOOK), Some("x")] {
+            let (st, b) = git_credential(&srv, t, &body("gitlab.example.com")).await;
+            assert_eq!(st, StatusCode::UNAUTHORIZED, "{t:?}");
+            assert!(!b.contains("tok-"), "{b}");
+        }
+        let (st, _) = git_credential(&srv, Some(&t), "nada").await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        srv.env.sessions.kill(&s.id).unwrap();
     }
 
     /// `POST` direto no router com o token da sessão: (status, corpo).

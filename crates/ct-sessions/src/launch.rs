@@ -494,6 +494,14 @@ impl Sessions {
             title,
         } = spec;
         let cfg = self.config().clone();
+        // Span `session` (#243): o id só existe depois do `create_session`.
+        let span = tracing::info_span!(
+            "session",
+            id = tracing::field::Empty,
+            project = %format!("{}/{}", project.gh_owner, project.gh_repo),
+            item = wi.gh_number
+        );
+        let _in_session = span.enter();
         let gestor = project.kind == ProjectKind::Gestor;
         // Sessão de release (#204): perfil próprio do guarda-corpo e o token
         // exclusivo da release.
@@ -521,6 +529,8 @@ impl Sessions {
             model: agent.model.clone(),
             mode: agent.mode,
         })?;
+        span.record("id", session.id.as_str());
+        tracing::info!(mode = ?mode, "sessão criada");
         let dir = cfg.dirs.session_dir(&session.id);
         private_dir(&dir)?;
         // A pasta de docs vai no mesmo `--add-dir` abaixo: sem a confiança,
@@ -686,6 +696,7 @@ impl Sessions {
             &self.project_connections(project),
             wi,
             gestor,
+            &cfg.ctower_bin,
         ));
         env.extend(docs.env());
         if docs.unreachable {
@@ -741,7 +752,6 @@ impl Sessions {
         self.inner
             .live
             .lock()
-            .unwrap()
             .insert(session.id.clone(), pty.clone());
         self.sync_pty_mask(&session.id, &pty);
         if remote_name.is_some() {
@@ -852,9 +862,9 @@ impl Sessions {
     /// (código ≠ 0 ou sinal) sem `SessionEnd` antes vira `interrupted` e entra
     /// na recuperação (#283).
     fn on_process_exit(&self, project_id: i64, wi_id: i64, sid: &str, code: Option<i32>) {
-        self.inner.live.lock().unwrap().remove(sid);
+        self.inner.live.lock().remove(sid);
         self.forget_session_token(sid);
-        let killed = self.inner.killed.lock().unwrap().remove(sid);
+        let killed = self.inner.killed.lock().remove(sid);
         let clean = code == Some(0) || killed;
         let to = if clean {
             SessionState::Exited
@@ -909,7 +919,10 @@ fn epic_warning(reason: &str) -> String {
 /// - Jira: `CTOWER_TRACKER=jira` (perfil Jira do hook) e, na sessão de issue
 ///   ou de épico, `CTOWER_ISSUE_KEY` (`PROJ-5450`); `JIRA_CONFIG_FILE` se a
 ///   conexão do Jira diz um. Sem `CTOWER_ISSUE`: o `Closes #n` é do GitHub.
-/// - GitLab: `GITLAB_HOST`, o host da conexão do GitLab.
+/// - GitLab: `GITLAB_HOST`, o host da conexão do GitLab e, com o clone por
+///   HTTPS, o credential helper `ctower git-credential` só para o host dele
+///   (`GIT_CONFIG_*`, #334): o `fetch` e o `push` da sessão usam o token da
+///   conexão sem ele ir ao `argv`, à URL nem ao `.git/config`.
 ///
 /// O arquivo e o host vêm das conexões do projeto neste ambiente (#277).
 fn provider_env(
@@ -917,6 +930,7 @@ fn provider_env(
     conns: &ct_core::ResolvedConnections,
     wi: &WorkItem,
     gestor: bool,
+    ctower_bin: &str,
 ) -> Vec<(String, String)> {
     let mut env = Vec::new();
     if gestor {
@@ -944,13 +958,31 @@ fn provider_env(
             }
         }
     }
-    if project.forge.gitlab().is_some() {
+    if let Some(g) = project.forge.gitlab() {
         let host = conns.gitlab_host();
         if !host.is_empty() {
             env.push(("GITLAB_HOST".to_string(), host));
         }
+        let inherited = std::env::var("GIT_CONFIG_COUNT")
+            .ok()
+            .and_then(|n| n.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let helper = format!("{} git-credential", shell_quote(ctower_bin));
+        if let Some(envs) = ct_git::credential_helper_envs(&g.clone_url, &helper, inherited) {
+            env.extend(envs.into_iter().map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.to_string_lossy().into_owned(),
+                )
+            }));
+        }
     }
     env
+}
+
+/// `s` entre aspas simples para o `sh -c` do credential helper do git.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -965,6 +997,15 @@ mod tests {
     use serde_json::Value;
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
+
+    #[test]
+    fn shell_quote_protege_aspas_e_espacos() {
+        assert_eq!(
+            shell_quote("/usr/local/bin/ctower"),
+            "'/usr/local/bin/ctower'"
+        );
+        assert_eq!(shell_quote("/a b/it's"), "'/a b/it'\\''s'");
+    }
 
     #[test]
     fn settings_tem_os_sete_hooks_e_matcher_bash() {
@@ -1258,6 +1299,16 @@ mod tests {
         assert!(out.contains("CTOWER_TRACKER=jira\n"), "{out}");
         assert!(out.contains("CTOWER_ISSUE_KEY=PROJ-5450\n"), "{out}");
         assert!(out.contains("GITLAB_HOST=gitlab.example.com\n"), "{out}");
+        // #334: o credential helper do git só para o host do clone, sem token.
+        assert!(out.contains("GIT_CONFIG_COUNT=1\n"), "{out}");
+        assert!(
+            out.contains("GIT_CONFIG_KEY_0=credential.https://gitlab.example.com.helper\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("GIT_CONFIG_VALUE_0=!'ctower' git-credential\n"),
+            "{out}"
+        );
         assert!(
             out.contains("JIRA_CONFIG_FILE=/etc/acme/jira.yml\n"),
             "{out}"

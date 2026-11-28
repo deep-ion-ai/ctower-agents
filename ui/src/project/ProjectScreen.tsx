@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProjectTree, TreeNode } from "../protocol/gen";
+import type { Project, ProjectTree, TreeNode } from "../protocol/gen";
 import { settingsTab } from "../settings/sections";
 import { useNav, type ItemIntent } from "../state/nav";
 import { useTower } from "../state/tower";
@@ -13,6 +13,8 @@ import { ProjectOverview } from "./ProjectOverview";
 import { ProjectSyncCard } from "./OverviewCards";
 import { projectSyncInfo } from "./sync-now";
 import { ProjectSessions } from "./ProjectSessions";
+import { ProjectSessionGrid } from "./ProjectSessionGrid";
+import { ProjectDayEnd } from "./ProjectDayEnd";
 import type { ProjectPage } from "./sections";
 import { projectSessions, sessionCounts } from "./sessions";
 import { syncText } from "./settings";
@@ -104,6 +106,7 @@ export function ProjectScreen(props: {
   const p = mine?.project ?? clone?.project ?? null;
   const name = p?.name ?? "Projeto";
   const sessions = () => projectSessions(clones, dashboards);
+  const only = (e: string, x: Project) => e === env && x.id === projectId;
   const sync = mine?.sync ?? dash?.sync.find((x) => x.project_id === projectId) ?? null;
   // "Sincronizar este projeto" no cabeçalho e no cartão (#90), no próprio ambiente.
   const syncInfo = projectSyncInfo(tower, { env, projectId });
@@ -134,17 +137,25 @@ export function ProjectScreen(props: {
               onPage={goPage}
               // Hub fora (#19): só o sync, no próprio ambiente. Saúde e gestor
               // dependem do hub (os sinais são calculados lá; o gestor lê o hub).
-              extra={<ProjectSyncCard info={syncInfo} />}
+              extra={
+                <>
+                  <ProjectSyncCard info={syncInfo} />
+                  <ProjectDayEnd now={now} only={only} />
+                </>
+              }
             />
           );
         },
         sessions: () => (
-          <ProjectSessions
-            groups={sessions()}
-            project={p}
-            now={now}
-            emptyText="O ambiente deste projeto não está conectado."
-          />
+          <>
+            <ProjectSessionGrid now={now} only={only} />
+            <ProjectSessions
+              groups={sessions()}
+              project={p}
+              now={now}
+              emptyText="O ambiente deste projeto não está conectado."
+            />
+          </>
         ),
         // As configurações do projeto ficam no hub (cadastro, atribuições,
         // regras, secrets, docs): sem ele, só o que o ambiente guarda.

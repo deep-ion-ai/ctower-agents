@@ -119,7 +119,31 @@ use tokio::sync::broadcast;
 /// desliga o `/code-review` da integração depois da aprovação), `epic_pr`
 /// no `hub.epic_run.status`, a origem `plano_falhou` dos pedidos e os
 /// eventos `wip_ready`, `revived` e `plan_revived`.
-pub const PROTOCOL_VERSION: &str = "1.27";
+/// 1.28 (#355): `hub.projects.release` (última release publicada e PRs
+/// mesclados na base depois dela, por projeto, lidos do espelho do hub).
+/// 1.29 (#354): `hub.control_room.projects` (PRs/MRs abertos com o resumo
+/// dos checks e execuções de épico ativas com o progresso e o motivo de
+/// parada, de todos os projetos; também na web) e o push
+/// `hub.control_room.changed` (`ControlRoomChanged`).
+pub const PROTOCOL_VERSION: &str = "1.29";
+
+/// Push `hub.control_room.changed` (#354): os PRs/MRs abertos, os checks
+/// ou uma execução de épico mudaram; a UI relê `hub.control_room.projects`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ControlRoomChanged {
+    /// Projeto que mudou; `None` = qualquer um (execução de épico, lote do
+    /// ambiente).
+    pub project_id: Option<i64>,
+}
+
+/// Nome do push da Sala de controle.
+pub const CONTROL_ROOM_PUSH: &str = "hub.control_room.changed";
+
+/// O push `hub.control_room.changed` pronto para o canal de eventos.
+pub(crate) fn control_room_push(project_id: Option<i64>) -> Value {
+    json!({ "event": CONTROL_ROOM_PUSH, "data": ControlRoomChanged { project_id } })
+}
 
 #[derive(Clone)]
 pub struct HubState {
@@ -223,6 +247,13 @@ impl HubState {
         let _ = self
             .events
             .send(json!({ "event": "hub.epic_run.changed", "data": {} }));
+        self.control_room_changed(None);
+    }
+
+    /// Avisa as UIs que a Sala de controle tem o que reler
+    /// (`hub.control_room.changed`, #354).
+    pub(crate) fn control_room_changed(&self, project_id: Option<i64>) {
+        let _ = self.events.send(control_room_push(project_id));
     }
 
     /// Avisa as UIs que regras do agente ou propostas de regras mudaram

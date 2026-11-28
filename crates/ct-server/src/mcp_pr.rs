@@ -16,7 +16,8 @@ use ct_ledger::{
     check_log_text, pr_feedback_text, FeedbackTextOptions, Ledger, PrCheck, PrRow, Project,
     Session, WorkItem,
 };
-use ct_sessions::{GithubSync, Sessions};
+use ct_sessions::Sessions;
+use ct_sync::GithubSync;
 use serde_json::{json, Value};
 
 /// Trecho do log devolvido por padrão (bytes).

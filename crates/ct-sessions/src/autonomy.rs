@@ -126,18 +126,6 @@ impl PrOpener for ct_gh::GhClient {
     }
 }
 
-impl PrOpener for crate::GithubSync {
-    fn ensure_draft_pr(
-        &self,
-        project: &Project,
-        head: &str,
-        base: &str,
-    ) -> std::result::Result<Option<DraftPr>, String> {
-        self.client_for(project)
-            .ensure_draft_pr(project, head, base)
-    }
-}
-
 /// O modo do projeto neste ambiente: `(projeto, branch, base, estratégia)`.
 struct Mode {
     project: Project,

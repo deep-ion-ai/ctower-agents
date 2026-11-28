@@ -4,6 +4,7 @@
 //! configuração dos projetos atribuídos.
 
 use clap::Parser;
+use ct_cleanup::Cleaner;
 use ct_gh::{GhClient, GhConfig};
 use ct_ledger::Ledger;
 use ct_server::cleanup::{spawn_periodic as spawn_cleanup_check, Cleanup};
@@ -12,14 +13,11 @@ use ct_server::hub_config::{spawn_puller, ConfigOptions};
 use ct_server::hub_sync::{spawn_sender, HubSender, HubTarget};
 use ct_server::update::{spawn_periodic as spawn_update_check, Updates};
 use ct_server::{notifier, router, AppState};
-use ct_sessions::cleanup::Cleaner;
 use ct_sessions::config::{DaemonConfig, HUB_REMOVED};
-use ct_sessions::github::next_delay;
-use ct_sessions::update::Build;
-use ct_sessions::{
-    ensure_env_id, ensure_token, Dirs, GithubSync, JiraGitlabSync, Sessions, SessionsConfig,
-    TrackerSyncConfig,
-};
+use ct_sessions::{ensure_env_id, ensure_token, Dirs, Sessions, SessionsConfig};
+use ct_sync::github::next_delay;
+use ct_sync::{GithubSync, JiraGitlabSync, TrackerSyncConfig};
+use ct_update::Build;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -60,6 +58,7 @@ async fn main() {
     ct_http::logs::init("ctowerd", &logs, "CTOWER_DATA_DIR");
     if let Err(e) = run().await {
         tracing::error!("ctowerd encerrado com erro: {e}");
+        ct_http::logs::flush();
         std::process::exit(1);
     }
 }
@@ -142,7 +141,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // O token de cada projeto vem da conexão `github` dele, pelo resolvedor
     // do ambiente (#275).
     let github = Arc::new(GithubSync::new(
-        sessions.clone(),
+        sessions.sync_handle(),
         GhClient::new(GhConfig::new(&cfg.gh_api_url, &cfg.gh_bin)),
     ));
 
@@ -161,7 +160,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .with_credentials(credentials.clone())
             .with_env_cache(sessions.env_cache()),
     );
-    let tracker = Arc::new(JiraGitlabSync::new(sessions.clone(), tracker_cfg));
+    let tracker = Arc::new(JiraGitlabSync::new(sessions.sync_handle(), tracker_cfg));
 
     // Sem hub o ambiente sobe, mas sem projetos e sem iniciar sessões;
     // hooks, MCP e `session.resume` continuam (spec do hub §7).
@@ -223,7 +222,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let updates = Arc::new(Updates::new(
-        ct_sessions::update::source(&cfg, &dirs),
+        ct_update::Source::new(&cfg.update_repo, &cfg.update_ref, dirs.update_dir()),
         Build::current(),
         events.clone(),
     ));

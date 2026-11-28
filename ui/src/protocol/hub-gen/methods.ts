@@ -9,6 +9,7 @@ import type { AutopilotStatus } from "./AutopilotStatus";
 import type { BackupConfigView } from "./BackupConfigView";
 import type { BudgetDecision } from "./BudgetDecision";
 import type { BudgetPolicy } from "./BudgetPolicy";
+import type { ControlRoomProjects } from "./ControlRoomProjects";
 import type { DeleteImpact } from "./DeleteImpact";
 import type { DependencyEdge } from "./DependencyEdge";
 import type { EpicDecision } from "./EpicDecision";
@@ -45,6 +46,7 @@ import type { HubWorkItemBody } from "./HubWorkItemBody";
 import type { MorningDigest } from "./MorningDigest";
 import type { ProjectAdded } from "./ProjectAdded";
 import type { ProjectDeleted } from "./ProjectDeleted";
+import type { ProjectRelease } from "./ProjectRelease";
 import type { ProposalDecided } from "./ProposalDecided";
 import type { PushRemoved } from "./PushRemoved";
 import type { PushTestResult } from "./PushTestResult";
@@ -69,6 +71,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.projects.move",
     "hub.projects.delete",
     "hub.projects.impact",
+    "hub.projects.release",
     "hub.tree.get",
     "hub.dashboard.get",
     "hub.envs.list",
@@ -156,12 +159,14 @@ export const HUB_METHOD_SCOPES = {
     "hub.secrets.delete",
     "hub.secrets.rotate_pending_dismiss",
     "hub.tracker.add_issue",
+    "hub.control_room.projects",
     "hub.release.status",
   ],
   web: [
     "hub.info",
     "hub.status",
     "hub.projects.list",
+    "hub.projects.release",
     "hub.tree.get",
     "hub.dashboard.get",
     "hub.envs.list",
@@ -216,6 +221,7 @@ export const HUB_METHOD_SCOPES = {
     "hub.epic_run.set_node",
     "hub.epic_run.handback",
     "hub.tracker.add_issue",
+    "hub.control_room.projects",
     "hub.release.status",
   ],
 } as const;
@@ -230,6 +236,7 @@ export interface HubMethods {
   "hub.projects.move": { params: { owner: string; repo: string; before?: { owner: string; repo: string } | null; after?: { owner: string; repo: string } | null }; result: HubProject };
   "hub.projects.delete": { params: { owner: string; repo: string; confirm?: boolean | null }; result: ProjectDeleted };
   "hub.projects.impact": { params: { owner: string; repo: string }; result: DeleteImpact };
+  "hub.projects.release": { params: null; result: ProjectRelease[] };
   "hub.tree.get": { params: { owner: string; repo: string }; result: HubTree };
   "hub.dashboard.get": { params: null; result: HubDashboard };
   "hub.envs.list": { params: null; result: HubEnv[] };
@@ -317,6 +324,7 @@ export interface HubMethods {
   "hub.secrets.delete": { params: { scope: "global" | { project: string }; name: string }; result: SecretChanged | {} };
   "hub.secrets.rotate_pending_dismiss": { params: null; result: {} };
   "hub.tracker.add_issue": { params: { owner: string; repo: string; key: string | number }; result: TrackerIssueAdded };
+  "hub.control_room.projects": { params: null; result: ControlRoomProjects };
   "hub.release.status": { params: { owner: string; repo: string }; result: HubReleaseStatus };
 }
 
