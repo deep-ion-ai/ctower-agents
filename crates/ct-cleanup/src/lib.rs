@@ -719,7 +719,13 @@ impl Cleaner {
             let changed = if dry_run {
                 None
             } else {
-                changed_since_plan(sessions, t)?
+                // Uma leitura que falha não aborta a rodada: os itens já
+                // limpos precisam ir no relatório; este fica para a próxima.
+                changed_since_plan(sessions, t).unwrap_or_else(|e| {
+                    Some(format!(
+                        "não deu para reler o work item ({e}); fica para a próxima verificação"
+                    ))
+                })
             };
             let steps = match changed {
                 Some(reason) => match scope

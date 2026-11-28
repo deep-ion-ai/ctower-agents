@@ -58,6 +58,7 @@ async fn main() {
     ct_http::logs::init("ctowerd", &logs, "CTOWER_DATA_DIR");
     if let Err(e) = run().await {
         tracing::error!("ctowerd encerrado com erro: {e}");
+        ct_http::logs::flush();
         std::process::exit(1);
     }
 }

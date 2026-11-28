@@ -106,8 +106,10 @@ const GIT_CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(30);
 /// git das sessões do GitLab. `get` lê do stdin os campos que o git manda
 /// (`protocol`, `host`, ...) e imprime `username=` e `password=` com o token
 /// da conexão do GitLab do projeto, pedido ao ctowerd com o token da sessão.
-/// Host que não é o da conexão (ou sem sessão): nada no stdout e saída `0`,
-/// para o git seguir com os outros helpers. `store` e `erase` não fazem
+/// Host que não é o da conexão: nada no stdout e saída `0`, para o git seguir
+/// com os outros helpers. Fora de uma sessão (variáveis ausentes), com a
+/// sessão encerrada (401) ou com o daemon fora do ar: o motivo no stderr e
+/// saída `1` (o git avisa e segue para o próximo helper). `store` e `erase` não fazem
 /// nada: a credencial é da conexão, não do git. Falha ao resolver o token:
 /// motivo no stderr (nunca o valor) e saída `1`.
 pub fn git_credential(op: &str) -> i32 {

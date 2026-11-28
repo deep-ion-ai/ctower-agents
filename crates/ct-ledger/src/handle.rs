@@ -44,9 +44,6 @@ struct PoolState {
     idle: Vec<Ledger>,
     /// Conexões abertas, ociosas ou emprestadas (inclusive as extras).
     open: usize,
-    /// Abrir uma conexão de leitura falhou: o pool para de tentar e as
-    /// leituras seguem pelo escritor.
-    broken: bool,
 }
 
 impl Pool {
@@ -58,9 +55,6 @@ impl Pool {
     fn acquire(&self) -> Option<Ledger> {
         {
             let mut st = self.state();
-            if st.broken {
-                return None;
-            }
             if let Some(l) = st.idle.pop() {
                 return Some(l);
             }
@@ -68,10 +62,11 @@ impl Pool {
         }
         match Ledger::open_reader(&self.path, &self.env_id) {
             Ok(l) => Some(l),
-            Err(_) => {
-                let mut st = self.state();
-                st.open -= 1;
-                st.broken = true;
+            Err(e) => {
+                // Falha passageira (limite de arquivos, lock momentâneo): só
+                // esta leitura vai pelo escritor; a próxima tenta de novo.
+                self.state().open -= 1;
+                tracing::warn!("ledger: conexão de leitura não abriu, usando o escritor: {e}");
                 None
             }
         }
@@ -126,7 +121,7 @@ impl LedgerHandle {
     /// Conexão de leitura do pool, para consultas que não escrevem: não
     /// espera a conexão de escrita. Escrever por ela falha
     /// (`SQLITE_READONLY`). Sem pool (ledger em memória, ou abrir a conexão
-    /// falhou), usa o escritor: não chame com [`LedgerHandle::lock`] na mão
+    /// falhou nesta chamada), usa o escritor: não chame com [`LedgerHandle::lock`] na mão
     /// na mesma thread.
     pub fn read(&self) -> LedgerRead<'_> {
         if let Some(pool) = &self.0.readers {

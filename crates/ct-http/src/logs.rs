@@ -632,9 +632,18 @@ impl<W: Write> Write for MaskedWriter<W> {
     }
 }
 
-/// Guarda do escritor assíncrono do arquivo diário: vive até o fim do
-/// processo, para o último lote sair no flush.
-static DAILY_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+/// Guarda do escritor assíncrono do arquivo diário. Um `static` nunca é
+/// destruído, então quem encerra o processo chama [`flush`] para o último
+/// lote (a mensagem do erro que derrubou o daemon) chegar ao arquivo.
+static DAILY_GUARD: Mutex<Option<WorkerGuard>> = Mutex::new(None);
+
+/// Esvazia a fila do arquivo diário e para o escritor. Chame antes de
+/// `std::process::exit` e antes de o `main` retornar. Depois dela, o
+/// arquivo diário não recebe mais linhas.
+pub fn flush() {
+    let guard = DAILY_GUARD.lock().unwrap_or_else(|e| e.into_inner()).take();
+    drop(guard);
+}
 
 fn json_format() -> bool {
     std::env::var(FORMAT_ENV).is_ok_and(|v| v.trim().eq_ignore_ascii_case("json"))
@@ -693,7 +702,7 @@ pub fn init(name: &str, cfg: &LogsConfig, data_env: &str) {
     let json = json_format();
     let dir = dir_from_config(cfg, data_env);
     let mut why = Vec::new();
-    if dir.is_none() {
+    if dir.is_none() && (cfg.max_file_mb > 0 || cfg.retention_days > 0) {
         why.push("pasta de log indefinida (sem HOME)".to_string());
     }
     let logs = match (cfg.max_file_mb, &dir) {
@@ -713,7 +722,7 @@ pub fn init(name: &str, cfg: &LogsConfig, data_env: &str) {
         (0, _) | (_, None) => None,
         (days, Some(dir)) => match daily_writer(dir, name, days) {
             Ok((w, guard)) => {
-                let _ = DAILY_GUARD.set(guard);
+                *DAILY_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
                 Some(w)
             }
             Err(e) => {
