@@ -494,6 +494,14 @@ impl Sessions {
             title,
         } = spec;
         let cfg = self.config().clone();
+        // Span `session` (#243): o id só existe depois do `create_session`.
+        let span = tracing::info_span!(
+            "session",
+            id = tracing::field::Empty,
+            project = %format!("{}/{}", project.gh_owner, project.gh_repo),
+            item = wi.gh_number
+        );
+        let _in_session = span.enter();
         let gestor = project.kind == ProjectKind::Gestor;
         // Sessão de release (#204): perfil próprio do guarda-corpo e o token
         // exclusivo da release.
@@ -521,6 +529,8 @@ impl Sessions {
             model: agent.model.clone(),
             mode: agent.mode,
         })?;
+        span.record("id", session.id.as_str());
+        tracing::info!(mode = ?mode, "sessão criada");
         let dir = cfg.dirs.session_dir(&session.id);
         private_dir(&dir)?;
         // A pasta de docs vai no mesmo `--add-dir` abaixo: sem a confiança,

@@ -17,6 +17,9 @@ pub struct LogsConfig {
     pub max_file_mb: u64,
     /// Arquivos guardados, contando o atual (`<daemon>.jsonl`, `.1` … `.N-1`).
     pub max_files: u32,
+    /// Dias de log diário guardados (`<daemon>.AAAA-MM-DD.log`, texto ou JSON
+    /// conforme `CTOWER_LOG_FORMAT`); `0` desliga o arquivo diário.
+    pub retention_days: u32,
 }
 
 impl Default for LogsConfig {
@@ -25,6 +28,7 @@ impl Default for LogsConfig {
             dir: String::new(),
             max_file_mb: 10,
             max_files: 5,
+            retention_days: 7,
         }
     }
 }

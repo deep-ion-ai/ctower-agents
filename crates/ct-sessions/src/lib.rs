@@ -16,6 +16,7 @@ pub mod epic_run;
 pub mod files;
 mod hooks;
 mod launch;
+pub mod obs;
 pub mod paths;
 mod prune;
 mod recovery;
@@ -34,6 +35,7 @@ pub use launch::{
     gestor_scopes, AgentOptions, GestorScope, PtySize, StartRequest, GESTOR_LIMITS,
     PROJECT_WORK_ITEM,
 };
+pub use obs::session_span;
 pub use paths::{ensure_env_id, ensure_token, Dirs};
 pub use prune::PruneOutcome;
 pub use recovery::{

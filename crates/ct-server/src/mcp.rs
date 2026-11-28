@@ -71,14 +71,18 @@ pub(crate) async fn handle(
     let hub = st.hub_sender.clone();
     let github = st.github.clone();
     let result = tokio::task::spawn_blocking(move || {
-        dispatch(
-            &sessions,
-            hub.as_deref(),
-            github.as_deref(),
-            &session_id,
-            &method,
-            &params,
-        )
+        // Span `session` (#243) no thread bloqueante, onde o ledger é lido.
+        let span = sessions.session_span(&session_id);
+        span.in_scope(|| {
+            dispatch(
+                &sessions,
+                hub.as_deref(),
+                github.as_deref(),
+                &session_id,
+                &method,
+                &params,
+            )
+        })
     })
     .await;
     let resp = match result {
