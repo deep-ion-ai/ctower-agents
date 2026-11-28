@@ -28,6 +28,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
+use tracing::Instrument;
 
 /// Prazos do canal (os testes encurtam).
 #[derive(Debug, Clone, Copy)]
@@ -169,11 +170,15 @@ async fn serve(ws: Ws, st: AppState, opts: ChannelOptions) -> String {
             Message::Text(t) => match ct_http::rpc::parse(&t) {
                 Ok(req) => {
                     let (st, out) = (st.clone(), out.clone());
-                    tokio::spawn(async move {
-                        let r = crate::ws::channel_call(st, &req.method, &req.params).await;
-                        let reply = ct_http::rpc::reply(req.id, r);
-                        let _ = out.send(Message::Text(reply.to_string().into()));
-                    });
+                    let span = req.span();
+                    tokio::spawn(
+                        async move {
+                            let r = crate::ws::channel_call(st, &req.method, &req.params).await;
+                            let reply = ct_http::rpc::reply(req.id, r);
+                            let _ = out.send(Message::Text(reply.to_string().into()));
+                        }
+                        .instrument(span),
+                    );
                 }
                 Err(reply) => {
                     let _ = out.send(Message::Text(reply.to_string().into()));

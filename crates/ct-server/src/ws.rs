@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 pub const CHANNEL_OUTPUT: u8 = 0;
 pub const CHANNEL_INPUT: u8 = 1;
@@ -339,7 +340,10 @@ impl Conn {
     async fn handle_text(&mut self, text: &str) -> Value {
         match ct_http::rpc::parse(text) {
             Ok(req) => {
-                let r = self.call(&req.method, &req.params).await;
+                let r = self
+                    .call(&req.method, &req.params)
+                    .instrument(req.span())
+                    .await;
                 ct_http::rpc::reply(req.id, r)
             }
             Err(reply) => reply,

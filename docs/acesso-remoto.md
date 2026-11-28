@@ -44,7 +44,7 @@ Os dois podem conviver: configure as duas seções (`[web.tailscale]` e `[web.cl
    ```
 
 2. Deixe o `bind` no padrão (`127.0.0.1`, ou sem a chave). Veja §5 e §7 para o caso de o hub também precisar escutar na LAN ou no IP Tailscale.
-3. Reinicie o hub para ler o config: `systemctl --user restart cthubd` (Linux) ou `launchctl kickstart -k gui/$(id -u)/ai.deep-ion.cthubd` (macOS). Um proxy configurado pela metade (sem `aud`, sem `emails`, sem `logins`) ou `session_days`/`idle_days` igual a `0` impedem o hub de subir: confira o log (`journalctl --user -u cthubd` ou `~/Library/Logs/cthubd.log`).
+3. Reinicie o hub para ler o config: `systemctl --user restart cthubd` (Linux) ou `launchctl kickstart -k gui/$(id -u)/ai.deep-ion.cthubd` (macOS). Um proxy configurado pela metade (sem `aud`, sem `emails`, sem `logins`) ou `session_days`/`idle_days` igual a `0` impedem o hub de subir: confira o log (`journalctl --user -u cthubd` ou `~/Library/Logs/ctower/cthubd.AAAA-MM-DD.log`).
 4. Tenha o token de UI à mão (`cat ~/.config/cthub/ui.token`), para digitar uma vez em cada aparelho. Ele não fica guardado na PWA.
 
 ## 3. Tailscale (`tailscale serve`)

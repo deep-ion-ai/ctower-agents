@@ -16,6 +16,7 @@ serde_json.workspace = true
 tracing.workspace = true
 # Log em arquivo e a tela Logs (#65).
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
 regex.workspace = true
 futures-util.workspace = true
 

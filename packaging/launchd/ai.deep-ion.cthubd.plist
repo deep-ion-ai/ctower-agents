@@ -31,6 +31,12 @@
     <string>@HOME@/.local/bin:@HOME@/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>RUST_LOG</key>
     <string>info</string>
+    <!-- O log vai para o arquivo diário com retenção (~/Library/Logs/ctower,
+         docs/ambiente.md, "Logs"); o log do launchd abaixo não rotaciona, e
+         isto o deixa só com o /bin/sh de partida e com pânicos. Se o arquivo
+         diário não abrir, o stderr volta sozinho. -->
+    <key>CTOWER_LOG_STDERR</key>
+    <string>off</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

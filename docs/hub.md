@@ -86,6 +86,7 @@ recovery_reverify_days = 90          # lembrete para verificar a chave de recupe
 dir = ""                             # vazio = ~/.local/state/ctower/logs/cthubd.jsonl (~/Library/Logs/ctower no macOS; <CTHUB_DATA_DIR>/logs se definido)
 max_file_mb = 10                     # tamanho de cada arquivo antes de rotacionar; 0 desliga o arquivo
 max_files = 5                        # arquivos guardados, contando o atual
+retention_days = 7                   # dias do log diário (cthubd.AAAA-MM-DD.log); 0 desliga; veja docs/ambiente.md, "Logs"
 
 [web]                                # UI web (PWA), #199 e #200; veja "UI web" abaixo
 enabled = false                      # `/`, `/assets/*` e `/web/*` desligados (404) por padrão
@@ -207,7 +208,7 @@ O release não tem binário de hub para macOS, então o build é local (o CI de 
 bash scripts/provision/provision.sh --hub
 ```
 
-No macOS valem `--hub` (hub) e `--env` (ambiente, `docs/ambiente-macos.md`). Para o ambiente ligar a um hub em outra máquina, veja "Ambiente com hub remoto" abaixo. O script compila o `cthubd` e instala o LaunchAgent `packaging/launchd/ai.deep-ion.cthubd.plist` em `~/Library/LaunchAgents/`, com o `@HOME@` trocado pelo seu HOME (o launchd não expande `~`). Depois carrega o agente com `launchctl bootstrap gui/$(id -u) ...`. O agente sobe no login e reinicia se o processo cair com erro. Log: `~/Library/Logs/cthubd.log`. À mão:
+No macOS valem `--hub` (hub) e `--env` (ambiente, `docs/ambiente-macos.md`). Para o ambiente ligar a um hub em outra máquina, veja "Ambiente com hub remoto" abaixo. O script compila o `cthubd` e instala o LaunchAgent `packaging/launchd/ai.deep-ion.cthubd.plist` em `~/Library/LaunchAgents/`, com o `@HOME@` trocado pelo seu HOME (o launchd não expande `~`). Depois carrega o agente com `launchctl bootstrap gui/$(id -u) ...`. O agente sobe no login e reinicia se o processo cair com erro. Log: `~/Library/Logs/ctower/cthubd.AAAA-MM-DD.log` (diário, com retenção; docs/ambiente.md, "Logs"). À mão:
 
 ```bash
 (cd ui && npm ci && npm run build:web)
@@ -525,7 +526,7 @@ O `ctowerd` lê o `docs_root` ao subir: depois de mudar, `ctower restart`. Para 
 
 - **`env.info.docs`** (`{ root, reachable, warning? }`): `reachable: true` com o `root` esperado é o critério de pronto. `reachable` exige o marcador `<docs_root>/.ct-docs-root` (decisão 106). A UI mostra o selo "docs inacessíveis" no ambiente quando vem `warning: "docs_unreachable"` (#441); pelo hub, `hub.env.call { env, method: "env.info" }` lê o de qualquer ambiente com canal.
 - **No terminal:** `ls -a <docs_root>` mostra o `.ct-docs-root` e as pastas `<owner>__<repo>` dos projetos (sem o marcador, a montagem caiu ou aponta para outra pasta); `mount | grep ctdocs` (macOS e Linux) mostra a montagem.
-- **No log do ambiente** (`journalctl --user -u ctowerd`, `~/Library/Logs/ctowerd.log`): `docs: docs_root ... inacessível (montagem caída?)` quando uma sessão subiu sem os docs.
+- **No log do ambiente** (`journalctl --user -u ctowerd`, `~/Library/Logs/ctower/ctowerd.AAAA-MM-DD.log`): `docs: docs_root ... inacessível (montagem caída?)` quando uma sessão subiu sem os docs.
 
 `reachable` diz que a pasta abre em até 2 s **e** tem o marcador `.ct-docs-root`, que só existe no `docs_dir` do hub: uma pasta de montagem vazia (montagem caída) não passa, e o ambiente não grava nada no disco local no lugar do compartilhamento. Não apague o marcador; se sumir, o `cthubd` o recria ao subir (ou rode de novo o `provision.sh --hub --docs-dir`).
 

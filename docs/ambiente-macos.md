@@ -10,7 +10,7 @@ gh auth login && gh auth setup-git
 claude                                     # login
 ```
 
-Log: `~/Library/Logs/ctowerd.log`. Se `~/.cargo/bin/ctowerd` sumir, o LaunchAgent registra no log `ctowerd: executável ausente: <caminho>` e para de tentar (em vez de ficar em loop com exit 78), e o `ctower status` aponta o caminho que falta; restaure o binário (`provision.sh --env`) e rode `ctower restart`. Ligue ao hub remoto com `provision.sh --env --hub-url http://<ip>:7879` e o token de sync em `CT_HUB_TOKEN` (docs/hub.md, "Ambiente com hub remoto"); à mão, `hub_url` em `~/.config/ctower/config.toml` e `ctower hub set-token`.
+Log: `~/Library/Logs/ctower/ctowerd.AAAA-MM-DD.log` (diário, com retenção; docs/ambiente.md, "Logs"); `~/Library/Logs/ctowerd.log` fica só com as mensagens do launchd. Se `~/.cargo/bin/ctowerd` sumir, o LaunchAgent registra em `~/Library/Logs/ctowerd.log` `ctowerd: executável ausente: <caminho>` e para de tentar (em vez de ficar em loop com exit 78), e o `ctower status` aponta o caminho que falta; restaure o binário (`provision.sh --env`) e rode `ctower restart`. Ligue ao hub remoto com `provision.sh --env --hub-url http://<ip>:7879` e o token de sync em `CT_HUB_TOKEN` (docs/hub.md, "Ambiente com hub remoto"); à mão, `hub_url` em `~/.config/ctower/config.toml` e `ctower hub set-token`.
 
 ## Disponível depois de ligar a máquina
 
