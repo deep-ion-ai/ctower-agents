@@ -16,6 +16,7 @@ import { useHubCounters } from "./hubCounters";
 import { useHubRoom } from "./hubRoom";
 import { Infra } from "./Infra";
 import { PilotBlock } from "./PilotBlock";
+import { ProjectCards } from "./ProjectCards";
 import { SessionUsageList } from "./SessionUsageList";
 import { Sidebar } from "./Sidebar";
 import { TileGrid } from "./TileGrid";
@@ -50,9 +51,9 @@ interface Chip {
 /**
  * Sala de controle (#316, #357). Na tela inicial: o topo (título, data,
  * contadores em chips e o botão de saúde), "Precisa de você" compacta e o
- * rodapé Infraestrutura; o centro fica para os cards por projeto (#358) e o
- * bloco do piloto (#359, antes do rodapé). Cada chip de contagem abre a visão dele (a grade
- * filtrada, o fim do dia ou o uso por sessão); clicar de novo volta.
+ * rodapé Infraestrutura; no centro, os cards por projeto (#358) e o bloco do
+ * piloto (#359, antes do rodapé). Cada chip de contagem abre a visão dele (a
+ * grade filtrada, o fim do dia ou o uso por sessão); clicar de novo volta.
  */
 export function ControlRoom() {
   const t = useTower();
@@ -195,6 +196,7 @@ export function ControlRoom() {
       )}
       {view === "usage" && <SessionUsageList now={now} />}
       {view === "done" && <Footer now={now} />}
+      {view === null && <ProjectCards rows={projects} items={items} room={room} now={now} />}
       {view === null && <PilotBlock now={now} />}
       {view === null && <Infra now={now} />}
     </main>

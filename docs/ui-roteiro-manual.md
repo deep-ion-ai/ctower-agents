@@ -412,3 +412,16 @@ Pré-requisito: um ambiente com uma sessão rodando e outra esperando você. Par
 7. No rodapé **Infraestrutura**: "<hub> · snapshot há X", os ambientes conectados (os caídos à parte, em destaque), os avisos de backup e **Ver manutenção ›** (na PWA, **Ver hub ›**).
 8. Derrube o hub. **Esperado:** os chips do hub somem, o botão diz "Hub indisponível · N ambientes conectados", a lista mostra **Hub indisponível** e o rodapé "<hub> · indisponível". Sem hub configurado, o botão e o rodapé falam só dos ambientes.
 9. Na PWA com 360 px: os chips quebram em linhas, cada item da lista ocupa um bloco (tipo e projeto em cima, há quanto tempo à direita, o botão embaixo) e nada rola na horizontal.
+
+## 28. Cards por projeto na Sala de controle (#358)
+
+Pré-requisito: o da seção 27, com dois projetos ou mais. Para as partes do hub: um projeto GitHub com um PR aberto, uma release publicada e uma execução de épico ativa, e, se houver, um projeto GitLab.
+
+1. Abra a **Sala de controle**. **Esperado:** abaixo de "Precisa de você", a seção **Projetos** com um card por projeto, primeiro os que mais pedem você e, empatados, na ordem dos projetos. Os filtros **Todos · N**, **Com pendência · N** e **Com sessão rodando · N** filtram os cards.
+2. Num card, o cabeçalho: o nome (clique abre o projeto), o repositório (no Jira, "Jira <chave> · owner/repo"), o badge **N pedem você** (o mesmo número das linhas do projeto em "Precisa de você"), **Tudo andando** ou **Parado**, e **autônomo** quando o modo autônomo está ligado.
+3. **Agora**: as sessões do projeto com a issue e o estado (**Aguardando**, **Falhou**, **Rodando**). Clicar numa viva abre o terminal; na que falhou, abre o projeto. Sem sessão: "Nenhuma sessão rodando" ou "Sem sessão há N dias".
+4. **Fluxo**: a barra e os números de Backlog, Em andamento, Em revisão e Feitas 7 dias. **Decisões a revisar**: "Nenhuma" ou "N autônomas".
+5. Com hub: **PRs abertos** ("Nenhum", "N · checks ok", "N · checks rodando" ou "N · <check> vermelho"; o mouse sobre o valor lista os PRs), **Release** com a tag e "N entregas na develop sem release" (o mouse lista as entregas) e **Épicos em execução** com a barra "D de T sub-issues" e "Em andamento: #N · próxima #M" ou o motivo de estar parado. Clicar no épico abre a execução no Hub. No projeto GitLab: **MRs abertos** e "—" na release.
+6. A última linha: "GitHub · sincronizado há X" (ou "sync atrasado", em destaque) e **Abrir projeto ›**.
+7. Derrube o hub (ou abra sem hub). **Esperado:** os cards continuam, com sessões, fluxo, decisões e sync, sem PRs, release e épicos (nem seções vazias).
+8. Na PWA com 360 px: um card por linha, sem rolagem horizontal; as linhas de sessão e os botões com área de toque cheia.
