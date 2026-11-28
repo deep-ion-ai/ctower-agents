@@ -43,7 +43,9 @@ export function useHubRoom(): HubRoom | undefined {
     void loadProjects();
     void loadPilot();
     return api.onHubPush((e) => {
-      if (e.event === "hub.control_room.changed") void loadProjects();
+      // `env.online`: o canal de um ambiente abriu ou fechou, e `env_online`
+      // e a parada `ambiente_fora` dependem disso.
+      if (e.event === "hub.control_room.changed" || e.event === "env.online") void loadProjects();
       if (e.event === "hub.autopilot.changed") void loadPilot();
     });
   }, [api, hub.connected, loadProjects, loadPilot]);

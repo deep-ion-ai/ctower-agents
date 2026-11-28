@@ -206,8 +206,8 @@ function Card({ card: c }: { card: ProjectCard }) {
                       role="progressbar"
                       aria-label={`Progresso de ${e.ref}`}
                       aria-valuemin={0}
-                      aria-valuemax={e.total}
-                      aria-valuenow={e.done}
+                      aria-valuemax={e.total > 0 ? e.total : undefined}
+                      aria-valuenow={e.total > 0 ? e.done : undefined}
                       aria-valuetext={e.progress}
                     >
                       <span style={{ width: e.total > 0 ? `${(100 * e.done) / e.total}%` : "0%" }} />

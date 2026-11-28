@@ -42,7 +42,9 @@ export function useHubCounters(): { epics: number | null; pilot: PilotCounter | 
     void loadEpics();
     void loadPilot();
     return api.onHubPush((e) => {
-      if (e.event === "hub.epic_run.changed") void loadEpics();
+      // `hub.epic_run.changed` não vai para a web; `hub.control_room.changed`
+      // sai junto dele e vai para os dois.
+      if (e.event === "hub.epic_run.changed" || e.event === "hub.control_room.changed") void loadEpics();
       if (e.event === "hub.autopilot.changed") void loadPilot();
     });
   }, [api, hub.connected, loadEpics, loadPilot]);

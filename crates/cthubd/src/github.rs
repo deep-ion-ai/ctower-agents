@@ -326,6 +326,10 @@ impl HubGithub {
                 let h = self.hub.lock();
                 if h.live_project_rev(project_id)? == Some(rev) {
                     h.apply_deliveries(&snap)?;
+                    // Só chega aqui com leitura nova (sem `304`): a Sala de
+                    // controle relê a release e as entregas (#355).
+                    drop(h);
+                    let _ = self.events.send(crate::control_room_push(Some(project_id)));
                 }
             }
             Err(e) => {
