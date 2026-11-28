@@ -13,6 +13,9 @@ ct-http.workspace = true
 ct-ledger.workspace = true
 ct-secrets.workspace = true
 ct-sessions.workspace = true
+ct-sync.workspace = true
+ct-cleanup.workspace = true
+ct-update.workspace = true
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -30,7 +33,7 @@ ts-rs = { workspace = true, optional = true }
 
 [features]
 # Exporta os tipos do protocolo para ui/src/protocol/gen (teste export_ts).
-ts = ["dep:ts-rs", "ct-core/ts", "ct-gh/ts", "ct-ledger/ts", "ct-sessions/ts"]
+ts = ["dep:ts-rs", "ct-core/ts", "ct-gh/ts", "ct-ledger/ts", "ct-sessions/ts", "ct-sync/ts", "ct-cleanup/ts", "ct-update/ts"]
 
 [dev-dependencies]
 ct-hub-store.workspace = true

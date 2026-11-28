@@ -29,10 +29,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use tokio::sync::{broadcast, mpsc};
 use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Subscriber};
+use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
+use tracing_subscriber::{Layer, Registry};
 
 use crate::rpc::{invalid, RpcResult};
 
@@ -536,13 +539,51 @@ impl Visit for Fields {
     }
 }
 
-/// Camada que grava cada evento em [`Logs`].
+/// Campos de um span, guardados na extensão dele para os eventos de dentro.
+struct SpanFields(Map<String, Value>);
+
+/// Camada que grava cada evento em [`Logs`]. Os campos dos spans abertos
+/// (`session{id, project, item}`, `rpc{method, req_id}`) entram no evento
+/// como `<span>.<campo>` (`session.id`), para filtrar por `q`.
 pub struct FileLayer(pub Logs);
 
-impl<S: Subscriber> Layer<S> for FileLayer {
-    fn on_event(&self, ev: &Event<'_>, _: Context<'_, S>) {
+impl<S> Layer<S> for FileLayer
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        let mut v = Fields::default();
+        attrs.record(&mut v);
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut().insert(SpanFields(v.fields));
+        }
+    }
+
+    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else { return };
+        let mut v = Fields::default();
+        values.record(&mut v);
+        let mut ext = span.extensions_mut();
+        if let Some(f) = ext.get_mut::<SpanFields>() {
+            f.0.extend(v.fields);
+        }
+    }
+
+    fn on_event(&self, ev: &Event<'_>, ctx: Context<'_, S>) {
         let mut v = Fields::default();
         ev.record(&mut v);
+        let mut fields = Map::new();
+        // Da raiz para a folha: o span mais interno vence um nome repetido.
+        if let Some(scope) = ctx.event_scope(ev) {
+            for span in scope.from_root() {
+                if let Some(f) = span.extensions().get::<SpanFields>() {
+                    for (k, val) in &f.0 {
+                        fields.insert(format!("{}.{k}", span.name()), val.clone());
+                    }
+                }
+            }
+        }
+        fields.extend(v.fields);
         let meta = ev.metadata();
         self.0.write(LogLine {
             id: 0,
@@ -550,7 +591,7 @@ impl<S: Subscriber> Layer<S> for FileLayer {
             level: meta.level().as_str().to_ascii_lowercase(),
             target: meta.target().to_string(),
             message: v.message,
-            fields: v.fields,
+            fields,
         });
     }
 }
@@ -568,43 +609,160 @@ pub fn install(logs: Logs) -> &'static Logs {
     GLOBAL.get_or_init(|| logs)
 }
 
-/// Liga o log deste processo: stderr com `RUST_LOG` (padrão `info`) e, se
-/// `cfg.max_file_mb > 0`, o arquivo `<dir>/<name>.jsonl`. Falha ao abrir o
+/// Variável de ambiente do formato do stderr e do arquivo diário: `json`
+/// (um objeto por linha, com os spans) ou, sem ela, texto.
+pub const FORMAT_ENV: &str = "CTOWER_LOG_FORMAT";
+/// `0`, `off` ou `false` calam o stderr quando o arquivo diário abriu (o
+/// LaunchAgent usa: o log do launchd não rotaciona).
+pub const STDERR_ENV: &str = "CTOWER_LOG_STDERR";
+
+type BoxLayer = Box<dyn Layer<Registry> + Send + Sync>;
+
+/// Escreve no arquivo diário com a máscara de secrets aplicada à linha.
+struct MaskedWriter<W>(W);
+
+impl<W: Write> Write for MaskedWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        self.0.write_all(mask(&text).as_bytes())?;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+/// Guarda do escritor assíncrono do arquivo diário. Um `static` nunca é
+/// destruído, então quem encerra o processo chama [`flush`] para o último
+/// lote (a mensagem do erro que derrubou o daemon) chegar ao arquivo.
+static DAILY_GUARD: Mutex<Option<WorkerGuard>> = Mutex::new(None);
+
+/// Esvazia a fila do arquivo diário e para o escritor. Chame antes de
+/// `std::process::exit` e antes de o `main` retornar. Depois dela, o
+/// arquivo diário não recebe mais linhas.
+pub fn flush() {
+    let guard = DAILY_GUARD.lock().unwrap_or_else(|e| e.into_inner()).take();
+    drop(guard);
+}
+
+fn json_format() -> bool {
+    std::env::var(FORMAT_ENV).is_ok_and(|v| v.trim().eq_ignore_ascii_case("json"))
+}
+
+fn stderr_muted() -> bool {
+    std::env::var(STDERR_ENV).is_ok_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "false" | "no"
+        )
+    })
+}
+
+/// Camada de texto (com os spans na frente da mensagem) ou JSON (com
+/// `span` e `spans`) para `writer`.
+fn fmt_layer<W>(json: bool, ansi: bool, writer: W) -> BoxLayer
+where
+    W: for<'w> tracing_subscriber::fmt::MakeWriter<'w> + Send + Sync + 'static,
+{
+    let layer = tracing_subscriber::fmt::layer()
+        .with_writer(writer)
+        .with_ansi(ansi);
+    if json {
+        Box::new(layer.json().with_current_span(true).with_span_list(true))
+    } else {
+        Box::new(layer)
+    }
+}
+
+/// Abre o arquivo diário `<dir>/<name>.AAAA-MM-DD.log` (datas em UTC), que
+/// rotaciona à meia-noite e guarda `days` arquivos.
+fn daily_writer(dir: &Path, name: &str, days: u32) -> Result<(NonBlocking, WorkerGuard), String> {
+    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let appender = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix(name)
+        .filename_suffix("log")
+        .max_log_files(days as usize)
+        .build(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    Ok(tracing_appender::non_blocking(MaskedWriter(appender)))
+}
+
+/// Liga o log deste processo: stderr com `RUST_LOG` (padrão `info`), o
+/// arquivo diário com retenção (`retention_days`) e, se `cfg.max_file_mb >
+/// 0`, o arquivo `<dir>/<name>.jsonl` da tela Logs. `CTOWER_LOG_FORMAT=json`
+/// troca o texto do stderr e do arquivo diário por JSON. Falha ao abrir um
 /// arquivo não impede o daemon de subir: fica o stderr, com o motivo.
+///
+/// Os spans (`session`, `rpc`) são `info`: com `RUST_LOG=warn` ou mais
+/// restritivo eles não existem e os eventos perdem o id da sessão.
 pub fn init(name: &str, cfg: &LogsConfig, data_env: &str) {
     let filter =
         || tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
-    let stderr = tracing_subscriber::fmt::layer().with_writer(io::stderr);
-    let mut why = None;
-    let logs = match (cfg.max_file_mb, dir_from_config(cfg, data_env)) {
-        (0, _) => None,
-        (_, None) => {
-            why = Some("pasta de log indefinida (sem HOME)".to_string());
-            None
-        }
+    let json = json_format();
+    let dir = dir_from_config(cfg, data_env);
+    let mut why = Vec::new();
+    if dir.is_none() && (cfg.max_file_mb > 0 || cfg.retention_days > 0) {
+        why.push("pasta de log indefinida (sem HOME)".to_string());
+    }
+    let logs = match (cfg.max_file_mb, &dir) {
+        (0, _) | (_, None) => None,
         (mb, Some(dir)) => {
-            match Logs::open(&dir, name, mb.saturating_mul(1024 * 1024), cfg.max_files) {
+            match Logs::open(dir, name, mb.saturating_mul(1024 * 1024), cfg.max_files) {
                 Ok(l) => Some(l),
                 Err(e) => {
-                    why = Some(format!("{}: {e}", dir.display()));
+                    why.push(format!("{}: {e}", dir.display()));
                     None
                 }
             }
         }
     };
-    let file = logs.clone().map(FileLayer);
+    let mut daily_err = None;
+    let daily = match (cfg.retention_days, &dir) {
+        (0, _) | (_, None) => None,
+        (days, Some(dir)) => match daily_writer(dir, name, days) {
+            Ok((w, guard)) => {
+                *DAILY_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
+                Some(w)
+            }
+            Err(e) => {
+                daily_err = Some(e);
+                None
+            }
+        },
+    };
+    let daily_on = daily.is_some();
+    let mut layers: Vec<BoxLayer> = Vec::new();
+    if !daily_on || !stderr_muted() {
+        layers.push(fmt_layer(json, true, io::stderr));
+    }
+    if let Some(w) = daily {
+        layers.push(fmt_layer(json, false, w));
+    }
+    if let Some(l) = &logs {
+        layers.push(Box::new(FileLayer(l.clone())));
+    }
     let _ = tracing_subscriber::registry()
+        .with(layers)
         .with(filter())
-        .with(stderr)
-        .with(file)
         .try_init();
-    match (&logs, why) {
+    match (&logs, why.is_empty()) {
         (Some(l), _) => {
             install(l.clone());
             tracing::info!("log em arquivo: {}", l.path().display());
         }
-        (None, Some(w)) => tracing::warn!("log em arquivo desligado: {w}"),
-        (None, None) => tracing::info!("log em arquivo desligado ([logs] max_file_mb = 0)"),
+        (None, false) => tracing::warn!("log em arquivo desligado: {}", why.join("; ")),
+        (None, true) => tracing::info!("log em arquivo desligado ([logs] max_file_mb = 0)"),
+    }
+    match (&dir, daily_on, daily_err) {
+        (Some(dir), true, _) => tracing::info!(
+            "log diário em {} (retenção {} dias, formato {})",
+            dir.join(format!("{name}.AAAA-MM-DD.log")).display(),
+            cfg.retention_days,
+            if json { "json" } else { "texto" }
+        ),
+        (_, _, Some(e)) => tracing::warn!("log diário desligado: {e}"),
+        _ => {}
     }
 }
 
@@ -856,5 +1014,118 @@ mod tests {
     async fn rpc_sem_arquivo_responde_desligado() {
         let e = rpc_tail(None, &json!({})).await.unwrap_err();
         assert_eq!(e.0, LOGS_DISABLED);
+    }
+
+    /// Buffer que o `tracing` escreve (um `Write` clonável).
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Captured {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn eventos_herdam_os_campos_dos_spans() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = Logs::open(dir.path(), "d", 1 << 20, 2).unwrap();
+        let sub = tracing_subscriber::registry().with(FileLayer(logs.clone()));
+        tracing::subscriber::with_default(sub, || {
+            let a = tracing::info_span!("session", id = "s-aaa", project = "acme/web", item = 7);
+            a.in_scope(|| {
+                let rpc = tracing::info_span!("rpc", method = "session.get", req_id = 3);
+                rpc.in_scope(|| tracing::info!("dentro dos dois"));
+                tracing::info!("só na sessão");
+            });
+            let b = tracing::info_span!("session", id = tracing::field::Empty, item = 8);
+            b.record("id", "s-bbb");
+            b.in_scope(|| tracing::info!("outra sessão"));
+            tracing::info!("sem span");
+        });
+        let page = logs.tail(&Filter::default(), 10, None).unwrap();
+        let by = |m: &str| page.lines.iter().find(|l| l.message == m).unwrap().clone();
+        let f = by("dentro dos dois").fields;
+        assert_eq!(f["session.id"], "s-aaa");
+        assert_eq!(f["session.project"], "acme/web");
+        assert_eq!(f["session.item"], 7);
+        assert_eq!(f["rpc.method"], "session.get");
+        assert_eq!(f["rpc.req_id"], 3);
+        let f = by("só na sessão").fields;
+        assert_eq!(f["session.id"], "s-aaa");
+        assert!(!f.contains_key("rpc.method"));
+        assert_eq!(by("outra sessão").fields["session.id"], "s-bbb");
+        assert!(by("sem span").fields.is_empty());
+
+        // O filtro `q` já isola uma sessão pelo id.
+        let q = Filter::from_params(&json!({ "q": "s-aaa" })).unwrap();
+        let only = logs.tail(&q, 10, None).unwrap();
+        let msgs: Vec<_> = only.lines.iter().map(|l| l.message.as_str()).collect();
+        assert_eq!(msgs, ["dentro dos dois", "só na sessão"]);
+    }
+
+    #[test]
+    fn formato_json_traz_os_spans() {
+        let out = Captured::default();
+        let w = out.clone();
+        let sub = tracing_subscriber::registry().with(fmt_layer(true, false, move || w.clone()));
+        tracing::subscriber::with_default(sub, || {
+            let s = tracing::info_span!("session", id = "s-json", project = "acme/web", item = 1);
+            s.in_scope(|| tracing::info!(n = 2, "uma linha"));
+        });
+        let text = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+        let v: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(v["fields"]["message"], "uma linha");
+        assert_eq!(v["span"]["name"], "session");
+        assert_eq!(v["span"]["id"], "s-json");
+        assert_eq!(v["spans"][0]["project"], "acme/web");
+    }
+
+    #[test]
+    fn formato_texto_mostra_o_span() {
+        let out = Captured::default();
+        let w = out.clone();
+        let sub = tracing_subscriber::registry().with(fmt_layer(false, false, move || w.clone()));
+        tracing::subscriber::with_default(sub, || {
+            let s = tracing::info_span!("rpc", method = "env.info", req_id = 9);
+            s.in_scope(|| tracing::info!("oi"));
+        });
+        let text = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("rpc{method=\"env.info\" req_id=9}"), "{text}");
+    }
+
+    #[test]
+    fn arquivo_diario_mascara_e_respeita_a_retencao() {
+        let dir = tempfile::tempdir().unwrap();
+        // Dias antigos que já estão na pasta; outro daemon e o .jsonl não contam.
+        for d in ["2020-01-01", "2020-01-02", "2020-01-03"] {
+            fs::write(dir.path().join(format!("dd.{d}.log")), "velho\n").unwrap();
+        }
+        fs::write(dir.path().join("outro.2020-01-01.log"), "x\n").unwrap();
+        fs::write(dir.path().join("dd.jsonl"), "x\n").unwrap();
+        let (w, guard) = daily_writer(dir.path(), "dd", 2).unwrap();
+        let sub = tracing_subscriber::registry().with(fmt_layer(true, false, w));
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!("token=segredo123 usado");
+        });
+        drop(guard); // flush do escritor assíncrono
+        let mut daily: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.starts_with("dd.") && n.ends_with(".log"))
+            .collect();
+        daily.sort();
+        // O de hoje + o mais recente dos antigos: 2 arquivos.
+        assert_eq!(daily.len(), 2, "{daily:?}");
+        assert_eq!(daily[0], "dd.2020-01-03.log");
+        assert!(dir.path().join("outro.2020-01-01.log").exists());
+        assert!(dir.path().join("dd.jsonl").exists());
+        let today = fs::read_to_string(dir.path().join(&daily[1])).unwrap();
+        assert!(today.contains("token=***"), "{today}");
+        assert!(!today.contains("segredo123"), "{today}");
     }
 }

@@ -1,64 +1,63 @@
 //! Ciclo de vida das sessões: lançamento, hooks, backup de transcripts e
 //! recuperação. Síncrono; o servidor chama daqui via `spawn_blocking`.
+//!
+//! O sync com a forja e o rastreador fica no `ct-sync` (que recebe só o
+//! [`SyncHandle`]), a limpeza do ambiente no `ct-cleanup` e o updater no
+//! `ct-update` (#242).
 
 pub mod autonomy;
-pub mod cleanup;
-pub mod cleanup_branches;
-pub mod cleanup_sessions;
-pub mod cleanup_worktree;
+pub mod completion;
 pub mod config;
+mod connections;
 pub mod diff;
 pub mod docs;
 pub mod epic_plan;
 pub mod epic_run;
 pub mod files;
-pub mod github;
-pub mod gitlab;
 mod hooks;
 mod launch;
+pub mod obs;
 pub mod paths;
 mod prune;
 mod recovery;
 pub mod release;
 pub mod remote;
-mod resolver;
+pub mod resolver;
 mod secrets;
 pub mod shell;
-pub mod tracker_sync;
 pub mod transcript_view;
 pub mod transcripts;
-pub mod update;
 pub mod usage;
 
-pub use github::{GithubSync, ProjectSync};
-pub use gitlab::GitlabRemote;
+pub use connections::Connections;
 pub use hooks::{HookEnvelope, HookOutcome};
 pub use launch::{
     gestor_scopes, AgentOptions, GestorScope, PtySize, StartRequest, GESTOR_LIMITS,
     PROJECT_WORK_ITEM,
 };
+pub use obs::session_span;
 pub use paths::{ensure_env_id, ensure_token, Dirs};
 pub use prune::PruneOutcome;
 pub use recovery::{
     recoverable_sessions, work_item_concluded, ArchivedItem, RecoveryItem, RESUME_PROMPT,
 };
 pub use remote::{RemoteControlEnable, RemoteControlStatus};
-pub use secrets::{SecretGetError, SESSION_TOKEN_ENV};
+pub use secrets::{cached_secret, SecretGetError, SessionMask, SESSION_TOKEN_ENV};
 pub use shell::{Shell, SHELL_LIMIT};
-pub use tracker_sync::{JiraGitlabSync, TrackerSyncConfig};
 pub use transcript_view::{ContextUsage, TranscriptEntry, TranscriptSource, TranscriptTail};
 pub use transcripts::TranscriptIntegrity;
 pub use usage::{SessionUsage, StatuslineInstall};
 
 pub use ct_agent::AgentHome;
 use ct_agent::AgentRuntime;
+use ct_core::Lock;
 use ct_core::Tool;
-use ct_ledger::Ledger;
+use ct_ledger::{Ledger, LedgerHandle, LedgerRead};
 use ct_pty::PtySession;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
 use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
@@ -109,7 +108,7 @@ pub fn agent_home_from_env(pre_trust: bool) -> AgentHome {
 
 /// Runtime registrado para a ferramenta (#240); ferramenta sem runtime vira
 /// erro.
-pub(crate) fn agent_runtime(tool: Tool) -> Result<&'static dyn AgentRuntime> {
+pub fn agent_runtime(tool: Tool) -> Result<&'static dyn AgentRuntime> {
     ct_agent::runtime(tool)
         .ok_or_else(|| SessionsError::Invalid(format!("agente sem runtime: {}", tool.as_str())))
 }
@@ -120,7 +119,7 @@ pub(crate) fn agent_runtime(tool: Tool) -> Result<&'static dyn AgentRuntime> {
 /// essa folga, inclusive numa máquina carregada, sem deixar a sessão viva
 /// quando o agente ignora o sinal. Menor que o prazo da limpeza para a
 /// sessão encerrada sair do estado vivo (`cleanup_sessions::END_TIMEOUT`).
-pub(crate) const KILL_GRACE: Duration = Duration::from_secs(5);
+pub const KILL_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct SessionsConfig {
@@ -162,33 +161,60 @@ pub struct SessionsConfig {
 /// nome do evento e dados.
 pub type Notifier = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
+/// O que o sync usa do ambiente (#242): o ledger, o aviso à UI e as
+/// credenciais das conexões, sem o ciclo de vida das sessões
+/// ([`Sessions::sync_handle`]).
+#[derive(Clone)]
+pub struct SyncHandle {
+    pub ledger: LedgerHandle,
+    pub notify: Notifier,
+    pub connections: Connections,
+}
+
+impl SyncHandle {
+    /// Acesso ao ledger ([`LedgerHandle::lock`]).
+    pub fn ledger(&self) -> MutexGuard<'_, Ledger> {
+        self.ledger.lock()
+    }
+
+    /// Conexão de leitura do pool ([`LedgerHandle::read`]), para consultas.
+    pub fn ledger_read(&self) -> LedgerRead<'_> {
+        self.ledger.read()
+    }
+
+    /// Push para as UIs conectadas (`{ "event": ..., "data": ... }`).
+    pub fn notify(&self, event: &str, data: Value) {
+        (self.notify)(event, data);
+    }
+}
+
 struct Inner {
     cfg: SessionsConfig,
-    ledger: Mutex<Ledger>,
-    live: Mutex<HashMap<String, PtySession>>,
+    ledger: LedgerHandle,
+    live: Lock<HashMap<String, PtySession>>,
     /// Sessões encerradas por `kill` (pedido humano): a saída é limpa.
-    killed: Mutex<HashSet<String>>,
+    killed: Lock<HashSet<String>>,
     /// Mascaramento dos secrets de cada sessão (#167), só em memória.
-    masks: Mutex<HashMap<String, secrets::SessionMask>>,
+    masks: Lock<HashMap<String, secrets::SessionMask>>,
     /// Token de cada sessão viva (#165) → id da sessão, só em memória.
-    session_tokens: Mutex<HashMap<String, String>>,
+    session_tokens: Lock<HashMap<String, String>>,
     /// Shells livres vivos (#428), só em memória.
-    shells: Mutex<HashMap<String, shell::LiveShell>>,
-    /// Token de cada conexão (Jira, GitLab, GitHub), em cache: o comando de
-    /// credencial não roda a cada ciclo (#236, #275).
-    credentials: Arc<resolver::CredentialResolver>,
+    shells: Lock<HashMap<String, shell::LiveShell>>,
+    /// Fontes e token de cada conexão (Jira, GitLab, GitHub), em cache: o
+    /// comando de credencial não roda a cada ciclo (#236, #275).
+    connections: Connections,
     /// Serializa a conferência "uma sessão de release viva por projeto" com
     /// a criação da sessão (#204).
-    release_start: Mutex<()>,
+    release_start: Lock<()>,
     /// Última entrada humana registrada por sessão da execução de épico
     /// (#301), para o debounce do evento `human_input`.
-    human_input: Mutex<HashMap<String, i64>>,
+    human_input: Lock<HashMap<String, i64>>,
     notify: Notifier,
     /// Prazo da cauda do mascaramento nos PTYs das sessões novas
     /// ([`Sessions::set_mask_hold`]); `None` = o de produção
     /// ([`ct_pty::MASK_HOLD`]).
     #[cfg(any(test, feature = "test-support"))]
-    mask_hold: Mutex<Option<Duration>>,
+    mask_hold: Lock<Option<Duration>>,
 }
 
 /// Fachada do ciclo de vida das sessões. Clonar compartilha o estado.
@@ -220,21 +246,25 @@ impl Sessions {
     pub fn new(cfg: SessionsConfig, ledger: Ledger, notify: Notifier) -> Self {
         Sessions {
             inner: Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| Inner {
+                connections: Connections::new(
+                    cfg.credentials.clone(),
+                    cfg.dirs.clone(),
+                    Arc::new(resolver::CredentialResolver::with_on_new(mask_refresher(
+                        weak.clone(),
+                    ))),
+                ),
                 cfg,
-                ledger: Mutex::new(ledger),
-                live: Mutex::new(HashMap::new()),
-                killed: Mutex::new(HashSet::new()),
-                masks: Mutex::new(HashMap::new()),
-                session_tokens: Mutex::new(HashMap::new()),
-                shells: Mutex::new(HashMap::new()),
-                credentials: Arc::new(resolver::CredentialResolver::with_on_new(mask_refresher(
-                    weak.clone(),
-                ))),
-                release_start: Mutex::new(()),
-                human_input: Mutex::new(HashMap::new()),
+                ledger: LedgerHandle::new(ledger),
+                live: Lock::new(HashMap::new()),
+                killed: Lock::new(HashSet::new()),
+                masks: Lock::new(HashMap::new()),
+                session_tokens: Lock::new(HashMap::new()),
+                shells: Lock::new(HashMap::new()),
+                release_start: Lock::new(()),
+                human_input: Lock::new(HashMap::new()),
                 notify,
                 #[cfg(any(test, feature = "test-support"))]
-                mask_hold: Mutex::new(None),
+                mask_hold: Lock::new(None),
             }),
         }
     }
@@ -243,111 +273,78 @@ impl Sessions {
         &self.inner.cfg
     }
 
-    /// Resolvedor de credencial do ambiente (#236).
-    pub(crate) fn credentials(&self) -> &resolver::CredentialResolver {
-        &self.inner.credentials
+    /// Credenciais das conexões do ambiente: fontes, resolvedor e cache de
+    /// secrets (#242). O sync recebe uma cópia em [`SyncHandle`].
+    pub fn connections(&self) -> &Connections {
+        &self.inner.connections
     }
 
-    /// Fonte do token do tipo `kind` do projeto neste ambiente (#274,
-    /// #275): o comando de `[credentials]` que sobrou da conversão (#143),
-    /// senão a da conexão do hub (a referenciada ou a padrão do tipo) com a
-    /// sobrescrita `[connections]`, senão a de reserva do descritor
-    /// ([`ct_core::SharedCredentials::source`]). `None` = nenhum lado do
-    /// projeto é do tipo. Só para resolver aqui: o que vai ao hub sai do
-    /// ledger, sem a sobrescrita.
+    /// O que o sync usa do ambiente, sem o ciclo de vida das sessões (#242):
+    /// o ledger, o aviso à UI e as credenciais das conexões.
+    pub fn sync_handle(&self) -> SyncHandle {
+        SyncHandle {
+            ledger: self.inner.ledger.clone(),
+            notify: Arc::clone(&self.inner.notify),
+            connections: self.inner.connections.clone(),
+        }
+    }
+
+    /// Resolvedor de credencial do ambiente (#236).
+    pub fn credentials(&self) -> &resolver::CredentialResolver {
+        self.inner.connections.resolver()
+    }
+
+    /// Fonte do token do tipo `kind` do projeto neste ambiente
+    /// ([`Connections::source`]).
     pub fn source(
         &self,
         project: &ct_ledger::Project,
         kind: ct_core::provider::ProviderKind,
     ) -> Option<ct_core::EnvSource> {
-        self.inner.cfg.credentials.source(
-            &project.gh_owner,
-            &project.gh_repo,
-            &project.tracker,
-            &project.forge,
-            kind,
-        )
+        self.inner.connections.source(project, kind)
     }
 
-    /// As fontes de todos os tipos que o projeto usa, sem repetir o tipo
-    /// (o GitHub nos dois lados conta uma vez).
+    /// As fontes de todos os tipos que o projeto usa
+    /// ([`Connections::sources`]).
     pub fn sources(
         &self,
         project: &ct_ledger::Project,
     ) -> Vec<(ct_core::provider::ProviderKind, ct_core::EnvSource)> {
-        let mut out: Vec<(ct_core::provider::ProviderKind, ct_core::EnvSource)> = Vec::new();
-        for side in ct_core::provider::project_sides(&project.tracker, &project.forge) {
-            if out.iter().any(|(k, _)| *k == side.kind) {
-                continue;
-            }
-            out.extend(self.source(project, side.kind).map(|s| (side.kind, s)));
-        }
-        out
+        self.inner.connections.sources(project)
     }
 
-    /// Fonte do token do Jira do projeto ([`Self::source`]). `None` = o
-    /// rastreador não é Jira.
+    /// Fonte do token do Jira do projeto ([`Connections::jira_source`]).
     pub fn jira_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        self.source(project, ct_core::provider::ProviderKind::Jira)
+        self.inner.connections.jira_source(project)
     }
 
-    /// Fonte do token do GitLab do projeto ([`Self::source`]). `None` = a
-    /// forja não é GitLab.
+    /// Fonte do token do GitLab do projeto ([`Connections::gitlab_source`]).
     pub fn gitlab_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        self.source(project, ct_core::provider::ProviderKind::Gitlab)
+        self.inner.connections.gitlab_source(project)
     }
 
-    /// Token da conexão do tipo `kind` do projeto pelo resolvedor do
-    /// ambiente (cache, sobrescrita `[connections]`, secret do cache): o
-    /// mesmo do sync, e por isso no mascaramento das sessões. Usado no
-    /// clone do GitLab por HTTPS (#281). Pode rodar o comando de credencial.
+    /// Token da conexão do tipo `kind` do projeto
+    /// ([`Connections::connection_token`]).
     pub fn connection_token(
         &self,
         project: &ct_ledger::Project,
         kind: ct_core::provider::ProviderKind,
     ) -> std::result::Result<String, String> {
-        let source = self
-            .source(project, kind)
-            .map_or(ct_core::provider::CredentialSource::None, |s| s.source);
-        let lookup = self.secret_lookup(project);
-        self.credentials()
-            .token(resolver::Ask {
-                key: &resolver::cache_key(kind, project.id),
-                what: ct_core::provider::descriptor(kind).label(),
-                source: &source,
-                lookup: &lookup,
-                deadline: ct_proc::CREDENTIAL_DEADLINE,
-                cli: None,
-            })
-            .map(|t| t.expose().to_string())
-            .map_err(|e| e.to_string())
+        self.inner.connections.connection_token(project, kind)
     }
 
-    /// Fonte do token do GitHub do projeto ([`Self::source`]): sem a
-    /// conexão no pull, o `gh auth token`. `None` = o projeto não usa o
-    /// GitHub.
+    /// Fonte do token do GitHub do projeto ([`Connections::github_source`]).
     pub fn github_source(&self, project: &ct_ledger::Project) -> Option<ct_core::EnvSource> {
-        self.source(project, ct_core::provider::ProviderKind::Github)
+        self.inner.connections.github_source(project)
     }
 
-    /// As conexões do projeto neste ambiente (#277): as do último pull, com
-    /// a fonte efetiva daqui ([`ct_core::SharedCredentials::resolve`]). É
-    /// daqui que o sync, as sessões, os templates e os links leem a URL do
-    /// Jira, o host do GitLab, o `config_file` do jira-cli e os prefixos.
+    /// As conexões do projeto neste ambiente
+    /// ([`Connections::project_connections`]).
     pub fn project_connections(
         &self,
         project: &ct_ledger::Project,
     ) -> ct_core::ResolvedConnections {
-        self.inner
-            .cfg
-            .credentials
-            .resolve(
-                &project.gh_owner,
-                &project.gh_repo,
-                &project.tracker,
-                &project.forge,
-            )
-            .0
+        self.inner.connections.project_connections(project)
     }
 
     /// O projeto com os endereços e prefixos das conexões deste ambiente
@@ -375,14 +372,22 @@ impl Sessions {
         Ok(())
     }
 
-    /// Acesso direto ao ledger (consultas do servidor).
+    /// Conexão de escrita do ledger. Para só ler, use
+    /// [`Sessions::ledger_read`].
     pub fn ledger(&self) -> MutexGuard<'_, Ledger> {
-        self.inner.ledger.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner.ledger.lock()
+    }
+
+    /// Conexão de leitura do pool (#244): consultas da UI, do MCP e
+    /// varreduras que não escrevem, sem esperar a conexão de escrita. Lê o
+    /// último commit; escrever por ela falha.
+    pub fn ledger_read(&self) -> LedgerRead<'_> {
+        self.inner.ledger.read()
     }
 
     /// PTY de uma sessão viva neste processo do daemon.
     pub fn pty(&self, session_id: &str) -> Option<PtySession> {
-        self.inner.live.lock().unwrap().get(session_id).cloned()
+        self.inner.live.lock().get(session_id).cloned()
     }
 
     /// Encerra a sessão a pedido do humano: `SIGHUP` e, se o agente não
@@ -391,11 +396,7 @@ impl Sessions {
     pub fn kill(&self, session_id: &str) -> Result<()> {
         match self.pty(session_id) {
             Some(p) => {
-                self.inner
-                    .killed
-                    .lock()
-                    .unwrap()
-                    .insert(session_id.to_string());
+                self.inner.killed.lock().insert(session_id.to_string());
                 Ok(p.terminate(KILL_GRACE)?)
             }
             None => Err(SessionsError::Invalid(format!(
@@ -410,7 +411,7 @@ impl Sessions {
     /// [`ct_pty::MASK_HOLD`] (#313).
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_mask_hold(&self, hold: Duration) {
-        *self.inner.mask_hold.lock().unwrap() = Some(hold);
+        *self.inner.mask_hold.lock() = Some(hold);
     }
 
     /// Sobe o PTY de uma sessão, com o prazo da cauda dos testes, se houver
@@ -418,7 +419,7 @@ impl Sessions {
     pub(crate) fn spawn_pty(&self, spec: ct_pty::SpawnSpec) -> std::io::Result<PtySession> {
         let scrollback = self.inner.cfg.scrollback;
         #[cfg(any(test, feature = "test-support"))]
-        if let Some(hold) = *self.inner.mask_hold.lock().unwrap() {
+        if let Some(hold) = *self.inner.mask_hold.lock() {
             return PtySession::spawn_with_hold(spec, scrollback, hold);
         }
         PtySession::spawn(spec, scrollback)
@@ -432,3 +433,40 @@ impl Sessions {
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{FakeClaude, TestEnv};
+    use ct_core::SessionState;
+    use std::sync::Arc;
+
+    /// Critério de aceite do #244: um pânico numa thread com os locks das
+    /// sessões na mão (`live`, `killed`, `masks`, os tokens e o ledger) não
+    /// derruba as operações seguintes.
+    #[test]
+    fn panico_com_os_locks_de_sessao_nao_derruba_as_proximas() {
+        let env = TestEnv::new(FakeClaude::sleep(30));
+        let s = env.sessions.start(env.request(4, "Longa")).unwrap();
+        let inner = Arc::clone(&env.sessions.inner);
+        let r = std::thread::spawn(move || {
+            let _live = inner.live.lock();
+            let _killed = inner.killed.lock();
+            let _masks = inner.masks.lock();
+            let _tokens = inner.session_tokens.lock();
+            let _ledger = inner.ledger.lock();
+            panic!("pânico com os locks de sessão");
+        })
+        .join();
+        assert!(r.is_err());
+
+        assert!(env.sessions.pty(&s.id).is_some());
+        env.sessions.kill(&s.id).unwrap();
+        env.wait_state(&s.id, SessionState::Exited);
+        assert!(env.sessions.pty(&s.id).is_none());
+        let outra = env.sessions.start(env.request(5, "Outra")).unwrap();
+        assert!(env.sessions.pty(&outra.id).is_some());
+        assert_eq!(env.sessions.ledger_read().live_sessions().unwrap().len(), 1);
+        env.sessions.kill(&outra.id).unwrap();
+        env.wait_state(&outra.id, SessionState::Exited);
+    }
+}

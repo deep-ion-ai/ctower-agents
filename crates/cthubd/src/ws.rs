@@ -59,6 +59,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 /// Resposta de `hub.info`.
 #[derive(Debug, Clone, Serialize)]
@@ -275,7 +276,12 @@ pub(crate) async fn serve(socket: WebSocket, st: HubState, channel: Channel) {
                             "hub.logs.follow" | "hub.logs.unfollow" => {
                                 logs_follow(&mut log_follow, &req.method, &req.params, &out)
                             }
-                            _ => call(&st, &req.method, req.params, channel.web_session()).await,
+                            _ => {
+                                let span = req.span();
+                                call(&st, &req.method, req.params, channel.web_session())
+                                    .instrument(span)
+                                    .await
+                            }
                         };
                         ct_http::rpc::reply(req.id, r)
                     }

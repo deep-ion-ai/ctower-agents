@@ -86,6 +86,7 @@ recovery_reverify_days = 90          # lembrete para verificar a chave de recupe
 dir = ""                             # vazio = ~/.local/state/ctower/logs/cthubd.jsonl (~/Library/Logs/ctower no macOS; <CTHUB_DATA_DIR>/logs se definido)
 max_file_mb = 10                     # tamanho de cada arquivo antes de rotacionar; 0 desliga o arquivo
 max_files = 5                        # arquivos guardados, contando o atual
+retention_days = 7                   # dias do log diário (cthubd.AAAA-MM-DD.log); 0 desliga; veja docs/ambiente.md, "Logs"
 
 [web]                                # UI web (PWA), #199 e #200; veja "UI web" abaixo
 enabled = false                      # `/`, `/assets/*` e `/web/*` desligados (404) por padrão
@@ -207,7 +208,7 @@ O release não tem binário de hub para macOS, então o build é local (o CI de 
 bash scripts/provision/provision.sh --hub
 ```
 
-No macOS valem `--hub` (hub) e `--env` (ambiente, `docs/ambiente-macos.md`). Para o ambiente ligar a um hub em outra máquina, veja "Ambiente com hub remoto" abaixo. O script compila o `cthubd` e instala o LaunchAgent `packaging/launchd/ai.deep-ion.cthubd.plist` em `~/Library/LaunchAgents/`, com o `@HOME@` trocado pelo seu HOME (o launchd não expande `~`). Depois carrega o agente com `launchctl bootstrap gui/$(id -u) ...`. O agente sobe no login e reinicia se o processo cair com erro. Log: `~/Library/Logs/cthubd.log`. À mão:
+No macOS valem `--hub` (hub) e `--env` (ambiente, `docs/ambiente-macos.md`). Para o ambiente ligar a um hub em outra máquina, veja "Ambiente com hub remoto" abaixo. O script compila o `cthubd` e instala o LaunchAgent `packaging/launchd/ai.deep-ion.cthubd.plist` em `~/Library/LaunchAgents/`, com o `@HOME@` trocado pelo seu HOME (o launchd não expande `~`). Depois carrega o agente com `launchctl bootstrap gui/$(id -u) ...`. O agente sobe no login e reinicia se o processo cair com erro. Log: `~/Library/Logs/ctower/cthubd.AAAA-MM-DD.log` (diário, com retenção; docs/ambiente.md, "Logs"). À mão:
 
 ```bash
 (cd ui && npm ci && npm run build:web)
@@ -525,7 +526,7 @@ O `ctowerd` lê o `docs_root` ao subir: depois de mudar, `ctower restart`. Para 
 
 - **`env.info.docs`** (`{ root, reachable, warning? }`): `reachable: true` com o `root` esperado é o critério de pronto. `reachable` exige o marcador `<docs_root>/.ct-docs-root` (decisão 106). A UI mostra o selo "docs inacessíveis" no ambiente quando vem `warning: "docs_unreachable"` (#441); pelo hub, `hub.env.call { env, method: "env.info" }` lê o de qualquer ambiente com canal.
 - **No terminal:** `ls -a <docs_root>` mostra o `.ct-docs-root` e as pastas `<owner>__<repo>` dos projetos (sem o marcador, a montagem caiu ou aponta para outra pasta); `mount | grep ctdocs` (macOS e Linux) mostra a montagem.
-- **No log do ambiente** (`journalctl --user -u ctowerd`, `~/Library/Logs/ctowerd.log`): `docs: docs_root ... inacessível (montagem caída?)` quando uma sessão subiu sem os docs.
+- **No log do ambiente** (`journalctl --user -u ctowerd`, `~/Library/Logs/ctower/ctowerd.AAAA-MM-DD.log`): `docs: docs_root ... inacessível (montagem caída?)` quando uma sessão subiu sem os docs.
 
 `reachable` diz que a pasta abre em até 2 s **e** tem o marcador `.ct-docs-root`, que só existe no `docs_dir` do hub: uma pasta de montagem vazia (montagem caída) não passa, e o ambiente não grava nada no disco local no lugar do compartilhamento. Não apague o marcador; se sumir, o `cthubd` o recria ao subir (ou rode de novo o `provision.sh --hub --docs-dir`).
 
@@ -668,7 +669,7 @@ secrets_max_age_hours = 24    # idade da configuração que dispara o aviso no s
 - **Remover:** todo projeto do cache que não veio em `projects` ganha `unassigned_at` e sai da lista. O clone, os worktrees e as sessões ficam; a limpeza é à mão. O espelho do GitHub do ambiente (`issue_cache`, `pr_cache`) só sincroniza os atribuídos.
 - **Primeiro pull:** projetos locais legados que vieram em `projects` são casados por `owner/repo` e mantêm o `id` local (o histórico continua ligado a eles). Legados que o hub não atribuiu ganham `unassigned_at` ("projeto local fora do hub"), sem nada ser apagado do disco.
 - **Hub antigo:** `404` em `/sync/config` (o `ctowerd` com `hub = true` do #64, durante a migração) não é erro: os projetos locais legados continuam valendo até o primeiro pull que responder, e `hub_config.legacy_hub` fica `true`.
-- **Concluídos do hub (#298):** o status dos work items não move o `config_rev`, então o `concluido` marcado à mão na tela Hub vem por `GET <hub_url>/sync/done` (mesmos cabeçalhos): o conjunto completo dos work items `concluido` dos projetos atribuídos. O `ctowerd` o pede em todo ciclo do pull e substitui o cache `hub_done` do `ledger.db`; `ct_sessions::cleanup::completion` o usa como sinal `work item concluído` (um PR aberto da branch ainda vence). `404` = hub antigo, ignorado.
+- **Concluídos do hub (#298):** o status dos work items não move o `config_rev`, então o `concluido` marcado à mão na tela Hub vem por `GET <hub_url>/sync/done` (mesmos cabeçalhos): o conjunto completo dos work items `concluido` dos projetos atribuídos. O `ctowerd` o pede em todo ciclo do pull e substitui o cache `hub_done` do `ledger.db`; `ct_sessions::completion::completion` o usa como sinal `work item concluído` (um PR aberto da branch ainda vence). `404` = hub antigo, ignorado.
 
 ### Secrets do ambiente
 
@@ -705,6 +706,20 @@ Se o agente imprimir um secret (`env`, `echo $API_TOKEN`), o valor acabaria no s
 - **Onde fica o conjunto:** só em memória no `ctowerd`, associado à sessão; nunca é gravado. Sai quando a sessão é retomada (a nova ganha o próprio) ou arquivada. Se um backup acontece sem ele (o daemon reiniciou), o conjunto é recalculado do cache atual pelo projeto da sessão; se o cache mudou nesse meio tempo, valem os valores atuais. Cache ausente ou ilegível: o backup sai sem mascaramento, com aviso no log.
 - **Cache novo com a sessão no ar** (#165): quando um pull regrava o cache, o `ctowerd` soma ao conjunto de cada sessão viva os secrets atuais do projeto dela, **mantendo os anteriores** (a saída antiga ainda pode trazer o valor velho). Vale para a saída do PTY dali em diante (a cauda pendente do filtro continua valendo) e para o backup do transcript. O scrollback já emitido não é reescrito.
 - **Resume:** a sessão retomada recebe os valores atuais do cache e mascara esses. Um valor injetado antes e trocado no hub depois não é mais mascarado.
+
+##### O que a máscara não protege (#335)
+
+A máscara age só na saída que o Control Tower mostra e grava. O agente roda antes dela, então um valor impresso na sessão (o token de uma conexão ou um secret do hub):
+
+- **chega aberto ao contexto do modelo.** Não há como protegê-lo: a saída da ferramenta entra no contexto antes de qualquer filtro do Control Tower, e os hooks do Claude Code não reescrevem a saída de `Bash`;
+- **fica aberto no arquivo de sessão do próprio Claude Code** (`~/.claude/projects/.../*.jsonl`, na máquina do ambiente). O Control Tower não altera esse arquivo: reescrevê-lo com a sessão no ar, ou depois dela, arrisca a retomada e disputa o arquivo com o Claude. Só a cópia em `transcripts/` é mascarada.
+
+Recomendações:
+
+- use credenciais de **escopo mínimo** (token fine-grained, só os repositórios e permissões necessários) e, quando possível, de curta duração;
+- se uma credencial foi impressa numa sessão, trate-a como exposta e **troque-a** no hub (a nova vale nas sessões seguintes);
+- proteja o diretório `~/.claude` do ambiente como protegeria qualquer segredo local (permissões do usuário, disco cifrado, sem backup para fora da máquina);
+- peça ao agente que não imprima variáveis de credencial (`env`, `printenv`, `echo $TOKEN`): a máscara é uma rede de segurança, não uma garantia.
 
 ### Secrets e variáveis pela UI do hub
 

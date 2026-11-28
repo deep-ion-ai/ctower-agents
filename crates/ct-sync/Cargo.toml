@@ -1,0 +1,34 @@
+[package]
+name = "ct-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Sincronização do ambiente com o GitHub, o Jira e o GitLab (#242): recebe o
+# ledger, o aviso à UI e as credenciais das conexões (`SyncHandle`), sem o
+# ciclo de vida das sessões.
+[dependencies]
+ct-core.workspace = true
+ct-gh.workspace = true
+ct-gitlab.workspace = true
+ct-jira.workspace = true
+ct-ledger.workspace = true
+ct-proc.workspace = true
+ct-secrets.workspace = true
+ct-sessions.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Tipos TypeScript para a UI (ts-rs).
+ts = ["dep:ts-rs", "ct-core/ts", "ct-ledger/ts", "ct-sessions/ts"]
+
+[dev-dependencies]
+ct-gh = { workspace = true, features = ["test-support"] }
+ct-gitlab = { workspace = true, features = ["test-support"] }
+ct-jira = { workspace = true, features = ["test-support"] }
+ct-sessions = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+toml.workspace = true

@@ -46,7 +46,7 @@ pub struct ArchivedItem {
 }
 
 /// Sessões oferecidas na Recuperação: as `interrupted`, menos as de work
-/// item concluído ([`crate::cleanup::completion`]), que não há o que retomar
+/// item concluído ([`crate::completion::completion`]), que não há o que retomar
 /// (#285). As linhas ficam no ledger: a etapa "sessões" da limpeza as
 /// arquiva e a poda do #179 as apaga depois da retenção. Lê só o ledger e o
 /// espelho do GitHub.
@@ -69,13 +69,13 @@ pub fn recoverable_sessions(l: &Ledger) -> Result<Vec<Session>> {
     Ok(out)
 }
 
-/// O work item já concluiu ([`crate::cleanup::completion`])? É o que tira a
+/// O work item já concluiu ([`crate::completion::completion`])? É o que tira a
 /// sessão `interrupted` da Recuperação, e o que a aba do terminal consulta
 /// (`session.get`) para não oferecê-la (#297).
 pub fn work_item_concluded(l: &Ledger, work_item_id: i64) -> Result<bool> {
     let wi = l.get_work_item(work_item_id)?;
     let project = l.get_project(wi.project_id)?;
-    Ok(crate::cleanup::completion(l, &project, &wi)?.is_some())
+    Ok(crate::completion::completion(l, &project, &wi)?.is_some())
 }
 
 impl Sessions {
@@ -91,7 +91,6 @@ impl Sessions {
             .inner
             .live
             .lock()
-            .unwrap()
             .values()
             .filter_map(|p| p.pid().map(i64::from))
             .collect();

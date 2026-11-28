@@ -37,7 +37,7 @@ use ct_http::sync::{
     ENV_PUBKEY_HEADER,
 };
 use ct_ledger::{Ledger, LocationState};
-use ct_sessions::GithubSync;
+use ct_sync::GithubSync;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -870,7 +870,7 @@ pub(crate) mod tests {
             ct_gh::GhConfig::new("http://127.0.0.1:1", bin.to_str().unwrap())
                 .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
         );
-        let github = Arc::new(GithubSync::new(srv.env.sessions.clone(), client));
+        let github = Arc::new(GithubSync::new(srv.env.sessions.sync_handle(), client));
         Arc::new(
             HubSender::new(
                 srv.env.sessions.clone(),

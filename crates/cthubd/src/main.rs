@@ -425,6 +425,7 @@ fn serve(dirs: Dirs) {
         .expect("runtime do tokio");
     if let Err(e) = rt.block_on(cthubd::cli::serve(dirs)) {
         tracing::error!("cthubd encerrado com erro: {e}");
+        ct_http::logs::flush();
         std::process::exit(1);
     }
 }

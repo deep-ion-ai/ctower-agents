@@ -179,7 +179,11 @@ pub(crate) async fn handle(
     }
     let sessions = st.sessions.clone();
     let req = h.clone();
-    let found = match tokio::task::spawn_blocking(move || sessions.permission_requested(&req)).await
+    let found = match tokio::task::spawn_blocking(move || {
+        let span = sessions.session_span(&req.session);
+        span.in_scope(|| sessions.permission_requested(&req))
+    })
+    .await
     {
         Ok(Ok(found)) => found,
         Ok(Err(e)) => {

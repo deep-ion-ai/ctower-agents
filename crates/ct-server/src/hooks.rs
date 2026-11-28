@@ -19,15 +19,22 @@ pub(crate) async fn handle(
         return (StatusCode::BAD_REQUEST, "corpo de hook inválido").into_response();
     };
     let sessions = st.sessions.clone();
-    match tokio::task::spawn_blocking(move || sessions.apply_hook(&h)).await {
-        Ok(Ok(outcome)) => {
-            tracing::debug!(?outcome, "hook aplicado");
-            StatusCode::ACCEPTED.into_response()
-        }
-        Ok(Err(e)) => {
-            tracing::warn!(error = %e, "falha ao aplicar hook");
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-        }
+    let result = tokio::task::spawn_blocking(move || {
+        // O span nasce no thread bloqueante: é nele que o ledger é lido.
+        let span = sessions.session_span(&h.session);
+        span.in_scope(|| {
+            let r = sessions.apply_hook(&h);
+            match &r {
+                Ok(outcome) => tracing::debug!(event = %h.event, ?outcome, "hook aplicado"),
+                Err(e) => tracing::warn!(event = %h.event, error = %e, "falha ao aplicar hook"),
+            }
+            r
+        })
+    })
+    .await;
+    match result {
+        Ok(Ok(_)) => StatusCode::ACCEPTED.into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

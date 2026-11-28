@@ -25,7 +25,7 @@ EXCECOES=(
   "crates/ct-sessions/src/usage.rs|statusLine encadeado e claude auth status, com prazo próprio (wait_output), rodam dentro do statusline do Claude Code"
   "crates/ctower/src/hook.rs|hooks do Claude Code, com prazo próprio (run_with_deadline) e stdin nulo"
   "crates/ct-gh/src/lib.rs|gh auth token, com prazo próprio e nova tentativa de ETXTBSY"
-  "crates/ct-sessions/src/update.rs|monta o comando do gerenciador de serviço (systemctl/launchctl); quem roda é o atualizador ou o ctower restart"
+  "crates/ct-update/src/service.rs|monta o comando do gerenciador de serviço (systemctl/launchctl); quem roda é o atualizador ou o ctower restart"
   "crates/cthubd/src/update.rs|atualização do hub: builds e npm longos e o gerenciador de serviço"
   "crates/ct-update/src/lib.rs|helper git() do atualizador; as chamadas ainda não têm prazo próprio (a migrar para ct_proc)"
   "crates/ct-update/src/runner.rs|pipeline de atualização: builds e downloads longos, cada passo registrado"

@@ -2,7 +2,7 @@
 //! #287): o job de verificação, o acionamento manual e o resumo ao hub.
 //!
 //! - Job ([`spawn_periodic`]): no boot e a cada `cleanup.check_interval_hours`
-//!   monta o plano ([`ct_sessions::cleanup::Cleaner::plan`]) sem apagar nada
+//!   monta o plano ([`ct_cleanup::Cleaner::plan`]) sem apagar nada
 //!   e guarda o resultado. Com `cleanup.auto`, executa em seguida as etapas
 //!   pendentes (nunca as bloqueadas).
 //! - Manual, sempre disponível (mesmo com o job desligado): `cleanup.status`,
@@ -24,7 +24,7 @@ use crate::AppState;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use ct_sessions::cleanup::{
+use ct_cleanup::{
     human_bytes, Cleaner, CleanupPlan, CleanupRun, CleanupScope, StepKind, StepResult,
 };
 use ct_sessions::config::CleanupConfig;
@@ -444,8 +444,8 @@ pub(crate) async fn run_http(
 mod tests {
     use super::*;
     use crate::test_util::{serve_hub, Srv, UI};
+    use ct_cleanup::{CleanupStep, StepContext, StepOutcome, StepPlan};
     use ct_core::{WorkItemKind, WorkItemStatus};
-    use ct_sessions::cleanup::{CleanupStep, StepContext, StepOutcome, StepPlan};
     use ct_sessions::test_support::FakeClaude;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
