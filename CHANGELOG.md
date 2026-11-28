@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.12.0](https://github.com/deep-ion-ai/ctower-agents/compare/v1.11.1...v1.12.0) (2026-11-28)
+
+
+### Features
+
+* épico [#350](https://github.com/deep-ion-ai/ctower-agents/issues/350) — ambiente mais enxuto, observável e seguro com credenciais ([7ee70a1](https://github.com/deep-ion-ai/ctower-agents/commit/7ee70a1e021d95fb6ff1509891c8ecfbc2003723))
+* **hub:** PRs, checks e execuções de épico por projeto para a Sala de controle ([db11914](https://github.com/deep-ion-ai/ctower-agents/commit/db1191499c42861d56c2d1bc943e4598dfb26128)), closes [#354](https://github.com/deep-ion-ai/ctower-agents/issues/354)
+* **hub:** última release e entregas na base sem release, por projeto ([d0b0bca](https://github.com/deep-ion-ai/ctower-agents/commit/d0b0bca1ad1e9cf16ca9dbf2082d2f47297591eb)), closes [#355](https://github.com/deep-ion-ai/ctower-agents/issues/355)
+* **obs:** logs estruturados com spans por sessão e RPC, JSON e rotação ([#243](https://github.com/deep-ion-ai/ctower-agents/issues/243)) ([41c379b](https://github.com/deep-ion-ai/ctower-agents/commit/41c379b33cd955c57214ab487ce9d453e5a52ca1))
+* Sala de controle por projeto (épico [#353](https://github.com/deep-ion-ai/ctower-agents/issues/353)) ([0907599](https://github.com/deep-ion-ai/ctower-agents/commit/09075990437f022ae34ba58e7aaa495fa373650c))
+* **sessions:** fetch e push do GitLab usam o token da conexão ([#334](https://github.com/deep-ion-ai/ctower-agents/issues/334)) ([fdb326a](https://github.com/deep-ion-ai/ctower-agents/commit/fdb326a4881c497f280a8fa2ca6403f25fa5b0db))
+* **ui:** bloco do piloto automático na Sala de controle ([a381029](https://github.com/deep-ion-ai/ctower-agents/commit/a38102933d9518e899380790b55fc1fc3a7b813f)), closes [#359](https://github.com/deep-ion-ai/ctower-agents/issues/359)
+* **ui:** cards por projeto na Sala de controle ([1674290](https://github.com/deep-ion-ai/ctower-agents/commit/1674290cdb8c103727914e39eba961a1283c69db)), closes [#358](https://github.com/deep-ion-ai/ctower-agents/issues/358)
+* **ui:** check vermelho e bloqueada pelo piloto em Precisa de você ([3c673d0](https://github.com/deep-ion-ai/ctower-agents/commit/3c673d0a43cd1fab10bb5b0e360ed040f7928c89)), closes [#360](https://github.com/deep-ion-ai/ctower-agents/issues/360)
+* **ui:** grade de sessões e fim do dia na tela do projeto ([f98e43e](https://github.com/deep-ion-ai/ctower-agents/commit/f98e43e03c8b188b4b751631f72e898e483792d7))
+* **ui:** nova moldura da Sala de controle (topo, Precisa de você compacta, Infraestrutura) ([aa060f8](https://github.com/deep-ion-ai/ctower-agents/commit/aa060f8a201bf0117c667c1695d038d25f059e62)), closes [#357](https://github.com/deep-ion-ai/ctower-agents/issues/357)
+
+
+### Bug Fixes
+
+* correções do code-review do épico (flush do log diário, pool de leitura, limpeza, docs) ([e74835a](https://github.com/deep-ion-ai/ctower-agents/commit/e74835aff83df3c510112da29dbde02ee35f7df2))
+* **ui:** Sala de controle relê release, entregas, ambiente e épicos na web ([845885f](https://github.com/deep-ion-ai/ctower-agents/commit/845885f6485e65de986d29b5e14abffd69d4ecb4))
+
+
+### Performance Improvements
+
+* **ledger:** pool de leitura, locks curtos e mutexes tolerantes a poison ([74c50ba](https://github.com/deep-ion-ai/ctower-agents/commit/74c50baf5ef2c6cd14bdffa6d8a8205fd6768dde)), closes [#244](https://github.com/deep-ion-ai/ctower-agents/issues/244)
+
 ## [1.11.1](https://github.com/deep-ion-ai/ctower-agents/compare/v1.11.0...v1.11.1) (2026-11-27)
 
 
