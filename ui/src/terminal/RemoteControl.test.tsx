@@ -6,6 +6,7 @@ import type { RemoteControlStatus } from "../protocol/gen";
 import { dashboard, HUB_CONFIG_UNLINKED, MIN, session, sync, workItem } from "../test/fixtures";
 import { RC_CONNECT_MS, rcOn, rcView } from "./remote";
 import { QrCode } from "./RemoteControl";
+import { showSessions } from "../test/control-room";
 
 // Remote Control do Claude Code nas sessões (#197): cabeçalho do painel,
 // árvore, menu de contexto, barra de status e o link com QR code.
@@ -43,6 +44,7 @@ async function openTab(rc?: RemoteControlStatus, s = S) {
     .on("session.remote_control.enable", { requested: true, rc_session_id: null });
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /remote control/ }));
   await waitFor(() => expect(api.attached.has(s.id)).toBe(true));
   return { api, user };
@@ -124,6 +126,7 @@ test("daemon anterior ao protocolo 2.3: sem controles de Remote Control", async 
     .on("session.peek", { data: "" });
   render(<App api={api} />);
   const user = userEvent.setup();
+  await showSessions(user);
   await user.click(await screen.findByRole("button", { name: /remote control/ }));
   await waitFor(() => expect(api.attached.has(S.id)).toBe(true));
   expect(within(pane()).queryByRole("button", { name: "Ligar Remote Control" })).not.toBeInTheDocument();

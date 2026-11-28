@@ -16,6 +16,8 @@ import {
   ProjectGestorCard, ProjectHealthCard, ProjectProposalsCard, ProjectReviewsCard, ProjectSyncCard } from "./OverviewCards";
 import { projectSyncInfo } from "./sync-now";
 import { ProjectSessions } from "./ProjectSessions";
+import { ProjectSessionGrid } from "./ProjectSessionGrid";
+import { ProjectDayEnd } from "./ProjectDayEnd";
 import { ProjectSettings } from "./ProjectSettings";
 import { projectsPlace, sectionOf, type ProjectPage, type ProjectSettingsSection } from "./sections";
 import { projectSessions, sessionCounts } from "./sessions";
@@ -25,6 +27,7 @@ import { itemTitle, trackerLabel } from "../util/item";
 import { assignmentText } from "../util/hub";
 import { projectState, syncText, type Tone } from "./settings";
 import type { AssignmentState } from "../protocol/hub-gen";
+import type { Project } from "../protocol/gen";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -115,6 +118,8 @@ export function HubProjectScreen({
         ? { dashboard: hub.dashboard, envs: hub.envs, envByDaemon: hub.envByDaemon, projectId: hubProject.project.id }
         : null,
     );
+  // Os projetos dos ambientes que são este do hub (mesmo repositório, sem distinguir a caixa).
+  const only = (_e: string, x: Project) => same(x.gh_owner, ref.owner) && same(x.gh_repo, ref.repo);
   const TONE: Record<AssignmentState, Tone> = { applied: "ok", pending: "attention", error: "error" };
   // "Sincronizar este projeto" no cabeçalho e no cartão (#90); o projeto Jira
   // sincroniza só no ambiente de sync.
@@ -165,18 +170,22 @@ export function HubProjectScreen({
                   {/* Por projeto (`key`): trocar de projeto não mostra as propostas do anterior. */}
                   <ProjectProposalsCard key={key} owner={ref.owner} repo={ref.repo} />
                   <ProjectReviewsCard key={`rv:${key}`} clones={clones} />
+                  <ProjectDayEnd now={now} only={only} />
                 </>
               }
             />
           );
         },
         sessions: () => (
-          <ProjectSessions
-            groups={sessions()}
-            project={p}
-            now={now}
-            emptyText="Nenhum ambiente com este projeto relatou sessões ao hub, e nenhum ambiente conectado o tem."
-          />
+          <>
+            <ProjectSessionGrid now={now} only={only} />
+            <ProjectSessions
+              groups={sessions()}
+              project={p}
+              now={now}
+              emptyText="Nenhum ambiente com este projeto relatou sessões ao hub, e nenhum ambiente conectado o tem."
+            />
+          </>
         ),
         settings: () => (
           <ProjectSettings

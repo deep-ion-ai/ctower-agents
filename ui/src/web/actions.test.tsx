@@ -15,6 +15,7 @@ import { setViewport } from "../test/viewport";
 import { ENV, envCalls, hubItem, hubSession, now, webApi } from "../test/web";
 import { resetRcRequests } from "./envActions";
 import { DEFAULT_RELEASE_CONFIG } from "../hub/release";
+import { showSessions } from "../test/control-room";
 
 afterEach(() => {
   resetRcRequests();
@@ -60,6 +61,7 @@ function envSession(s: HubSession, p: Partial<Session> = {}): Session {
 describe("ações visíveis na web só com o ambiente online", () => {
   it("online: o painel da sessão tem Ligar Remote Control e Encerrar", async () => {
     const user = renderApp(webApi());
+    await showSessions(user);
     await user.click(await screen.findByRole("button", { name: /WebDaemonApi/ }));
     const actions = await screen.findByRole("region", { name: "Ações da sessão" });
     expect(within(actions).getByRole("button", { name: "Ligar Remote Control" })).toBeInTheDocument();
@@ -73,6 +75,7 @@ describe("ações visíveis na web só com o ambiente online", () => {
       webApi({ live_sessions: [live], interrupted_sessions: [int] }, [hubItem({ pending_decisions: 2 })]),
     );
     const user = renderApp(api);
+    await showSessions(user);
     await user.click(await screen.findByRole("button", { name: /WebDaemonApi/ }));
     expect(await screen.findByText(/Ambiente offline: iniciar, retomar/)).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Ações da sessão" })).toBeNull();
@@ -94,6 +97,7 @@ describe("ações visíveis na web só com o ambiente online", () => {
     let online = true;
     const api = webApi().onHub("hub.envs.list", () => [hubEnv({ last_seen_at: now, online })]);
     const user = renderApp(api);
+    await showSessions(user);
     await user.click(await screen.findByRole("button", { name: /WebDaemonApi/ }));
     expect(await screen.findByRole("button", { name: "Encerrar" })).toBeInTheDocument();
     online = false;
@@ -106,7 +110,7 @@ describe("ações visíveis na web só com o ambiente online", () => {
 describe("pushes do ambiente (env.push)", () => {
   it("relêem a visão do hub", async () => {
     const api = webApi();
-    renderApp(api);
+    await showSessions(renderApp(api));
     await screen.findAllByText("WebDaemonApi");
     const before = api.hubCallsTo("hub.dashboard.get").length;
     act(() => api.push(ENV, "session_started", { session_id: "s-9" }));
@@ -129,6 +133,7 @@ describe("ações da sessão pelo canal reverso", () => {
       .on("session.remote_control.enable", () => ({ requested: true, rc_session_id: null }))
       .on("session.get", () => envSession(live, { rc_session_id: rc }));
     const user = renderApp(api);
+    await showSessions(user);
     await user.click(await screen.findByRole("button", { name: /WebDaemonApi/ }));
     await user.click(await screen.findByRole("button", { name: "Ligar Remote Control" }));
     expect(api.callsTo("session.remote_control.enable")).toEqual([
@@ -145,6 +150,7 @@ describe("ações da sessão pelo canal reverso", () => {
   it("encerrar pede confirmação e chama session.kill", async () => {
     const api = webApi().on("session.kill", {});
     const user = renderApp(api);
+    await showSessions(user);
     await user.click(await screen.findByRole("button", { name: /WebDaemonApi/ }));
     await user.click(await screen.findByRole("button", { name: "Encerrar" }));
     expect(api.callsTo("session.kill")).toEqual([]);
@@ -196,7 +202,7 @@ describe("ações da sessão pelo canal reverso", () => {
     const b = hubSession({ id: "s-b", state: "interrupted", ended_at: now - 60_000 });
     const api = webApi({ live_sessions: [], interrupted_sessions: [a, b] });
     const user = renderApp(api, { name: "control" });
-    const faixa = (await screen.findByText(/Precisa de você ·/)).closest("section")!;
+    const faixa = await screen.findByRole("region", { name: "Precisa de você" });
     await user.click(within(faixa).getAllByRole("button", { name: "Recuperar" })[1]);
     expect(await screen.findByRole("heading", { name: "Recuperação · 2" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /^Retomar .*#201/ })).toHaveLength(2);
@@ -219,6 +225,7 @@ describe("ações da sessão pelo canal reverso", () => {
       throw new Error("Remote Control indisponível: ANTHROPIC_API_KEY no ambiente do ctowerd");
     });
     const user = renderApp(api);
+    await showSessions(user);
     await user.click(await screen.findByRole("button", { name: /WebDaemonApi/ }));
     await user.click(await screen.findByRole("button", { name: "Ligar Remote Control" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("ANTHROPIC_API_KEY");
@@ -347,6 +354,7 @@ describe("no celular", () => {
     const user = renderApp(webApi());
     const bar = await screen.findByRole("navigation", { name: "Telas" });
     expect(bar).toHaveClass("bottombar");
+    await showSessions(user);
     await user.click(await screen.findByRole("button", { name: /WebDaemonApi/ }));
     const actions = await screen.findByRole("region", { name: "Ações da sessão" });
     // A regra do shell do celular vale para todo botão dentro dele.

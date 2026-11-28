@@ -2319,9 +2319,10 @@ mod tests {
                 .execute_batch(&format!(
                     "UPDATE epic_run SET status = 'cancelado', ended_at = 5 WHERE id = {};
                      UPDATE epic_decision SET answer = NULL, answered_by = NULL, answered_at = NULL;
-                     PRAGMA user_version = {};",
-                    e.id,
-                    crate::HUB_MIGRATIONS.len() - 1
+                     DROP TABLE project_release;
+                     DROP TABLE project_delivery;
+                     PRAGMA user_version = 48;",
+                    e.id
                 ))
                 .unwrap();
             (a.id, e.id)

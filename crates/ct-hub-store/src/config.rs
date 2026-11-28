@@ -648,6 +648,8 @@ impl Hub {
             "DELETE FROM event WHERE project_id = ?1".to_string(),
             format!("DELETE FROM decision WHERE work_item_id IN ({wi})"),
             "DELETE FROM pr_checks WHERE project_id = ?1".to_string(),
+            "DELETE FROM project_release WHERE project_id = ?1".to_string(),
+            "DELETE FROM project_delivery WHERE project_id = ?1".to_string(),
             "DELETE FROM pr_cache WHERE project_id = ?1".to_string(),
             format!("DELETE FROM session WHERE work_item_id IN ({wi})"),
             format!("DELETE FROM work_item_location WHERE work_item_id IN ({wi})"),

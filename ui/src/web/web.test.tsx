@@ -9,6 +9,7 @@ import type { Screen } from "../state/nav";
 import { hubEnv, hubStatus } from "../test/fixtures";
 import { envCalls, hubItem, hubSession, now, webApi } from "../test/web";
 import { ENDED_NOTICE, LEFT_NOTICE, WebGate } from "./WebGate";
+import { showSessions } from "../test/control-room";
 
 function renderApp(api: FakeDaemonApi, initial?: Screen) {
   return render(<App api={api} initial={initial} />);
@@ -19,6 +20,7 @@ describe("modo web: seções exclusivas do desktop ocultas ou desabilitadas", ()
     const api = webApi();
     renderApp(api);
     const bar = await screen.findByRole("navigation", { name: "Telas" });
+    await showSessions(userEvent.setup());
     await waitFor(() => expect(screen.getAllByText("WebDaemonApi").length).toBeGreaterThan(0));
     const names = within(bar)
       .getAllByRole("button")
@@ -170,7 +172,7 @@ describe("modo web: seções exclusivas do desktop ocultas ou desabilitadas", ()
 
   it("Projetos na Sala de controle (#10, #26): '+' desabilitado e sem Atribuir a ambiente no menu", async () => {
     renderApp(webApi());
-    const side = await screen.findByRole("complementary", { name: "Ambientes e projetos" });
+    const side = await screen.findByRole("complementary", { name: "Projetos e contas" });
     const linha = await within(side).findByRole("button", { name: "ctower-agents" });
     const mais = within(side).getByRole("button", { name: "Novo projeto" });
     expect(mais).toBeDisabled();
@@ -201,8 +203,9 @@ describe("modo web: painel da sessão no lugar do terminal", () => {
     ]);
     const user = userEvent.setup();
     renderApp(api);
-    // O tile da grade (o destaque "Aguardando você" abre o Remote Control direto; mobile.test.tsx).
+    // O tile da grade, na visão "Precisa de você" (o destaque "Aguardando você" abre o Remote Control direto; mobile.test.tsx).
     await screen.findByRole("region", { name: "Aguardando você · 1" });
+    await showSessions(user, "pede");
     const grid = document.querySelector<HTMLElement>(".tiles-section")!;
     const tile = within(grid).getByRole("button", { name: /WebDaemonApi/ });
     await user.click(tile);
@@ -223,6 +226,7 @@ describe("modo web: painel da sessão no lugar do terminal", () => {
     const api = webApi();
     renderApp(api);
     const user = userEvent.setup();
+    await showSessions(user);
     await user.click(await screen.findByRole("button", { name: /WebDaemonApi/ }));
     expect(await screen.findByText(/Remote Control desligado/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ligar Remote Control" })).toBeInTheDocument();

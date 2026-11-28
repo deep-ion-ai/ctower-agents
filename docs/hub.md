@@ -996,6 +996,38 @@ A execução de épico roda as sub-issues de um épico com um **plano por agente
   O âmbar marca só o que pede o desenvolvedor: plano aguardando aprovação, decisões pendentes e o merge do épico.
 - **Web Push:** cada pedido de decisão novo gera a notificação `epic_decision`, com o épico, a sub-issue e o motivo, nunca o texto do pedido.
 
+### Sala de controle: PRs, checks e execuções de épico por projeto (#354)
+
+`hub.control_room.projects` (hub 1.29, também na web, sem parâmetros) devolve `ControlRoomProjects { projects, now }`, um item por projeto do hub na ordem dos projetos. Tudo sai do `hub.db`, sem consulta nova ao GitHub ou ao GitLab. Cada `ControlRoomProject` traz `owner`, `repo`, `name`, `tracker`, `forge` (`github` = PRs, `gitlab` = MRs) e:
+
+- **`prs`:** os PRs/MRs abertos do espelho (`pr_cache`), do mais novo ao mais antigo. Cada um tem `number`, `url`, `head`, `base`, a issue ligada (`issue`, `issue_ref`) e `title`, que é o título da issue ligada, porque o espelho não guarda o do PR. O PR do épico (`wip → base`) entra, ligado ao épico. O PR da `wip/autonoma` não entra: ele fica no bloco do piloto (`hub.autopilot.wip`). Os checks (`checks`) vêm do espelho `pr_checks` (#129):
+  - `state`: `success`, `pending` (algum em andamento, ou nenhum check ainda), `failure` (algum falhou; vence os em andamento) ou `none` (sem leitura no espelho, como nos MRs do GitLab, cujos checks o hub não lê);
+  - `total`, `failed`, `pending` e o texto pronto (`text`, "2 checks, 1 falhou");
+  - `failed_names` (os checks que falharam), `head_sha` e `synced_at`.
+- **`epic_runs`:** as execuções de épico ativas. Concluídas e canceladas não aparecem. Cada `ControlRoomEpicRun` traz:
+  - o épico (`epic`, `epic_ref`, `title`), o `status`, o `env_id` e `env_online`, que diz se o canal do ambiente está aberto;
+  - o progresso pelo plano aprovado em vigor: `done` (sub-issues mescladas na `wip`) e `total`, ambos 0 sem plano aprovado;
+  - `current`, as sub-issues com sessão ou PR vivos, na ordem do plano, e `next`, a primeira pronta ou, sem nenhuma pronta, a primeira pendente;
+  - `pending_decisions`, os pedidos de decisão pendentes.
+- **`stop`:** o motivo de a execução estar parada, ou `null` se ela está andando. Vale só um, nesta ordem:
+  1. `pausado`, com o motivo da pausa;
+  2. `estacionado`, com o motivo e `until` (a retomada);
+  3. `aguardando_decisao`, com o texto do pedido pendente mais antigo e a sub-issue dele;
+  4. `aguardando_aprovacao`, quando o plano espera aprovação;
+  5. `falha`, quando o evento mais recente do motor é `start_failed`, `refused`, `continue_failed` ou `plan_failed`, com a mensagem;
+  6. `ambiente_fora`, quando o ambiente da execução está sem canal e o motor espera por ele.
+
+Na web, os textos livres de `stop.reason` (motivo da pausa, texto do pedido, mensagem do motor) passam pela mesma máscara de secrets do log do hub. Caminhos de worktree e ids de sessão não saem por este método.
+
+**Push:** `hub.control_room.changed` (`ControlRoomChanged { project_id }`, também na web) avisa que a tela deve reler. Ele sai em quatro casos:
+
+- quando o sync do GitHub do hub muda os PRs abertos ou os checks de um projeto (`project_id` preenchido);
+- quando o sync grava uma leitura nova da release ou das entregas de um projeto (`project_id` preenchido; em `304` não sai);
+- quando a ingestão de um ambiente aplica MRs do espelho de um projeto Jira;
+- junto de todo `hub.epic_run.changed` (`project_id: null`).
+
+**`hub.projects.release` (#355):** sem parâmetros, devolve um `ProjectRelease` por projeto: `owner`/`repo`, a última release (`release`: `tag`, `name`, `published_at`, `url`) e as entregas na base sem release (`unreleased` e `deliveries`, do merge mais recente ao mais antigo). Três flags dizem como ler o resultado: `supported` (só projeto GitHub com GitHub; `false` vira "—" na UI), `synced` (sem leitura, `release` vazio é "ainda não sei", não "sem release") e `truncated` (a leitura parou no limite de páginas, então `unreleased` é um mínimo). `synced_at` é quando a leitura gravada mudou pela última vez. O hub lê com requisições condicionais (ETag) a cada sync do GitHub, e a UI relê o método junto de `hub.control_room.changed`. Vale também na web.
+
 ### Hub fora do ar
 
 Nada para: sessões, hooks e decisões gravam localmente e esperam no outbox, e o ambiente usa a última configuração em cache. Envio e pull tentam de novo com backoff até 5 min. `env.info` e a UI mostram as pendências, o `config_rev` local e a idade dele. O MCP `ledger_list_decisions` com escopo `epic`/`project` devolve as decisões locais com `partial: true` se o hub não responder.

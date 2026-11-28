@@ -12,6 +12,7 @@
 
 use ct_core::now_ms;
 use ct_core::provider::{self, CredentialSource};
+use ct_gh::deliveries;
 use ct_gh::sync::{fetch, SyncInput};
 use ct_gh::{GhClient, GhError, TokenProvider};
 use ct_hub_store::{HubProject, SharedHub};
@@ -265,7 +266,13 @@ impl HubGithub {
         }
         let result = match fetched {
             Ok(snap) => {
+                // PRs abertos e checks antes e depois: mudou, a Sala de
+                // controle relê (#354).
+                let before = h.control_room_pr_stamp(project_id)?;
                 let applied = h.apply_github(&snap, &self.hub_id)?;
+                if h.control_room_pr_stamp(project_id)? != before {
+                    let _ = self.events.send(crate::control_room_push(Some(project_id)));
+                }
                 for g in &applied.removed {
                     tracing::warn!("github: projeto {project_id}: {g}, removida do espelho");
                 }
@@ -292,8 +299,44 @@ impl HubGithub {
         drop(h);
         if result.ok {
             self.sync_reviews(&client, project_id, rev, &input)?;
+            self.sync_deliveries(&client, project_id, rev)?;
         }
         Ok(result)
+    }
+
+    /// Última release e entregas na base sem release (#355), depois do
+    /// espelho aplicado: duas consultas condicionais por projeto (em `304`
+    /// quando nada mudou), sem o lock do `hub.db` durante a rede, e aplicado
+    /// só se o projeto não mudou de `rev`. Como as reviews, a falha no
+    /// GitHub não derruba o sync: fica no log, e o próximo ciclo tenta de
+    /// novo; o que está gravado continua valendo. Projeto que não é GitHub +
+    /// GitHub não é lido.
+    fn sync_deliveries(
+        &self,
+        client: &GhClient,
+        project_id: i64,
+        rev: i64,
+    ) -> ct_ledger::Result<()> {
+        let Some(input) = self.hub.lock().deliveries_input(project_id, now_ms())? else {
+            return Ok(());
+        };
+        match deliveries::fetch(client, &input) {
+            Ok(None) => {}
+            Ok(Some(snap)) => {
+                let h = self.hub.lock();
+                if h.live_project_rev(project_id)? == Some(rev) {
+                    h.apply_deliveries(&snap)?;
+                    // Só chega aqui com leitura nova (sem `304`): a Sala de
+                    // controle relê a release e as entregas (#355).
+                    drop(h);
+                    let _ = self.events.send(crate::control_room_push(Some(project_id)));
+                }
+            }
+            Err(e) => {
+                tracing::warn!("github: projeto {project_id}: release e entregas não lidas: {e}");
+            }
+        }
+        Ok(())
     }
 
     /// Feedback de review dos PRs abertos dos work items (#130), depois do
@@ -543,9 +586,136 @@ mod tests {
         let w = h.find_work_item(o, r, 5).unwrap().unwrap();
         assert_eq!(w.status, WorkItemStatus::EmRevisao);
         assert_eq!(h.prs_for_work_item(w.id).unwrap()[0].number, 40);
+        let pid = h.find_project(o, r).unwrap().unwrap().id;
+        drop(h);
+        // PR novo no espelho: a Sala de controle relê (#354), antes do status.
+        let ev = rx.try_recv().unwrap();
+        assert_eq!(ev["event"], crate::CONTROL_ROOM_PUSH);
+        assert_eq!(ev["data"]["project_id"], pid);
         let ev = rx.try_recv().unwrap();
         assert_eq!(ev["event"], "hub_sync_status");
         assert_eq!(ev["data"]["ok"], true);
+        // Rodada sem mudança nos PRs abertos: só o status.
+        assert!(sync.sync_all().unwrap()[0].ok);
+        let ev = rx.try_recv().unwrap();
+        assert_eq!(ev["event"], "hub_sync_status");
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// #355: o sync do hub guarda a última release e os PRs mesclados na base
+    /// depois dela; com tudo igual, só as duas consultas condicionais (em
+    /// `304`); a release publicada zera a contagem no ciclo seguinte, mesmo
+    /// com o back-merge `main → develop` mesclado depois da publicação.
+    #[test]
+    fn hub_guarda_release_e_entregas_sem_release() {
+        use ct_gh::deliveries::{merged_pulls_path, releases_path};
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let bin = fake_gh(tmp.path(), "tok");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("acme", "acme-web");
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        let release = |tag: &str, at: &str| {
+            json!({ "tag_name": tag, "name": tag, "draft": false, "prerelease": false,
+                    "published_at": at,
+                    "html_url": format!("https://github.com/acme/acme-web/releases/tag/{tag}") })
+        };
+        let merged = |n: i64, at: &str, head: &str| {
+            json!({ "number": n, "title": format!("Entrega {n}"), "merged_at": at,
+                    "updated_at": at,
+                    "head": { "ref": head, "repo": { "full_name": "acme/acme-web" } },
+                    "base": { "ref": "develop" } })
+        };
+        gh.set(
+            &releases_path(o, r),
+            json!([release("v1.0.0", "2026-10-10T10:00:00Z")]),
+        );
+        let pulls = merged_pulls_path(o, r, "develop");
+        gh.set(
+            &pulls,
+            json!([
+                merged(12, "2026-10-14T10:00:00Z", "feat/12-b"),
+                merged(11, "2026-10-12T10:00:00Z", "feat/11-a"),
+                merged(10, "2026-10-09T10:00:00Z", "feat/10-velha"),
+            ]),
+        );
+
+        let hub = hub_com(o, r);
+        let (events, _rx) = broadcast::channel(16);
+        let sync = HubGithub::new(hub.clone(), client, "hub-id", events);
+        assert!(sync.sync_all().unwrap()[0].ok);
+        let v = hub.lock().project_releases().unwrap().remove(0);
+        assert_eq!(v.release.as_ref().unwrap().tag, "v1.0.0");
+        let numbers: Vec<_> = v.deliveries.iter().map(|d| d.number).collect();
+        assert_eq!(numbers, [12, 11]);
+
+        // Nada mudou: as duas consultas saem com ETag, e nada é regravado.
+        let before = gh.requests().len();
+        assert!(sync.sync_all().unwrap()[0].ok);
+        let new: Vec<_> = gh.requests().split_off(before);
+        let ours: Vec<_> = new
+            .iter()
+            .filter(|(p, _)| *p == releases_path(o, r) || *p == pulls)
+            .collect();
+        assert_eq!(ours.len(), 2, "{new:?}");
+        assert!(ours.iter().all(|(_, etag)| etag.is_some()), "{ours:?}");
+        assert_eq!(hub.lock().project_releases().unwrap().remove(0), v);
+
+        // A release em andamento é publicada; o back-merge entra depois.
+        gh.set(
+            &releases_path(o, r),
+            json!([
+                release("v1.1.0", "2026-10-16T10:00:00Z"),
+                release("v1.0.0", "2026-10-10T10:00:00Z"),
+            ]),
+        );
+        gh.set(
+            &pulls,
+            json!([
+                merged(13, "2026-10-16T12:00:00Z", "main"),
+                merged(12, "2026-10-14T10:00:00Z", "feat/12-b"),
+                merged(11, "2026-10-12T10:00:00Z", "feat/11-a"),
+            ]),
+        );
+        assert!(sync.sync_all().unwrap()[0].ok);
+        let v = hub.lock().project_releases().unwrap().remove(0);
+        assert_eq!(v.release.unwrap().tag, "v1.1.0");
+        assert_eq!(v.unreleased, 0);
+    }
+
+    /// Falha ao ler a release não derruba o sync do projeto nem apaga o que
+    /// estava gravado.
+    #[test]
+    fn falha_na_release_nao_derruba_o_sync() {
+        use ct_gh::deliveries::releases_path;
+        let tmp = tempfile::tempdir().unwrap();
+        let gh = FakeGitHub::start("tok");
+        let bin = fake_gh(tmp.path(), "tok");
+        let client = GhClient::new(
+            GhConfig::new(&gh.url(), bin.to_str().unwrap())
+                .with_token_timeout(ct_gh::fake::FAKE_GH_TOKEN_TIMEOUT),
+        );
+        let (o, r) = ("acme", "acme-web");
+        gh.set(&issues_path(o, r, "open", None), json!([]));
+        gh.set(
+            &issues_path(o, r, "closed", Some(&closed_since(now_ms()))),
+            json!([]),
+        );
+        gh.fail_next(&releases_path(o, r), 500, &[]);
+        let hub = hub_com(o, r);
+        let (events, _rx) = broadcast::channel(16);
+        let sync = HubGithub::new(hub.clone(), client, "hub-id", events);
+        let res = sync.sync_all().unwrap();
+        assert!(res[0].ok, "{res:?}");
+        let v = hub.lock().project_releases().unwrap().remove(0);
+        assert!(!v.synced);
     }
 
     /// Thread de review no formato do GraphQL, montada à mão.
