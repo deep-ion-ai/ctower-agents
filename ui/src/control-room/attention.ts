@@ -57,6 +57,11 @@ export interface AttentionItem {
    * própria na lista compacta (#357). Os itens do hub e dos ambientes não têm.
    */
   project?: string;
+  /**
+   * Repositório do projeto (`owner/repo`), quando há um: o card do projeto
+   * (#358) conta por ele os itens que pedem você.
+   */
+  repo?: string;
   /** O título sem o projeto, para a lista compacta; ausente = `title`. */
   item?: string;
   detail: string;
@@ -209,9 +214,12 @@ export function sessionItem(project?: Project, wi?: DashboardWorkItem, gestor = 
   return itemTitle(wi, project);
 }
 
+/** `owner/repo` do projeto, a chave do card (#358). */
+export const repoOf = (p: Pick<Project, "gh_owner" | "gh_repo">) => `${p.gh_owner}/${p.gh_repo}`;
+
 /** Projeto e item de uma sessão, para a lista compacta (#357). */
 function sessionWhere(project?: Project, wi?: DashboardWorkItem, gestor = false, scope?: GestorScope) {
-  return { ...(project ? { project: project.name } : {}), item: sessionItem(project, wi, gestor, scope) };
+  return { ...(project ? { project: project.name, repo: repoOf(project) } : {}), item: sessionItem(project, wi, gestor, scope) };
 }
 
 /** Issue no hub de uma sessão (`owner`/`repo`/número); `null` no gestor e no planejamento do projeto. */
@@ -246,6 +254,7 @@ function hubRoomItems(room: HubRoom, dashboards: Record<string, Dashboard>): Att
         label: "Check vermelho",
         title: `${p.name} #${pr.number}${pr.title ? ` ${pr.title}` : ""}`,
         project: p.name,
+        repo: `${p.owner}/${p.repo}`,
         item: `#${pr.number}${pr.title ? ` ${pr.title}` : ""}`,
         detail: `${names || pr.checks.text || "Check"} falhou no último push`,
         // O espelho não guarda desde quando o check está vermelho: vale a leitura que o mudou.
@@ -272,6 +281,7 @@ function hubRoomItems(room: HubRoom, dashboards: Record<string, Dashboard>): Att
         label: "Bloqueada pelo piloto",
         title: `${b.name} #${i.number}${i.title ? ` ${i.title}` : ""}`,
         project: b.name,
+        repo: `${b.owner}/${b.repo}`,
         item: `#${i.number}${i.title ? ` ${i.title}` : ""}`,
         detail: i.reason ?? "Sem motivo registrado",
         since: room.blockedAt,
@@ -449,6 +459,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
           label: "Sync falhando",
           title: `${project.name}: sync falhando há ${failures} ciclos`,
           project: project.name,
+          repo: repoOf(project),
           item: `Sync falhando há ${failures} ciclos`,
           detail:
             sync.last_error ??
@@ -469,6 +480,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
         label: "Sync atrasado",
         title: `${trackerLabel(project)} de ${project.name} sem sincronizar`,
         project: project.name,
+        repo: repoOf(project),
         item: `${trackerLabel(project)} sem sincronizar`,
         detail:
           sync.last_error ??
@@ -492,7 +504,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
       env: a.env,
       label: "Alerta",
       title: ALERT_TEXT[a.kind] ?? a.kind,
-      ...(project ? { project: project.name } : {}),
+      ...(project ? { project: project.name, repo: repoOf(project) } : {}),
       detail: a.detail,
       since: a.at,
       actionLabel: live ? "Ver terminal" : "Configurações",

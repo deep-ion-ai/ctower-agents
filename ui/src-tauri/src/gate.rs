@@ -64,6 +64,7 @@ pub const HUB_METHODS: &[&str] = &[
     "hub.connections.list",
     "hub.connections.test",
     "hub.connections.update",
+    "hub.control_room.projects",
     "hub.dashboard.get",
     "hub.envs.list",
     "hub.envs.set_autonomous",
